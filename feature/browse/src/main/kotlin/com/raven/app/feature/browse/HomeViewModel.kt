@@ -10,8 +10,10 @@ import com.raven.app.core.database.repository.BlockedTermsRepository
 import com.raven.app.core.database.repository.BrowsePositionRepository
 import com.raven.app.core.database.repository.FavoriteRepository
 import com.raven.app.core.database.repository.HistoryRepository
+import com.raven.app.core.database.repository.MediaTagCacheRepository
 import com.raven.app.core.database.repository.PreferencesRepository
 import com.raven.app.core.database.repository.ShelfRepository
+import com.raven.app.core.database.repository.TagDictionaryRepository
 import com.raven.app.core.model.ComicLanguage
 import com.raven.app.core.model.FeedRequest
 import com.raven.app.core.model.FeedSection
@@ -24,6 +26,7 @@ import com.raven.app.core.model.SiteCapability
 import com.raven.app.core.model.SiteDescriptor
 import com.raven.app.core.model.SiteException
 import com.raven.app.core.model.SiteId
+import com.raven.app.core.model.TagRef
 import com.raven.app.core.model.WatchProgress
 import com.raven.app.core.sitespi.SiteRegistry
 import kotlinx.coroutines.CancellationException
@@ -36,6 +39,7 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
@@ -101,10 +105,12 @@ private data class HomeFeedLoadState(
 
 private data class SiteLocalContext(
     val blockedTerms: List<String>,
+    val cachedTagsByKey: Map<String, List<TagRef>>,
     val watchProgress: List<WatchProgress>,
     val readingProgress: List<ReadingProgress>,
     val watchLaterKeys: Set<String>,
     val browsePosition: BrowsePosition?,
+    val dictRevision: Long = 0L,
 )
 
 @OptIn(ExperimentalCoroutinesApi::class)
@@ -118,6 +124,8 @@ class HomeViewModel(
     private val browsePositionRepository: BrowsePositionRepository,
     private val dispatchers: AppDispatchers,
     private val tagDictionary: TagDictionary = TagDictionary.default,
+    private val mediaTagCacheRepository: MediaTagCacheRepository? = null,
+    private val tagDictionaryRepository: TagDictionaryRepository? = null,
 ) : ViewModel() {
 
     private val allDescriptors: List<SiteDescriptor> = siteRegistry.allDescriptors()
@@ -127,6 +135,8 @@ class HomeViewModel(
 
     private var loadJob: Job? = null
     private var paginateJob: Job? = null
+
+    private val dictRevisionFlow = tagDictionaryRepository?.observeRevision() ?: flowOf(0L)
 
     private val resolvedSiteKeyFlow = preferencesRepository.settings
         .map { settings ->
@@ -139,20 +149,29 @@ class HomeViewModel(
         .distinctUntilChanged()
 
     private val siteLocalContextFlow = resolvedSiteKeyFlow.flatMapLatest { (siteId, language) ->
-        combine(
-            blockedTermsRepository.observeTermsBySite(siteId),
+        val cachedTagsFlow = mediaTagCacheRepository?.observeTagsBySite(siteId) ?: flowOf(emptyMap())
+        val baseFlow = combine(
+            blockedTermsRepository.observeEffectiveTermsBySite(siteId),
+            cachedTagsFlow,
             historyRepository.observeWatchProgressBySite(siteId),
             historyRepository.observeReadingProgressBySite(siteId),
             shelfRepository.observeShelfItemKeys(Shelf.WATCH_LATER_ID),
-            browsePositionRepository.observe(homePositionKey(siteId, language)),
-        ) { blockedTerms, watches, readings, watchLaterKeys, browsePos ->
+        ) { blockedTerms, cachedTags, watches, readings, watchLaterKeys ->
             SiteLocalContext(
                 blockedTerms = blockedTerms,
+                cachedTagsByKey = cachedTags,
                 watchProgress = watches,
                 readingProgress = readings,
                 watchLaterKeys = watchLaterKeys,
-                browsePosition = browsePos,
+                browsePosition = null,
             )
+        }
+        combine(
+            baseFlow,
+            browsePositionRepository.observe(homePositionKey(siteId, language)),
+            dictRevisionFlow,
+        ) { base, browsePos, dictRevision ->
+            base.copy(browsePosition = browsePos, dictRevision = dictRevision)
         }
     }
 
@@ -173,9 +192,19 @@ class HomeViewModel(
         val isAligned = network.loadedKey == expectedKey
 
         val blocked = local.blockedTerms
+        val cachedTags = local.cachedTagsByKey
+        val isItemAllowed: (MediaItem) -> Boolean = { item ->
+            ContentFilter.isAllowed(
+                item = item,
+                blockedTerms = blocked,
+                tagDictionary = tagDictionary,
+                extraTags = cachedTags[item.compositeKey].orEmpty(),
+            )
+        }
+
         val filteredPrimary = if (isAligned) {
             network.rawPrimaryItems
-                .filter { ContentFilter.isAllowed(it, blocked) }
+                .filter(isItemAllowed)
                 .withLocalizedTags(tagDictionary, translateTags)
         } else {
             emptyList()
@@ -184,7 +213,7 @@ class HomeViewModel(
         val filteredSections = if (isAligned) {
             network.rawSections.mapNotNull { section ->
                 val allowed = section.items
-                    .filter { ContentFilter.isAllowed(it, blocked) }
+                    .filter(isItemAllowed)
                     .withLocalizedTags(tagDictionary, translateTags)
                 if (allowed.isEmpty()) null else section.copy(items = allowed)
             }
@@ -194,7 +223,7 @@ class HomeViewModel(
 
         val rawHero = if (isAligned) {
             network.rawHeroItems
-                .filter { ContentFilter.isAllowed(it, blocked) }
+                .filter(isItemAllowed)
                 .withLocalizedTags(tagDictionary, translateTags)
         } else {
             emptyList()
@@ -208,7 +237,7 @@ class HomeViewModel(
         val continueWatching = local.watchProgress
             .filter { !it.completed && it.positionMs > 0L }
             .filter { wp ->
-                ContentFilter.isAllowed(
+                isItemAllowed(
                     MediaItem(
                         siteId = wp.siteId,
                         id = wp.mediaId,
@@ -217,7 +246,6 @@ class HomeViewModel(
                         title = wp.title,
                         coverUrl = wp.coverUrl,
                     ),
-                    blocked,
                 )
             }
             .take(12)
@@ -225,7 +253,7 @@ class HomeViewModel(
         val resumeReading = local.readingProgress
             .filter { !it.completed && it.currentPage > 0 }
             .firstOrNull { rp ->
-                ContentFilter.isAllowed(
+                isItemAllowed(
                     MediaItem(
                         siteId = rp.siteId,
                         id = rp.mediaId,
@@ -234,7 +262,6 @@ class HomeViewModel(
                         title = rp.title,
                         coverUrl = rp.coverUrl,
                     ),
-                    blocked,
                 )
             }
 

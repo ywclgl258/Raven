@@ -97,4 +97,64 @@ class BlockedTermsViewModelTest {
             cancelAndIgnoreRemainingEvents()
         }
     }
+
+    @Test
+    fun `supports Global vs Current-Site segmented toggle and blockTagsGlobally preference`() = runTest {
+        val db = FakeDatabaseBundle(runtimeDictionary = testDictionary)
+        val registry = createTestSiteRegistry()
+
+        val vm = BlockedTermsViewModel(
+            route = RavenRoute.BlockedTerms(SiteId.R34V.value),
+            siteRegistry = registry,
+            blockedTermsRepository = db.blockedTermsRepository,
+            tagDictionary = testDictionary,
+            dispatchers = mainDispatcherRule.appDispatchers,
+            preferencesRepository = db.preferencesRepository,
+            tagDictionaryRepository = db.tagDictionaryRepository,
+        )
+
+        vm.uiState.test {
+            advanceUntilIdle()
+            val initial = expectMostRecentItem()
+            assertEquals(BlockedTermsScope.CURRENT_SITE, initial.selectedScope)
+            assertTrue(initial.blockTagsGlobally)
+
+            // Toggle global sync switch off and verify persistence
+            vm.setBlockTagsGlobally(false)
+            advanceUntilIdle()
+            assertFalse(expectMostRecentItem().blockTagsGlobally)
+            assertFalse(db.preferencesRepository.currentSettings().blockTagsGlobally)
+
+            // Add site-scoped term on R34V
+            vm.addTerm("site-only-tag")
+            advanceUntilIdle()
+            val afterSiteAdd = expectMostRecentItem()
+            assertEquals(1, afterSiteAdd.siteTermsCount)
+            assertEquals(0, afterSiteAdd.globalTermsCount)
+
+            // Switch to Global scope and add a global term
+            vm.selectScope(BlockedTermsScope.GLOBAL)
+            vm.addTerm("global-tag")
+            advanceUntilIdle()
+            val globalState = expectMostRecentItem()
+            assertEquals(BlockedTermsScope.GLOBAL, globalState.selectedScope)
+            assertEquals(SiteId.GLOBAL, globalState.activeTargetSiteId)
+            assertEquals(1, globalState.globalTermsCount)
+            assertEquals(1, globalState.siteTermsCount)
+            assertEquals(listOf("global-tag"), globalState.terms.map { it.term })
+
+            // Verify global + site terms both appear in observeEffectiveTermsBySite(R34V)
+            val allStored = db.blockedTermDao.getAll()
+            assertTrue(allStored.any { it.siteId == SiteId.GLOBAL.value && it.term == "global-tag" })
+            assertTrue(allStored.any { it.siteId == SiteId.R34V.value && it.term == "site-only-tag" })
+
+            // Clearing Global only clears SiteId.GLOBAL, leaving R34V's term intact
+            vm.clearAll()
+            advanceUntilIdle()
+            val afterClearGlobal = expectMostRecentItem()
+            assertEquals(0, afterClearGlobal.globalTermsCount)
+            assertEquals(1, afterClearGlobal.siteTermsCount)
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
 }

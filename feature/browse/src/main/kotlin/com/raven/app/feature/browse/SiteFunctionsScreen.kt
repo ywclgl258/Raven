@@ -137,7 +137,7 @@ class SiteFunctionsViewModel(
         favoriteRepository.observeBySite(siteId),
         downloadStateRepository.observeBySite(siteId),
         subscriptionRepository.observeSubscriptions(siteId),
-        blockedTermsRepository.observeBySite(siteId),
+        blockedTermsRepository.observeEffectiveTermsBySite(siteId),
     ) { favs, dls, subs, blocked ->
         SiteCounts(
             favorites = favs.size,

@@ -17,6 +17,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
+import androidx.compose.material.icons.outlined.AutoStories
 import androidx.compose.material.icons.outlined.Backup
 import androidx.compose.material.icons.outlined.Block
 import androidx.compose.material.icons.outlined.Cached
@@ -249,11 +250,22 @@ fun SettingsScreenContent(
                     RavenGroupedDivider(insetWithIcon = true)
                     RavenGroupedSwitchRow(
                         title = "中文标签词典翻译",
-                        subtitle = "使用内置 165 条标签词典中文化显示作品标签与搜索联想",
+                        subtitle = "结合内置、EhTagTranslation 社区与自定义译名中文化显示标签与搜索联想",
                         icon = Icons.Outlined.Translate,
                         checked = uiState.settings.translateTags,
                         onCheckedChange = onToggleTranslateTags,
                         modifier = Modifier.testTag("settings_translate_tags"),
+                    )
+                    RavenGroupedDivider(insetWithIcon = true)
+                    val dictStats = uiState.tagDictionaryStats
+                    RavenGroupedRow(
+                        title = "标签中文词典",
+                        subtitle = "同步 40,000+ 社区中文词库并管理自定义标签译名",
+                        value = "内置 ${dictStats.builtInCount} · 社区 ${dictStats.communityCount} · 自定义 ${dictStats.customCount}",
+                        icon = Icons.Outlined.AutoStories,
+                        showChevron = true,
+                        onClick = navigator::openTagDictionary,
+                        modifier = Modifier.testTag("settings_tag_dictionary_row"),
                     )
                     RavenGroupedDivider(insetWithIcon = true)
                     RavenGroupedSwitchRow(

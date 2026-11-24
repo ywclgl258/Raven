@@ -150,6 +150,35 @@ class NhentaiSitePluginTest {
         assertTrue(q.contains("pages:>=10"))
         assertTrue(q.contains("pages:<=80"))
 
+        // Multi-word & EH-namespaced excludeTags quote properly, strip unsupported female: namespace,
+        // and anchor pure-exclude feed requests with pages:>0
+        val multiExcludeUrl = ComicUrl.requireParse(
+            plugin.resolveApiUrl(
+                FeedRequest(
+                    siteId = SiteId.NHENTAI,
+                    query = "elf",
+                    advancedFilters = AdvancedSearchFilters(
+                        excludeTags = listOf("big breasts", "female:sole_female", "tag:dark skin"),
+                    ),
+                ),
+            ),
+        )
+        val multiQ = multiExcludeUrl.queryParameter("query").orEmpty()
+        assertTrue(multiQ.contains("elf"))
+        assertTrue(multiQ.contains("-\"big breasts\""))
+        assertTrue(multiQ.contains("-\"sole female\""))
+        assertTrue(multiQ.contains("-tag:\"dark skin\""))
+
+        val pureExcludeUrl = ComicUrl.requireParse(
+            plugin.resolveApiUrl(
+                FeedRequest(
+                    siteId = SiteId.NHENTAI,
+                    advancedFilters = AdvancedSearchFilters(excludeTags = listOf("guro")),
+                ),
+            ),
+        )
+        assertEquals("pages:>0 -guro", pureExcludeUrl.queryParameter("query"))
+
         // Gallery detail deduplicates cover/page extensions and rotates image_servers
         val detail = plugin.gallerySource!!.loadGalleryDetail("https://nhentai.net/g/550001/")
         assertEquals("https://t1.nhentai.net/galleries/990001/cover.jpg", detail.item.coverUrl)

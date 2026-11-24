@@ -15,6 +15,7 @@ import com.raven.app.core.database.dao.ShelfDao
 import com.raven.app.core.database.dao.ShelfItemDao
 import com.raven.app.core.database.dao.SmartShelfDao
 import com.raven.app.core.database.dao.TagSubscriptionDao
+import com.raven.app.core.database.dao.TagTranslationDao
 import com.raven.app.core.database.dao.TimeBookmarkDao
 import com.raven.app.core.database.dao.UpdateInboxDao
 import com.raven.app.core.database.dao.WatchProgressDao
@@ -28,6 +29,7 @@ import com.raven.app.core.model.ImageFavorite
 import com.raven.app.core.model.RavenBackupPayload
 import com.raven.app.core.model.Shelf
 import com.raven.app.core.model.SiteId
+import com.raven.app.core.model.TagTranslationSource
 
 /**
  * Exports [RavenBackupPayload] snapshots and atomically merges/applies incoming backups
@@ -56,6 +58,7 @@ class BackupDataRepository(
     private val settingsDataStore: SettingsDataStore,
     private val transactionRunner: DatabaseTransactionRunner,
     private val clock: () -> Long = System::currentTimeMillis,
+    private val tagTranslationDao: TagTranslationDao? = null,
 ) {
     fun summarize(payload: RavenBackupPayload): BackupSummary = BackupMerger.summarize(payload)
 
@@ -151,6 +154,10 @@ class BackupDataRepository(
             readerPreferences = readerPreferencesDao.getAll().map { it.toDomain() },
             siteLanguages = siteLanguages,
             settings = portableSettings,
+            customTagTranslations = tagTranslationDao
+                ?.getBySource(TagTranslationSource.USER_CUSTOM)
+                ?.map { it.toDomain() }
+                .orEmpty(),
         )
     }
 
@@ -233,6 +240,16 @@ class BackupDataRepository(
         readerPreferencesDao.deleteAll()
         if (payload.readerPreferences.isNotEmpty()) {
             readerPreferencesDao.upsertAll(payload.readerPreferences.map { it.toEntity() })
+        }
+
+        tagTranslationDao?.let { dao ->
+            dao.deleteBySource(TagTranslationSource.USER_CUSTOM)
+            if (payload.customTagTranslations.isNotEmpty()) {
+                payload.customTagTranslations
+                    .map { it.copy(source = TagTranslationSource.USER_CUSTOM).toEntity() }
+                    .chunked(150)
+                    .forEach { chunk -> dao.upsertAll(chunk) }
+            }
         }
     }
 

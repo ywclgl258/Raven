@@ -9,6 +9,7 @@ import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.emptyPreferences
 import androidx.datastore.preferences.core.floatPreferencesKey
+import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStoreFile
 import com.raven.app.core.database.converter.RavenTypeConverters
@@ -166,6 +167,34 @@ class SettingsDataStore(
         dataStore.edit { prefs -> prefs[Keys.SITE_SWITCH_TUTORIAL_SEEN] = seen }
     }
 
+    suspend fun setTagDictAutoSync(enabled: Boolean) {
+        dataStore.edit { prefs -> prefs[Keys.TAG_DICT_AUTO_SYNC] = enabled }
+    }
+
+    suspend fun setTagDictEtag(etag: String) {
+        dataStore.edit { prefs -> prefs[Keys.TAG_DICT_ETAG] = etag.trim() }
+    }
+
+    suspend fun setTagDictReleaseTag(releaseTag: String) {
+        dataStore.edit { prefs -> prefs[Keys.TAG_DICT_RELEASE_TAG] = releaseTag.trim() }
+    }
+
+    suspend fun setTagDictUpdatedAt(updatedAt: Long) {
+        dataStore.edit { prefs -> prefs[Keys.TAG_DICT_UPDATED_AT] = updatedAt.coerceAtLeast(0L) }
+    }
+
+    suspend fun setTagDictSyncState(etag: String, releaseTag: String, updatedAt: Long) {
+        dataStore.edit { prefs ->
+            prefs[Keys.TAG_DICT_ETAG] = etag.trim()
+            prefs[Keys.TAG_DICT_RELEASE_TAG] = releaseTag.trim()
+            prefs[Keys.TAG_DICT_UPDATED_AT] = updatedAt.coerceAtLeast(0L)
+        }
+    }
+
+    suspend fun setBlockTagsGlobally(enabled: Boolean) {
+        dataStore.edit { prefs -> prefs[Keys.BLOCK_TAGS_GLOBALLY] = enabled }
+    }
+
     /**
      * Atomically marks `site_switch_tutorial_seen = true`.
      * Returns `true` strictly once when transitioning from unseen (`false`) to seen (`true`).
@@ -201,6 +230,8 @@ class SettingsDataStore(
             put(KEY_DOWNLOAD_UNMETERED_ONLY, current.downloadUnmeteredOnly.toString())
             put(KEY_REDUCE_TRANSPARENCY, current.reduceTransparency.toString())
             put(KEY_AUTO_UPDATE_CHECK, current.autoUpdateCheck.toString())
+            put(KEY_TAG_DICT_AUTO_SYNC, current.tagDictAutoSync.toString())
+            put(KEY_BLOCK_TAGS_GLOBALLY, current.blockTagsGlobally.toString())
         }
     }
 
@@ -264,6 +295,12 @@ class SettingsDataStore(
         }
         settingsMap[KEY_AUTO_UPDATE_CHECK]?.toBooleanStrictOrNull()?.let {
             prefs[Keys.AUTO_UPDATE_CHECK] = it
+        }
+        settingsMap[KEY_TAG_DICT_AUTO_SYNC]?.toBooleanStrictOrNull()?.let {
+            prefs[Keys.TAG_DICT_AUTO_SYNC] = it
+        }
+        settingsMap[KEY_BLOCK_TAGS_GLOBALLY]?.toBooleanStrictOrNull()?.let {
+            prefs[Keys.BLOCK_TAGS_GLOBALLY] = it
         }
     }
 
@@ -332,6 +369,11 @@ class SettingsDataStore(
             reduceTransparency = prefs[Keys.REDUCE_TRANSPARENCY] ?: false,
             autoUpdateCheck = prefs[Keys.AUTO_UPDATE_CHECK] ?: true,
             siteSwitchTutorialSeen = prefs[Keys.SITE_SWITCH_TUTORIAL_SEEN] ?: false,
+            tagDictAutoSync = prefs[Keys.TAG_DICT_AUTO_SYNC] ?: true,
+            tagDictEtag = prefs[Keys.TAG_DICT_ETAG].orEmpty(),
+            tagDictReleaseTag = prefs[Keys.TAG_DICT_RELEASE_TAG].orEmpty(),
+            tagDictUpdatedAt = prefs[Keys.TAG_DICT_UPDATED_AT] ?: 0L,
+            blockTagsGlobally = prefs[Keys.BLOCK_TAGS_GLOBALLY] ?: true,
         )
     }
 
@@ -351,6 +393,11 @@ class SettingsDataStore(
         val REDUCE_TRANSPARENCY = booleanPreferencesKey(KEY_REDUCE_TRANSPARENCY)
         val AUTO_UPDATE_CHECK = booleanPreferencesKey(KEY_AUTO_UPDATE_CHECK)
         val SITE_SWITCH_TUTORIAL_SEEN = booleanPreferencesKey(KEY_SITE_SWITCH_TUTORIAL_SEEN)
+        val TAG_DICT_AUTO_SYNC = booleanPreferencesKey(KEY_TAG_DICT_AUTO_SYNC)
+        val TAG_DICT_ETAG = stringPreferencesKey(KEY_TAG_DICT_ETAG)
+        val TAG_DICT_RELEASE_TAG = stringPreferencesKey(KEY_TAG_DICT_RELEASE_TAG)
+        val TAG_DICT_UPDATED_AT = longPreferencesKey(KEY_TAG_DICT_UPDATED_AT)
+        val BLOCK_TAGS_GLOBALLY = booleanPreferencesKey(KEY_BLOCK_TAGS_GLOBALLY)
 
         fun siteLanguage(siteId: SiteId): Preferences.Key<String> =
             stringPreferencesKey("$SITE_LANGUAGE_PREFIX${siteId.value}")
@@ -380,6 +427,11 @@ class SettingsDataStore(
         const val KEY_REDUCE_TRANSPARENCY: String = "reduce_transparency"
         const val KEY_AUTO_UPDATE_CHECK: String = "auto_update_check"
         const val KEY_SITE_SWITCH_TUTORIAL_SEEN: String = "site_switch_tutorial_seen"
+        const val KEY_TAG_DICT_AUTO_SYNC: String = "tag_dict_auto_sync"
+        const val KEY_TAG_DICT_ETAG: String = "tag_dict_etag"
+        const val KEY_TAG_DICT_RELEASE_TAG: String = "tag_dict_release_tag"
+        const val KEY_TAG_DICT_UPDATED_AT: String = "tag_dict_updated_at"
+        const val KEY_BLOCK_TAGS_GLOBALLY: String = "block_tags_globally"
 
         /** Keys safe to include in encrypted cross-device backups (never device paths/credentials). */
         val PORTABLE_BACKUP_KEYS: Set<String> = setOf(
@@ -395,6 +447,8 @@ class SettingsDataStore(
             KEY_DOWNLOAD_UNMETERED_ONLY,
             KEY_REDUCE_TRANSPARENCY,
             KEY_AUTO_UPDATE_CHECK,
+            KEY_TAG_DICT_AUTO_SYNC,
+            KEY_BLOCK_TAGS_GLOBALLY,
         )
 
         private val json = RavenTypeConverters.json

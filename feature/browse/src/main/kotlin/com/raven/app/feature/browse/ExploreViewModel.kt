@@ -10,8 +10,10 @@ import com.raven.app.core.database.model.ExploreFilterState
 import com.raven.app.core.database.repository.BlockedTermsRepository
 import com.raven.app.core.database.repository.BrowsePositionRepository
 import com.raven.app.core.database.repository.HistoryRepository
+import com.raven.app.core.database.repository.MediaTagCacheRepository
 import com.raven.app.core.database.repository.PreferencesRepository
 import com.raven.app.core.database.repository.ShelfRepository
+import com.raven.app.core.database.repository.TagDictionaryRepository
 import com.raven.app.core.model.ComicLanguage
 import com.raven.app.core.model.FeedRequest
 import com.raven.app.core.model.FeedSort
@@ -23,6 +25,7 @@ import com.raven.app.core.model.SiteDescriptor
 import com.raven.app.core.model.SiteException
 import com.raven.app.core.model.SiteId
 import com.raven.app.core.model.SiteSectionSpec
+import com.raven.app.core.model.TagRef
 import com.raven.app.core.sitespi.SitePlugin
 import com.raven.app.core.sitespi.SiteRegistry
 import kotlinx.coroutines.CancellationException
@@ -34,6 +37,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
@@ -123,9 +127,11 @@ private data class ExploreLoadState(
 
 private data class ExploreLocalContext(
     val blockedTerms: List<String>,
+    val cachedTagsByKey: Map<String, List<TagRef>>,
     val watchProgressMap: Map<String, Float>,
     val readingProgressMap: Map<String, Float>,
     val watchLaterKeys: Set<String>,
+    val dictRevision: Long = 0L,
 )
 
 @OptIn(ExperimentalCoroutinesApi::class)
@@ -138,6 +144,8 @@ class ExploreViewModel(
     private val browsePositionRepository: BrowsePositionRepository,
     private val dispatchers: AppDispatchers,
     private val tagDictionary: TagDictionary = TagDictionary.default,
+    private val mediaTagCacheRepository: MediaTagCacheRepository? = null,
+    private val tagDictionaryRepository: TagDictionaryRepository? = null,
 ) : ViewModel() {
 
     private val allDescriptors: List<SiteDescriptor> = siteRegistry.allDescriptors()
@@ -146,6 +154,8 @@ class ExploreViewModel(
 
     private var loadJob: Job? = null
     private var paginateJob: Job? = null
+
+    private val dictRevisionFlow = tagDictionaryRepository?.observeRevision() ?: flowOf(0L)
 
     private val loadKeyFlow = preferencesRepository.settings
         .map { settings ->
@@ -164,19 +174,23 @@ class ExploreViewModel(
         .map { it.siteId }
         .distinctUntilChanged()
         .flatMapLatest { siteId ->
-            combine(
-                blockedTermsRepository.observeTermsBySite(siteId),
+            val cachedTagsFlow = mediaTagCacheRepository?.observeTagsBySite(siteId) ?: flowOf(emptyMap())
+            val base = combine(
+                blockedTermsRepository.observeEffectiveTermsBySite(siteId),
+                cachedTagsFlow,
                 historyRepository.observeWatchProgressBySite(siteId),
                 historyRepository.observeReadingProgressBySite(siteId),
                 shelfRepository.observeShelfItemKeys(Shelf.WATCH_LATER_ID),
-            ) { blocked, watches, readings, watchLater ->
+            ) { blocked, cachedTags, watches, readings, watchLater ->
                 ExploreLocalContext(
                     blockedTerms = blocked,
+                    cachedTagsByKey = cachedTags,
                     watchProgressMap = watches.associate { it.mediaId to it.progressFraction },
                     readingProgressMap = readings.associate { it.mediaId to it.progressFraction },
                     watchLaterKeys = watchLater,
                 )
             }
+            combine(base, dictRevisionFlow) { ctx, rev -> ctx.copy(dictRevision = rev) }
         }
 
     val uiState: StateFlow<ExploreUiState> = combine(
@@ -204,7 +218,14 @@ class ExploreViewModel(
         val aligned = network.loadedKey == key
         val filteredItems = if (aligned) {
             network.rawItems
-                .filter { ContentFilter.isAllowed(it, local.blockedTerms) }
+                .filter { item ->
+                    ContentFilter.isAllowed(
+                        item = item,
+                        blockedTerms = local.blockedTerms,
+                        tagDictionary = tagDictionary,
+                        extraTags = local.cachedTagsByKey[item.compositeKey].orEmpty(),
+                    )
+                }
                 .withLocalizedTags(tagDictionary, settings.translateTags)
         } else {
             emptyList()

@@ -20,6 +20,7 @@ import com.raven.app.core.model.SiteId
 import com.raven.app.core.model.SmartShelfRule
 import com.raven.app.core.model.StorageLocation
 import com.raven.app.core.model.TagRef
+import com.raven.app.core.model.TagTranslationSource
 import org.junit.Assert.assertEquals
 import org.junit.Test
 
@@ -130,5 +131,10 @@ class RavenTypeConvertersTest {
             assertEquals(it, converters.toStorageLocation(converters.fromStorageLocation(it)))
         }
         assertEquals(StorageLocation.PRIVATE, converters.toStorageLocation("UNKNOWN"))
+
+        TagTranslationSource.entries.forEach {
+            assertEquals(it, converters.toTagTranslationSource(converters.fromTagTranslationSource(it)))
+        }
+        assertEquals(TagTranslationSource.USER_CUSTOM, converters.toTagTranslationSource("UNKNOWN"))
     }
 }

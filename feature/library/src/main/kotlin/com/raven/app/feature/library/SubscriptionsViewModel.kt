@@ -4,17 +4,19 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.raven.app.core.common.AppDispatchers
 import com.raven.app.core.common.ContentFilter
+import com.raven.app.core.common.TagDictionary
 import com.raven.app.core.database.model.AppSettings
 import com.raven.app.core.database.repository.BlockedTermsRepository
+import com.raven.app.core.database.repository.MediaTagCacheRepository
 import com.raven.app.core.database.repository.PreferencesRepository
 import com.raven.app.core.database.repository.SubscriptionRepository
-import com.raven.app.core.model.BlockedTerm
 import com.raven.app.core.model.FeedRequest
 import com.raven.app.core.model.FeedSort
 import com.raven.app.core.model.InboxSourceKind
 import com.raven.app.core.model.MediaItem
 import com.raven.app.core.model.SavedSearch
 import com.raven.app.core.model.SiteId
+import com.raven.app.core.model.TagRef
 import com.raven.app.core.model.TagSubscription
 import com.raven.app.core.model.UpdateInboxItem
 import com.raven.app.core.sitespi.ResolvedLink
@@ -31,6 +33,7 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
@@ -112,6 +115,8 @@ class SubscriptionsViewModel(
     private val siteRegistry: SiteRegistry,
     private val dispatchers: AppDispatchers,
     private val clockMs: () -> Long = System::currentTimeMillis,
+    private val tagDictionary: TagDictionary = TagDictionary.default,
+    private val mediaTagCacheRepository: MediaTagCacheRepository? = null,
 ) : ViewModel() {
 
     private val controls = MutableStateFlow(
@@ -128,18 +133,31 @@ class SubscriptionsViewModel(
 
     private var refreshJob: Job? = null
 
+    private val cachedTagsFlow = mediaTagCacheRepository?.observeAllTags() ?: flowOf(emptyMap())
+
     private val repoDataFlow = combine(
         subscriptionRepository.observeAllSubscriptions(),
         subscriptionRepository.observeSavedSearches(),
         subscriptionRepository.observeInbox(),
-    ) { subs, savedSearches, inbox ->
-        Triple(subs, savedSearches, inbox)
+        blockedTermsRepository.observeAllGrouped(),
+        cachedTagsFlow,
+    ) { subs, savedSearches, inbox, blockedBySite, cachedTags ->
+        SubscriptionsRepoSnapshot(
+            subscriptions = subs,
+            savedSearches = savedSearches,
+            inbox = inbox,
+            blockedBySite = blockedBySite,
+            cachedTagsByKey = cachedTags,
+        )
     }
 
     val uiState: StateFlow<SubscriptionsUiState> = combine(
         repoDataFlow,
         controls,
-    ) { (allSubs, savedSearches, allInbox), ctrl ->
+    ) { repo, ctrl ->
+        val allSubs = repo.subscriptions
+        val savedSearches = repo.savedSearches
+        val allInbox = filterInboxEntries(repo.inbox, repo.blockedBySite, repo.cachedTagsByKey)
         val sortedSubs = allSubs.sortedWith(
             compareBy<TagSubscription> { it.siteId.value }.thenBy { it.sortOrder },
         )
@@ -308,9 +326,9 @@ class SubscriptionsViewModel(
             controls.update { it.copy(checkingSourceId = sourceId) }
             try {
                 val settings = preferencesRepository.currentSettings()
-                val blockedBySite = blockedTermsRepository.observeAll().first()
-                    .groupBy(BlockedTerm::siteId) { it.term }
-                val outcome = refreshTagSubscription(sub, settings, blockedBySite)
+                val blockedBySite = blockedTermsRepository.observeAllGrouped().first()
+                val cachedTags = mediaTagCacheRepository?.observeAllTags()?.first().orEmpty()
+                val outcome = refreshTagSubscription(sub, settings, blockedBySite, cachedTags)
                 controls.update {
                     it.copy(
                         checkingSourceId = null,
@@ -374,8 +392,8 @@ class SubscriptionsViewModel(
             }
 
             val settings = preferencesRepository.currentSettings()
-            val blockedBySite = blockedTermsRepository.observeAll().first()
-                .groupBy(BlockedTerm::siteId) { it.term }
+            val blockedBySite = blockedTermsRepository.observeAllGrouped().first()
+            val cachedTags = mediaTagCacheRepository?.observeAllTags()?.first().orEmpty()
             val semaphore = Semaphore(MAX_CONCURRENT_CHECKS)
 
             try {
@@ -383,7 +401,7 @@ class SubscriptionsViewModel(
                     val tagJobs = allSubs.map { sub ->
                         async(dispatchers.io) {
                             semaphore.withPermit {
-                                val outcome = refreshTagSubscription(sub, settings, blockedBySite)
+                                val outcome = refreshTagSubscription(sub, settings, blockedBySite, cachedTags)
                                 recordProgressTick(outcome)
                                 outcome
                             }
@@ -392,7 +410,7 @@ class SubscriptionsViewModel(
                     val savedJobs = allSaved.map { saved ->
                         async(dispatchers.io) {
                             semaphore.withPermit {
-                                val outcome = refreshSavedSearch(saved, settings, blockedBySite)
+                                val outcome = refreshSavedSearch(saved, settings, blockedBySite, cachedTags)
                                 recordProgressTick(outcome)
                                 outcome
                             }
@@ -450,6 +468,7 @@ class SubscriptionsViewModel(
         sub: TagSubscription,
         settings: AppSettings,
         blockedBySite: Map<SiteId, List<String>>,
+        cachedTagsByKey: Map<String, List<TagRef>>,
     ): SourceCheckOutcome {
         val plugin = siteRegistry.get(sub.siteId) ?: return SourceCheckOutcome(failed = true)
         val sourceId = subscriptionSourceId(sub)
@@ -461,7 +480,7 @@ class SubscriptionsViewModel(
             val knownKeys = existing.mapTo(mutableSetOf()) { it.item.compositeKey }
 
             val rawItems = fetchTagItems(plugin, sub, settings)
-            val allowed = filterBlocked(rawItems, blockedBySite)
+            val allowed = filterBlocked(rawItems, blockedBySite, cachedTagsByKey)
             val now = clockMs()
 
             if (isBaseline) {
@@ -511,6 +530,7 @@ class SubscriptionsViewModel(
         saved: SavedSearch,
         settings: AppSettings,
         blockedBySite: Map<SiteId, List<String>>,
+        cachedTagsByKey: Map<String, List<TagRef>>,
     ): SourceCheckOutcome {
         val sourceId = saved.id
         return try {
@@ -558,7 +578,7 @@ class SubscriptionsViewModel(
                 return SourceCheckOutcome(failed = true)
             }
 
-            val allowed = filterBlocked(collected.values.toList(), blockedBySite)
+            val allowed = filterBlocked(collected.values.toList(), blockedBySite, cachedTagsByKey)
             val now = clockMs()
 
             if (isBaseline) {
@@ -644,13 +664,48 @@ class SubscriptionsViewModel(
     private fun filterBlocked(
         items: List<MediaItem>,
         blockedBySite: Map<SiteId, List<String>>,
-    ): List<MediaItem> {
-        if (items.isEmpty() || blockedBySite.isEmpty()) return items
-        return items.filter { media ->
-            val terms = blockedBySite[media.siteId].orEmpty()
-            terms.isEmpty() || ContentFilter.isAllowed(media, terms)
+        cachedTagsByKey: Map<String, List<TagRef>>,
+    ): List<MediaItem> = ContentFilter.filterAllowed(
+        items = items,
+        blockedTermsBySite = blockedBySite,
+        tagDictionary = tagDictionary,
+        extraTagsByMediaKey = cachedTagsByKey,
+    )
+
+    private fun filterInboxEntries(
+        entries: List<UpdateInboxItem>,
+        blockedBySite: Map<SiteId, List<String>>,
+        cachedTagsByKey: Map<String, List<TagRef>>,
+    ): List<UpdateInboxItem> {
+        if (entries.isEmpty() || blockedBySite.isEmpty()) return entries
+        val globalTerms = blockedBySite[SiteId.GLOBAL].orEmpty()
+        return entries.filter { entry ->
+            val siteTerms = blockedBySite[entry.item.siteId].orEmpty()
+            val effectiveTerms = when {
+                globalTerms.isEmpty() -> siteTerms
+                siteTerms.isEmpty() -> globalTerms
+                else -> globalTerms + siteTerms
+            }
+            if (effectiveTerms.isEmpty()) {
+                true
+            } else {
+                ContentFilter.isAllowed(
+                    item = entry.item,
+                    blockedTerms = effectiveTerms,
+                    tagDictionary = tagDictionary,
+                    extraTags = cachedTagsByKey[entry.item.compositeKey].orEmpty(),
+                )
+            }
         }
     }
+
+    private data class SubscriptionsRepoSnapshot(
+        val subscriptions: List<TagSubscription>,
+        val savedSearches: List<SavedSearch>,
+        val inbox: List<UpdateInboxItem>,
+        val blockedBySite: Map<SiteId, List<String>>,
+        val cachedTagsByKey: Map<String, List<TagRef>>,
+    )
 
     companion object {
         const val MAX_CONCURRENT_CHECKS: Int = 3

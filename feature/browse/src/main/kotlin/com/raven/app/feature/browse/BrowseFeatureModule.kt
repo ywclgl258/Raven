@@ -23,6 +23,8 @@ val browseFeatureModule: Module = module {
             browsePositionRepository = get(),
             dispatchers = get(),
             tagDictionary = getOrNull<TagDictionary>() ?: TagDictionary.default,
+            mediaTagCacheRepository = get(),
+            tagDictionaryRepository = get(),
         )
     }
 
@@ -36,6 +38,8 @@ val browseFeatureModule: Module = module {
             browsePositionRepository = get(),
             dispatchers = get(),
             tagDictionary = getOrNull<TagDictionary>() ?: TagDictionary.default,
+            mediaTagCacheRepository = get(),
+            tagDictionaryRepository = get(),
         )
     }
 
@@ -51,6 +55,8 @@ val browseFeatureModule: Module = module {
             browsePositionRepository = get(),
             dispatchers = get(),
             tagDictionary = getOrNull<TagDictionary>() ?: TagDictionary.default,
+            mediaTagCacheRepository = get(),
+            tagDictionaryRepository = get(),
         )
     }
 
@@ -89,6 +95,8 @@ val browseFeatureModule: Module = module {
             shelfRepository = get(),
             dispatchers = get(),
             tagDictionary = getOrNull<TagDictionary>() ?: TagDictionary.default,
+            mediaTagCacheRepository = get(),
+            tagDictionaryRepository = get(),
         )
     }
 }

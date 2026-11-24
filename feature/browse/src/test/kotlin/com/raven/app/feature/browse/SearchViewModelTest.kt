@@ -14,6 +14,7 @@ import com.raven.app.core.model.SiteDescriptor
 import com.raven.app.core.model.SiteException
 import com.raven.app.core.model.SiteId
 import com.raven.app.core.model.SiteNetworkProfile
+import com.raven.app.core.model.TagRef
 import com.raven.app.core.sitespi.SiteRegistry
 import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -588,4 +589,159 @@ class SearchViewModelTest {
         assertEquals("最长时长", FeedSort.DURATION.displayLabel())
         assertEquals("随机", FeedSort.RANDOM.displayLabel())
     }
+
+    @Test
+    fun `auto-injects blocked terms into server excludeTags capped at 12 and filters global bilingual and cached-tag matches across single and cross-site search`() =
+        runTest(mainDispatcherRule.dispatcher) {
+            val harness = BrowseTestHarness(mainDispatcherRule.dispatcher)
+
+            // Seed Global Chinese blocked term ("触手" -> "tentacles") + per-site term + 14 extra ASCII terms to test 12-term cap
+            harness.blockedTermsRepository.addTerm(SiteId.GLOBAL, "触手")
+            harness.blockedTermsRepository.addTerm(SiteId.R34V, "netorare")
+            for (i in 1..14) {
+                harness.blockedTermsRepository.addTerm(SiteId.GLOBAL, "spam_tag_$i")
+            }
+
+            // Seed MediaTagCacheRepository for a card whose search listing omits tags!
+            harness.mediaTagCacheRepository.upsertTags(
+                siteId = SiteId.R34V,
+                mediaId = "cached-tentacle-card",
+                tags = listOf(TagRef(slug = "female:tentacles", label = "tentacles", namespace = "female")),
+            )
+            harness.mediaTagCacheRepository.upsertTags(
+                siteId = SiteId.NHENTAI,
+                mediaId = "nh-cached-blocked",
+                tags = listOf(TagRef(slug = "tentacles", label = "tentacles")),
+            )
+
+            val r34Plugin = FakeSitePlugin(
+                descriptor = SiteDescriptor(
+                    id = SiteId.R34V,
+                    displayName = "Rule34Video",
+                    shortName = "R34V",
+                    primaryKind = MediaKind.VIDEO,
+                    defaultHost = "rule34video.com",
+                    capabilities = setOf(SiteCapability.SEARCH, SiteCapability.ADVANCED_SEARCH),
+                    supportedFilters = setOf(AdvancedFilterField.EXCLUDE_TAGS),
+                ),
+                supportsExcludeTagsFlag = true,
+                searchHandler = {
+                    FeedPage(
+                        items = listOf(
+                            sampleMediaItem(
+                                siteId = SiteId.R34V,
+                                id = "clean-1",
+                                title = "Clean Anime",
+                                tags = listOf(TagRef(slug = "blonde", label = "blonde")),
+                            ),
+                            sampleMediaItem(
+                                siteId = SiteId.R34V,
+                                id = "blocked-direct-tag",
+                                title = "Direct Blocked",
+                                tags = listOf(TagRef(slug = "netorare", label = "netorare")),
+                            ),
+                            // Search card has NO tags, but MediaTagCacheRepository knows it has "female:tentacles"
+                            sampleMediaItem(
+                                siteId = SiteId.R34V,
+                                id = "cached-tentacle-card",
+                                title = "Innocent Looking Title",
+                                tags = emptyList(),
+                            ),
+                        ),
+                    )
+                },
+            )
+
+            val nhentaiPlugin = FakeSitePlugin(
+                descriptor = SiteDescriptor(
+                    id = SiteId.NHENTAI,
+                    displayName = "nHentai",
+                    shortName = "nHentai",
+                    primaryKind = MediaKind.COMIC,
+                    defaultHost = "nhentai.net",
+                    capabilities = setOf(SiteCapability.SEARCH),
+                ),
+                supportsExcludeTagsFlag = false,
+                searchHandler = {
+                    FeedPage(
+                        items = listOf(
+                            sampleMediaItem(
+                                siteId = SiteId.NHENTAI,
+                                id = "nh-clean",
+                                kind = MediaKind.COMIC,
+                                title = "Clean Comic",
+                                tags = listOf(TagRef(slug = "stockings", label = "stockings")),
+                            ),
+                            sampleMediaItem(
+                                siteId = SiteId.NHENTAI,
+                                id = "nh-cached-blocked",
+                                kind = MediaKind.COMIC,
+                                title = "Untagged Comic",
+                                tags = emptyList(),
+                            ),
+                        ),
+                    )
+                },
+            )
+
+            val vm = SearchViewModel(
+                initialRoute = RavenRoute.Search(),
+                siteRegistry = SiteRegistry(listOf(r34Plugin, nhentaiPlugin)),
+                preferencesRepository = harness.preferencesRepository,
+                searchHistoryRepository = harness.searchHistoryRepository,
+                subscriptionRepository = harness.subscriptionRepository,
+                blockedTermsRepository = harness.blockedTermsRepository,
+                historyRepository = harness.historyRepository,
+                shelfRepository = harness.shelfRepository,
+                dispatchers = harness.dispatchers,
+                tagDictionary = harness.runtimeDictionary,
+                mediaTagCacheRepository = harness.mediaTagCacheRepository,
+                tagDictionaryRepository = harness.tagDictionaryRepository,
+            )
+
+            vm.uiState.test {
+                advanceUntilIdle()
+
+                // 1. Single-site search on R34V (supportsExcludeTags = true)
+                vm.updateQuery("elf")
+                vm.submitSearch()
+                advanceUntilIdle()
+
+                val singleReq = r34Plugin.searchRequests.last()
+                assertEquals(
+                    SearchViewModel.MAX_SERVER_EXCLUDE_BLOCKED_TERMS,
+                    singleReq.advancedFilters.excludeTags.size,
+                )
+                assertTrue("tentacles" in singleReq.advancedFilters.excludeTags)
+
+                val singleState = expectMostRecentItem()
+                // Only clean-1 survives (blocked-direct-tag & cached-tentacle-card both filtered out!)
+                assertEquals(listOf("clean-1"), singleState.singleSiteItems.map { it.id })
+
+                // 2. Cross-site search injects excludeTags on R34V (supportsExcludeTags=true) only, not nhentai
+                vm.setMode(SearchMode.CROSS_SITE)
+                advanceUntilIdle()
+
+                val r34CrossReq = r34Plugin.searchRequests.last()
+                val nhCrossReq = nhentaiPlugin.searchRequests.last()
+                assertEquals(12, r34CrossReq.advancedFilters.excludeTags.size)
+                assertTrue("tentacles" in r34CrossReq.advancedFilters.excludeTags)
+                assertTrue(nhCrossReq.advancedFilters.excludeTags.isEmpty())
+
+                // Client-side cross-site filter removes cached-tag & global blocked works on BOTH sites
+                val crossState = expectMostRecentItem()
+                assertEquals(
+                    setOf("clean-1", "nh-clean"),
+                    crossState.crossSiteMediaItems.map { it.id }.toSet(),
+                )
+
+                // 3. Updating custom TagDictionary refreshes suggestions & localized tags reactively
+                harness.tagDictionaryRepository.upsertCustomTranslation("elven_archer", "精灵弓箭手")
+                vm.updateQuery("精灵弓")
+                advanceUntilIdle()
+                val afterDictUpdate = expectMostRecentItem()
+                assertTrue(afterDictUpdate.tagSuggestions.any { it.slug == "elven archer" && it.localizedName == "精灵弓箭手" })
+                cancelAndIgnoreRemainingEvents()
+            }
+        }
 }

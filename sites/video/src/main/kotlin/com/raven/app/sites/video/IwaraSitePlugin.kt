@@ -229,6 +229,17 @@ class IwaraSitePlugin(
                     filters = request.advancedFilters,
                     filterDuration = true,
                     filterRating = false,
+                    filterExcludeTags = true,
+                )
+                return page.copy(items = filtered)
+            }
+            if (isGallery && request.advancedFilters.excludeTags.isNotEmpty()) {
+                val filtered = VideoSiteSupport.applyLocalFilters(
+                    items = page.items,
+                    filters = request.advancedFilters,
+                    filterDuration = false,
+                    filterRating = false,
+                    filterExcludeTags = true,
                 )
                 return page.copy(items = filtered)
             }

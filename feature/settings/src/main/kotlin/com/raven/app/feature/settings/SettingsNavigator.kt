@@ -17,6 +17,8 @@ interface SettingsNavigator {
 
     fun openBlockedTerms(siteId: SiteId)
 
+    fun openTagDictionary()
+
     fun openBackupRestore()
 
     fun openStorageMigration()

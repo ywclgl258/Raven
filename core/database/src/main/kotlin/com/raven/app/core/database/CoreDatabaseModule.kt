@@ -2,6 +2,7 @@ package com.raven.app.core.database
 
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
+import com.raven.app.core.common.TagDictionary
 import com.raven.app.core.database.datastore.SettingsDataStore
 import com.raven.app.core.database.repository.BackupDataRepository
 import com.raven.app.core.database.repository.BlockedTermsRepository
@@ -10,10 +11,12 @@ import com.raven.app.core.database.repository.BrowsePositionRepository
 import com.raven.app.core.database.repository.DownloadStateRepository
 import com.raven.app.core.database.repository.FavoriteRepository
 import com.raven.app.core.database.repository.HistoryRepository
+import com.raven.app.core.database.repository.MediaTagCacheRepository
 import com.raven.app.core.database.repository.PreferencesRepository
 import com.raven.app.core.database.repository.SearchHistoryRepository
 import com.raven.app.core.database.repository.ShelfRepository
 import com.raven.app.core.database.repository.SubscriptionRepository
+import com.raven.app.core.database.repository.TagDictionaryRepository
 import org.koin.android.ext.koin.androidContext
 import org.koin.core.module.Module
 import org.koin.dsl.module
@@ -26,7 +29,7 @@ val coreDatabaseModule: Module = module {
     single<RavenDatabase> { RavenDatabase.build(androidContext()) }
     single<DatabaseTransactionRunner> { RoomTransactionRunner(get()) }
 
-    // 18 Room DAOs
+    // 20 Room DAOs
     single { get<RavenDatabase>().watchProgressDao() }
     single { get<RavenDatabase>().readingProgressDao() }
     single { get<RavenDatabase>().favoriteDao() }
@@ -45,6 +48,8 @@ val coreDatabaseModule: Module = module {
     single { get<RavenDatabase>().playbackPreferencesDao() }
     single { get<RavenDatabase>().readerPreferencesDao() }
     single { get<RavenDatabase>().browsePositionDao() }
+    single { get<RavenDatabase>().tagTranslationDao() }
+    single { get<RavenDatabase>().mediaTagCacheDao() }
 
     // Preferences DataStore
     single<DataStore<Preferences>> { SettingsDataStore.createDataStore(androidContext()) }
@@ -124,6 +129,19 @@ val coreDatabaseModule: Module = module {
         )
     }
     single {
+        TagDictionaryRepository(
+            tagTranslationDao = get(),
+            transactionRunner = get(),
+            runtimeDictionary = getOrNull<TagDictionary>() ?: TagDictionary.default,
+        )
+    }
+    single {
+        MediaTagCacheRepository(
+            mediaTagCacheDao = get(),
+            transactionRunner = get(),
+        )
+    }
+    single {
         BackupDataRepository(
             watchProgressDao = get(),
             readingProgressDao = get(),
@@ -143,6 +161,7 @@ val coreDatabaseModule: Module = module {
             readerPreferencesDao = get(),
             settingsDataStore = get(),
             transactionRunner = get(),
+            tagTranslationDao = get(),
         )
     }
 }

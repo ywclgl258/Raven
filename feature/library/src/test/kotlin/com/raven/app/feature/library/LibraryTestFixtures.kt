@@ -4,11 +4,13 @@ import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.emptyPreferences
 import com.raven.app.core.common.CustomAppDispatchers
+import com.raven.app.core.common.TagDictionary
 import com.raven.app.core.database.DatabaseTransactionRunner
 import com.raven.app.core.database.dao.BlockedTermDao
 import com.raven.app.core.database.dao.DownloadItemDao
 import com.raven.app.core.database.dao.FavoriteDao
 import com.raven.app.core.database.dao.ImageFavoriteDao
+import com.raven.app.core.database.dao.MediaTagCacheDao
 import com.raven.app.core.database.dao.PageBookmarkDao
 import com.raven.app.core.database.dao.PlaybackPreferencesDao
 import com.raven.app.core.database.dao.ReaderPreferencesDao
@@ -26,6 +28,7 @@ import com.raven.app.core.database.entity.BlockedTermEntity
 import com.raven.app.core.database.entity.DownloadItemEntity
 import com.raven.app.core.database.entity.FavoriteEntity
 import com.raven.app.core.database.entity.ImageFavoriteEntity
+import com.raven.app.core.database.entity.MediaTagCacheEntity
 import com.raven.app.core.database.entity.PageBookmarkEntity
 import com.raven.app.core.database.entity.PlaybackPreferencesEntity
 import com.raven.app.core.database.entity.ReaderPreferencesEntity
@@ -43,6 +46,7 @@ import com.raven.app.core.database.repository.BookmarkRepository
 import com.raven.app.core.database.repository.DownloadStateRepository
 import com.raven.app.core.database.repository.FavoriteRepository
 import com.raven.app.core.database.repository.HistoryRepository
+import com.raven.app.core.database.repository.MediaTagCacheRepository
 import com.raven.app.core.database.repository.PreferencesRepository
 import com.raven.app.core.database.repository.ShelfRepository
 import com.raven.app.core.database.repository.SubscriptionRepository
@@ -346,10 +350,19 @@ internal class LibraryTestHarness(
     val pageBookmarkDao = InMemoryPageBookmarkDao()
     val timeBookmarkDao = InMemoryTimeBookmarkDao()
     val imageFavoriteDao = InMemoryImageFavoriteDao()
+    val mediaTagCacheDao = InMemoryMediaTagCacheDao()
+
+    val runtimeDictionary = TagDictionary(
+        mapOf(
+            "tentacles" to "触手",
+            "guro" to "猎奇",
+        ),
+    )
 
     val settingsDataStore = SettingsDataStore(InMemoryPreferencesDataStore())
     val preferencesRepository = PreferencesRepository(settingsDataStore, playbackPrefsDao, readerPrefsDao)
     val blockedTermsRepository = BlockedTermsRepository(blockedTermDao, transactionRunner, clock)
+    val mediaTagCacheRepository = MediaTagCacheRepository(mediaTagCacheDao, transactionRunner, clock = clock)
     val historyRepository = HistoryRepository(watchDao, readingDao, transactionRunner)
     val favoriteRepository = FavoriteRepository(favoriteDao, transactionRunner, clock)
     val shelfRepository = ShelfRepository(
@@ -960,5 +973,32 @@ internal class InMemoryImageFavoriteDao : ImageFavoriteDao {
     override suspend fun deleteAll() { rows.value = emptyList() }
     override suspend fun prune(limit: Int) {
         rows.update { list -> list.sortedByDescending { it.addedAt }.take(limit) }
+    }
+}
+
+internal class InMemoryMediaTagCacheDao : MediaTagCacheDao {
+    private val rows = MutableStateFlow<List<MediaTagCacheEntity>>(emptyList())
+    override fun observeAll(): Flow<List<MediaTagCacheEntity>> = rows
+    override fun observeBySite(siteId: String): Flow<List<MediaTagCacheEntity>> =
+        rows.map { list -> list.filter { it.siteId == siteId } }
+    override suspend fun getOne(siteId: String, mediaId: String): MediaTagCacheEntity? =
+        rows.value.firstOrNull { it.siteId == siteId && it.mediaId == mediaId }
+    override suspend fun getBySite(siteId: String): List<MediaTagCacheEntity> =
+        rows.value.filter { it.siteId == siteId }
+    override suspend fun upsert(entity: MediaTagCacheEntity) = upsertAll(listOf(entity))
+    override suspend fun upsertAll(entities: List<MediaTagCacheEntity>) {
+        rows.update { current ->
+            val map = LinkedHashMap<Pair<String, String>, MediaTagCacheEntity>()
+            current.forEach { map[it.siteId to it.mediaId] = it }
+            entities.forEach { map[it.siteId to it.mediaId] = it }
+            map.values.sortedByDescending { it.updatedAt }
+        }
+    }
+    override suspend fun deleteBySite(siteId: String) {
+        rows.update { list -> list.filterNot { it.siteId == siteId } }
+    }
+    override suspend fun deleteAll() { rows.value = emptyList() }
+    override suspend fun prune(limit: Int) {
+        rows.update { list -> list.sortedByDescending { it.updatedAt }.take(limit) }
     }
 }

@@ -12,9 +12,11 @@ import com.raven.app.core.database.repository.BlockedTermsRepository
 import com.raven.app.core.database.repository.BookmarkRepository
 import com.raven.app.core.database.repository.FavoriteRepository
 import com.raven.app.core.database.repository.HistoryRepository
+import com.raven.app.core.database.repository.MediaTagCacheRepository
 import com.raven.app.core.database.repository.PreferencesRepository
 import com.raven.app.core.database.repository.ShelfRepository
 import com.raven.app.core.database.repository.SubscriptionRepository
+import com.raven.app.core.database.repository.TagDictionaryRepository
 import com.raven.app.core.media.download.DownloadCoordinator
 import com.raven.app.core.media.reader.ExportMode
 import com.raven.app.core.media.reader.GalleryExporter
@@ -26,6 +28,7 @@ import com.raven.app.core.model.DownloadStatus
 import com.raven.app.core.model.FavoriteItem
 import com.raven.app.core.model.FavoriteKind
 import com.raven.app.core.model.GalleryDetail
+import com.raven.app.core.model.MediaItem
 import com.raven.app.core.model.MediaKind
 import com.raven.app.core.model.PageBookmark
 import com.raven.app.core.model.RavenRoute
@@ -51,6 +54,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
@@ -99,6 +103,9 @@ data class GalleryDetailUiState(
     val pageBookmarks: List<PageBookmark> = emptyList(),
     val activeDownload: DownloadItem? = null,
     val translateTags: Boolean = true,
+    val blockTagsGlobally: Boolean = true,
+    val tagDictionaryRevision: Long = 0L,
+    val filteredRelated: List<MediaItem> = emptyList(),
     val favoritedTagSlugs: Set<String> = emptySet(),
     val subscribedTagSlugs: Set<String> = emptySet(),
     val blockedTerms: Set<String> = emptySet(),
@@ -170,6 +177,8 @@ class GalleryDetailViewModel(
     private val dispatchers: AppDispatchers,
     private val tagDictionary: TagDictionary = TagDictionary.default,
     private val clock: () -> Long = System::currentTimeMillis,
+    private val mediaTagCacheRepository: MediaTagCacheRepository? = null,
+    private val tagDictionaryRepository: TagDictionaryRepository? = null,
 ) : ViewModel() {
 
     constructor(
@@ -189,6 +198,8 @@ class GalleryDetailViewModel(
         dispatchers: AppDispatchers,
         tagDictionary: TagDictionary = TagDictionary.default,
         clock: () -> Long = System::currentTimeMillis,
+        mediaTagCacheRepository: MediaTagCacheRepository? = null,
+        tagDictionaryRepository: TagDictionaryRepository? = null,
     ) : this(
         route = route,
         siteRegistry = siteRegistry,
@@ -206,6 +217,8 @@ class GalleryDetailViewModel(
         dispatchers = dispatchers,
         tagDictionary = tagDictionary,
         clock = clock,
+        mediaTagCacheRepository = mediaTagCacheRepository,
+        tagDictionaryRepository = tagDictionaryRepository,
     )
 
     private val siteId: SiteId = SiteId.of(route.siteId)
@@ -236,6 +249,7 @@ class GalleryDetailViewModel(
 
     private var loadJob: Job? = null
     private var exportJob: Job? = null
+    private var latestCachedTagsByKey: Map<String, List<TagRef>> = emptyMap()
 
     init {
         observeLocalPersonalState()
@@ -258,6 +272,7 @@ class GalleryDetailViewModel(
                     isInWatchLater = Shelf.WATCH_LATER_ID in shelfIds,
                     activeDownload = downloads.maxByOrNull { it.updatedAt },
                     translateTags = settings.translateTags,
+                    blockTagsGlobally = settings.blockTagsGlobally,
                 )
             }.collectLatest { snapshot ->
                 _uiState.update { state ->
@@ -267,24 +282,32 @@ class GalleryDetailViewModel(
                         isInWatchLater = snapshot.isInWatchLater,
                         activeDownload = snapshot.activeDownload,
                         translateTags = snapshot.translateTags,
+                        blockTagsGlobally = snapshot.blockTagsGlobally,
                     )
                 }
             }
         }
 
-        // Combine site favorites, tag subscriptions, and blocked terms.
+        // Combine site favorites, tag subscriptions, effective blocked terms, cached tags, and dictionary revision.
+        val cachedTagsFlow = mediaTagCacheRepository?.observeTagsBySite(siteId) ?: flowOf(emptyMap())
+        val dictRevisionFlow = tagDictionaryRepository?.observeRevision() ?: flowOf(0L)
         viewModelScope.launch(dispatchers.main) {
             combine(
                 favoriteRepository.observeBySite(siteId),
                 subscriptionRepository.observeSubscriptions(siteId),
-                blockedTermsRepository.observeTermsBySite(siteId),
-            ) { favorites, subscriptions, blocked ->
+                blockedTermsRepository.observeEffectiveTermsBySite(siteId),
+                cachedTagsFlow,
+                dictRevisionFlow,
+            ) { favorites, subscriptions, blocked, cachedTags, dictRevision ->
                 SitePersonalSnapshot(
                     favorites = favorites,
                     subscribedSlugs = subscriptions.mapTo(linkedSetOf()) { it.slug.lowercase() },
                     blockedTerms = blocked.mapTo(linkedSetOf()) { ContentFilter.normalizeTerm(it) },
+                    cachedTagsByKey = cachedTags,
+                    dictRevision = dictRevision,
                 )
             }.collectLatest { snapshot ->
+                latestCachedTagsByKey = snapshot.cachedTagsByKey
                 _uiState.update { state ->
                     val detailKind = state.detail?.item?.kind
                     val isWorkFav = snapshot.favorites.any { fav ->
@@ -299,18 +322,25 @@ class GalleryDetailViewModel(
                         .mapTo(linkedSetOf()) { it.targetId.lowercase() }
                     val updatedTagAction = state.tagAction?.let { action ->
                         val normSlug = action.tag.slug.lowercase()
-                        val normTerm = ContentFilter.normalizeTerm(action.tag.slug)
                         action.copy(
+                            translatedLabel = formatTagLabelInternal(action.tag, state.translateTags),
                             isFavorited = normSlug in favTagSlugs,
                             isSubscribed = normSlug in snapshot.subscribedSlugs,
-                            isBlocked = normTerm in snapshot.blockedTerms,
+                            isBlocked = matchesBlockedTerms(action.tag, snapshot.blockedTerms),
                         )
                     }
+                    val filteredRelated = filterRelatedItems(
+                        raw = state.detail?.related.orEmpty(),
+                        blockedTerms = snapshot.blockedTerms,
+                        cachedTagsByKey = snapshot.cachedTagsByKey,
+                    )
                     state.copy(
                         isFavorite = isWorkFav,
                         favoritedTagSlugs = favTagSlugs,
                         subscribedTagSlugs = snapshot.subscribedSlugs,
                         blockedTerms = snapshot.blockedTerms,
+                        tagDictionaryRevision = snapshot.dictRevision,
+                        filteredRelated = filteredRelated,
                         tagAction = updatedTagAction,
                     )
                 }
@@ -369,11 +399,17 @@ class GalleryDetailViewModel(
                 val isFavNow = runCatching {
                     favoriteRepository.isFavorite(siteId, favoriteKind, mediaId)
                 }.getOrDefault(_uiState.value.isFavorite)
+                cacheDetailTags(snapshot.detail)
 
                 _uiState.update {
                     it.copy(
                         isLoading = false,
                         detail = snapshot.detail,
+                        filteredRelated = filterRelatedItems(
+                            raw = snapshot.detail.related,
+                            blockedTerms = it.blockedTerms,
+                            cachedTagsByKey = latestCachedTagsByKey,
+                        ),
                         downloadedPages = snapshot.downloadedPages,
                         isOfflineComplete = snapshot.isComplete,
                         sourceRoot = snapshot.sourceRoot,
@@ -408,10 +444,17 @@ class GalleryDetailViewModel(
         }
     }
 
-    fun formatTagLabel(tag: TagRef): String {
+    fun formatTagLabel(tag: TagRef): String =
+        formatTagLabelInternal(tag, _uiState.value.translateTags)
+
+    fun isTagBlocked(tag: TagRef): Boolean =
+        matchesBlockedTerms(tag, _uiState.value.blockedTerms)
+
+    private fun formatTagLabelInternal(tag: TagRef, translateTags: Boolean): String {
         val raw = tag.label.ifBlank { tag.slug }
-        if (!_uiState.value.translateTags) return raw
-        val translated = tagDictionary.translate(tag.slug) ?: tagDictionary.translate(raw)
+        if (!translateTags) return raw
+        val translated = tagDictionary.translate(tag.slug, tag.namespace)
+            ?: tagDictionary.translate(raw, tag.namespace)
         return translated ?: raw
     }
 
@@ -594,7 +637,6 @@ class GalleryDetailViewModel(
     fun openTagActions(tag: TagRef) {
         val state = _uiState.value
         val normSlug = tag.slug.lowercase()
-        val normTerm = ContentFilter.normalizeTerm(tag.slug)
         _uiState.update {
             it.copy(
                 tagAction = TagActionState(
@@ -602,7 +644,7 @@ class GalleryDetailViewModel(
                     translatedLabel = formatTagLabel(tag),
                     isFavorited = normSlug in state.favoritedTagSlugs,
                     isSubscribed = normSlug in state.subscribedTagSlugs,
-                    isBlocked = normTerm in state.blockedTerms,
+                    isBlocked = matchesBlockedTerms(tag, state.blockedTerms),
                 ),
             )
         }
@@ -652,8 +694,60 @@ class GalleryDetailViewModel(
     fun toggleTagBlocked(tag: TagRef) {
         viewModelScope.launch(dispatchers.io) {
             val label = formatTagLabel(tag)
-            val blocked = blockedTermsRepository.toggleTerm(siteId, tag.slug)
-            emitSnackbar(if (blocked) "已在当前站点屏蔽「$label」" else "已取消屏蔽「$label」")
+            val term = tag.slug.trim().ifBlank { tag.label.trim() }
+            if (term.isEmpty()) return@launch
+            val settings = preferencesRepository.currentSettings()
+            val primaryScope = if (settings.blockTagsGlobally) SiteId.GLOBAL else siteId
+            val normalized = ContentFilter.normalizeTerm(term)
+            val globalTerms = blockedTermsRepository.observeGlobalTerms().first()
+            val siteTerms = blockedTermsRepository.observeTermsBySite(siteId).first()
+            val matchingGlobal = globalTerms.filter { isMatchingTermForTag(tag, it) }
+            val matchingSite = siteTerms.filter { isMatchingTermForTag(tag, it) }
+            val nowBlocked = if (matchingGlobal.isNotEmpty() || matchingSite.isNotEmpty()) {
+                matchingGlobal.forEach { blockedTermsRepository.removeTerm(SiteId.GLOBAL, it) }
+                matchingSite.forEach { blockedTermsRepository.removeTerm(siteId, it) }
+                false
+            } else {
+                blockedTermsRepository.addTerm(primaryScope, normalized)
+                true
+            }
+            val msg = when {
+                !nowBlocked -> "已取消屏蔽「$label」"
+                settings.blockTagsGlobally -> "已全局屏蔽「$label」"
+                else -> "已在当前站点屏蔽「$label」"
+            }
+            emitSnackbar(msg)
+        }
+    }
+
+    fun saveCustomTagTranslation(tag: TagRef, chineseName: String) {
+        val repo = tagDictionaryRepository ?: return
+        val slug = tag.slug.trim().ifBlank { tag.label.trim() }
+        val cleanZh = chineseName.trim()
+        if (slug.isEmpty() || cleanZh.isEmpty()) {
+            emitSnackbar("请输入有效的中文译名")
+            return
+        }
+        viewModelScope.launch(dispatchers.io) {
+            val saved = repo.upsertCustomTranslation(
+                rawSlug = slug,
+                chineseName = cleanZh,
+                namespace = tag.namespace,
+            )
+            if (saved) {
+                repo.hydrateRuntimeDictionary()
+                _uiState.update { state ->
+                    val updatedAction = state.tagAction?.let { action ->
+                        if (action.tag.slug == tag.slug && action.tag.namespace == tag.namespace) {
+                            action.copy(translatedLabel = formatTagLabelInternal(action.tag, state.translateTags))
+                        } else {
+                            action
+                        }
+                    }
+                    state.copy(tagAction = updatedAction)
+                }
+                emitSnackbar("已更新中文译名：$cleanZh")
+            }
         }
     }
 
@@ -775,6 +869,55 @@ class GalleryDetailViewModel(
         }
     }
 
+    private fun cacheDetailTags(detail: GalleryDetail) {
+        val repo = mediaTagCacheRepository ?: return
+        if (siteId.isLocal || mediaId.isBlank()) return
+        val allTags = detail.tags + detail.characters + detail.categories + detail.item.tags
+        if (allTags.isEmpty()) return
+        viewModelScope.launch(dispatchers.io) {
+            runCatching { repo.upsertTags(siteId, mediaId, allTags) }
+        }
+    }
+
+    private fun filterRelatedItems(
+        raw: List<MediaItem>,
+        blockedTerms: Set<String>,
+        cachedTagsByKey: Map<String, List<TagRef>>,
+    ): List<MediaItem> {
+        if (raw.isEmpty() || blockedTerms.isEmpty()) return raw
+        return raw.filter { item ->
+            ContentFilter.isAllowed(
+                item = item,
+                blockedTerms = blockedTerms,
+                tagDictionary = tagDictionary,
+                extraTags = cachedTagsByKey[item.compositeKey].orEmpty(),
+            )
+        }
+    }
+
+    private fun matchesBlockedTerms(tag: TagRef, blockedTerms: Set<String>): Boolean {
+        if (blockedTerms.isEmpty()) return false
+        return blockedTerms.any { isMatchingTermForTag(tag, it) }
+    }
+
+    private fun isMatchingTermForTag(tag: TagRef, blockedTerm: String): Boolean {
+        val slugOrLabel = tag.slug.ifBlank { tag.label }
+        val tagCandidates = buildSet {
+            val norm = ContentFilter.normalizeTerm(slugOrLabel)
+            if (norm.isNotEmpty()) add(norm)
+            val bare = ContentFilter.canonicalizeForMatching(slugOrLabel)
+            if (bare.isNotEmpty()) add(bare)
+            addAll(tagDictionary.expandSynonyms(slugOrLabel))
+            if (tag.label.isNotBlank() && tag.label != slugOrLabel) {
+                addAll(tagDictionary.expandSynonyms(tag.label))
+            }
+        }
+        val bNorm = ContentFilter.normalizeTerm(blockedTerm)
+        val bBare = ContentFilter.canonicalizeForMatching(blockedTerm)
+        if (bNorm in tagCandidates || bBare in tagCandidates) return true
+        return tagDictionary.expandSynonyms(blockedTerm).any { it in tagCandidates }
+    }
+
     private fun favoriteKindFor(kind: MediaKind): FavoriteKind = when (kind) {
         MediaKind.PHOTO -> FavoriteKind.PHOTO
         MediaKind.VIDEO -> FavoriteKind.VIDEO
@@ -787,11 +930,14 @@ class GalleryDetailViewModel(
         val isInWatchLater: Boolean,
         val activeDownload: DownloadItem?,
         val translateTags: Boolean,
+        val blockTagsGlobally: Boolean,
     )
 
     private data class SitePersonalSnapshot(
         val favorites: List<FavoriteItem>,
         val subscribedSlugs: Set<String>,
         val blockedTerms: Set<String>,
+        val cachedTagsByKey: Map<String, List<TagRef>>,
+        val dictRevision: Long,
     )
 }

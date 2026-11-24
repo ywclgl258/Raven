@@ -8,13 +8,14 @@ import com.raven.app.core.common.TagDictionary
 import com.raven.app.core.common.TagSuggestion
 import com.raven.app.core.database.repository.BlockedTermsRepository
 import com.raven.app.core.database.repository.HistoryRepository
+import com.raven.app.core.database.repository.MediaTagCacheRepository
 import com.raven.app.core.database.repository.PreferencesRepository
 import com.raven.app.core.database.repository.SearchHistoryRepository
 import com.raven.app.core.database.repository.ShelfRepository
 import com.raven.app.core.database.repository.SubscriptionRepository
+import com.raven.app.core.database.repository.TagDictionaryRepository
 import com.raven.app.core.model.AdvancedFilterField
 import com.raven.app.core.model.AdvancedSearchFilters
-import com.raven.app.core.model.BlockedTerm
 import com.raven.app.core.model.ComicLanguage
 import com.raven.app.core.model.FeedRequest
 import com.raven.app.core.model.FeedSort
@@ -29,6 +30,7 @@ import com.raven.app.core.model.SiteCapability
 import com.raven.app.core.model.SiteDescriptor
 import com.raven.app.core.model.SiteException
 import com.raven.app.core.model.SiteId
+import com.raven.app.core.model.TagRef
 import com.raven.app.core.sitespi.SitePlugin
 import com.raven.app.core.sitespi.SiteRegistry
 import kotlinx.coroutines.CancellationException
@@ -42,7 +44,9 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
@@ -176,13 +180,31 @@ private data class CrossSiteResultState(
     val bucketsBySite: Map<SiteId, CrossSiteBucketState> = emptyMap(),
 )
 
-private data class SearchDbContext(
+private data class SearchTopDbSlice(
     val history: List<SearchHistoryEntry>,
     val savedSearches: List<SavedSearch>,
-    val allBlockedTerms: List<BlockedTerm>,
+    val blockedTermsBySite: Map<SiteId, List<String>>,
+    val activeSiteEffectiveBlocked: List<String>,
+)
+
+private data class SearchBottomDbSlice(
     val watchProgressMap: Map<String, Float>,
     val readingProgressMap: Map<String, Float>,
     val watchLaterKeys: Set<String>,
+    val cachedTagsByKey: Map<String, List<TagRef>>,
+    val dictRevision: Long,
+)
+
+private data class SearchDbContext(
+    val history: List<SearchHistoryEntry>,
+    val savedSearches: List<SavedSearch>,
+    val blockedTermsBySite: Map<SiteId, List<String>>,
+    val activeSiteEffectiveBlocked: List<String>,
+    val cachedTagsByKey: Map<String, List<TagRef>>,
+    val watchProgressMap: Map<String, Float>,
+    val readingProgressMap: Map<String, Float>,
+    val watchLaterKeys: Set<String>,
+    val dictRevision: Long = 0L,
 )
 
 @OptIn(ExperimentalCoroutinesApi::class)
@@ -197,6 +219,8 @@ class SearchViewModel(
     private val shelfRepository: ShelfRepository,
     private val dispatchers: AppDispatchers,
     private val tagDictionary: TagDictionary = TagDictionary.default,
+    private val mediaTagCacheRepository: MediaTagCacheRepository? = null,
+    private val tagDictionaryRepository: TagDictionaryRepository? = null,
 ) : ViewModel() {
 
     private val allDescriptors: List<SiteDescriptor> = siteRegistry.allDescriptors()
@@ -225,33 +249,51 @@ class SearchViewModel(
         .map { resolveActiveSiteId(it.activeSiteId) }
         .distinctUntilChanged()
 
+    private val cachedTagsFlow = mediaTagCacheRepository?.observeAllTags() ?: flowOf(emptyMap())
+    private val dictRevisionFlow = tagDictionaryRepository?.observeRevision() ?: flowOf(0L)
+
     private val dbContextFlow = activeSiteIdFlow.flatMapLatest { siteId ->
-        val topThree = combine(
+        val topFour = combine(
             searchHistoryRepository.observeBySite(siteId, limit = MAX_HISTORY_CHIPS),
             subscriptionRepository.observeSavedSearches(),
-            blockedTermsRepository.observeAll(),
-        ) { history, saved, blocked -> Triple(history, saved, blocked) }
-
-        val bottomThree = combine(
-            historyRepository.observeAllWatchProgress(),
-            historyRepository.observeAllReadingProgress(),
-            shelfRepository.observeShelfItemKeys(Shelf.WATCH_LATER_ID),
-        ) { watches, readings, watchLater ->
-            Triple(
-                watches.associate { it.compositeKey to it.progressFraction },
-                readings.associate { it.compositeKey to it.progressFraction },
-                watchLater,
+            blockedTermsRepository.observeAllGrouped(),
+            blockedTermsRepository.observeEffectiveTermsBySite(siteId),
+        ) { history, saved, groupedBlocked, activeEffectiveBlocked ->
+            SearchTopDbSlice(
+                history = history,
+                savedSearches = saved,
+                blockedTermsBySite = groupedBlocked,
+                activeSiteEffectiveBlocked = activeEffectiveBlocked,
             )
         }
 
-        combine(topThree, bottomThree) { left, right ->
+        val bottomFour = combine(
+            historyRepository.observeAllWatchProgress(),
+            historyRepository.observeAllReadingProgress(),
+            shelfRepository.observeShelfItemKeys(Shelf.WATCH_LATER_ID),
+            cachedTagsFlow,
+            dictRevisionFlow,
+        ) { watches, readings, watchLater, cachedTags, dictRevision ->
+            SearchBottomDbSlice(
+                watchProgressMap = watches.associate { it.compositeKey to it.progressFraction },
+                readingProgressMap = readings.associate { it.compositeKey to it.progressFraction },
+                watchLaterKeys = watchLater,
+                cachedTagsByKey = cachedTags,
+                dictRevision = dictRevision,
+            )
+        }
+
+        combine(topFour, bottomFour) { left, right ->
             SearchDbContext(
-                history = left.first,
-                savedSearches = left.second,
-                allBlockedTerms = left.third,
-                watchProgressMap = right.first,
-                readingProgressMap = right.second,
-                watchLaterKeys = right.third,
+                history = left.history,
+                savedSearches = left.savedSearches,
+                blockedTermsBySite = left.blockedTermsBySite,
+                activeSiteEffectiveBlocked = left.activeSiteEffectiveBlocked,
+                cachedTagsByKey = right.cachedTagsByKey,
+                watchProgressMap = right.watchProgressMap,
+                readingProgressMap = right.readingProgressMap,
+                watchLaterKeys = right.watchLaterKeys,
+                dictRevision = right.dictRevision,
             )
         }
     }
@@ -315,13 +357,22 @@ class SearchViewModel(
             emptyList()
         }
 
-        val blockedBySite = db.allBlockedTerms.groupBy(BlockedTerm::siteId) { it.term }
-        val activeSiteBlocked = blockedBySite[activeSiteId].orEmpty()
+        val blockedBySite = db.blockedTermsBySite
+        val globalBlocked = blockedBySite[SiteId.GLOBAL].orEmpty()
+        val activeSiteBlocked = db.activeSiteEffectiveBlocked
+        val cachedTags = db.cachedTagsByKey
 
         val singleAligned = single.siteId == activeSiteId
         val baseSingleItems = if (singleAligned) {
             single.rawItems
-                .filter { ContentFilter.isAllowed(it, activeSiteBlocked) }
+                .filter { item ->
+                    ContentFilter.isAllowed(
+                        item = item,
+                        blockedTerms = activeSiteBlocked,
+                        tagDictionary = tagDictionary,
+                        extraTags = cachedTags[item.compositeKey].orEmpty(),
+                    )
+                }
                 .withLocalizedTags(tagDictionary, translateTags)
         } else {
             emptyList()
@@ -339,9 +390,16 @@ class SearchViewModel(
 
         val orderedCrossBuckets = selectedCrossIds.mapNotNull { id ->
             val rawBucket = cross.bucketsBySite[id] ?: return@mapNotNull null
-            val siteBlocked = blockedBySite[id].orEmpty()
+            val siteBlocked = (globalBlocked + blockedBySite[id].orEmpty()).distinct()
             val allowed = rawBucket.items
-                .filter { ContentFilter.isAllowed(it, siteBlocked) }
+                .filter { item ->
+                    ContentFilter.isAllowed(
+                        item = item,
+                        blockedTerms = siteBlocked,
+                        tagDictionary = tagDictionary,
+                        extraTags = cachedTags[item.compositeKey].orEmpty(),
+                    )
+                }
                 .withLocalizedTags(tagDictionary, translateTags)
             rawBucket.copy(items = allowed)
         }
@@ -767,6 +825,7 @@ class SearchViewModel(
             val nextPageNumber = snap.nextPage ?: (snap.currentPage + 1)
             val input = inputState.value
             val settings = preferencesRepository.currentSettings()
+            val effectiveBlocked = blockedTermsRepository.observeEffectiveTermsBySite(siteId).first()
             val request = buildSingleSiteRequest(
                 plugin = plugin,
                 query = input.submittedQuery,
@@ -774,6 +833,7 @@ class SearchViewModel(
                 cursor = snap.nextCursor,
                 inputSnapshot = input,
                 siteLanguage = settings.languageFor(siteId),
+                effectiveBlockedTerms = effectiveBlocked,
             )
             try {
                 val page = withContext(dispatchers.io) { searchSource.search(request) }
@@ -865,6 +925,12 @@ class SearchViewModel(
                     } else {
                         ComicLanguage.ALL
                     }
+                    val effectiveBlocked = blockedTermsRepository.observeEffectiveTermsBySite(siteId).first()
+                    val crossFilters = buildServerExcludeFilters(
+                        plugin = plugin,
+                        baseFilters = AdvancedSearchFilters(),
+                        effectiveBlockedTerms = effectiveBlocked,
+                    )
                     val req = FeedRequest(
                         siteId = siteId,
                         query = query,
@@ -873,6 +939,7 @@ class SearchViewModel(
                         language = lang,
                         page = nextPageNumber,
                         cursor = existing.nextCursor,
+                        advancedFilters = crossFilters,
                     )
                     val feedPage = withContext(dispatchers.io) { searchSource.search(req) }
                     Result.success(feedPage)
@@ -955,6 +1022,7 @@ class SearchViewModel(
                     }
                 }
 
+                val effectiveBlocked = blockedTermsRepository.observeEffectiveTermsBySite(targetSiteId).first()
                 val request = buildSingleSiteRequest(
                     plugin = plugin,
                     query = query,
@@ -962,6 +1030,7 @@ class SearchViewModel(
                     cursor = null,
                     inputSnapshot = inputSnapshot,
                     siteLanguage = siteLanguage,
+                    effectiveBlockedTerms = effectiveBlocked,
                 )
                 val page = withContext(dispatchers.io) { searchSource.search(request) }
                 singleSiteState.value = SingleSiteResultState(
@@ -1078,6 +1147,12 @@ class SearchViewModel(
                 } else {
                     ComicLanguage.ALL
                 }
+                val effectiveBlocked = blockedTermsRepository.observeEffectiveTermsBySite(plugin.id).first()
+                val crossFilters = buildServerExcludeFilters(
+                    plugin = plugin,
+                    baseFilters = AdvancedSearchFilters(),
+                    effectiveBlockedTerms = effectiveBlocked,
+                )
                 val request = FeedRequest(
                     siteId = plugin.id,
                     query = query,
@@ -1086,6 +1161,7 @@ class SearchViewModel(
                     language = language,
                     page = page,
                     cursor = cursor,
+                    advancedFilters = crossFilters,
                 )
                 val result = withContext(dispatchers.io) { searchSource.search(request) }
                 val unique = result.items.distinctBy { it.compositeKey }
@@ -1123,6 +1199,7 @@ class SearchViewModel(
         cursor: String?,
         inputSnapshot: SearchInputState,
         siteLanguage: ComicLanguage,
+        effectiveBlockedTerms: Collection<String> = emptyList(),
     ): FeedRequest {
         val searchSource = plugin.searchSource
         val supportedScopes = searchSource?.supportedScopes ?: setOf(SearchScope.ALL)
@@ -1141,17 +1218,43 @@ class SearchViewModel(
         val nativeSorts = resolveNativeSearchSorts(plugin, effectiveScope)
         val requestedSort = if (inputSnapshot.sort == FeedSort.DEFAULT) nativeSorts.first() else inputSnapshot.sort
         val effectiveSort = resolveCompatibleServerSort(nativeSorts, requestedSort)
+        val effectiveFilters = buildServerExcludeFilters(
+            plugin = plugin,
+            baseFilters = inputSnapshot.advancedFilters,
+            effectiveBlockedTerms = effectiveBlockedTerms,
+        )
         return FeedRequest(
             siteId = plugin.id,
-            category = inputSnapshot.advancedFilters.category?.takeIf { it.isNotBlank() },
+            category = effectiveFilters.category?.takeIf { it.isNotBlank() },
             sort = effectiveSort,
             language = effectiveLanguage,
             page = page,
             cursor = cursor,
             query = query.ifBlank { null },
             scope = effectiveScope,
-            advancedFilters = inputSnapshot.advancedFilters,
+            advancedFilters = effectiveFilters,
         )
+    }
+
+    private fun buildServerExcludeFilters(
+        plugin: SitePlugin,
+        baseFilters: AdvancedSearchFilters,
+        effectiveBlockedTerms: Collection<String>,
+    ): AdvancedSearchFilters {
+        val searchSource = plugin.searchSource ?: return baseFilters
+        val supportsExclude = searchSource.supportsExcludeTags ||
+            AdvancedFilterField.EXCLUDE_TAGS in searchSource.supportedFilters
+        if (!supportsExclude || effectiveBlockedTerms.isEmpty()) return baseFilters
+        val merged = mergeBlockedExcludeTags(
+            existingExcludeTags = baseFilters.excludeTags,
+            effectiveBlockedTerms = effectiveBlockedTerms,
+            tagDictionary = tagDictionary,
+        )
+        return if (merged == baseFilters.excludeTags) {
+            baseFilters
+        } else {
+            baseFilters.copy(excludeTags = merged)
+        }
     }
 
     private fun updateCrossBucket(
@@ -1198,6 +1301,37 @@ class SearchViewModel(
     companion object {
         const val MAX_CONCURRENT_CROSS_SITE_SEARCHES: Int = 3
         const val MAX_HISTORY_CHIPS: Int = 30
+        const val MAX_SERVER_EXCLUDE_BLOCKED_TERMS: Int = 12
+
+        internal fun mergeBlockedExcludeTags(
+            existingExcludeTags: List<String>,
+            effectiveBlockedTerms: Collection<String>,
+            tagDictionary: TagDictionary,
+            maxTerms: Int = MAX_SERVER_EXCLUDE_BLOCKED_TERMS,
+        ): List<String> {
+            if (effectiveBlockedTerms.isEmpty()) return existingExcludeTags
+            val result = LinkedHashSet<String>()
+            val seenLower = HashSet<String>()
+            for (raw in existingExcludeTags) {
+                val trimmed = raw.trim()
+                if (trimmed.isNotEmpty() && seenLower.add(trimmed.lowercase())) {
+                    result.add(trimmed)
+                }
+            }
+            val cap = maxOf(result.size, maxTerms)
+            for (term in effectiveBlockedTerms) {
+                if (result.size >= cap) break
+                val englishSlugs = tagDictionary.canonicalEnglishSlugs(term)
+                for (slug in englishSlugs) {
+                    if (result.size >= cap) break
+                    val cleaned = slug.trim()
+                    if (cleaned.isNotEmpty() && seenLower.add(cleaned.lowercase())) {
+                        result.add(cleaned)
+                    }
+                }
+            }
+            return result.toList()
+        }
 
         val CROSS_SITE_SORTS: List<FeedSort> = listOf(
             FeedSort.RELEVANCE,

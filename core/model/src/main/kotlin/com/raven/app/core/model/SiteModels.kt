@@ -15,8 +15,9 @@ value class SiteId(val value: String) {
 
     val isLive: Boolean get() = this in LIVE_SET
     val isLocal: Boolean get() = this == LOCAL
+    val isGlobal: Boolean get() = this == GLOBAL
     val isRetired: Boolean get() = this in RETIRED_HOSTS
-    val isKnown: Boolean get() = isLive || isLocal || isRetired
+    val isKnown: Boolean get() = isLive || isLocal || isRetired || isGlobal
 
     override fun toString(): String = value
 
@@ -48,6 +49,9 @@ value class SiteId(val value: String) {
 
         // Local non-network library source
         val LOCAL = SiteId("local")
+
+        // Global cross-site wildcard scope (used by global blocked terms; excluded from ALL_LIVE)
+        val GLOBAL = SiteId("*")
 
         // Retired video site identities retained only for historical records & backups
         val RETIRED_KBJ = SiteId("kbj")

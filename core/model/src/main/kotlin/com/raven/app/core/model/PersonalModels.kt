@@ -208,6 +208,23 @@ data class BlockedTerm(
 )
 
 @Serializable
+enum class TagTranslationSource {
+    USER_CUSTOM,
+    COMMUNITY_EHTAG,
+    BUILTIN,
+}
+
+@Serializable
+data class TagTranslationEntry(
+    val namespace: String = "",
+    val rawSlug: String,
+    val chineseName: String,
+    val intro: String = "",
+    val source: TagTranslationSource = TagTranslationSource.USER_CUSTOM,
+    val updatedAt: Long = 0L,
+)
+
+@Serializable
 data class SearchHistoryEntry(
     val siteId: SiteId,
     val query: String,
@@ -357,6 +374,7 @@ data class RavenBackupPayload(
     val readerPreferences: List<ReaderPreferences> = emptyList(),
     val siteLanguages: Map<SiteId, ComicLanguage> = emptyMap(),
     val settings: Map<String, String> = emptyMap(),
+    val customTagTranslations: List<TagTranslationEntry> = emptyList(),
 ) {
     companion object {
         const val CURRENT_SCHEMA_VERSION: Int = 1

@@ -54,6 +54,18 @@ val settingsFeatureModule: Module = module {
         )
     }
 
+    single {
+        val appContext = androidContext()
+        val info = getOrNull<RavenAppInfo>() ?: RavenAppInfo.fromContext(appContext)
+        EhTagTranslationSyncer(
+            apiClient = get(NetworkQualifiers.API),
+            tagDictionaryRepository = get(),
+            preferencesRepository = get(),
+            appInfo = info,
+            dispatchers = get(),
+        )
+    }
+
     single<StorageMigrationExecutor> {
         val coordinator = get<DownloadCoordinator>()
         StorageMigrationExecutor { onProgress ->
@@ -85,6 +97,16 @@ val settingsFeatureModule: Module = module {
             ravenUpdater = get(),
             appInfo = info,
             dispatchers = get(),
+            tagDictionaryRepository = get(),
+        )
+    }
+
+    viewModel {
+        TagDictionaryViewModel(
+            tagDictionaryRepository = get(),
+            preferencesRepository = get(),
+            syncer = get(),
+            dispatchers = get(),
         )
     }
 
@@ -103,6 +125,8 @@ val settingsFeatureModule: Module = module {
             blockedTermsRepository = get(),
             tagDictionary = getOrNull<TagDictionary>() ?: TagDictionary.default,
             dispatchers = get(),
+            preferencesRepository = get(),
+            tagDictionaryRepository = get(),
         )
     }
 

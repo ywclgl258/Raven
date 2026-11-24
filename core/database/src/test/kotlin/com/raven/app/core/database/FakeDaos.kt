@@ -8,6 +8,7 @@ import com.raven.app.core.database.dao.BrowsePositionDao
 import com.raven.app.core.database.dao.DownloadItemDao
 import com.raven.app.core.database.dao.FavoriteDao
 import com.raven.app.core.database.dao.ImageFavoriteDao
+import com.raven.app.core.database.dao.MediaTagCacheDao
 import com.raven.app.core.database.dao.PageBookmarkDao
 import com.raven.app.core.database.dao.PlaybackPreferencesDao
 import com.raven.app.core.database.dao.ReaderPreferencesDao
@@ -18,6 +19,7 @@ import com.raven.app.core.database.dao.ShelfDao
 import com.raven.app.core.database.dao.ShelfItemDao
 import com.raven.app.core.database.dao.SmartShelfDao
 import com.raven.app.core.database.dao.TagSubscriptionDao
+import com.raven.app.core.database.dao.TagTranslationDao
 import com.raven.app.core.database.dao.TimeBookmarkDao
 import com.raven.app.core.database.dao.UpdateInboxDao
 import com.raven.app.core.database.dao.WatchProgressDao
@@ -26,6 +28,7 @@ import com.raven.app.core.database.entity.BrowsePositionEntity
 import com.raven.app.core.database.entity.DownloadItemEntity
 import com.raven.app.core.database.entity.FavoriteEntity
 import com.raven.app.core.database.entity.ImageFavoriteEntity
+import com.raven.app.core.database.entity.MediaTagCacheEntity
 import com.raven.app.core.database.entity.PageBookmarkEntity
 import com.raven.app.core.database.entity.PlaybackPreferencesEntity
 import com.raven.app.core.database.entity.ReaderPreferencesEntity
@@ -36,6 +39,7 @@ import com.raven.app.core.database.entity.ShelfEntity
 import com.raven.app.core.database.entity.ShelfItemEntity
 import com.raven.app.core.database.entity.SmartShelfEntity
 import com.raven.app.core.database.entity.TagSubscriptionEntity
+import com.raven.app.core.database.entity.TagTranslationEntity
 import com.raven.app.core.database.entity.TimeBookmarkEntity
 import com.raven.app.core.database.entity.UpdateInboxEntity
 import com.raven.app.core.database.entity.WatchProgressEntity
@@ -45,6 +49,7 @@ import com.raven.app.core.model.FavoriteKind
 import com.raven.app.core.model.InboxSourceKind
 import com.raven.app.core.model.SearchScope
 import com.raven.app.core.model.StorageLocation
+import com.raven.app.core.model.TagTranslationSource
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.map
@@ -95,6 +100,8 @@ internal class FakeRavenDb {
     val playbackPreferences = FakePlaybackPreferencesDao()
     val readerPreferences = FakeReaderPreferencesDao()
     val browsePositions = FakeBrowsePositionDao()
+    val tagTranslations = FakeTagTranslationDao()
+    val mediaTagCache = FakeMediaTagCacheDao()
 
     val transactionRunner: DatabaseTransactionRunner = object : DatabaseTransactionRunner {
         override suspend fun <R> invoke(block: suspend () -> R): R {
@@ -116,6 +123,8 @@ internal class FakeRavenDb {
             val snapPlayback = playbackPreferences.rows.value
             val snapReader = readerPreferences.rows.value
             val snapPos = browsePositions.rows.value
+            val snapTagTrans = tagTranslations.rows.value
+            val snapMediaTagCache = mediaTagCache.rows.value
             return try {
                 block()
             } catch (t: Throwable) {
@@ -137,6 +146,8 @@ internal class FakeRavenDb {
                 playbackPreferences.rows.value = snapPlayback
                 readerPreferences.rows.value = snapReader
                 browsePositions.rows.value = snapPos
+                tagTranslations.rows.value = snapTagTrans
+                mediaTagCache.rows.value = snapMediaTagCache
                 throw t
             }
         }
@@ -1052,6 +1063,114 @@ internal class FakeBrowsePositionDao : BrowsePositionDao {
             .sortedByDescending { it.updatedAt }
             .take(limit)
             .mapTo(mutableSetOf()) { it.positionKey }
+        rows.value = rows.value.filterKeys { it in keep }
+    }
+}
+
+internal class FakeTagTranslationDao : TagTranslationDao {
+    val rows = MutableStateFlow<Map<Triple<TagTranslationSource, String, String>, TagTranslationEntity>>(emptyMap())
+
+    override fun observeBySource(source: TagTranslationSource): Flow<List<TagTranslationEntity>> =
+        rows.map { map ->
+            map.values.filter { it.source == source }
+                .sortedWith(compareByDescending<TagTranslationEntity> { it.updatedAt }.thenBy { it.rawSlug })
+        }
+
+    override fun observeCountBySource(source: TagTranslationSource): Flow<Int> =
+        rows.map { map -> map.values.count { it.source == source } }
+
+    override fun observeAll(): Flow<List<TagTranslationEntity>> =
+        rows.map { map ->
+            map.values.sortedWith(
+                compareBy<TagTranslationEntity> { it.source.name }
+                    .thenBy { it.namespace }
+                    .thenBy { it.rawSlug },
+            )
+        }
+
+    override suspend fun getBySource(source: TagTranslationSource): List<TagTranslationEntity> =
+        rows.value.values.filter { it.source == source }
+            .sortedWith(compareByDescending<TagTranslationEntity> { it.updatedAt }.thenBy { it.rawSlug })
+
+    override suspend fun getAll(): List<TagTranslationEntity> =
+        rows.value.values.sortedWith(
+            compareBy<TagTranslationEntity> { it.source.name }
+                .thenBy { it.namespace }
+                .thenBy { it.rawSlug },
+        )
+
+    override suspend fun search(query: String, limit: Int): List<TagTranslationEntity> =
+        rows.value.values
+            .filter {
+                it.rawSlug.contains(query, ignoreCase = true) ||
+                    it.chineseName.contains(query, ignoreCase = true)
+            }
+            .sortedWith(
+                compareBy<TagTranslationEntity>(
+                    { if (it.source == TagTranslationSource.USER_CUSTOM) 0 else 1 },
+                    { it.rawSlug.length },
+                    { it.rawSlug },
+                ),
+            )
+            .take(limit)
+
+    override suspend fun upsert(entity: TagTranslationEntity) {
+        rows.value = rows.value + (Triple(entity.source, entity.namespace, entity.rawSlug) to entity)
+    }
+
+    override suspend fun upsertAll(entities: List<TagTranslationEntity>) {
+        rows.value = rows.value + entities.associateBy { Triple(it.source, it.namespace, it.rawSlug) }
+    }
+
+    override suspend fun delete(source: TagTranslationSource, namespace: String, rawSlug: String) {
+        rows.value = rows.value - Triple(source, namespace, rawSlug)
+    }
+
+    override suspend fun deleteBySource(source: TagTranslationSource) {
+        rows.value = rows.value.filterKeys { it.first != source }
+    }
+
+    override suspend fun deleteAll() {
+        rows.value = emptyMap()
+    }
+}
+
+internal class FakeMediaTagCacheDao : MediaTagCacheDao {
+    val rows = MutableStateFlow<Map<Pair<String, String>, MediaTagCacheEntity>>(emptyMap())
+
+    override fun observeAll(): Flow<List<MediaTagCacheEntity>> =
+        rows.map { it.values.sortedByDescending(MediaTagCacheEntity::updatedAt) }
+
+    override fun observeBySite(siteId: String): Flow<List<MediaTagCacheEntity>> =
+        rows.map { it.values.filter { e -> e.siteId == siteId }.sortedByDescending(MediaTagCacheEntity::updatedAt) }
+
+    override suspend fun getOne(siteId: String, mediaId: String): MediaTagCacheEntity? =
+        rows.value[siteId to mediaId]
+
+    override suspend fun getBySite(siteId: String): List<MediaTagCacheEntity> =
+        rows.value.values.filter { it.siteId == siteId }.sortedByDescending(MediaTagCacheEntity::updatedAt)
+
+    override suspend fun upsert(entity: MediaTagCacheEntity) {
+        rows.value = rows.value + ((entity.siteId to entity.mediaId) to entity)
+    }
+
+    override suspend fun upsertAll(entities: List<MediaTagCacheEntity>) {
+        rows.value = rows.value + entities.associateBy { it.siteId to it.mediaId }
+    }
+
+    override suspend fun deleteBySite(siteId: String) {
+        rows.value = rows.value.filterKeys { it.first != siteId }
+    }
+
+    override suspend fun deleteAll() {
+        rows.value = emptyMap()
+    }
+
+    override suspend fun prune(limit: Int) {
+        val keep = rows.value.values
+            .sortedByDescending { it.updatedAt }
+            .take(limit)
+            .mapTo(mutableSetOf()) { it.siteId to it.mediaId }
         rows.value = rows.value.filterKeys { it in keep }
     }
 }

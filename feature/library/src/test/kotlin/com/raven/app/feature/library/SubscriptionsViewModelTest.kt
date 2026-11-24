@@ -9,6 +9,7 @@ import com.raven.app.core.model.SavedSearch
 import com.raven.app.core.model.SearchScope
 import com.raven.app.core.model.SiteDescriptor
 import com.raven.app.core.model.SiteId
+import com.raven.app.core.model.TagRef
 import com.raven.app.core.model.TagSubscription
 import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -236,6 +237,70 @@ class SubscriptionsViewModelTest {
                         it.sourceId == SubscriptionsViewModel.subscriptionSourceId(toRemove)
                 },
             )
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    @Test
+    fun `filters subscription feeds and live inbox using global bilingual and cached media tags`() = runTest {
+        val plugin = FakeLibrarySitePlugin(
+            descriptor = SiteDescriptor(
+                id = SiteId.R34V,
+                displayName = "Rule34Video",
+                shortName = "R34V",
+                primaryKind = MediaKind.VIDEO,
+                defaultHost = "rule34video.com",
+            ),
+            searchHandler = {
+                FeedPage(
+                    items = listOf(
+                        sampleMedia(SiteId.R34V, "clean-item", title = "Clean Episode"),
+                        sampleMedia(SiteId.R34V, "cached-tentacle", title = "Innocent Episode"),
+                    ),
+                )
+            },
+        )
+        val harness = LibraryTestHarness(
+            dispatcher = mainRule.dispatcher,
+            localRootDir = tempFolder.newFolder("sub-block"),
+            plugins = listOf(plugin),
+        )
+        // Global Chinese block ("触手" -> "tentacles") + MediaTagCacheRepository tag on untagged card
+        harness.blockedTermsRepository.addTerm(SiteId.GLOBAL, "触手")
+        harness.mediaTagCacheRepository.upsertTags(
+            siteId = SiteId.R34V,
+            mediaId = "cached-tentacle",
+            tags = listOf(TagRef(slug = "tentacles", label = "tentacles")),
+        )
+        harness.subscriptionRepository.subscribe(
+            TagSubscription(
+                siteId = SiteId.R34V,
+                slug = "anime",
+                label = "动漫",
+                url = "https://rule34video.com/tags/anime/",
+                scope = SearchScope.TAG,
+            ),
+        )
+
+        val vm = SubscriptionsViewModel(
+            initialSiteId = null,
+            subscriptionRepository = harness.subscriptionRepository,
+            blockedTermsRepository = harness.blockedTermsRepository,
+            preferencesRepository = harness.preferencesRepository,
+            siteRegistry = harness.siteRegistry,
+            dispatchers = harness.dispatchers,
+            clockMs = harness.clock,
+            tagDictionary = harness.runtimeDictionary,
+            mediaTagCacheRepository = harness.mediaTagCacheRepository,
+        )
+
+        vm.uiState.test {
+            awaitItem()
+            advanceUntilIdle()
+            vm.refreshAllUpdates()
+            advanceUntilIdle()
+            val afterRefresh = expectMostRecentItem()
+            assertEquals(listOf("clean-item"), afterRefresh.aggregatedTagFeed.map { it.item.id })
             cancelAndIgnoreRemainingEvents()
         }
     }

@@ -429,4 +429,82 @@ class GalleryDetailViewModelTest {
             cancelAndIgnoreRemainingEvents()
         }
     }
+
+    @Test
+    fun `caches detail tags saves custom tag translation live and respects blockTagsGlobally`() =
+        runTest(mainDispatcherRule.dispatcher) {
+            val harness = ReaderTestHarness(mainDispatcherRule.dispatcher, tempFolder.newFolder())
+            val tag = TagRef(slug = "stockings", label = "stockings", namespace = "female")
+            val detail = sampleGalleryDetail(
+                siteId = SiteId.NHENTAI,
+                mediaId = "nh-tag-edit",
+                pageCount = 6,
+                tags = listOf(tag),
+            ).copy(
+                related = listOf(
+                    MediaItem(
+                        siteId = SiteId.NHENTAI,
+                        id = "rel-safe",
+                        url = "https://nhentai.net/g/rel-safe/",
+                        kind = MediaKind.COMIC,
+                        title = "Safe Comic",
+                    ),
+                    MediaItem(
+                        siteId = SiteId.NHENTAI,
+                        id = "rel-blocked",
+                        url = "https://nhentai.net/g/rel-blocked/",
+                        kind = MediaKind.COMIC,
+                        title = "Blocked Comic",
+                        tags = listOf(tag),
+                    ),
+                ),
+            )
+            val registry = SiteRegistry(
+                listOf(FakeGallerySitePlugin(sampleSiteDescriptor(SiteId.NHENTAI), detailHandler = { detail })),
+            )
+            val loader = FakeReaderPageLoader(
+                detailLoader = { _, _, _, _ -> OfflineGallerySnapshot(detail, emptyList(), emptyList(), "", false) },
+            )
+            val viewModel = GalleryDetailViewModel(
+                route = RavenRoute.GalleryDetail(SiteId.NHENTAI.value, "nh-tag-edit", detail.item.url),
+                siteRegistry = registry,
+                pageLoader = loader,
+                localLibraryImporter = harness.localLibraryImporter,
+                downloadGateway = FakeGalleryDownloadGateway(),
+                exportGateway = harness.exportGateway,
+                historyRepository = harness.historyRepository,
+                favoriteRepository = harness.favoriteRepository,
+                shelfRepository = harness.shelfRepository,
+                bookmarkRepository = harness.bookmarkRepository,
+                blockedTermsRepository = harness.blockedTermsRepository,
+                subscriptionRepository = harness.subscriptionRepository,
+                preferencesRepository = harness.preferencesRepository,
+                dispatchers = harness.dispatchers,
+                tagDictionary = harness.runtimeDictionary,
+                clock = harness.clock,
+                mediaTagCacheRepository = harness.mediaTagCacheRepository,
+                tagDictionaryRepository = harness.tagDictionaryRepository,
+            )
+
+            advanceUntilIdle()
+
+            // Detail tags persisted into MediaTagCacheRepository
+            val cached = harness.mediaTagCacheRepository.getTags(SiteId.NHENTAI, "nh-tag-edit")
+            assertEquals(listOf("stockings"), cached.map { it.slug })
+
+            // Edit Chinese translation via long-press -> updates runtime dictionary & UI immediately
+            viewModel.openTagActions(tag)
+            viewModel.saveCustomTagTranslation(tag, "黑丝长袜")
+            advanceUntilIdle()
+            assertEquals("黑丝长袜", viewModel.formatTagLabel(tag))
+            assertEquals("黑丝长袜", viewModel.uiState.value.tagAction?.translatedLabel)
+            assertTrue(viewModel.uiState.value.tagDictionaryRevision > 0L)
+
+            // Default blockTagsGlobally = true -> blocking writes to SiteId.GLOBAL & filters related galleries
+            viewModel.toggleTagBlocked(tag)
+            advanceUntilIdle()
+            assertTrue(viewModel.isTagBlocked(tag))
+            assertTrue(harness.blockedTermDao.getAll().any { it.siteId == SiteId.GLOBAL.value && it.term == "stockings" })
+            assertEquals(listOf("rel-safe"), viewModel.uiState.value.filteredRelated.map { it.id })
+        }
 }

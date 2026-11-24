@@ -1,5 +1,6 @@
 package com.raven.app.sites.comic
 
+import com.raven.app.core.common.ContentFilter
 import com.raven.app.core.model.AdvancedFilterField
 import com.raven.app.core.model.AuthorRef
 import com.raven.app.core.model.ComicLanguage
@@ -107,6 +108,8 @@ class HitomiSitePlugin(
         )
 
         override val supportedFilters: Set<AdvancedFilterField> = setOf(
+            AdvancedFilterField.INCLUDE_TAGS,
+            AdvancedFilterField.EXCLUDE_TAGS,
             AdvancedFilterField.LANGUAGE,
         )
 
@@ -291,8 +294,15 @@ class HitomiSitePlugin(
             }
         }.awaitAll().filterNotNull()
 
+        val excludes = request.advancedFilters.excludeTags
+        val filteredCards = if (excludes.isEmpty()) {
+            cards
+        } else {
+            cards.filter { card -> ContentFilter.isAllowed(card, excludes) }
+        }
+
         FeedPage(
-            items = cards,
+            items = filteredCards,
             nextPage = if (hasMore) request.page + 1 else null,
             nextCursor = nextCursor,
             hasMore = hasMore,
@@ -746,7 +756,7 @@ class HitomiSitePlugin(
         )
     }
 
-    private fun buildQuery(request: FeedRequest): String {
+    internal fun buildQuery(request: FeedRequest): String {
         val raw = request.query?.trim().orEmpty()
         val categoryValue = request.category?.trim()?.takeIf { it.isNotEmpty() }
             ?: request.section?.takeIf { it in CATEGORIES }
@@ -763,7 +773,53 @@ class HitomiSitePlugin(
             }
             parts.add(formatted)
         }
+        request.advancedFilters.includeTags
+            .mapNotNull { formatHitomiTerm(it, exclude = false) }
+            .forEach(parts::add)
+
+        // Hitomi B-Tree search requires >=1 positive term and <=6 total terms.
+        // Append server-side -tag terms only when a positive anchor exists, respecting the 6-term cap
+        // (any remaining excludeTags are still enforced locally on loaded cards).
+        val baseQuery = parts.joinToString(" ")
+        val existingTerms = if (baseQuery.isBlank()) emptyList() else QUERY_TERM_REGEX.findAll(baseQuery.lowercase()).map { it.value }.toList()
+        val hasPositiveAnchor = existingTerms.any { !it.startsWith('-') }
+        if (hasPositiveAnchor && request.advancedFilters.excludeTags.isNotEmpty()) {
+            val existingSet = existingTerms.toMutableSet()
+            var budget = (MAX_QUERY_TERMS - existingTerms.size).coerceAtLeast(0)
+            for (rawExclude in request.advancedFilters.excludeTags) {
+                if (budget <= 0) break
+                val formatted = formatHitomiTerm(rawExclude, exclude = true) ?: continue
+                if (existingSet.add(formatted.lowercase())) {
+                    parts.add(formatted)
+                    budget--
+                }
+            }
+        }
         return parts.joinToString(" ")
+    }
+
+    private fun formatHitomiTerm(raw: String, exclude: Boolean): String? {
+        val cleaned = raw.trim()
+            .let { if (exclude) it.removePrefix("-").trim() else it }
+            .replace("\"", "")
+        if (cleaned.isEmpty() || cleaned.contains('/') || cleaned.contains('#')) return null
+        val prefix = if (exclude) "-" else ""
+        val colonIdx = cleaned.indexOf(':')
+        if (colonIdx > 0 && colonIdx < cleaned.lastIndex) {
+            val field = cleaned.substring(0, colonIdx).trim().lowercase()
+            val value = cleaned.substring(colonIdx + 1).trim().replace(' ', '_')
+            if (value.isEmpty()) return null
+            return if (field in VALID_FACET_FIELDS) {
+                "$prefix$field:$value"
+            } else {
+                "$prefix$value"
+            }
+        }
+        return if (cleaned.any(Char::isWhitespace)) {
+            "$prefix\"$cleaned\""
+        } else {
+            "$prefix$cleaned"
+        }
     }
 
     private fun isPopularRequest(request: FeedRequest): Boolean =
@@ -820,6 +876,7 @@ class HitomiSitePlugin(
         private const val MAX_CACHED_SEARCH_RESULTS = 50_000
         private const val MAX_RANGE_OFFSET = 1_000_000_000_000L
         private const val MAX_BTREE_DEPTH = 16
+        private const val MAX_QUERY_TERMS = 6
         private const val MAX_PAGE = 1_000_000
         private const val CONCURRENT_METADATA_PERMITS = 3
 
@@ -871,7 +928,11 @@ class HitomiSitePlugin(
                 }
             },
             searchScopes = listOf(SearchScope.ALL, SearchScope.TAG, SearchScope.AUTHOR, SearchScope.CHARACTER),
-            supportedFilters = setOf(AdvancedFilterField.LANGUAGE),
+            supportedFilters = setOf(
+                AdvancedFilterField.INCLUDE_TAGS,
+                AdvancedFilterField.EXCLUDE_TAGS,
+                AdvancedFilterField.LANGUAGE,
+            ),
             networkProfile = SiteNetworkProfile(
                 userAgent = SiteNetworkProfile.RAVEN_API_UA,
                 referer = "https://hitomi.la/",

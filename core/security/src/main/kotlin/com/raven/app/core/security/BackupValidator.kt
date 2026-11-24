@@ -40,6 +40,7 @@ data class BackupSummary(
     val searchHistoryCount: Int,
     val siteIdsPresent: Set<SiteId>,
     val retiredSiteIdsPresent: Set<SiteId>,
+    val customTagTranslationsCount: Int = 0,
 ) {
     val totalHistoryCount: Int get() = watchProgressCount + readingProgressCount
     val totalBookmarksCount: Int get() = pageBookmarksCount + timeBookmarksCount
@@ -50,6 +51,9 @@ data class BackupSummary(
         append("\n片单 $shelvesCount 个（$shelfItemsCount 项） · 书签 $totalBookmarksCount 个")
         if (imageFavoritesCount > 0 || savedSearchesCount > 0) {
             append("\n单图收藏 $imageFavoritesCount 张 · 保存的搜索 $savedSearchesCount 个")
+        }
+        if (customTagTranslationsCount > 0) {
+            append("\n自定义标签译名 $customTagTranslationsCount 条")
         }
         if (retiredSiteIdsPresent.isNotEmpty()) {
             append("\n包含已退役站点历史记录：${retiredSiteIdsPresent.joinToString(", ") { it.value }}")
@@ -301,10 +305,12 @@ class BackupValidator(
             validateMediaItem(inboxItem.item)
         }
 
-        // 12. Blocked terms
+        // 12. Blocked terms (allows SiteId.GLOBAL "*" in addition to live/local/retired sites)
         val blockedBySite = HashMap<SiteId, Int>()
         for (term in payload.blockedTerms) {
-            validateSite(term.siteId)
+            if (!term.siteId.isGlobal) {
+                validateSite(term.siteId)
+            }
             val count = (blockedBySite[term.siteId] ?: 0) + 1
             checkRule(count <= MAX_BLOCKED_PER_SITE) { "站点 ${term.siteId.value} 屏蔽词超过上限 ($MAX_BLOCKED_PER_SITE)" }
             blockedBySite[term.siteId] = count
@@ -359,6 +365,22 @@ class BackupValidator(
             }
         }
 
+        // 17. Custom tag translations
+        checkRule(payload.customTagTranslations.size <= MAX_CUSTOM_TAG_TRANSLATIONS) {
+            "自定义标签词条超过上限 ($MAX_CUSTOM_TAG_TRANSLATIONS)"
+        }
+        for (entry in payload.customTagTranslations) {
+            checkRule(entry.namespace.length <= MAX_NAMESPACE_LENGTH) { "自定义标签命名空间过长" }
+            checkRule(entry.rawSlug.isNotBlank() && entry.rawSlug.length <= MAX_TAG_LENGTH) {
+                "自定义标签英文词条无效"
+            }
+            checkRule(entry.chineseName.isNotBlank() && entry.chineseName.length <= MAX_TAG_LENGTH) {
+                "自定义标签中文译名无效"
+            }
+            checkRule(entry.intro.length <= MAX_ID_LENGTH) { "自定义标签说明过长" }
+            checkRule(entry.updatedAt >= 0L) { "自定义标签时间戳无效" }
+        }
+
         val retiredPresent = sitesPresent.filterTo(LinkedHashSet()) { it.isRetired }
         return BackupSummary(
             schemaVersion = payload.schemaVersion,
@@ -380,6 +402,7 @@ class BackupValidator(
             searchHistoryCount = payload.searchHistory.size,
             siteIdsPresent = sitesPresent.toSet(),
             retiredSiteIdsPresent = retiredPresent,
+            customTagTranslationsCount = payload.customTagTranslations.size,
         )
     }
 
@@ -465,6 +488,9 @@ class BackupValidator(
         const val MAX_INBOX_ITEMS: Int = 10_000
         const val MAX_BLOCKED_PER_SITE: Int = 10_000
         const val MAX_SEARCH_HISTORY_PER_SITE: Int = 30
+        const val MAX_CUSTOM_TAG_TRANSLATIONS: Int = 50_000
+        const val MAX_NAMESPACE_LENGTH: Int = 64
+        const val MAX_TAG_LENGTH: Int = 200
 
         val LOCAL_SHA256_REGEX: Regex = Regex("^[a-f0-9]{64}$")
         val LOCAL_ITEM_URI_REGEX: Regex = Regex("^(ravenlocal|r34local)://[a-f0-9]{64}$")
@@ -483,6 +509,8 @@ class BackupValidator(
             "stream_cache",
             "seek_cache_enabled",
             "seek_cache",
+            "tag_dict_auto_sync",
+            "block_tags_globally",
         )
 
         val STRING_SETTINGS_KEYS: Set<String> = setOf(

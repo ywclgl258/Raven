@@ -127,7 +127,8 @@ fun MediaItem.withLocalizedTags(
     if (!translateTags || tags.isEmpty()) return this
     var changed = false
     val mapped = tags.map { tag ->
-        val translated = tagDictionary.translate(tag.slug) ?: tagDictionary.translate(tag.label)
+        val translated = tagDictionary.translate(tag.slug, tag.namespace)
+            ?: tagDictionary.translate(tag.label, tag.namespace)
         if (translated != null && translated != tag.label) {
             changed = true
             tag.copy(label = translated)

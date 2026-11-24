@@ -1,5 +1,6 @@
 package com.raven.app.feature.library
 
+import com.raven.app.core.common.TagDictionary
 import org.koin.core.module.Module
 import org.koin.core.module.dsl.viewModel
 import org.koin.dsl.module
@@ -102,6 +103,8 @@ val libraryFeatureModule: Module = module {
             preferencesRepository = get(),
             siteRegistry = get(),
             dispatchers = get(),
+            tagDictionary = getOrNull<TagDictionary>() ?: TagDictionary.default,
+            mediaTagCacheRepository = get(),
         )
     }
 }

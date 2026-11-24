@@ -29,6 +29,8 @@ val readerFeatureModule: Module = module {
             preferencesRepository = get(),
             dispatchers = get(),
             tagDictionary = getOrNull<TagDictionary>() ?: TagDictionary.default,
+            mediaTagCacheRepository = get(),
+            tagDictionaryRepository = get(),
         )
     }
 

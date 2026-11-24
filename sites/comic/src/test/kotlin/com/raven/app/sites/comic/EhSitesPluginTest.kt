@@ -378,4 +378,30 @@ class EhSitesPluginTest {
         assertEquals("4", catLink.request.category)
         assertNotNull(resolver.canonicalize("https://e-hentai.org/g/987654/abcdef0123?p=1#top"))
     }
+
+    @Test
+    fun `ehentai formats multi-word and namespaced excludeTags safely alongside non-empty query`() = runTest {
+        val http = FakeHttpClientAdapter()
+        val store = InMemorySiteSessionStore()
+        val eh = EhentaiSitePlugin(http, store)
+        http.onMatch({ true }) { req ->
+            FakeHttpClientAdapter.htmlResponse(req.url, sampleFeedHtml("e-hentai.org"))
+        }
+
+        eh.searchSource!!.search(
+            FeedRequest(
+                siteId = SiteId.EHENTAI,
+                query = "elf",
+                advancedFilters = AdvancedSearchFilters(
+                    excludeTags = listOf("guro", "big breasts", "female:sole female"),
+                ),
+            ),
+        )
+        val url = ComicUrl.requireParse(http.recordedRequests.last().url)
+        val fSearch = url.queryParameter("f_search").orEmpty()
+        assertTrue(fSearch.contains("elf"))
+        assertTrue(fSearch.contains("-guro"))
+        assertTrue(fSearch.contains("-\"big breasts\""))
+        assertTrue(fSearch.contains("-female:\"sole female\""))
+    }
 }

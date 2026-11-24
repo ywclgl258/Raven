@@ -1,6 +1,7 @@
 package com.raven.app.core.database
 
 import app.cash.turbine.test
+import com.raven.app.core.common.TagDictionary
 import com.raven.app.core.database.datastore.SettingsDataStore
 import com.raven.app.core.database.model.BrowsePosition
 import com.raven.app.core.database.repository.BackupDataRepository
@@ -10,10 +11,12 @@ import com.raven.app.core.database.repository.BrowsePositionRepository
 import com.raven.app.core.database.repository.DownloadStateRepository
 import com.raven.app.core.database.repository.FavoriteRepository
 import com.raven.app.core.database.repository.HistoryRepository
+import com.raven.app.core.database.repository.MediaTagCacheRepository
 import com.raven.app.core.database.repository.PreferencesRepository
 import com.raven.app.core.database.repository.SearchHistoryRepository
 import com.raven.app.core.database.repository.ShelfRepository
 import com.raven.app.core.database.repository.SubscriptionRepository
+import com.raven.app.core.database.repository.TagDictionaryRepository
 import com.raven.app.core.model.ComicLanguage
 import com.raven.app.core.model.DownloadErrorCategory
 import com.raven.app.core.model.DownloadItem
@@ -39,7 +42,10 @@ import com.raven.app.core.model.SiteId
 import com.raven.app.core.model.SmartShelf
 import com.raven.app.core.model.SmartShelfRule
 import com.raven.app.core.model.StorageLocation
+import com.raven.app.core.model.TagRef
 import com.raven.app.core.model.TagSubscription
+import com.raven.app.core.model.TagTranslationEntry
+import com.raven.app.core.model.TagTranslationSource
 import com.raven.app.core.model.TimeBookmark
 import com.raven.app.core.model.UpdateInboxItem
 import com.raven.app.core.model.WatchProgress
@@ -398,4 +404,113 @@ class RepositoriesBehaviorTest {
         assertEquals(1, db.favorites.getAll().size)
         assertEquals("720p", settingsStore.currentSettings().preferredQuality)
     }
+
+    @Test
+    fun `tag dictionary repository, media tag cache, global blocked terms, and backup custom translations work end-to-end`() =
+        runTest {
+            val db = FakeRavenDb()
+            var now = 20_000L
+            val clock = { now++ }
+            val runtimeDict = TagDictionary(mapOf("stockings" to "丝袜", "tentacles" to "触手"))
+
+            val tagDictRepo = TagDictionaryRepository(
+                tagTranslationDao = db.tagTranslations,
+                transactionRunner = db.transactionRunner,
+                runtimeDictionary = runtimeDict,
+                clock = clock,
+            )
+
+            // Bulk replace community entries and hydrate runtime dictionary
+            val inserted = tagDictRepo.replaceCommunityEntries(
+                listOf(
+                    TagTranslationEntry(namespace = "female", rawSlug = "sole_female", chineseName = "单女主", source = TagTranslationSource.COMMUNITY_EHTAG),
+                    TagTranslationEntry(namespace = "", rawSlug = "stockings", chineseName = "长筒袜", source = TagTranslationSource.COMMUNITY_EHTAG),
+                ),
+            )
+            assertEquals(2, inserted)
+            assertEquals("单女主", runtimeDict.translate("female:sole_female"))
+            assertEquals("长筒袜", runtimeDict.translate("stockings"))
+
+            // Custom override beats community
+            assertTrue(tagDictRepo.upsertCustomEntry("female:stockings", "过膝丝袜", intro = "偏好"))
+            assertEquals("过膝丝袜", runtimeDict.translate("female:stockings"))
+            val stats = tagDictRepo.observeStats().first()
+            assertEquals(2, stats.builtInCount)
+            assertEquals(2, stats.communityCount)
+            assertEquals(1, stats.customCount)
+            assertEquals(1, tagDictRepo.observeCustomEntries().first().size)
+
+            // MediaTagCacheRepository caches and prunes to maxEntries
+            val tagCacheRepo = MediaTagCacheRepository(
+                mediaTagCacheDao = db.mediaTagCache,
+                transactionRunner = db.transactionRunner,
+                maxEntries = 3,
+                clock = clock,
+            )
+            repeat(5) { idx ->
+                tagCacheRepo.upsertTags(
+                    SiteId.R34V,
+                    "v$idx",
+                    listOf(TagRef(slug = "tentacles", label = "Tentacles")),
+                )
+            }
+            val cachedBySite = tagCacheRepo.observeTagsBySite(SiteId.R34V).first()
+            assertEquals(3, cachedBySite.size)
+            assertTrue("r34v:v4" in cachedBySite)
+            assertFalse("r34v:v0" in cachedBySite)
+            assertEquals(3, tagCacheRepo.observeAllTags().first().size)
+
+            // BlockedTermsRepository global + per-site effective union & grouped map
+            val blockedRepo = BlockedTermsRepository(db.blockedTerms, db.transactionRunner, clock)
+            blockedRepo.addTerm(SiteId.GLOBAL, "guro")
+            blockedRepo.addTerm(SiteId.R34V, "scat")
+            blockedRepo.addTerm(SiteId.NHENTAI, "yaoi")
+            assertEquals(listOf("guro"), blockedRepo.observeGlobalTerms().first())
+            assertEquals(listOf("guro", "scat"), blockedRepo.observeEffectiveTermsBySite(SiteId.R34V).first())
+            assertEquals(listOf("guro", "yaoi"), blockedRepo.observeEffectiveTermsBySite(SiteId.NHENTAI).first())
+            val grouped = blockedRepo.observeAllGrouped().first()
+            assertEquals(listOf("guro"), grouped[SiteId.GLOBAL])
+            assertEquals(listOf("scat"), grouped[SiteId.R34V])
+
+            // BackupDataRepository exports & restores customTagTranslations without wiping COMMUNITY_EHTAG
+            val settingsStore = SettingsDataStore(InMemoryPreferencesDataStore())
+            val backupRepo = BackupDataRepository(
+                watchProgressDao = db.watchProgress,
+                readingProgressDao = db.readingProgress,
+                favoriteDao = db.favorites,
+                shelfDao = db.shelves,
+                shelfItemDao = db.shelfItems,
+                smartShelfDao = db.smartShelves,
+                pageBookmarkDao = db.pageBookmarks,
+                timeBookmarkDao = db.timeBookmarks,
+                imageFavoriteDao = db.imageFavorites,
+                tagSubscriptionDao = db.tagSubscriptions,
+                savedSearchDao = db.savedSearches,
+                updateInboxDao = db.updateInbox,
+                blockedTermDao = db.blockedTerms,
+                searchHistoryDao = db.searchHistory,
+                playbackPreferencesDao = db.playbackPreferences,
+                readerPreferencesDao = db.readerPreferences,
+                settingsDataStore = settingsStore,
+                transactionRunner = db.transactionRunner,
+                clock = clock,
+                tagTranslationDao = db.tagTranslations,
+            )
+            val exported = backupRepo.exportPayload(appVersion = "1.1.0")
+            assertEquals(1, exported.customTagTranslations.size)
+            assertEquals("过膝丝袜", exported.customTagTranslations.single().chineseName)
+
+            val summary = backupRepo.applyBackup(
+                RavenBackupPayload(
+                    exportedAt = 99_000L,
+                    customTagTranslations = listOf(
+                        TagTranslationEntry(namespace = "", rawSlug = "elf", chineseName = "尖耳精灵", updatedAt = 99_000L),
+                    ),
+                ),
+            )
+            assertEquals(2, summary.customTagTranslationsCount)
+            // Community entries remain untouched after backup restore
+            assertEquals(2, db.tagTranslations.getBySource(TagTranslationSource.COMMUNITY_EHTAG).size)
+            assertEquals(2, db.tagTranslations.getBySource(TagTranslationSource.USER_CUSTOM).size)
+        }
 }

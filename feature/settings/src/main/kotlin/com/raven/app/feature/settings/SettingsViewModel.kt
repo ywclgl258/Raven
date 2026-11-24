@@ -3,9 +3,12 @@ package com.raven.app.feature.settings
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.raven.app.core.common.AppDispatchers
+import com.raven.app.core.common.TagDictionary
 import com.raven.app.core.database.model.AppSettings
+import com.raven.app.core.database.model.TagDictionaryStats
 import com.raven.app.core.database.repository.BlockedTermsRepository
 import com.raven.app.core.database.repository.PreferencesRepository
+import com.raven.app.core.database.repository.TagDictionaryRepository
 import com.raven.app.core.media.reader.GalleryPageRepository
 import com.raven.app.core.media.storage.StorageRootManager
 import com.raven.app.core.media.storage.StorageStatus
@@ -25,6 +28,7 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
@@ -71,6 +75,11 @@ data class SettingsUiState(
     val activeSite: SiteDescriptor? = null,
     val activeSiteSupportsAuth: Boolean = false,
     val activeSiteBlockedTermsCount: Int = 0,
+    val tagDictionaryStats: TagDictionaryStats = TagDictionaryStats(
+        builtInCount = TagDictionary.default.builtInSize,
+        communityCount = 0,
+        customCount = 0,
+    ),
     val authSites: List<AuthSiteAccountItem> = emptyList(),
     val allSites: List<SiteDescriptor> = emptyList(),
     val readingCache: ReadingCacheSummary = ReadingCacheSummary(),
@@ -121,6 +130,7 @@ class SettingsViewModel(
     private val ravenUpdater: RavenUpdater,
     private val appInfo: RavenAppInfo,
     private val dispatchers: AppDispatchers,
+    private val tagDictionaryRepository: TagDictionaryRepository? = null,
 ) : ViewModel() {
 
     private val auxState = MutableStateFlow(
@@ -136,8 +146,17 @@ class SettingsViewModel(
     private val activeBlockedCountFlow = preferencesRepository.settings
         .map { it.activeSiteId }
         .flatMapLatest { siteId ->
-            blockedTermsRepository.observeBySite(siteId).map { it.size }
+            blockedTermsRepository.observeEffectiveTermsBySite(siteId).map { it.size }
         }
+
+    private val tagDictionaryStatsFlow = tagDictionaryRepository?.observeStats()
+        ?: flowOf(
+            TagDictionaryStats(
+                builtInCount = TagDictionary.default.builtInSize,
+                communityCount = 0,
+                customCount = 0,
+            ),
+        )
 
     private val networkSummaryFlow = combine(
         networkMonitor.isMetered,
@@ -154,9 +173,10 @@ class SettingsViewModel(
     val uiState: StateFlow<SettingsUiState> = combine(
         preferencesRepository.settings,
         activeBlockedCountFlow,
+        tagDictionaryStatsFlow,
         networkSummaryFlow,
         auxState,
-    ) { settings, blockedCount, net, aux ->
+    ) { settings, blockedCount, dictStats, net, aux ->
         val activePlugin = siteRegistry.get(settings.activeSiteId)
             ?: siteRegistry.allPlugins().firstOrNull()
         val activeSupportsAuth = activePlugin != null && activePlugin.authProvider.mode != AuthMode.None
@@ -165,6 +185,7 @@ class SettingsViewModel(
             activeSite = activePlugin?.descriptor,
             activeSiteSupportsAuth = activeSupportsAuth,
             activeSiteBlockedTermsCount = blockedCount,
+            tagDictionaryStats = dictStats,
             authSites = aux.authSites,
             allSites = siteRegistry.allDescriptors(),
             readingCache = aux.readingCache,

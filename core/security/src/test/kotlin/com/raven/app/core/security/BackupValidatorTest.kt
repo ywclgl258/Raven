@@ -1,5 +1,6 @@
 package com.raven.app.core.security
 
+import com.raven.app.core.model.BlockedTerm
 import com.raven.app.core.model.FavoriteItem
 import com.raven.app.core.model.FavoriteKind
 import com.raven.app.core.model.ImageFavorite
@@ -12,6 +13,8 @@ import com.raven.app.core.model.ShelfItem
 import com.raven.app.core.model.SiteDescriptor
 import com.raven.app.core.model.SiteId
 import com.raven.app.core.model.SiteNetworkProfile
+import com.raven.app.core.model.TagTranslationEntry
+import com.raven.app.core.model.TagTranslationSource
 import com.raven.app.core.model.WatchProgress
 import com.raven.app.core.sitespi.SitePlugin
 import com.raven.app.core.sitespi.SiteRegistry
@@ -230,5 +233,52 @@ class BackupValidatorTest {
             savedSearches = listOf(SavedSearch(id = "s1", name = "Bad", query = "q", siteIds = listOf(SiteId.LOCAL))),
         )
         assertThrows(BackupValidationException::class.java) { validator.validate(localSearch) }
+    }
+
+    @Test
+    fun `accepts global blocked terms, custom tag translations, and new boolean settings while rejecting invalid entries`() {
+        val validPayload = RavenBackupPayload(
+            exportedAt = 1_700_000_000_000L,
+            blockedTerms = listOf(
+                BlockedTerm(SiteId.GLOBAL, "guro", createdAt = 100L),
+                BlockedTerm(SiteId.R34V, "scat", createdAt = 200L),
+            ),
+            settings = mapOf(
+                "tag_dict_auto_sync" to "true",
+                "block_tags_globally" to "false",
+            ),
+            customTagTranslations = listOf(
+                TagTranslationEntry(
+                    namespace = "female",
+                    rawSlug = "stockings",
+                    chineseName = "过膝丝袜",
+                    intro = "自定义",
+                    source = TagTranslationSource.USER_CUSTOM,
+                    updatedAt = 1_700_000_000_000L,
+                ),
+            ),
+        )
+        val summary = validator.validate(validPayload)
+        assertEquals(2, summary.blockedTermsCount)
+        assertEquals(1, summary.customTagTranslationsCount)
+        assertTrue(summary.toDisplayText().contains("自定义标签译名 1 条"))
+
+        // SiteId.GLOBAL must still be rejected for non-blocklist records like WatchProgress
+        val globalWatch = RavenBackupPayload(
+            exportedAt = 100L,
+            watchProgress = listOf(
+                WatchProgress(SiteId.GLOBAL, "1", "https://rule34video.com/video/1", "Bad", positionMs = 0, durationMs = 10, updatedAt = 1),
+            ),
+        )
+        assertThrows(BackupValidationException::class.java) { validator.validate(globalWatch) }
+
+        // Blank custom translation chineseName is rejected
+        val blankTranslation = RavenBackupPayload(
+            exportedAt = 100L,
+            customTagTranslations = listOf(
+                TagTranslationEntry(rawSlug = "stockings", chineseName = "   "),
+            ),
+        )
+        assertThrows(BackupValidationException::class.java) { validator.validate(blankTranslation) }
     }
 }

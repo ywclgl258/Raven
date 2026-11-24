@@ -1,6 +1,7 @@
 package com.raven.app.core.database.domain
 
 import com.raven.app.core.common.ContentFilter
+import com.raven.app.core.common.TagDictionary
 import com.raven.app.core.database.RavenDatabase
 import com.raven.app.core.database.dao.ImageFavoriteDao
 import com.raven.app.core.database.dao.ReadingProgressDao
@@ -23,6 +24,8 @@ import com.raven.app.core.model.Shelf
 import com.raven.app.core.model.ShelfItem
 import com.raven.app.core.model.SmartShelf
 import com.raven.app.core.model.TagSubscription
+import com.raven.app.core.model.TagTranslationEntry
+import com.raven.app.core.model.TagTranslationSource
 import com.raven.app.core.model.TimeBookmark
 import com.raven.app.core.model.UpdateInboxItem
 import com.raven.app.core.model.WatchProgress
@@ -58,6 +61,7 @@ object BackupMerger {
         updateInboxCount = payload.updateInbox.size,
         blockedTermsCount = payload.blockedTerms.size,
         searchHistoryCount = payload.searchHistory.size,
+        customTagTranslationsCount = payload.customTagTranslations.size,
     )
 
     fun merge(
@@ -92,6 +96,10 @@ object BackupMerger {
         val mergedReaderPrefs = mergeReaderPreferences(local.readerPreferences, incoming.readerPreferences)
         val mergedLanguages = local.siteLanguages + incoming.siteLanguages
         val mergedSettings = filterPortableSettings(local.settings) + filterPortableSettings(incoming.settings)
+        val mergedCustomTags = mergeCustomTagTranslations(
+            local = local.customTagTranslations,
+            incoming = incoming.customTagTranslations,
+        )
 
         return RavenBackupPayload(
             schemaVersion = RavenBackupPayload.CURRENT_SCHEMA_VERSION,
@@ -115,6 +123,7 @@ object BackupMerger {
             readerPreferences = mergedReaderPrefs,
             siteLanguages = mergedLanguages,
             settings = mergedSettings,
+            customTagTranslations = mergedCustomTags,
         )
     }
 
@@ -658,6 +667,42 @@ object BackupMerger {
             byKey[key] = clean
         }
         return byKey.values.toList()
+    }
+
+    private fun mergeCustomTagTranslations(
+        local: List<TagTranslationEntry>,
+        incoming: List<TagTranslationEntry>,
+    ): List<TagTranslationEntry> {
+        val byKey = linkedMapOf<Pair<String, String>, TagTranslationEntry>()
+        fun accept(entry: TagTranslationEntry, preferOnTie: Boolean) {
+            val (embeddedNs, barePart) = TagDictionary.splitNamespace(entry.rawSlug)
+            val slug = TagDictionary.normalizeBareSlug(barePart)
+            val ns = TagDictionary.normalizeNamespace(entry.namespace).ifEmpty { embeddedNs }
+            val zh = entry.chineseName.trim()
+            if (slug.isEmpty() || zh.isEmpty()) return
+            val normalized = entry.copy(
+                namespace = ns,
+                rawSlug = slug,
+                chineseName = zh,
+                intro = entry.intro.trim(),
+                source = TagTranslationSource.USER_CUSTOM,
+                updatedAt = entry.updatedAt.coerceAtLeast(0L),
+            )
+            val key = ns to slug
+            val prev = byKey[key]
+            if (prev == null || normalized.updatedAt > prev.updatedAt ||
+                (preferOnTie && normalized.updatedAt == prev.updatedAt)
+            ) {
+                byKey[key] = normalized
+            }
+        }
+        local.forEach { accept(it, preferOnTie = false) }
+        incoming.forEach { accept(it, preferOnTie = true) }
+        return byKey.values.sortedWith(
+            compareByDescending<TagTranslationEntry> { it.updatedAt }
+                .thenBy { it.namespace }
+                .thenBy { it.rawSlug },
+        )
     }
 
     private fun filterPortableSettings(settings: Map<String, String>): Map<String, String> =

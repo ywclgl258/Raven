@@ -49,6 +49,7 @@ import androidx.compose.material.icons.outlined.NotificationsNone
 import androidx.compose.material.icons.outlined.OfflinePin
 import androidx.compose.material.icons.outlined.Person
 import androidx.compose.material.icons.outlined.Search
+import androidx.compose.material.icons.outlined.Translate
 import androidx.compose.material.icons.outlined.WatchLater
 import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.PlayArrow
@@ -247,6 +248,7 @@ fun GalleryDetailScreen(
                         showAllPreviewPages = showAllPreviewPages,
                         onExpandAllPages = { showAllPreviewPages = true },
                         formatTagLabel = viewModel::formatTagLabel,
+                        isTagBlocked = viewModel::isTagBlocked,
                         onOpenReader = { startPage, offline ->
                             navigator.openReader(
                                 siteId = detail.item.siteId,
@@ -351,6 +353,7 @@ fun GalleryDetailScreen(
     if (activeTagAction != null) {
         TagActionBottomSheet(
             state = activeTagAction,
+            blockTagsGlobally = uiState.blockTagsGlobally,
             onDismiss = viewModel::dismissTagActions,
             onBrowseTag = {
                 viewModel.dismissTagActions()
@@ -359,6 +362,9 @@ fun GalleryDetailScreen(
             onToggleFavorite = { viewModel.toggleTagFavorite(activeTagAction.tag) },
             onToggleSubscription = { viewModel.toggleTagSubscription(activeTagAction.tag) },
             onToggleBlocked = { viewModel.toggleTagBlocked(activeTagAction.tag) },
+            onSaveCustomTranslation = { chineseName ->
+                viewModel.saveCustomTagTranslation(activeTagAction.tag, chineseName)
+            },
         )
     }
 }
@@ -371,6 +377,7 @@ private fun GalleryDetailContent(
     showAllPreviewPages: Boolean,
     onExpandAllPages: () -> Unit,
     formatTagLabel: (TagRef) -> String,
+    isTagBlocked: (TagRef) -> Boolean,
     onOpenReader: (startPage: Int, offlineOnly: Boolean) -> Unit,
     onOpenVideo: (com.raven.app.core.model.MediaItem) -> Unit,
     onOpenAuthor: (AuthorRef) -> Unit,
@@ -486,9 +493,13 @@ private fun GalleryDetailContent(
                             horizontalArrangement = Arrangement.spacedBy(8.dp),
                             verticalArrangement = Arrangement.spacedBy(8.dp),
                         ) {
+                            // Read tagDictionaryRevision so edited Chinese translations recompose chips live
+                            val dictRevision = uiState.tagDictionaryRevision
                             allTags.forEach { tag ->
-                                val label = formatTagLabel(tag)
-                                val isBlocked = com.raven.app.core.common.ContentFilter.normalizeTerm(tag.slug) in uiState.blockedTerms
+                                val label = remember(tag, uiState.translateTags, dictRevision) {
+                                    formatTagLabel(tag)
+                                }
+                                val isBlocked = isTagBlocked(tag)
                                 val isFav = tag.slug.lowercase() in uiState.favoritedTagSlugs
                                 GalleryTagChip(
                                     label = label,
@@ -585,15 +596,16 @@ private fun GalleryDetailContent(
                 }
             }
 
-            // 7. Related Galleries
-            if (detail.related.isNotEmpty()) {
+            // 7. Related Galleries (respecting global/per-site blocked terms)
+            val relatedItems = uiState.filteredRelated
+            if (relatedItems.isNotEmpty()) {
                 item(key = "related") {
                     RavenHorizontalShelf(
                         title = "相关推荐",
-                        subtitle = "${detail.related.size} 部作品",
+                        subtitle = "${relatedItems.size} 部作品",
                     ) {
                         items(
-                            items = detail.related,
+                            items = relatedItems,
                             key = { "rel_${it.compositeKey}" },
                         ) { relatedItem ->
                             RavenGalleryCard(
@@ -1458,13 +1470,26 @@ private fun SelectiveDownloadBottomSheet(
 @Composable
 private fun TagActionBottomSheet(
     state: TagActionState,
+    blockTagsGlobally: Boolean,
     onDismiss: () -> Unit,
     onBrowseTag: () -> Unit,
     onToggleFavorite: () -> Unit,
     onToggleSubscription: () -> Unit,
     onToggleBlocked: () -> Unit,
+    onSaveCustomTranslation: (String) -> Unit,
 ) {
     val colors = LocalRavenColors.current
+    var isEditingTranslation by remember(state.tag.slug, state.tag.namespace) { mutableStateOf(false) }
+    var editedChineseName by remember(state.tag.slug, state.tag.namespace, state.translatedLabel) {
+        mutableStateOf(
+            if (state.translatedLabel != state.tag.slug && state.translatedLabel != state.tag.label) {
+                state.translatedLabel
+            } else {
+                ""
+            },
+        )
+    }
+
     val subtitle = buildList {
         if (state.tag.namespace.isNotBlank()) add(state.tag.namespace)
         if (state.tag.slug != state.translatedLabel) add(state.tag.slug)
@@ -1499,8 +1524,98 @@ private fun TagActionBottomSheet(
             )
             RavenGroupedDivider(insetWithIcon = true)
             RavenGroupedRow(
-                title = if (state.isBlocked) "取消屏蔽该标签" else "在当前站点屏蔽该标签",
-                subtitle = "仅影响当前站点，不污染其他来源",
+                title = "编辑中文译名",
+                subtitle = if (state.translatedLabel != state.tag.slug) {
+                    "当前译名：${state.translatedLabel}"
+                } else {
+                    "为该标签自定义中文译名并立即全局生效"
+                },
+                icon = Icons.Outlined.Translate,
+                iconTint = if (isEditingTranslation) colors.crimson else colors.inkPrimary,
+                onClick = { isEditingTranslation = !isEditingTranslation },
+                modifier = Modifier.testTag("gallery_tag_edit_translation_row"),
+            )
+            if (isEditingTranslation) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(start = 16.dp, end = 16.dp, bottom = 14.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    OutlinedTextField(
+                        value = editedChineseName,
+                        onValueChange = { editedChineseName = it },
+                        label = { Text("中文译名") },
+                        placeholder = { Text("输入该标签的中文译名") },
+                        singleLine = true,
+                        shape = RavenShapes.ControlShape,
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedBorderColor = colors.crimson,
+                            unfocusedBorderColor = colors.outlineSubtle,
+                            focusedTextColor = colors.inkPrimary,
+                            unfocusedTextColor = colors.inkPrimary,
+                            focusedLabelColor = colors.crimson,
+                            unfocusedLabelColor = colors.inkSecondary,
+                            cursorColor = colors.crimson,
+                        ),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("gallery_tag_edit_translation_field"),
+                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        OutlinedButton(
+                            onClick = { isEditingTranslation = false },
+                            shape = RavenShapes.PillShape,
+                            border = BorderStroke(0.5.dp, colors.outlineSubtle),
+                            colors = ButtonDefaults.outlinedButtonColors(
+                                containerColor = colors.surface2,
+                                contentColor = colors.inkSecondary,
+                            ),
+                            modifier = Modifier
+                                .weight(1f)
+                                .heightIn(min = 44.dp),
+                        ) {
+                            Text("取消")
+                        }
+                        Button(
+                            onClick = {
+                                onSaveCustomTranslation(editedChineseName)
+                                isEditingTranslation = false
+                            },
+                            enabled = editedChineseName.trim().isNotEmpty(),
+                            shape = RavenShapes.PillShape,
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = colors.primaryCtaContainer,
+                                contentColor = colors.primaryCtaInk,
+                            ),
+                            modifier = Modifier
+                                .weight(1f)
+                                .heightIn(min = 44.dp)
+                                .testTag("gallery_tag_edit_translation_save"),
+                        ) {
+                            Text(
+                                text = "保存译名",
+                                style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.SemiBold),
+                            )
+                        }
+                    }
+                }
+            }
+            RavenGroupedDivider(insetWithIcon = true)
+            RavenGroupedRow(
+                title = when {
+                    state.isBlocked -> "取消屏蔽该标签"
+                    blockTagsGlobally -> "全局屏蔽该标签"
+                    else -> "在当前站点屏蔽该标签"
+                },
+                subtitle = when {
+                    state.isBlocked -> "当前已被过滤隐藏，点击立即解除屏蔽"
+                    blockTagsGlobally -> "屏蔽后将在全部站点同步生效并自动注入搜索排除"
+                    else -> "仅影响当前站点，不污染其他来源"
+                },
                 icon = Icons.Outlined.Block,
                 destructive = !state.isBlocked,
                 onClick = onToggleBlocked,

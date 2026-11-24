@@ -142,6 +142,7 @@ data class PlayerUiState(
     val isTemporarySpeedActive: Boolean = false,
     val temporarySpeedValue: Float = 2.0f,
     val translateTags: Boolean = true,
+    val blockTagsGlobally: Boolean = true,
     val reduceTransparency: Boolean = false,
     // Controls, loop, sleep timer & lock
     val loopRange: VideoLoopRange = VideoLoopRange.NONE,

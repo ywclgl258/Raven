@@ -42,9 +42,11 @@ import com.raven.app.core.database.model.BrowsePosition
 import com.raven.app.core.database.repository.BlockedTermsRepository
 import com.raven.app.core.database.repository.BrowsePositionRepository
 import com.raven.app.core.database.repository.HistoryRepository
+import com.raven.app.core.database.repository.MediaTagCacheRepository
 import com.raven.app.core.database.repository.PreferencesRepository
 import com.raven.app.core.database.repository.ShelfRepository
 import com.raven.app.core.database.repository.SubscriptionRepository
+import com.raven.app.core.database.repository.TagDictionaryRepository
 import com.raven.app.core.designsystem.component.RavenBottomSheet
 import com.raven.app.core.designsystem.component.RavenEmptyState
 import com.raven.app.core.designsystem.component.RavenErrorState
@@ -67,6 +69,7 @@ import com.raven.app.core.model.SiteCapability
 import com.raven.app.core.model.SiteDescriptor
 import com.raven.app.core.model.SiteException
 import com.raven.app.core.model.SiteId
+import com.raven.app.core.model.TagRef
 import com.raven.app.core.model.TagSubscription
 import com.raven.app.core.sitespi.SitePlugin
 import com.raven.app.core.sitespi.SiteRegistry
@@ -137,6 +140,8 @@ class SiteFeedViewModel(
     private val browsePositionRepository: BrowsePositionRepository,
     private val dispatchers: AppDispatchers,
     private val tagDictionary: TagDictionary = TagDictionary.default,
+    private val mediaTagCacheRepository: MediaTagCacheRepository? = null,
+    private val tagDictionaryRepository: TagDictionaryRepository? = null,
 ) : ViewModel() {
 
     val siteId: SiteId = SiteId.of(route.siteId)
@@ -167,20 +172,30 @@ class SiteFeedViewModel(
         flowOf(false)
     }
 
+    private val cachedTagsFlow = mediaTagCacheRepository?.observeTagsBySite(siteId) ?: flowOf(emptyMap())
+    private val dictRevisionFlow = tagDictionaryRepository?.observeRevision() ?: flowOf(0L)
+
     private val localDataFlow = combine(
-        blockedTermsRepository.observeTermsBySite(siteId),
-        historyRepository.observeWatchProgressBySite(siteId),
-        historyRepository.observeReadingProgressBySite(siteId),
-        shelfRepository.observeShelfItemKeys(Shelf.WATCH_LATER_ID),
+        combine(
+            blockedTermsRepository.observeEffectiveTermsBySite(siteId),
+            cachedTagsFlow,
+            historyRepository.observeWatchProgressBySite(siteId),
+            historyRepository.observeReadingProgressBySite(siteId),
+            shelfRepository.observeShelfItemKeys(Shelf.WATCH_LATER_ID),
+        ) { blocked, cachedTags, watches, readings, watchLater ->
+            SiteFeedLocalData(
+                blockedTerms = blocked,
+                cachedTagsByKey = cachedTags,
+                watchProgressMap = watches.associate { it.mediaId to it.progressFraction },
+                readingProgressMap = readings.associate { it.mediaId to it.progressFraction },
+                watchLaterKeys = watchLater,
+                isSubscribed = false,
+            )
+        },
         isSubscribedFlow,
-    ) { blocked, watches, readings, watchLater, subscribed ->
-        SiteFeedLocalData(
-            blockedTerms = blocked,
-            watchProgressMap = watches.associate { it.mediaId to it.progressFraction },
-            readingProgressMap = readings.associate { it.mediaId to it.progressFraction },
-            watchLaterKeys = watchLater,
-            isSubscribed = subscribed,
-        )
+        dictRevisionFlow,
+    ) { base, subscribed, rev ->
+        base.copy(isSubscribed = subscribed, dictRevision = rev)
     }
 
     val uiState: StateFlow<SiteFeedUiState> = combine(
@@ -204,7 +219,14 @@ class SiteFeedViewModel(
         val effectiveKind = matchedSection?.mediaKind ?: descriptor?.primaryKind ?: MediaKind.VIDEO
 
         val filteredItems = net.rawItems
-            .filter { ContentFilter.isAllowed(it, local.blockedTerms) }
+            .filter { item ->
+                ContentFilter.isAllowed(
+                    item = item,
+                    blockedTerms = local.blockedTerms,
+                    tagDictionary = tagDictionary,
+                    extraTags = local.cachedTagsByKey[item.compositeKey].orEmpty(),
+                )
+            }
             .withLocalizedTags(tagDictionary, settings.translateTags)
 
         val resolvedTitle = resolveDisplayTitle(
@@ -514,10 +536,12 @@ class SiteFeedViewModel(
 
     private data class SiteFeedLocalData(
         val blockedTerms: List<String>,
+        val cachedTagsByKey: Map<String, List<TagRef>>,
         val watchProgressMap: Map<String, Float>,
         val readingProgressMap: Map<String, Float>,
         val watchLaterKeys: Set<String>,
         val isSubscribed: Boolean,
+        val dictRevision: Long = 0L,
     )
 }
 

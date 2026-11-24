@@ -682,4 +682,82 @@ class PlayerViewModelTest {
 
         collectJob.cancel()
     }
+
+    @Test
+    fun cachesDetailTagsFiltersRelatedByGlobalBilingualAndCachedTagsAndUpdatesCustomTranslationLive() = runTest {
+        val harness = PlayerTestHarness(mainDispatcherRule.dispatcher)
+        val (registry, _) = buildRegistry(
+            r34vDetailHandler = { url ->
+                val id = url.substringAfterLast('/')
+                VideoDetail(
+                    item = sampleVideoItem(SiteId.R34V, id, title = "Video $id"),
+                    streams = sampleStreams(id),
+                    tags = listOf(
+                        TagRef(slug = "blonde", label = "blonde"),
+                        TagRef(slug = "spoiler", label = "spoiler"),
+                    ),
+                    related = listOf(
+                        sampleVideoItem(SiteId.R34V, "rel-clean", title = "Clean Related"),
+                        sampleVideoItem(
+                            SiteId.R34V,
+                            "rel-bilingual",
+                            title = "Spoiler Related",
+                            tags = listOf(TagRef(slug = "spoiler", label = "spoiler")),
+                        ),
+                        // No inline tags on related card, but MediaTagCacheRepository has "spoiler"
+                        sampleVideoItem(SiteId.R34V, "rel-cached-blocked", title = "Neutral Title"),
+                    ),
+                )
+            },
+        )
+        harness.mediaTagCacheRepository.upsertTags(
+            siteId = SiteId.R34V,
+            mediaId = "rel-cached-blocked",
+            tags = listOf(TagRef(slug = "spoiler", label = "spoiler")),
+        )
+
+        val vm = harness.createViewModel(
+            registry,
+            initialArgs = PlayerLaunchArgs(SiteId.R34V, "v-cache", "https://r34v.example/video/v-cache"),
+        )
+
+        vm.uiState.test {
+            advanceUntilIdle()
+            val initial = expectMostRecentItem()
+            assertEquals(3, initial.relatedItems.size)
+
+            // Detail tags cached in MediaTagCacheRepository
+            val cached = harness.mediaTagCacheRepository.getTags(SiteId.R34V, "v-cache")
+            assertTrue(cached.any { it.slug == "blonde" })
+            assertTrue(cached.any { it.slug == "spoiler" })
+
+            // Global Chinese block ("剧透" -> "spoiler") filters BOTH direct-tagged AND cached-tag related videos!
+            harness.blockedTermsRepository.addTerm(SiteId.GLOBAL, "剧透")
+            advanceUntilIdle()
+            val afterGlobalBlock = expectMostRecentItem()
+            assertEquals(listOf("rel-clean"), afterGlobalBlock.relatedItems.map { it.id })
+            assertTrue(afterGlobalBlock.tags.first { it.tag.slug == "spoiler" }.isBlocked)
+
+            // Custom Chinese translation edit refreshes UI tags immediately
+            val blondeTag = afterGlobalBlock.tags.first { it.tag.slug == "blonde" }.tag
+            vm.saveCustomTagTranslation(blondeTag, "浅金长发")
+            advanceUntilIdle()
+            val afterRename = expectMostRecentItem()
+            assertEquals("浅金长发", afterRename.tags.first { it.tag.slug == "blonde" }.displayLabel)
+
+            // Unblocking removes global term cleanly, then blocking with blockTagsGlobally=false writes per-site
+            val spoilerTag = afterRename.tags.first { it.tag.slug == "spoiler" }.tag
+            vm.toggleTagBlocked(spoilerTag)
+            advanceUntilIdle()
+            assertFalse(expectMostRecentItem().tags.first { it.tag.slug == "spoiler" }.isBlocked)
+
+            harness.preferencesRepository.setBlockTagsGlobally(false)
+            vm.toggleTagBlocked(spoilerTag)
+            advanceUntilIdle()
+            val allBlocked = harness.blockedTermDao.getAll()
+            assertTrue(allBlocked.any { it.siteId == SiteId.R34V.value && it.term == "spoiler" })
+            assertFalse(allBlocked.any { it.siteId == SiteId.GLOBAL.value && it.term == "spoiler" })
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
 }

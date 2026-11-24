@@ -36,6 +36,8 @@ import com.raven.app.core.model.SmartShelf
 import com.raven.app.core.model.SmartShelfRule
 import com.raven.app.core.model.StorageLocation
 import com.raven.app.core.model.TagSubscription
+import com.raven.app.core.model.TagTranslationEntry
+import com.raven.app.core.model.TagTranslationSource
 import com.raven.app.core.model.TimeBookmark
 import com.raven.app.core.model.UpdateInboxItem
 import com.raven.app.core.model.WatchProgress
@@ -263,6 +265,16 @@ class EntityMappersTest {
             updatedAt = 15_000L,
         )
         assertEquals(browsePos, browsePos.toEntity().toDomain())
+
+        val tagTranslation = TagTranslationEntry(
+            namespace = "female",
+            rawSlug = "big breasts",
+            chineseName = "巨乳",
+            intro = "说明文本",
+            source = TagTranslationSource.COMMUNITY_EHTAG,
+            updatedAt = 16_000L,
+        )
+        assertEquals(tagTranslation, tagTranslation.toEntity().toDomain())
     }
 
     @Test

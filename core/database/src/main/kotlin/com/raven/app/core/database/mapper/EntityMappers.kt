@@ -15,6 +15,7 @@ import com.raven.app.core.database.entity.ShelfEntity
 import com.raven.app.core.database.entity.ShelfItemEntity
 import com.raven.app.core.database.entity.SmartShelfEntity
 import com.raven.app.core.database.entity.TagSubscriptionEntity
+import com.raven.app.core.database.entity.TagTranslationEntity
 import com.raven.app.core.database.entity.TimeBookmarkEntity
 import com.raven.app.core.database.entity.UpdateInboxEntity
 import com.raven.app.core.database.entity.WatchProgressEntity
@@ -34,6 +35,7 @@ import com.raven.app.core.model.ShelfItem
 import com.raven.app.core.model.SiteId
 import com.raven.app.core.model.SmartShelf
 import com.raven.app.core.model.TagSubscription
+import com.raven.app.core.model.TagTranslationEntry
 import com.raven.app.core.model.TimeBookmark
 import com.raven.app.core.model.UpdateInboxItem
 import com.raven.app.core.model.WatchProgress
@@ -503,5 +505,23 @@ fun BrowsePositionEntity.toDomain(): BrowsePosition = BrowsePosition(
     workId = workId,
     throughPage = throughPage,
     shelfId = shelfId,
+    updatedAt = updatedAt,
+)
+
+fun TagTranslationEntry.toEntity(): TagTranslationEntity = TagTranslationEntity(
+    namespace = namespace.trim().lowercase(),
+    rawSlug = rawSlug.trim().lowercase(),
+    source = source,
+    chineseName = chineseName.trim(),
+    intro = intro.trim(),
+    updatedAt = updatedAt.coerceAtLeast(0L),
+)
+
+fun TagTranslationEntity.toDomain(): TagTranslationEntry = TagTranslationEntry(
+    namespace = namespace,
+    rawSlug = rawSlug,
+    chineseName = chineseName,
+    intro = intro,
+    source = source,
     updatedAt = updatedAt,
 )

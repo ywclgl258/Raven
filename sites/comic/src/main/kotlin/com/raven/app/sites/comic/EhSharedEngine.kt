@@ -1,5 +1,6 @@
 package com.raven.app.sites.comic
 
+import com.raven.app.core.common.ContentFilter
 import com.raven.app.core.model.AdvancedFilterField
 import com.raven.app.core.model.AuthorRef
 import com.raven.app.core.model.ComicLanguage
@@ -202,12 +203,17 @@ class EhSharedEngine(
         val html = fetchHtml(url)
         val isPopular = isPopularRequest(request)
         val clientLanguage = if (isPopular) request.language else ComicLanguage.ALL
-        return parseFeed(
+        val parsed = parseFeed(
             body = html,
             baseUrl = url,
             page = request.page.coerceAtLeast(1),
             clientLanguage = clientLanguage,
             heading = feedHeading(request),
+        )
+        val excludes = request.advancedFilters.excludeTags
+        if (excludes.isEmpty()) return parsed
+        return parsed.copy(
+            items = parsed.items.filter { item -> ContentFilter.isAllowed(item, excludes) },
         )
     }
 
@@ -264,10 +270,8 @@ class EhSharedEngine(
         }
 
         val languageTerms = buildLanguageTerms(request.language)
-        val includeTerms = filters.includeTags.map { it.trim() }.filter { it.isNotEmpty() }
-        val excludeTerms = filters.excludeTags.map { it.trim().removePrefix("-") }
-            .filter { it.isNotEmpty() }
-            .map { "-$it" }
+        val includeTerms = filters.includeTags.mapNotNull { formatSearchTag(it, exclude = false) }
+        val excludeTerms = filters.excludeTags.mapNotNull { formatSearchTag(it, exclude = true) }
 
         val existingTokens = tokenizeSearchTerms(baseQuery)
         val combinedTerms = (existingTokens + languageTerms + includeTerms + excludeTerms)
@@ -903,6 +907,30 @@ class EhSharedEngine(
                 .find(style)?.groupValues?.get(1)?.toIntOrNull()?.let { return it }
         }
         return 0
+    }
+
+    private fun formatSearchTag(raw: String, exclude: Boolean): String? {
+        val cleaned = raw.trim().let { if (exclude) it.removePrefix("-").trim() else it }
+        if (cleaned.isEmpty()) return null
+        val prefix = if (exclude) "-" else ""
+        if (cleaned.contains('"')) return "$prefix$cleaned"
+        val colonIdx = cleaned.indexOf(':')
+        if (colonIdx > 0 && colonIdx < cleaned.lastIndex) {
+            val ns = cleaned.substring(0, colonIdx).trim()
+            val value = cleaned.substring(colonIdx + 1).trim()
+            if (ns.isNotEmpty() && value.isNotEmpty()) {
+                return if (value.any(Char::isWhitespace)) {
+                    "$prefix$ns:\"$value\""
+                } else {
+                    "$prefix$ns:$value"
+                }
+            }
+        }
+        return if (cleaned.any(Char::isWhitespace)) {
+            "$prefix\"$cleaned\""
+        } else {
+            "$prefix$cleaned"
+        }
     }
 
     private fun buildPrimaryQuery(request: FeedRequest): String {

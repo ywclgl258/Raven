@@ -1,5 +1,6 @@
 package com.raven.app.sites.video
 
+import com.raven.app.core.common.ContentFilter
 import com.raven.app.core.common.UrlSanitizer
 import com.raven.app.core.model.AdvancedSearchFilters
 import com.raven.app.core.model.FeedPage
@@ -411,7 +412,7 @@ internal object VideoSiteSupport {
         val maxSec = if (filterDuration) (filters.maxDurationMinutes ?: 0) * 60 else 0
         val minRating = if (filterRating) (filters.minRating ?: 0) else 0
         val excluded = if (filterExcludeTags) {
-            filters.excludeTags.map { it.trim().lowercase() }.filter { it.isNotEmpty() }
+            filters.excludeTags.map { it.trim() }.filter { it.isNotEmpty() }
         } else {
             emptyList()
         }
@@ -420,10 +421,7 @@ internal object VideoSiteSupport {
             val dur = item.durationSeconds ?: 0
             val durOk = (minSec <= 0 || dur >= minSec) && (maxSec <= 0 || dur in 1..maxSec)
             val ratingOk = minRating <= 0 || (item.rating ?: 0f) >= minRating.toFloat()
-            val excludeOk = excluded.isEmpty() || excluded.none { term ->
-                item.title.lowercase().contains(term) ||
-                    item.tags.any { it.slug.lowercase() == term || it.label.lowercase().contains(term) }
-            }
+            val excludeOk = excluded.isEmpty() || ContentFilter.isAllowed(item, excluded)
             durOk && ratingOk && excludeOk
         }
     }

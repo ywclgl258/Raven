@@ -5,11 +5,13 @@ import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.emptyPreferences
 import com.raven.app.core.common.CustomAppDispatchers
+import com.raven.app.core.common.TagDictionary
 import com.raven.app.core.database.DatabaseTransactionRunner
 import com.raven.app.core.database.dao.BlockedTermDao
 import com.raven.app.core.database.dao.DownloadItemDao
 import com.raven.app.core.database.dao.FavoriteDao
 import com.raven.app.core.database.dao.ImageFavoriteDao
+import com.raven.app.core.database.dao.MediaTagCacheDao
 import com.raven.app.core.database.dao.PageBookmarkDao
 import com.raven.app.core.database.dao.PlaybackPreferencesDao
 import com.raven.app.core.database.dao.ReaderPreferencesDao
@@ -19,6 +21,7 @@ import com.raven.app.core.database.dao.ShelfDao
 import com.raven.app.core.database.dao.ShelfItemDao
 import com.raven.app.core.database.dao.SmartShelfDao
 import com.raven.app.core.database.dao.TagSubscriptionDao
+import com.raven.app.core.database.dao.TagTranslationDao
 import com.raven.app.core.database.dao.TimeBookmarkDao
 import com.raven.app.core.database.dao.UpdateInboxDao
 import com.raven.app.core.database.dao.WatchProgressDao
@@ -27,6 +30,7 @@ import com.raven.app.core.database.entity.BlockedTermEntity
 import com.raven.app.core.database.entity.DownloadItemEntity
 import com.raven.app.core.database.entity.FavoriteEntity
 import com.raven.app.core.database.entity.ImageFavoriteEntity
+import com.raven.app.core.database.entity.MediaTagCacheEntity
 import com.raven.app.core.database.entity.PageBookmarkEntity
 import com.raven.app.core.database.entity.PlaybackPreferencesEntity
 import com.raven.app.core.database.entity.ReaderPreferencesEntity
@@ -36,6 +40,7 @@ import com.raven.app.core.database.entity.ShelfEntity
 import com.raven.app.core.database.entity.ShelfItemEntity
 import com.raven.app.core.database.entity.SmartShelfEntity
 import com.raven.app.core.database.entity.TagSubscriptionEntity
+import com.raven.app.core.database.entity.TagTranslationEntity
 import com.raven.app.core.database.entity.TimeBookmarkEntity
 import com.raven.app.core.database.entity.UpdateInboxEntity
 import com.raven.app.core.database.entity.WatchProgressEntity
@@ -43,9 +48,11 @@ import com.raven.app.core.database.repository.BlockedTermsRepository
 import com.raven.app.core.database.repository.BookmarkRepository
 import com.raven.app.core.database.repository.FavoriteRepository
 import com.raven.app.core.database.repository.HistoryRepository
+import com.raven.app.core.database.repository.MediaTagCacheRepository
 import com.raven.app.core.database.repository.PreferencesRepository
 import com.raven.app.core.database.repository.ShelfRepository
 import com.raven.app.core.database.repository.SubscriptionRepository
+import com.raven.app.core.database.repository.TagDictionaryRepository
 import com.raven.app.core.media.download.InMemoryPlaybackQueuePersistence
 import com.raven.app.core.media.download.PlaybackQueueStore
 import com.raven.app.core.media.reader.GalleryExporter
@@ -67,6 +74,7 @@ import com.raven.app.core.model.SiteDescriptor
 import com.raven.app.core.model.SiteId
 import com.raven.app.core.model.SiteNetworkProfile
 import com.raven.app.core.model.StorageLocation
+import com.raven.app.core.model.TagTranslationSource
 import com.raven.app.core.sitespi.AuthMode
 import com.raven.app.core.sitespi.AuthProvider
 import com.raven.app.core.sitespi.AuthState
@@ -201,6 +209,21 @@ internal class ReaderTestHarness(
         persistence = InMemoryPlaybackQueuePersistence(),
         dispatchers = dispatchers,
         tokenGenerator = { "queue-token-1" },
+    )
+
+    val tagTranslationDao = InMemoryTagTranslationDao()
+    val mediaTagCacheDao = InMemoryMediaTagCacheDao()
+    val runtimeDictionary = TagDictionary(mapOf("solo-female" to "单人女性", "tentacles" to "触手"))
+    val tagDictionaryRepository = TagDictionaryRepository(
+        tagTranslationDao = tagTranslationDao,
+        transactionRunner = transactionRunner,
+        runtimeDictionary = runtimeDictionary,
+        clock = clock,
+    )
+    val mediaTagCacheRepository = MediaTagCacheRepository(
+        mediaTagCacheDao = mediaTagCacheDao,
+        transactionRunner = transactionRunner,
+        clock = clock,
     )
 }
 
@@ -774,4 +797,65 @@ internal class InMemoryUpdateInboxDao : UpdateInboxDao {
     override suspend fun deleteById(id: String) { rows.update { it.filterNot { e -> e.id == id } } }
     override suspend fun deleteBySource(sourceKind: InboxSourceKind, sourceId: String) = Unit
     override suspend fun deleteAll() { rows.value = emptyList() }
+}
+
+internal class InMemoryTagTranslationDao : TagTranslationDao {
+    private val rows = MutableStateFlow<List<TagTranslationEntity>>(emptyList())
+    override fun observeBySource(source: TagTranslationSource): Flow<List<TagTranslationEntity>> =
+        rows.map { list -> list.filter { it.source == source } }
+    override fun observeCountBySource(source: TagTranslationSource): Flow<Int> =
+        rows.map { list -> list.count { it.source == source } }
+    override fun observeAll(): Flow<List<TagTranslationEntity>> = rows
+    override suspend fun getBySource(source: TagTranslationSource): List<TagTranslationEntity> =
+        rows.value.filter { it.source == source }
+    override suspend fun getAll(): List<TagTranslationEntity> = rows.value
+    override suspend fun search(query: String, limit: Int): List<TagTranslationEntity> =
+        rows.value.filter {
+            it.rawSlug.contains(query, ignoreCase = true) || it.chineseName.contains(query, ignoreCase = true)
+        }.take(limit)
+    override suspend fun upsert(entity: TagTranslationEntity) = upsertAll(listOf(entity))
+    override suspend fun upsertAll(entities: List<TagTranslationEntity>) {
+        rows.update { current ->
+            val map = LinkedHashMap<Triple<TagTranslationSource, String, String>, TagTranslationEntity>()
+            current.forEach { map[Triple(it.source, it.namespace, it.rawSlug)] = it }
+            entities.forEach { map[Triple(it.source, it.namespace, it.rawSlug)] = it }
+            map.values.toList()
+        }
+    }
+    override suspend fun delete(source: TagTranslationSource, namespace: String, rawSlug: String) {
+        rows.update { list ->
+            list.filterNot { it.source == source && it.namespace == namespace && it.rawSlug == rawSlug }
+        }
+    }
+    override suspend fun deleteBySource(source: TagTranslationSource) {
+        rows.update { list -> list.filterNot { it.source == source } }
+    }
+    override suspend fun deleteAll() { rows.value = emptyList() }
+}
+
+internal class InMemoryMediaTagCacheDao : MediaTagCacheDao {
+    private val rows = MutableStateFlow<List<MediaTagCacheEntity>>(emptyList())
+    override fun observeAll(): Flow<List<MediaTagCacheEntity>> = rows
+    override fun observeBySite(siteId: String): Flow<List<MediaTagCacheEntity>> =
+        rows.map { list -> list.filter { it.siteId == siteId } }
+    override suspend fun getOne(siteId: String, mediaId: String): MediaTagCacheEntity? =
+        rows.value.firstOrNull { it.siteId == siteId && it.mediaId == mediaId }
+    override suspend fun getBySite(siteId: String): List<MediaTagCacheEntity> =
+        rows.value.filter { it.siteId == siteId }
+    override suspend fun upsert(entity: MediaTagCacheEntity) = upsertAll(listOf(entity))
+    override suspend fun upsertAll(entities: List<MediaTagCacheEntity>) {
+        rows.update { current ->
+            val map = LinkedHashMap<Pair<String, String>, MediaTagCacheEntity>()
+            current.forEach { map[it.siteId to it.mediaId] = it }
+            entities.forEach { map[it.siteId to it.mediaId] = it }
+            map.values.sortedByDescending { it.updatedAt }
+        }
+    }
+    override suspend fun deleteBySite(siteId: String) {
+        rows.update { list -> list.filterNot { it.siteId == siteId } }
+    }
+    override suspend fun deleteAll() { rows.value = emptyList() }
+    override suspend fun prune(limit: Int) {
+        rows.update { list -> list.sortedByDescending { it.updatedAt }.take(limit) }
+    }
 }

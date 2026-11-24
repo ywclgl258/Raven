@@ -105,6 +105,7 @@ import com.raven.app.feature.settings.SettingsNavigator
 import com.raven.app.feature.settings.SettingsScreen
 import com.raven.app.feature.settings.SiteAccountScreen
 import com.raven.app.feature.settings.StorageMigrationScreen
+import com.raven.app.feature.settings.TagDictionaryScreen
 import java.io.File
 import org.koin.androidx.compose.koinViewModel
 import org.koin.core.parameter.parametersOf
@@ -544,6 +545,10 @@ fun RavenAppShell(
                 }
             }
 
+            override fun openTagDictionary() {
+                navController.navigate(RavenRoute.TagDictionary) { launchSingleTop = true }
+            }
+
             override fun openBackupRestore() {
                 navController.navigate(RavenRoute.BackupRestore) { launchSingleTop = true }
             }
@@ -747,6 +752,9 @@ fun RavenAppShell(
             composable<RavenRoute.BlockedTerms> { backStackEntry ->
                 val route = backStackEntry.toRoute<RavenRoute.BlockedTerms>()
                 BlockedTermsScreen(route = route, navigator = settingsNavigator)
+            }
+            composable<RavenRoute.TagDictionary> {
+                TagDictionaryScreen(navigator = settingsNavigator)
             }
             composable<RavenRoute.BackupRestore> {
                 BackupRestoreScreen(navigator = settingsNavigator)

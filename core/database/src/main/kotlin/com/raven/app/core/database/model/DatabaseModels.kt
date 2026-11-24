@@ -51,6 +51,11 @@ data class AppSettings(
     val reduceTransparency: Boolean = false,
     val autoUpdateCheck: Boolean = true,
     val siteSwitchTutorialSeen: Boolean = false,
+    val tagDictAutoSync: Boolean = true,
+    val tagDictEtag: String = "",
+    val tagDictReleaseTag: String = "",
+    val tagDictUpdatedAt: Long = 0L,
+    val blockTagsGlobally: Boolean = true,
 ) {
     fun languageFor(siteId: SiteId): ComicLanguage = siteLanguages[siteId] ?: ComicLanguage.ALL
 
@@ -130,7 +135,19 @@ data class BackupSummary(
     val updateInboxCount: Int,
     val blockedTermsCount: Int,
     val searchHistoryCount: Int,
+    val customTagTranslationsCount: Int = 0,
 ) {
     val totalHistoryCount: Int get() = watchHistoryCount + readingHistoryCount
     val totalBookmarksCount: Int get() = pageBookmarksCount + timeBookmarksCount
+}
+
+/**
+ * Live entry counts across all three persisted/bundled tag dictionary tiers.
+ */
+data class TagDictionaryStats(
+    val builtInCount: Int,
+    val communityCount: Int,
+    val customCount: Int,
+) {
+    val totalCount: Int get() = builtInCount + communityCount + customCount
 }

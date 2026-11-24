@@ -8,10 +8,12 @@ import com.raven.app.core.database.mapper.toDomain
 import com.raven.app.core.model.BlockedTerm
 import com.raven.app.core.model.SiteId
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.map
 
 /**
- * Manages strict per-site content blocklists normalized via [ContentFilter.normalizeTerm].
+ * Manages global (`SiteId.GLOBAL`) and per-site content blocklists normalized via
+ * [ContentFilter.normalizeTerm].
  */
 class BlockedTermsRepository(
     private val blockedTermDao: BlockedTermDao,
@@ -26,6 +28,31 @@ class BlockedTermsRepository(
 
     fun observeTermsBySite(siteId: SiteId): Flow<List<String>> =
         observeBySite(siteId).map { list -> list.map { it.term } }
+
+    fun observeGlobalTerms(): Flow<List<String>> =
+        observeTermsBySite(SiteId.GLOBAL)
+
+    /**
+     * Reactive union of global (`SiteId.GLOBAL`) and site-specific blocked terms for [siteId].
+     */
+    fun observeEffectiveTermsBySite(siteId: SiteId): Flow<List<String>> =
+        if (siteId.isGlobal) {
+            observeGlobalTerms()
+        } else {
+            combine(
+                observeGlobalTerms(),
+                observeTermsBySite(siteId),
+            ) { globalTerms, siteTerms ->
+                (globalTerms + siteTerms).distinct()
+            }
+        }
+
+    /**
+     * Reactive map grouped by [SiteId] (including [SiteId.GLOBAL]) ready for
+     * [ContentFilter.filterAllowed].
+     */
+    fun observeAllGrouped(): Flow<Map<SiteId, List<String>>> =
+        observeAll().map { list -> list.groupBy(BlockedTerm::siteId) { it.term } }
 
     suspend fun addTerm(siteId: SiteId, rawTerm: String): Boolean {
         val term = ContentFilter.normalizeTerm(rawTerm)

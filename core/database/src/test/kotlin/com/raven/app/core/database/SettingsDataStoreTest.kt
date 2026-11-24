@@ -43,6 +43,11 @@ class SettingsDataStoreTest {
             assertFalse(initial.reduceTransparency)
             assertTrue(initial.autoUpdateCheck)
             assertFalse(initial.siteSwitchTutorialSeen)
+            assertTrue(initial.tagDictAutoSync)
+            assertEquals("", initial.tagDictEtag)
+            assertEquals("", initial.tagDictReleaseTag)
+            assertEquals(0L, initial.tagDictUpdatedAt)
+            assertTrue(initial.blockTagsGlobally)
 
             settingsStore.setActiveSiteId(SiteId.EHENTAI)
             assertEquals(SiteId.EHENTAI, awaitItem().activeSiteId)
@@ -96,6 +101,18 @@ class SettingsDataStoreTest {
             settingsStore.setAutoUpdateCheck(false)
             assertFalse(awaitItem().autoUpdateCheck)
 
+            settingsStore.setTagDictAutoSync(false)
+            assertFalse(awaitItem().tagDictAutoSync)
+
+            settingsStore.setTagDictSyncState(etag = "\"v2\"", releaseTag = "2026.11", updatedAt = 999_000L)
+            val synced = awaitItem()
+            assertEquals("\"v2\"", synced.tagDictEtag)
+            assertEquals("2026.11", synced.tagDictReleaseTag)
+            assertEquals(999_000L, synced.tagDictUpdatedAt)
+
+            settingsStore.setBlockTagsGlobally(false)
+            assertFalse(awaitItem().blockTagsGlobally)
+
             cancelAndIgnoreRemainingEvents()
         }
     }
@@ -118,10 +135,18 @@ class SettingsDataStoreTest {
         assertNull(settingsStore.currentSettings().pendingStorageLocation)
         assertNull(settingsStore.applyPendingStorageLocation())
 
-        // Export excludes device-local storage & tutorial keys
+        // Export excludes device-local storage, sync metadata & tutorial keys, includes portable tag/block flags
         settingsStore.setPreferredQuality("720p")
+        settingsStore.setTagDictAutoSync(false)
+        settingsStore.setBlockTagsGlobally(false)
+        settingsStore.setTagDictSyncState(etag = "etag-1", releaseTag = "r1", updatedAt = 1234L)
         val exported = settingsStore.exportPortableSettings()
         assertEquals("720p", exported[SettingsDataStore.KEY_PREFERRED_QUALITY])
+        assertEquals("false", exported[SettingsDataStore.KEY_TAG_DICT_AUTO_SYNC])
+        assertEquals("false", exported[SettingsDataStore.KEY_BLOCK_TAGS_GLOBALLY])
+        assertFalse(SettingsDataStore.KEY_TAG_DICT_ETAG in exported)
+        assertFalse(SettingsDataStore.KEY_TAG_DICT_RELEASE_TAG in exported)
+        assertFalse(SettingsDataStore.KEY_TAG_DICT_UPDATED_AT in exported)
         assertFalse(SettingsDataStore.KEY_STORAGE_LOCATION in exported)
         assertFalse(SettingsDataStore.KEY_PENDING_STORAGE_LOCATION in exported)
         assertFalse(SettingsDataStore.KEY_SITE_SWITCH_TUTORIAL_SEEN in exported)

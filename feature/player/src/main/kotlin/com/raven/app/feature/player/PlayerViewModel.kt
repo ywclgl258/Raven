@@ -14,8 +14,10 @@ import com.raven.app.core.database.repository.BlockedTermsRepository
 import com.raven.app.core.database.repository.BookmarkRepository
 import com.raven.app.core.database.repository.FavoriteRepository
 import com.raven.app.core.database.repository.HistoryRepository
+import com.raven.app.core.database.repository.MediaTagCacheRepository
 import com.raven.app.core.database.repository.PreferencesRepository
 import com.raven.app.core.database.repository.ShelfRepository
+import com.raven.app.core.database.repository.TagDictionaryRepository
 import com.raven.app.core.designsystem.component.RavenFormatters
 import com.raven.app.core.media.download.OfflineMediaHandle
 import com.raven.app.core.media.download.PlaybackQueueSession
@@ -97,8 +99,10 @@ private data class PlayerPersonalBindings(
     val isFavorite: Boolean = false,
     val favoriteTagSlugs: Set<String> = emptySet(),
     val blockedTerms: Set<String> = emptySet(),
+    val cachedTagsByKey: Map<String, List<TagRef>> = emptyMap(),
     val timeBookmarks: List<TimeBookmark> = emptyList(),
     val downloads: List<DownloadItem> = emptyList(),
+    val dictRevision: Long = 0L,
 )
 
 /**
@@ -124,6 +128,8 @@ class PlayerViewModel(
     private val tagDictionary: TagDictionary = TagDictionary.default,
     private val clockMs: () -> Long = System::currentTimeMillis,
     private val elapsedRealtimeMs: () -> Long = { SystemClock.elapsedRealtime() },
+    private val mediaTagCacheRepository: MediaTagCacheRepository? = null,
+    private val tagDictionaryRepository: TagDictionaryRepository? = null,
 ) : ViewModel() {
 
     private val activeTarget = MutableStateFlow<PlayerLaunchArgs?>(null)
@@ -147,6 +153,8 @@ class PlayerViewModel(
     private var lastSavedCompleted: Boolean = false
     private var lastHandledEndedKey: String? = null
 
+    private val dictRevisionFlow = tagDictionaryRepository?.observeRevision() ?: flowOf(0L)
+
     private val personalBindings: Flow<PlayerPersonalBindings> = activeTarget.flatMapLatest { target ->
         if (target == null) {
             flowOf(PlayerPersonalBindings())
@@ -161,22 +169,26 @@ class PlayerViewModel(
             ) { prefs, watchLater, fav, favTags ->
                 Quad(prefs, watchLater, fav, favTags)
             }
+            val cachedTagsFlow = mediaTagCacheRepository?.observeTagsBySite(target.siteId) ?: flowOf(emptyMap())
             val termsBookmarksDownloads = combine(
-                blockedTermsRepository.observeTermsBySite(target.siteId).map { it.toSet() },
+                blockedTermsRepository.observeEffectiveTermsBySite(target.siteId).map { it.toSet() },
+                cachedTagsFlow,
                 bookmarkRepository.observeTimeBookmarks(target.siteId, target.mediaId),
                 offline.observeDownloadsByMedia(target.siteId, target.mediaId),
-            ) { blocked, bookmarks, downloads ->
-                Triple(blocked, bookmarks, downloads)
+            ) { blocked, cachedTags, bookmarks, downloads ->
+                Quad(blocked, cachedTags, bookmarks, downloads)
             }
-            combine(prefsAndFlags, termsBookmarksDownloads) { left, right ->
+            combine(prefsAndFlags, termsBookmarksDownloads, dictRevisionFlow) { left, right, dictRevision ->
                 PlayerPersonalBindings(
                     playbackPreferences = left.first,
                     inWatchLater = left.second,
                     isFavorite = left.third,
                     favoriteTagSlugs = left.fourth,
                     blockedTerms = right.first,
-                    timeBookmarks = right.second,
-                    downloads = right.third,
+                    cachedTagsByKey = right.second,
+                    timeBookmarks = right.third,
+                    downloads = right.fourth,
+                    dictRevision = dictRevision,
                 )
             }
         }
@@ -747,10 +759,46 @@ class PlayerViewModel(
         val term = tag.slug.trim().ifBlank { tag.label.trim() }
         if (term.isEmpty()) return
         viewModelScope.launch {
-            val blocked = blockedTermsRepository.toggleTerm(siteId, term)
+            val settings = preferencesRepository.currentSettings()
+            val primaryScope = if (settings.blockTagsGlobally) SiteId.GLOBAL else siteId
+            val normalized = ContentFilter.normalizeTerm(term)
+            val globalTerms = blockedTermsRepository.observeGlobalTerms().first()
+            val siteTerms = blockedTermsRepository.observeTermsBySite(siteId).first()
+            val matchingGlobal = globalTerms.filter { isMatchingTermForTag(tag, it) }
+            val matchingSite = siteTerms.filter { isMatchingTermForTag(tag, it) }
+            val nowBlocked = if (matchingGlobal.isNotEmpty() || matchingSite.isNotEmpty()) {
+                matchingGlobal.forEach { blockedTermsRepository.removeTerm(SiteId.GLOBAL, it) }
+                matchingSite.forEach { blockedTermsRepository.removeTerm(siteId, it) }
+                false
+            } else {
+                blockedTermsRepository.addTerm(primaryScope, normalized)
+                true
+            }
+            val scopePrefix = if (settings.blockTagsGlobally) "已全局屏蔽标签" else "已在当前站点屏蔽标签"
             _sideEffects.tryEmit(
-                PlayerSideEffect.ShowMessage(if (blocked) "已屏蔽标签：$term" else "已取消屏蔽：$term"),
+                PlayerSideEffect.ShowMessage(if (nowBlocked) "$scopePrefix：$term" else "已取消屏蔽：$term"),
             )
+        }
+    }
+
+    fun saveCustomTagTranslation(tag: TagRef, chineseName: String) {
+        val repo = tagDictionaryRepository ?: return
+        val slug = tag.slug.trim().ifBlank { tag.label.trim() }
+        val cleanZh = chineseName.trim()
+        if (slug.isEmpty() || cleanZh.isEmpty()) {
+            _sideEffects.tryEmit(PlayerSideEffect.ShowMessage("请输入有效的中文译名"))
+            return
+        }
+        viewModelScope.launch(dispatchers.io) {
+            val saved = repo.upsertCustomTranslation(
+                rawSlug = slug,
+                chineseName = cleanZh,
+                namespace = tag.namespace,
+            )
+            if (saved) {
+                repo.hydrateRuntimeDictionary()
+                _sideEffects.tryEmit(PlayerSideEffect.ShowMessage("已更新中文译名：$cleanZh"))
+            }
         }
     }
 
@@ -1034,6 +1082,7 @@ class PlayerViewModel(
 
         val resolvedMediaId = detail.item.id.ifBlank { args.mediaId }
         val resolvedUrl = detail.item.url.ifBlank { args.url }
+        cacheDetailTags(args.siteId, resolvedMediaId, detail)
         val resumeNotice = if (resumePositionMs > 0L) {
             "已从 ${RavenFormatters.formatDurationMs(resumePositionMs)} 续播"
         } else {
@@ -1197,6 +1246,7 @@ class PlayerViewModel(
                 }.getOrNull() ?: return@launch
                 if (activeTarget.value?.compositeKey == args.compositeKey) {
                     localState.update { it.copy(detail = enriched) }
+                    cacheDetailTags(args.siteId, enriched.item.id.ifBlank { args.mediaId }, enriched)
                 }
             }
         }
@@ -1335,6 +1385,34 @@ class PlayerViewModel(
         )
     }
 
+    private fun cacheDetailTags(siteId: SiteId, mediaId: String, detail: VideoDetail) {
+        val repo = mediaTagCacheRepository ?: return
+        if (siteId.isLocal || mediaId.isBlank()) return
+        val allTags = detail.tags + detail.characters + detail.categories + detail.item.tags
+        if (allTags.isEmpty()) return
+        viewModelScope.launch(dispatchers.io) {
+            runCatching { repo.upsertTags(siteId, mediaId, allTags) }
+        }
+    }
+
+    private fun isMatchingTermForTag(tag: TagRef, blockedTerm: String): Boolean {
+        val slugOrLabel = tag.slug.ifBlank { tag.label }
+        val tagCandidates = buildSet {
+            val norm = ContentFilter.normalizeTerm(slugOrLabel)
+            if (norm.isNotEmpty()) add(norm)
+            val bare = ContentFilter.canonicalizeForMatching(slugOrLabel)
+            if (bare.isNotEmpty()) add(bare)
+            addAll(tagDictionary.expandSynonyms(slugOrLabel))
+            if (tag.label.isNotBlank() && tag.label != slugOrLabel) {
+                addAll(tagDictionary.expandSynonyms(tag.label))
+            }
+        }
+        val bNorm = ContentFilter.normalizeTerm(blockedTerm)
+        val bBare = ContentFilter.canonicalizeForMatching(blockedTerm)
+        if (bNorm in tagCandidates || bBare in tagCandidates) return true
+        return tagDictionary.expandSynonyms(blockedTerm).any { it in tagCandidates }
+    }
+
     private fun postNotice(message: String) {
         localState.update { it.copy(localNotice = message) }
     }
@@ -1371,15 +1449,19 @@ class PlayerViewModel(
         val mapTags: (List<TagRef>) -> List<PlayerTagDisplay> = { source ->
             source.map { tag ->
                 val slug = tag.slug.trim().lowercase()
-                val translated = if (appSettings.translateTags) tagDictionary.translate(tag.slug) else null
+                val translated = if (appSettings.translateTags) {
+                    tagDictionary.translate(tag.slug, tag.namespace)
+                        ?: tagDictionary.translate(tag.label, tag.namespace)
+                } else {
+                    null
+                }
                 val fallback = tag.label.ifBlank { tag.slug }
-                val normalizedTerm = ContentFilter.normalizeTerm(tag.slug.ifBlank { tag.label })
                 PlayerTagDisplay(
                     tag = tag,
                     displayLabel = translated ?: fallback,
                     translatedLabel = translated,
                     isFavorited = slug in personal.favoriteTagSlugs,
-                    isBlocked = normalizedTerm in personal.blockedTerms,
+                    isBlocked = personal.blockedTerms.any { isMatchingTermForTag(tag, it) },
                 )
             }
         }
@@ -1411,7 +1493,12 @@ class PlayerViewModel(
         }
 
         val filteredRelated = detail?.related.orEmpty().filter { related ->
-            ContentFilter.isAllowed(related, personal.blockedTerms)
+            ContentFilter.isAllowed(
+                item = related,
+                blockedTerms = personal.blockedTerms,
+                tagDictionary = tagDictionary,
+                extraTags = personal.cachedTagsByKey[related.compositeKey].orEmpty(),
+            )
         }
 
         val combinedNotice = engine.lastNotice ?: local.localNotice
@@ -1452,6 +1539,7 @@ class PlayerViewModel(
             isTemporarySpeedActive = local.isTemporarySpeedActive,
             temporarySpeedValue = local.temporarySpeedValue,
             translateTags = appSettings.translateTags,
+            blockTagsGlobally = appSettings.blockTagsGlobally,
             reduceTransparency = appSettings.reduceTransparency,
             loopRange = engine.loopRange,
             sleepTimer = PlayerSleepTimerState(

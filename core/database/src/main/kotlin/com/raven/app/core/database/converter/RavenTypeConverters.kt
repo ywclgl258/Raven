@@ -17,6 +17,8 @@ import com.raven.app.core.model.ReaderStartPosition
 import com.raven.app.core.model.SearchScope
 import com.raven.app.core.model.SmartShelfRule
 import com.raven.app.core.model.StorageLocation
+import com.raven.app.core.model.TagRef
+import com.raven.app.core.model.TagTranslationSource
 import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.builtins.MapSerializer
 import kotlinx.serialization.builtins.serializer
@@ -175,6 +177,13 @@ class RavenTypeConverters {
     fun toStorageLocation(raw: String): StorageLocation =
         StorageLocation.entries.firstOrNull { it.name == raw } ?: StorageLocation.PRIVATE
 
+    @TypeConverter
+    fun fromTagTranslationSource(value: TagTranslationSource): String = value.name
+
+    @TypeConverter
+    fun toTagTranslationSource(raw: String): TagTranslationSource =
+        TagTranslationSource.entries.firstOrNull { it.name == raw } ?: TagTranslationSource.USER_CUSTOM
+
     companion object {
         internal val json: Json = Json {
             ignoreUnknownKeys = true
@@ -185,5 +194,13 @@ class RavenTypeConverters {
         private val stringListSerializer = ListSerializer(String.serializer())
         private val intListSerializer = ListSerializer(Int.serializer())
         private val stringMapSerializer = MapSerializer(String.serializer(), String.serializer())
+        private val tagRefListSerializer = ListSerializer(TagRef.serializer())
+
+        internal fun encodeTagRefList(tags: List<TagRef>): String =
+            if (tags.isEmpty()) "[]" else json.encodeToString(tagRefListSerializer, tags)
+
+        internal fun decodeTagRefList(raw: String): List<TagRef> =
+            if (raw.isBlank() || raw == "[]") emptyList()
+            else runCatching { json.decodeFromString(tagRefListSerializer, raw) }.getOrDefault(emptyList())
     }
 }

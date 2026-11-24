@@ -577,6 +577,9 @@ fun VideoPlayerScreen(
             },
             onToggleTagFavorite = { tag -> viewModel.toggleTagFavorite(tag) },
             onToggleTagBlocked = { tag -> viewModel.toggleTagBlocked(tag) },
+            onSaveTagTranslation = { tag, chineseName ->
+                viewModel.saveCustomTagTranslation(tag, chineseName)
+            },
             onEnqueueDownload = { stream, groupName -> viewModel.enqueueDownload(stream, groupName) },
             onOpenExternalUrl = { url -> navigator.openExternalUrl(url) },
             onUpdateDefaultSpeed = { speed -> viewModel.updateDefaultSpeedPreference(speed) },

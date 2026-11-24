@@ -19,6 +19,8 @@ import com.raven.app.core.model.Shelf
 import com.raven.app.core.model.ShelfItem
 import com.raven.app.core.model.SiteId
 import com.raven.app.core.model.TagSubscription
+import com.raven.app.core.model.TagTranslationEntry
+import com.raven.app.core.model.TagTranslationSource
 import com.raven.app.core.model.TimeBookmark
 import com.raven.app.core.model.UpdateInboxItem
 import com.raven.app.core.model.WatchProgress
@@ -228,5 +230,39 @@ class BackupMergerTest {
         val local = RavenBackupPayload(exportedAt = 1000L)
         val unsupported = RavenBackupPayload(schemaVersion = 99, exportedAt = 2000L)
         BackupMerger.merge(local, unsupported)
+    }
+
+    @Test
+    fun `merges custom tag translations by newer updatedAt and preserves global blocked terms`() {
+        val local = RavenBackupPayload(
+            exportedAt = 1000L,
+            blockedTerms = listOf(BlockedTerm(SiteId.GLOBAL, "guro", createdAt = 100L)),
+            customTagTranslations = listOf(
+                TagTranslationEntry(namespace = "female", rawSlug = "stockings", chineseName = "旧译名", updatedAt = 100L),
+                TagTranslationEntry(namespace = "", rawSlug = "local_only", chineseName = "本地词条", updatedAt = 200L),
+            ),
+        )
+        val incoming = RavenBackupPayload(
+            exportedAt = 2000L,
+            blockedTerms = listOf(
+                BlockedTerm(SiteId.GLOBAL, "guro", createdAt = 50L),
+                BlockedTerm(SiteId.GLOBAL, "scat", createdAt = 300L),
+            ),
+            customTagTranslations = listOf(
+                TagTranslationEntry(namespace = "female", rawSlug = "stockings", chineseName = "新译名", updatedAt = 500L),
+                TagTranslationEntry(namespace = "", rawSlug = "incoming-only", chineseName = "导入词条", updatedAt = 400L),
+            ),
+        )
+
+        val merged = BackupMerger.merge(local, incoming, now = 3000L)
+        assertEquals(2, merged.blockedTerms.size)
+        assertEquals(50L, merged.blockedTerms.first { it.term == "guro" }.createdAt)
+        assertEquals(3, merged.customTagTranslations.size)
+        assertEquals(
+            "新译名",
+            merged.customTagTranslations.first { it.namespace == "female" && it.rawSlug == "stockings" }.chineseName,
+        )
+        assertTrue(merged.customTagTranslations.all { it.source == TagTranslationSource.USER_CUSTOM })
+        assertEquals(3, BackupMerger.summarize(merged).customTagTranslationsCount)
     }
 }

@@ -41,11 +41,13 @@ import androidx.compose.material.icons.rounded.Speed
 import androidx.compose.material.icons.rounded.Swipe
 import androidx.compose.material.icons.rounded.Tag
 import androidx.compose.material.icons.rounded.TouchApp
+import androidx.compose.material.icons.rounded.Translate
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
@@ -111,6 +113,7 @@ internal fun PlayerSheetHost(
     onOpenTagFeed: (TagRef) -> Unit,
     onToggleTagFavorite: (TagRef) -> Unit,
     onToggleTagBlocked: (TagRef) -> Unit,
+    onSaveTagTranslation: (TagRef, String) -> Unit,
     onEnqueueDownload: (VideoStream?, String) -> Unit,
     onOpenExternalUrl: (String) -> Unit,
     onUpdateDefaultSpeed: (Float) -> Unit,
@@ -209,6 +212,7 @@ internal fun PlayerSheetHost(
                 ?: uiState.characters.firstOrNull { it.tag.slug == activeSheet.tag.tag.slug }
                 ?: uiState.categories.firstOrNull { it.tag.slug == activeSheet.tag.tag.slug }
                 ?: activeSheet.tag,
+            blockTagsGlobally = uiState.blockTagsGlobally,
             onDismiss = onDismiss,
             onOpenTagFeed = {
                 onDismiss()
@@ -216,6 +220,9 @@ internal fun PlayerSheetHost(
             },
             onToggleFavorite = { onToggleTagFavorite(activeSheet.tag.tag) },
             onToggleBlocked = { onToggleTagBlocked(activeSheet.tag.tag) },
+            onSaveCustomTranslation = { chineseName ->
+                onSaveTagTranslation(activeSheet.tag.tag, chineseName)
+            },
         )
 
         PlayerSheet.Download -> PlayerDownloadSheet(
@@ -909,12 +916,18 @@ private fun PlayerBookmarkEditorSheet(
 @Composable
 private fun PlayerTagActionsSheet(
     tag: PlayerTagDisplay,
+    blockTagsGlobally: Boolean,
     onDismiss: () -> Unit,
     onOpenTagFeed: () -> Unit,
     onToggleFavorite: () -> Unit,
     onToggleBlocked: () -> Unit,
+    onSaveCustomTranslation: (String) -> Unit,
 ) {
     val colors = LocalRavenColors.current
+    var isEditingTranslation by remember(tag.tag.slug, tag.tag.namespace) { mutableStateOf(false) }
+    var editedChineseName by remember(tag.tag.slug, tag.tag.namespace, tag.translatedLabel) {
+        mutableStateOf(tag.translatedLabel.orEmpty())
+    }
 
     RavenBottomSheet(
         onDismissRequest = onDismiss,
@@ -922,28 +935,114 @@ private fun PlayerTagActionsSheet(
         subtitle = tag.tag.slug.takeIf { it != tag.displayLabel && it.isNotBlank() },
         modifier = Modifier.testTag(PlayerTestTags.PLAYER_TAG_SHEET),
     ) {
-        RavenGroupedSection {
-            RavenGroupedRow(
-                title = "查看该标签下的作品",
-                icon = Icons.Rounded.Tag,
-                showChevron = true,
-                onClick = onOpenTagFeed,
-            )
-            RavenGroupedDivider(insetWithIcon = true)
-            RavenGroupedRow(
-                title = if (tag.isFavorited) "取消收藏标签" else "收藏标签",
-                icon = if (tag.isFavorited) Icons.Rounded.Favorite else Icons.Rounded.FavoriteBorder,
-                iconTint = if (tag.isFavorited) colors.crimson else colors.inkPrimary,
-                onClick = onToggleFavorite,
-            )
-            RavenGroupedDivider(insetWithIcon = true)
-            RavenGroupedRow(
-                title = if (tag.isBlocked) "取消屏蔽该标签" else "在当前站点屏蔽该标签",
-                subtitle = if (tag.isBlocked) "当前已被过滤隐藏" else "屏蔽后将过滤包含该标签的推荐和列表项",
-                icon = Icons.Rounded.Block,
-                destructive = !tag.isBlocked,
-                onClick = onToggleBlocked,
-            )
+        Column(
+            modifier = Modifier.fillMaxWidth(),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            RavenGroupedSection {
+                RavenGroupedRow(
+                    title = "查看该标签下的作品",
+                    icon = Icons.Rounded.Tag,
+                    showChevron = true,
+                    onClick = onOpenTagFeed,
+                )
+                RavenGroupedDivider(insetWithIcon = true)
+                RavenGroupedRow(
+                    title = if (tag.isFavorited) "取消收藏标签" else "收藏标签",
+                    icon = if (tag.isFavorited) Icons.Rounded.Favorite else Icons.Rounded.FavoriteBorder,
+                    iconTint = if (tag.isFavorited) colors.crimson else colors.inkPrimary,
+                    onClick = onToggleFavorite,
+                )
+                RavenGroupedDivider(insetWithIcon = true)
+                RavenGroupedRow(
+                    title = "编辑中文译名",
+                    subtitle = tag.translatedLabel?.let { "当前译名：$it" } ?: "为该标签自定义中文译名并立即全局生效",
+                    icon = Icons.Rounded.Translate,
+                    iconTint = if (isEditingTranslation) colors.crimson else colors.inkPrimary,
+                    onClick = { isEditingTranslation = !isEditingTranslation },
+                    modifier = Modifier.testTag("player_tag_edit_translation_row"),
+                )
+                if (isEditingTranslation) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(start = 16.dp, end = 16.dp, bottom = 14.dp),
+                        verticalArrangement = Arrangement.spacedBy(10.dp),
+                    ) {
+                        OutlinedTextField(
+                            value = editedChineseName,
+                            onValueChange = { editedChineseName = it },
+                            label = { Text("中文译名") },
+                            placeholder = { Text("输入该标签的中文译名") },
+                            singleLine = true,
+                            shape = RavenShapes.ControlShape,
+                            colors = OutlinedTextFieldDefaults.colors(
+                                focusedBorderColor = colors.crimson,
+                                unfocusedBorderColor = colors.outlineSubtle,
+                                focusedTextColor = colors.inkPrimary,
+                                unfocusedTextColor = colors.inkPrimary,
+                                focusedLabelColor = colors.crimson,
+                                unfocusedLabelColor = colors.inkSecondary,
+                                cursorColor = colors.crimson,
+                            ),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("player_tag_edit_translation_field"),
+                        )
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            OutlinedButton(
+                                onClick = { isEditingTranslation = false },
+                                shape = RavenShapes.PillShape,
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .heightIn(min = 44.dp),
+                            ) {
+                                Text("取消", color = colors.inkSecondary)
+                            }
+                            Button(
+                                onClick = {
+                                    onSaveCustomTranslation(editedChineseName)
+                                    isEditingTranslation = false
+                                },
+                                enabled = editedChineseName.trim().isNotEmpty(),
+                                shape = RavenShapes.PillShape,
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = colors.primaryCtaContainer,
+                                    contentColor = colors.primaryCtaInk,
+                                ),
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .heightIn(min = 44.dp)
+                                    .testTag("player_tag_edit_translation_save"),
+                            ) {
+                                Text(
+                                    text = "保存译名",
+                                    style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.SemiBold),
+                                )
+                            }
+                        }
+                    }
+                }
+                RavenGroupedDivider(insetWithIcon = true)
+                RavenGroupedRow(
+                    title = when {
+                        tag.isBlocked -> "取消屏蔽该标签"
+                        blockTagsGlobally -> "全局屏蔽该标签"
+                        else -> "在当前站点屏蔽该标签"
+                    },
+                    subtitle = when {
+                        tag.isBlocked -> "当前已被过滤隐藏，点击立即解除屏蔽"
+                        blockTagsGlobally -> "屏蔽后将在全部站点自动过滤相关作品与搜索结果"
+                        else -> "屏蔽后将过滤当前站点包含该标签的推荐和列表项"
+                    },
+                    icon = Icons.Rounded.Block,
+                    destructive = !tag.isBlocked,
+                    onClick = onToggleBlocked,
+                )
+            }
         }
     }
 }

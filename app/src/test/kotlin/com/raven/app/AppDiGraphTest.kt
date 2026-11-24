@@ -235,12 +235,13 @@ class AppDiGraphTest {
             RavenRoute.Settings,
             RavenRoute.SiteAccount(siteId = SiteId.EXHENTAI.value),
             RavenRoute.BlockedTerms(siteId = SiteId.R34V.value),
+            RavenRoute.TagDictionary,
             RavenRoute.BackupRestore,
             RavenRoute.StorageMigration,
             RavenRoute.DuplicateScanner,
         )
 
-        assertEquals(25, routes.size)
+        assertEquals(26, routes.size)
         val json = Json { encodeDefaults = true }
 
         routes.forEach { original ->

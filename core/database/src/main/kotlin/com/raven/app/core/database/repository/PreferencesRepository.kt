@@ -84,6 +84,19 @@ class PreferencesRepository(
 
     suspend fun consumeSiteSwitchTutorial(): Boolean = settingsDataStore.consumeSiteSwitchTutorial()
 
+    suspend fun setTagDictAutoSync(enabled: Boolean) = settingsDataStore.setTagDictAutoSync(enabled)
+
+    suspend fun setTagDictEtag(etag: String) = settingsDataStore.setTagDictEtag(etag)
+
+    suspend fun setTagDictReleaseTag(releaseTag: String) = settingsDataStore.setTagDictReleaseTag(releaseTag)
+
+    suspend fun setTagDictUpdatedAt(updatedAt: Long) = settingsDataStore.setTagDictUpdatedAt(updatedAt)
+
+    suspend fun setTagDictSyncState(etag: String, releaseTag: String, updatedAt: Long) =
+        settingsDataStore.setTagDictSyncState(etag, releaseTag, updatedAt)
+
+    suspend fun setBlockTagsGlobally(enabled: Boolean) = settingsDataStore.setBlockTagsGlobally(enabled)
+
     // ---- Room PlaybackPreferences (global "*" + per-site override) ----
 
     fun observeGlobalPlaybackPreferences(): Flow<PlaybackPreferences> =

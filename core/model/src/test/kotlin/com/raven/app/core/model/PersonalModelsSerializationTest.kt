@@ -150,7 +150,10 @@ class PersonalModelsSerializationTest {
                     discoveredAt = 1_700_000_005_000L,
                 ),
             ),
-            blockedTerms = listOf(BlockedTerm(siteId = SiteId.R34V, term = "gore")),
+            blockedTerms = listOf(
+                BlockedTerm(siteId = SiteId.R34V, term = "gore"),
+                BlockedTerm(siteId = SiteId.GLOBAL, term = "scat"),
+            ),
             searchHistory = listOf(SearchHistoryEntry(siteId = SiteId.R34V, query = "elf", searchedAt = 10L)),
             playbackPreferences = listOf(PlaybackPreferences(siteId = SiteId.IWARA, defaultSpeed = 1.25f)),
             readerPreferences = listOf(
@@ -163,6 +166,16 @@ class PersonalModelsSerializationTest {
             ),
             siteLanguages = mapOf(SiteId.NHENTAI to ComicLanguage.CHINESE_AND_JAPANESE),
             settings = mapOf("translate_tags" to "true"),
+            customTagTranslations = listOf(
+                TagTranslationEntry(
+                    namespace = "female",
+                    rawSlug = "stockings",
+                    chineseName = "过膝丝袜",
+                    intro = "自定义覆盖",
+                    source = TagTranslationSource.USER_CUSTOM,
+                    updatedAt = 1_700_000_006_000L,
+                ),
+            ),
         )
 
         val encoded = json.encodeToString(payload)
@@ -170,6 +183,10 @@ class PersonalModelsSerializationTest {
         assertEquals(payload, decoded)
         assertEquals(0.25f, decoded.watchProgress.first().progressFraction, 0.001f)
         assertEquals(0.5f, decoded.readingProgress.first().progressFraction, 0.001f)
+
+        // Legacy backup JSON omitting customTagTranslations deserializes cleanly with default emptyList
+        val legacyDecoded = json.decodeFromString<RavenBackupPayload>("""{"schemaVersion":1,"exportedAt":100}""")
+        assertTrue(legacyDecoded.customTagTranslations.isEmpty())
     }
 
     @Test

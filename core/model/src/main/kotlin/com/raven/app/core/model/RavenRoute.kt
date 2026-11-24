@@ -117,6 +117,9 @@ sealed interface RavenRoute {
     ) : RavenRoute
 
     @Serializable
+    data object TagDictionary : RavenRoute
+
+    @Serializable
     data object BackupRestore : RavenRoute
 
     @Serializable

@@ -1,5 +1,6 @@
 package com.raven.app.sites.comic
 
+import com.raven.app.core.model.AdvancedSearchFilters
 import com.raven.app.core.model.ComicLanguage
 import com.raven.app.core.model.FeedRequest
 import com.raven.app.core.model.FeedSort
@@ -262,6 +263,40 @@ class HitomiSitePluginTest {
             FeedRequest(SiteId.HITOMI, query = "cat dog -fox", scope = SearchScope.ALL),
         )
         assertEquals(listOf("400"), res.items.map { it.id })
+
+        // AdvancedSearchFilters.excludeTags wires directly into Hitomi B-Tree negative term lookup
+        val filterExcludeRes = plugin.searchSource!!.search(
+            FeedRequest(
+                siteId = SiteId.HITOMI,
+                query = "cat dog",
+                scope = SearchScope.ALL,
+                advancedFilters = AdvancedSearchFilters(
+                    excludeTags = listOf("fox", "extra1", "extra2", "extra3", "extra4", "extra5"),
+                ),
+            ),
+        )
+        assertEquals(listOf("400"), filterExcludeRes.items.map { it.id })
+        // Respects Hitomi 6-term limit (2 positive + at most 4 negative = 6)
+        val built = plugin.buildQuery(
+            FeedRequest(
+                siteId = SiteId.HITOMI,
+                query = "cat dog",
+                advancedFilters = AdvancedSearchFilters(
+                    excludeTags = listOf("fox", "a", "b", "c", "d", "e"),
+                ),
+            ),
+        )
+        assertEquals(6, HitomiSitePlugin.parseTerms(built).size)
+        // Blank query with excludeTags leaves B-Tree query blank instead of throwing
+        assertEquals(
+            "",
+            plugin.buildQuery(
+                FeedRequest(
+                    siteId = SiteId.HITOMI,
+                    advancedFilters = AdvancedSearchFilters(excludeTags = listOf("fox")),
+                ),
+            ),
+        )
 
         // cat AND dog with popular sort -> preserves year-all.nozomi order [300, 400]
         val popRes = plugin.searchSource!!.search(

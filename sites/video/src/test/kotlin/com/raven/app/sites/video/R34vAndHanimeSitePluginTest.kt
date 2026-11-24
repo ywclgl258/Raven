@@ -509,4 +509,66 @@ class R34vAndHanimeSitePluginTest {
         val hLink = hanime.linkResolver.resolve(hViews) as ResolvedLink.Feed
         assertEquals(FeedSort.VIEWS, hLink.request.sort)
     }
+
+    @Test
+    fun `r34v supports server-side excludeTags in search URL and bilingual local filtering`() = runTest {
+        val fakeHttp = FakeHttpClientAdapter()
+        val store = InMemorySiteSessionStore()
+        val plugin = R34vSitePlugin(fakeHttp, store, rateLimitBackoffMs = 0L)
+
+        assertTrue(plugin.searchSource.supportsExcludeTags)
+
+        // Appends -guro and quoted multi-word -"big breasts" when searching with non-empty query
+        val searchUrl = R34vSitePlugin.resolveFeedUrl(
+            FeedRequest(
+                siteId = SiteId.R34V,
+                query = "elf",
+                scope = SearchScope.ALL,
+                advancedFilters = AdvancedSearchFilters(
+                    excludeTags = listOf("guro", "female:big breasts"),
+                ),
+            ),
+        )
+        assertEquals(
+            "https://rule34video.com/search/elf%20-guro%20-%22big%20breasts%22/",
+            searchUrl,
+        )
+
+        // Does NOT inject -tag into non-search browse paths
+        assertEquals(
+            "https://rule34video.com/latest-updates/",
+            R34vSitePlugin.resolveFeedUrl(
+                FeedRequest(
+                    siteId = SiteId.R34V,
+                    advancedFilters = AdvancedSearchFilters(excludeTags = listOf("guro")),
+                ),
+            ),
+        )
+
+        // Local filtering blocks cards by bilingual Chinese synonym ("触手" -> "tentacles")
+        fakeHttp.onGet(
+            "https://rule34video.com/latest-updates/",
+            body = """
+                <html><body>
+                <div class="thumbs">
+                    <div data-video-card-id="2001" class="item thumb">
+                        <a class="th" href="/video/2001/tentacles-attack/"><img src="/t/1.jpg" alt="Tentacles Attack" /></a>
+                        <div class="thumb_title">Tentacles Attack</div>
+                    </div>
+                    <div data-video-card-id="2002" class="item thumb">
+                        <a class="th" href="/video/2002/elf-dance/"><img src="/t/2.jpg" alt="Elf Dance" /></a>
+                        <div class="thumb_title">Elf Dance</div>
+                    </div>
+                </div>
+                </body></html>
+            """.trimIndent(),
+        )
+        val filtered = plugin.feedSource.loadFeed(
+            FeedRequest(
+                siteId = SiteId.R34V,
+                advancedFilters = AdvancedSearchFilters(excludeTags = listOf("触手")),
+            ),
+        )
+        assertEquals(listOf("2002"), filtered.items.map { it.id })
+    }
 }

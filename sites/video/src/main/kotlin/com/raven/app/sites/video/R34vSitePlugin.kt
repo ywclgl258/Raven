@@ -90,6 +90,7 @@ class R34vSitePlugin(
                 filters = request.advancedFilters,
                 filterDuration = true,
                 filterRating = true,
+                filterExcludeTags = true,
             )
             return parsed.copy(items = filtered)
         }
@@ -106,10 +107,11 @@ class R34vSitePlugin(
             SearchScope.CHARACTER,
         )
         override val supportedFilters: Set<AdvancedFilterField> = setOf(
+            AdvancedFilterField.EXCLUDE_TAGS,
             AdvancedFilterField.DURATION,
             AdvancedFilterField.RATING,
         )
-        override val supportsExcludeTags: Boolean = false
+        override val supportsExcludeTags: Boolean = true
         override fun supportedSearchSorts(scope: SearchScope): List<FeedSort> =
             if (scope == SearchScope.ALL) {
                 descriptor.feedSorts
@@ -468,6 +470,7 @@ class R34vSitePlugin(
                 SearchScope.CHARACTER,
             ),
             supportedFilters = setOf(
+                AdvancedFilterField.EXCLUDE_TAGS,
                 AdvancedFilterField.DURATION,
                 AdvancedFilterField.RATING,
             ),
@@ -488,14 +491,17 @@ class R34vSitePlugin(
             var isForYou = false
             val path = when {
                 query.isNotEmpty() -> {
-                    val encoded = HtmlUrlCleaner.encodePathSegment(query)
                     when (request.scope) {
                         SearchScope.ALL -> {
                             isSearch = true
-                            "/search/$encoded/"
+                            val combinedQuery = buildSearchQueryWithExcludes(
+                                query = query,
+                                excludeTags = request.advancedFilters.excludeTags,
+                            )
+                            "/search/${HtmlUrlCleaner.encodePathSegment(combinedQuery)}/"
                         }
-                        SearchScope.TAG, SearchScope.CHARACTER -> "/tags/$encoded/"
-                        SearchScope.AUTHOR -> "/models/$encoded/"
+                        SearchScope.TAG, SearchScope.CHARACTER -> "/tags/${HtmlUrlCleaner.encodePathSegment(query)}/"
+                        SearchScope.AUTHOR -> "/models/${HtmlUrlCleaner.encodePathSegment(query)}/"
                     }
                 }
                 category.isNotEmpty() -> "/categories/${HtmlUrlCleaner.encodePathSegment(category)}/"
@@ -535,6 +541,26 @@ class R34vSitePlugin(
                 }
                 else -> null
             }
+        }
+
+        private fun buildSearchQueryWithExcludes(
+            query: String,
+            excludeTags: List<String>,
+        ): String {
+            if (excludeTags.isEmpty()) return query
+            val existingLower = query.lowercase()
+            val formattedExcludes = excludeTags
+                .mapNotNull { raw ->
+                    val cleaned = raw.trim().removePrefix("-").trim().replace("\"", "")
+                    if (cleaned.isEmpty()) return@mapNotNull null
+                    val bare = cleaned.substringAfter(':', cleaned).trim()
+                    if (bare.isEmpty()) return@mapNotNull null
+                    val formatted = if (bare.any(Char::isWhitespace)) "-\"$bare\"" else "-$bare"
+                    if (existingLower.contains(formatted.lowercase())) null else formatted
+                }
+                .distinct()
+            if (formattedExcludes.isEmpty()) return query
+            return "$query ${formattedExcludes.joinToString(" ")}"
         }
 
         private fun sortToParam(sort: FeedSort): String = when (sort) {
