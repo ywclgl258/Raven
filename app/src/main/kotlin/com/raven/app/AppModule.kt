@@ -56,6 +56,7 @@ val appModule: Module = module {
             versionCode = BuildConfig.VERSION_CODE.toLong(),
             isDebug = BuildConfig.DEBUG,
             packageName = BuildConfig.APPLICATION_ID,
+            releaseCertSha256 = BuildConfig.RELEASE_CERT_SHA256.ifBlank { null },
         )
     }
 

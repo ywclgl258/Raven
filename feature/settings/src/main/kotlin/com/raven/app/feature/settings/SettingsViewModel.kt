@@ -81,7 +81,7 @@ data class SettingsUiState(
     val diagnostics: NetworkDiagnosticsUiState = NetworkDiagnosticsUiState(),
     val updateState: UpdateUiState = UpdateUiState.Idle,
     val appInfo: RavenAppInfo = RavenAppInfo(
-        versionName = "1.0.0",
+        versionName = "0.1.0",
         versionCode = 1L,
         isDebug = false,
         packageName = RavenAppInfo.DEFAULT_PACKAGE_NAME,

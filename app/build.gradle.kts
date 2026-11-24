@@ -1,3 +1,9 @@
+import java.io.File
+import java.security.KeyStore
+import java.security.MessageDigest
+import java.util.Locale
+import java.util.Properties
+import org.gradle.api.GradleException
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 
 plugins {
@@ -5,6 +11,67 @@ plugins {
     alias(libs.plugins.kotlin.compose)
     alias(libs.plugins.kotlin.serialization)
 }
+
+val releaseMetadataFile: File = rootProject.file("release.properties")
+val releaseMetadata: Properties = Properties().apply {
+    if (!releaseMetadataFile.isFile) {
+        throw GradleException("Missing root release.properties at ${releaseMetadataFile.absolutePath}")
+    }
+    releaseMetadataFile.inputStream().use { load(it) }
+}
+
+val releaseVersionName: String = releaseMetadata.getProperty("versionName")?.trim()
+    ?.takeIf { it.isNotEmpty() }
+    ?: throw GradleException("release.properties must define non-blank versionName")
+
+val releaseVersionCode: Int = releaseMetadata.getProperty("versionCode")?.trim()?.toIntOrNull()
+    ?: throw GradleException("release.properties must define integer versionCode")
+
+val expectedReleaseCertSha256: String = releaseMetadata.getProperty("releaseCertificate")?.trim()
+    ?.replace(":", "")
+    ?.uppercase(Locale.ROOT)
+    ?.takeIf { it.matches(Regex("^[0-9A-F]{64}$")) }
+    ?: throw GradleException("release.properties must define valid 64-hex releaseCertificate")
+
+val signingHomeDir: File = System.getenv("RAVEN_SIGNING_HOME")
+    ?.trim()
+    ?.takeIf { it.isNotEmpty() }
+    ?.let(::File)
+    ?: File(System.getProperty("user.home"), ".raven/signing")
+
+val signingPropsFile: File = File(signingHomeDir, "signing.properties")
+
+data class ExternalReleaseSigning(
+    val storeFile: File,
+    val storePassword: String,
+    val keyAlias: String,
+    val keyPassword: String,
+)
+
+fun loadExternalReleaseSigning(): ExternalReleaseSigning? {
+    if (!signingPropsFile.isFile) return null
+    val props = Properties().apply {
+        signingPropsFile.inputStream().use { load(it) }
+    }
+    val rawStorePath = props.getProperty("KEYSTORE_PATH")?.trim().orEmpty()
+    val storePassword = props.getProperty("KEYSTORE_PASSWORD")?.trim().orEmpty()
+    val keyAlias = props.getProperty("KEY_ALIAS")?.trim().orEmpty()
+    val keyPassword = props.getProperty("KEY_PASSWORD")?.trim().orEmpty()
+    if (rawStorePath.isEmpty() || storePassword.isEmpty() || keyAlias.isEmpty() || keyPassword.isEmpty()) {
+        return null
+    }
+    val resolvedStoreFile = File(rawStorePath).let { candidate ->
+        if (candidate.isAbsolute) candidate else File(signingPropsFile.parentFile, rawStorePath)
+    }
+    return ExternalReleaseSigning(
+        storeFile = resolvedStoreFile,
+        storePassword = storePassword,
+        keyAlias = keyAlias,
+        keyPassword = keyPassword,
+    )
+}
+
+val externalReleaseSigning: ExternalReleaseSigning? = loadExternalReleaseSigning()
 
 android {
     namespace = "com.raven.app"
@@ -15,9 +82,24 @@ android {
         applicationId = "com.raven.app"
         minSdk = 24
         targetSdk = 36
-        versionCode = 1
-        versionName = "1.0.0"
+        versionCode = releaseVersionCode
+        versionName = releaseVersionName
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        buildConfigField("String", "RELEASE_CERT_SHA256", "\"$expectedReleaseCertSha256\"")
+    }
+
+    signingConfigs {
+        if (externalReleaseSigning != null) {
+            create("release") {
+                storeFile = externalReleaseSigning.storeFile
+                storePassword = externalReleaseSigning.storePassword
+                keyAlias = externalReleaseSigning.keyAlias
+                keyPassword = externalReleaseSigning.keyPassword
+                enableV1Signing = true
+                enableV2Signing = true
+                enableV3Signing = true
+            }
+        }
     }
 
     compileOptions {
@@ -42,6 +124,9 @@ android {
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro",
             )
+            signingConfigs.findByName("release")?.let { releaseSigning ->
+                signingConfig = releaseSigning
+            }
         }
     }
 
@@ -54,6 +139,49 @@ kotlin {
     compilerOptions {
         jvmTarget.set(JvmTarget.JVM_17)
     }
+}
+
+val validateReleaseSigningTask = tasks.register("validateReleaseSigning") {
+    group = "verification"
+    description = "Validates external Raven release signing properties, keystore presence, and SHA-256 certificate match."
+    doLast {
+        if (!signingPropsFile.isFile) {
+            throw GradleException(
+                "Release signing properties not found at ${signingPropsFile.absolutePath}. " +
+                    "Set RAVEN_SIGNING_HOME or place signing.properties under ~/.raven/signing/.",
+            )
+        }
+        val signing = loadExternalReleaseSigning()
+            ?: throw GradleException(
+                "Incomplete signing.properties at ${signingPropsFile.absolutePath}. " +
+                    "Required keys: KEYSTORE_PATH, KEYSTORE_PASSWORD, KEY_ALIAS, KEY_PASSWORD.",
+            )
+        if (!signing.storeFile.isFile) {
+            throw GradleException("Release keystore not found at ${signing.storeFile.absolutePath}.")
+        }
+        val keyStore = KeyStore.getInstance("PKCS12")
+        signing.storeFile.inputStream().use { input ->
+            keyStore.load(input, signing.storePassword.toCharArray())
+        }
+        val cert = keyStore.getCertificate(signing.keyAlias)
+            ?: throw GradleException("Key alias '${signing.keyAlias}' not found in release keystore.")
+        val actualSha256 = MessageDigest.getInstance("SHA-256")
+            .digest(cert.encoded)
+            .joinToString("") { b -> String.format(Locale.ROOT, "%02X", b) }
+        if (!actualSha256.equals(expectedReleaseCertSha256, ignoreCase = true)) {
+            throw GradleException(
+                "Release keystore SHA-256 ($actualSha256) does not match release.properties " +
+                    "releaseCertificate ($expectedReleaseCertSha256).",
+            )
+        }
+        logger.lifecycle("validateReleaseSigning PASSED (alias=${signing.keyAlias}, SHA-256=$actualSha256)")
+    }
+}
+
+tasks.matching {
+    it.name in setOf("assembleRelease", "bundleRelease", "packageRelease")
+}.configureEach {
+    dependsOn(validateReleaseSigningTask)
 }
 
 dependencies {

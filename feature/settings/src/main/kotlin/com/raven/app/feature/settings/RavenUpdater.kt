@@ -50,7 +50,7 @@ data class RavenAppInfo(
 
     companion object {
         const val DEFAULT_GITHUB_OWNER: String = "ywclgl258"
-        const val DEFAULT_GITHUB_REPO: String = "raven"
+        const val DEFAULT_GITHUB_REPO: String = "Raven"
         const val DEFAULT_PACKAGE_NAME: String = "com.raven.app"
 
         @Suppress("DEPRECATION")
@@ -68,7 +68,7 @@ data class RavenAppInfo(
             val pkgInfo = runCatching {
                 appCtx.packageManager.getPackageInfo(pkg, 0)
             }.getOrNull()
-            val versionName = pkgInfo?.versionName?.takeIf { it.isNotBlank() } ?: "1.0.0"
+            val versionName = pkgInfo?.versionName?.takeIf { it.isNotBlank() } ?: "0.1.0"
             val versionCode = when {
                 pkgInfo == null -> 1L
                 Build.VERSION.SDK_INT >= Build.VERSION_CODES.P -> pkgInfo.longVersionCode
