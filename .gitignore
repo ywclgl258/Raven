@@ -1,0 +1,22 @@
+# Gradle & build outputs
+.gradle/
+build/
+**/build/
+*.hprof
+captures/
+
+# Local environment & signing secrets
+local.properties
+*.keystore
+*.jks
+signing.properties
+
+# IDE & OS files
+.idea/
+*.iml
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Room schema / test scratch
+.kotlin/

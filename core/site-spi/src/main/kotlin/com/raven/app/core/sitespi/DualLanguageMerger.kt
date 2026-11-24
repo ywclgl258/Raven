@@ -1,0 +1,124 @@
+package com.raven.app.core.sitespi
+
+import com.raven.app.core.model.SiteException
+
+enum class DualMergeStrategy {
+    /** Pick item with higher numeric ID first (newest feed merge). */
+    DESCENDING_NUMERIC_ID,
+
+    /** Alternate between streams (popular feed merge). */
+    INTERLEAVED,
+}
+
+data class DualCursor(
+    val pageA: Int = 1,
+    val indexA: Int = 0,
+    val pageB: Int = 1,
+    val indexB: Int = 0,
+) {
+    fun encode(): String = "$pageA,$indexA,$pageB,$indexB"
+
+    companion object {
+        private const val MAX_SLOT_VALUE = 1_000_000
+
+        fun parse(raw: String?): DualCursor {
+            if (raw.isNullOrBlank()) return DualCursor()
+            val parts = raw.trim().split(',')
+            if (parts.size != 4) {
+                throw SiteException.ParseError("Invalid dual-language cursor format: '$raw'")
+            }
+            val nums = parts.map { token ->
+                token.trim().toIntOrNull()?.takeIf { it in 0..MAX_SLOT_VALUE }
+                    ?: throw SiteException.ParseError("Invalid dual-language cursor value in '$raw'")
+            }
+            return DualCursor(nums[0], nums[1], nums[2], nums[3])
+        }
+    }
+}
+
+data class StreamSlice<T>(
+    val items: List<T>,
+    val hasNext: Boolean,
+)
+
+data class MergedPage<T>(
+    val items: List<T>,
+    val nextCursor: String?,
+    val hasMore: Boolean,
+)
+
+/**
+ * Pure-Kotlin dual-stream cursor merger for `ComicLanguage.CHINESE_AND_JAPANESE`
+ * (shared by nhentai and Hitomi when no native OR query operator exists).
+ */
+object DualLanguageMerger {
+
+    suspend fun <T> merge(
+        cursorRaw: String?,
+        pageSize: Int,
+        strategy: DualMergeStrategy,
+        idOf: (T) -> String,
+        fetchStreamA: suspend (page: Int) -> StreamSlice<T>,
+        fetchStreamB: suspend (page: Int) -> StreamSlice<T>,
+    ): MergedPage<T> {
+        require(pageSize > 0) { "pageSize must be positive" }
+        val initial = DualCursor.parse(cursorRaw)
+        val pages = intArrayOf(initial.pageA, initial.pageB)
+        val indices = intArrayOf(initial.indexA, initial.indexB)
+        val cache = arrayOf(mutableMapOf<Int, StreamSlice<T>>(), mutableMapOf<Int, StreamSlice<T>>())
+
+        suspend fun peek(stream: Int): T? {
+            while (pages[stream] > 0) {
+                val p = pages[stream]
+                val slice = cache[stream].getOrPut(p) {
+                    if (stream == 0) fetchStreamA(p) else fetchStreamB(p)
+                }
+                val item = slice.items.getOrNull(indices[stream])
+                if (item != null) return item
+                if (!slice.hasNext || slice.items.isEmpty()) {
+                    pages[stream] = 0
+                    indices[stream] = 0
+                    break
+                }
+                pages[stream] = p + 1
+                indices[stream] = 0
+            }
+            return null
+        }
+
+        val merged = mutableListOf<T>()
+        val seenIds = HashSet<String>(pageSize * 2)
+        var turn = 0
+
+        while (merged.size < pageSize) {
+            val headA = peek(0)
+            val headB = peek(1)
+            if (headA == null && headB == null) break
+
+            val chosenStream = when {
+                headA == null -> 1
+                headB == null -> 0
+                strategy == DualMergeStrategy.INTERLEAVED -> turn % 2
+                else -> {
+                    val idA = idOf(headA).toLongOrNull() ?: 0L
+                    val idB = idOf(headB).toLongOrNull() ?: 0L
+                    if (idA >= idB) 0 else 1
+                }
+            }
+            val chosenItem = if (chosenStream == 0) headA!! else headB!!
+            indices[chosenStream]++
+            turn++
+            if (seenIds.add(idOf(chosenItem))) {
+                merged.add(chosenItem)
+            }
+        }
+
+        val hasMore = peek(0) != null || peek(1) != null
+        val nextCursor = if (hasMore) {
+            DualCursor(pages[0], indices[0], pages[1], indices[1]).encode()
+        } else {
+            null
+        }
+        return MergedPage(items = merged, nextCursor = nextCursor, hasMore = hasMore)
+    }
+}
