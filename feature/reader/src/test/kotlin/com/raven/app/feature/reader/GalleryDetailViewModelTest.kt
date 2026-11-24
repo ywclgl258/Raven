@@ -1,0 +1,432 @@
+package com.raven.app.feature.reader
+
+import app.cash.turbine.test
+import com.raven.app.core.common.TagDictionary
+import com.raven.app.core.media.reader.GalleryPageRepository
+import com.raven.app.core.media.reader.OfflineGallerySnapshot
+import com.raven.app.core.media.storage.LocalLibraryImporter
+import com.raven.app.core.media.storage.StorageRootManager
+import com.raven.app.core.model.MediaItem
+import com.raven.app.core.model.MediaKind
+import com.raven.app.core.model.PageBookmark
+import com.raven.app.core.model.RavenRoute
+import com.raven.app.core.model.ReadingProgress
+import com.raven.app.core.model.SiteCapability
+import com.raven.app.core.model.SiteException
+import com.raven.app.core.model.SiteId
+import com.raven.app.core.model.TagRef
+import com.raven.app.core.sitespi.SiteRegistry
+import java.io.File
+import java.util.zip.ZipFile
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.test.advanceUntilIdle
+import kotlinx.coroutines.test.runTest
+import okhttp3.OkHttpClient
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
+import org.junit.Rule
+import org.junit.Test
+import org.junit.rules.TemporaryFolder
+
+@OptIn(ExperimentalCoroutinesApi::class)
+class GalleryDetailViewModelTest {
+
+    @get:Rule
+    val mainDispatcherRule = MainDispatcherRule()
+
+    @get:Rule
+    val tempFolder = TemporaryFolder()
+
+    @Test
+    fun `online gallery load surfaces resume CTA, translated tags, bookmarks, and reactive toggles`() = runTest(mainDispatcherRule.dispatcher) {
+        val harness = ReaderTestHarness(mainDispatcherRule.dispatcher, tempFolder.newFolder())
+        val tag = TagRef(slug = "solo-female", label = "solo female", namespace = "female")
+        val detail = sampleGalleryDetail(
+            siteId = SiteId.NHENTAI,
+            mediaId = "nh-42",
+            pageCount = 12,
+            tags = listOf(tag),
+        )
+        harness.historyRepository.saveReadingProgress(
+            ReadingProgress(
+                siteId = SiteId.NHENTAI,
+                mediaId = "nh-42",
+                url = detail.item.url,
+                title = detail.item.title,
+                currentPage = 5,
+                totalPages = 12,
+                updatedAt = harness.nowMs,
+            ),
+        )
+        harness.bookmarkRepository.savePageBookmark(
+            PageBookmark(
+                id = "bm-1",
+                siteId = SiteId.NHENTAI,
+                mediaId = "nh-42",
+                url = detail.item.url,
+                title = detail.item.title,
+                page = 7,
+                totalPages = 12,
+                note = "精彩跨页",
+                createdAt = harness.nowMs,
+            ),
+        )
+
+        val plugin = FakeGallerySitePlugin(
+            descriptor = sampleSiteDescriptor(SiteId.NHENTAI, displayName = "nHentai"),
+            detailHandler = { detail },
+        )
+        val registry = SiteRegistry(listOf(plugin))
+        val downloadGateway = FakeGalleryDownloadGateway()
+        val loader = FakeReaderPageLoader(
+            detailLoader = { _, _, _, _ ->
+                OfflineGallerySnapshot(detail, emptyList(), emptyList(), "", false)
+            },
+        )
+        val dictionary = TagDictionary(mapOf("solo-female" to "单人女性"))
+
+        val viewModel = GalleryDetailViewModel(
+            route = RavenRoute.GalleryDetail(SiteId.NHENTAI.value, "nh-42", detail.item.url),
+            siteRegistry = registry,
+            pageLoader = loader,
+            localLibraryImporter = harness.localLibraryImporter,
+            downloadGateway = downloadGateway,
+            exportGateway = harness.exportGateway,
+            historyRepository = harness.historyRepository,
+            favoriteRepository = harness.favoriteRepository,
+            shelfRepository = harness.shelfRepository,
+            bookmarkRepository = harness.bookmarkRepository,
+            blockedTermsRepository = harness.blockedTermsRepository,
+            subscriptionRepository = harness.subscriptionRepository,
+            preferencesRepository = harness.preferencesRepository,
+            dispatchers = harness.dispatchers,
+            tagDictionary = dictionary,
+            clock = harness.clock,
+        )
+
+        advanceUntilIdle()
+
+        val state = viewModel.uiState.value
+        assertFalse(state.isLoading)
+        assertEquals("nh-42", state.detail?.item?.id)
+        assertEquals("继续阅读 (第 5 页)", state.primaryCtaLabel)
+        assertEquals(5, state.resumeStartPage)
+        assertEquals("单人女性", viewModel.formatTagLabel(tag))
+        assertEquals(1, state.pageBookmarks.size)
+        assertEquals(7, state.pageBookmarks.first().page)
+
+        // Watch Later & Favorite toggles update state reactively
+        viewModel.toggleWatchLater()
+        viewModel.toggleFavorite()
+        advanceUntilIdle()
+        assertTrue(viewModel.uiState.value.isInWatchLater)
+        assertTrue(viewModel.uiState.value.isFavorite)
+
+        // Tag long-press actions: favorite & block
+        viewModel.openTagActions(tag)
+        viewModel.toggleTagFavorite(tag)
+        viewModel.toggleTagBlocked(tag)
+        advanceUntilIdle()
+        val actionState = viewModel.uiState.value.tagAction
+        assertNotNull(actionState)
+        assertTrue(actionState!!.isFavorited)
+        assertTrue(actionState.isBlocked)
+
+        // Bookmark deletion propagates reactively
+        viewModel.deleteBookmark("bm-1")
+        advanceUntilIdle()
+        assertTrue(viewModel.uiState.value.pageBookmarks.isEmpty())
+    }
+
+    @Test
+    fun `local book detail loads directly via LocalLibraryImporter and GalleryPageRepository`() = runTest(mainDispatcherRule.dispatcher) {
+        val root = tempFolder.newFolder()
+        val harness = ReaderTestHarness(mainDispatcherRule.dispatcher, root)
+
+        // Import a real 3-page local directory into LocalLibraryImporter
+        val srcDir = File(root, "source-comic").apply { mkdirs() }
+        File(srcDir, "page1.png").writeBytes(validTestPngBytes("1"))
+        File(srcDir, "page2.png").writeBytes(validTestPngBytes("2"))
+        File(srcDir, "page10.png").writeBytes(validTestPngBytes("10"))
+        val importedBook = harness.localLibraryImporter.importLocalDirectory(srcDir, title = "本地测试漫")
+
+        val storageRootManager = StorageRootManager(
+            context = null,
+            settingsDataStore = harness.settingsDataStore,
+            dispatchers = harness.dispatchers,
+            privateRootOverride = File(root, "private-storage").apply { mkdirs() },
+        )
+        val registry = SiteRegistry(emptyList())
+        val realPageRepo = GalleryPageRepository(
+            context = null,
+            imageClient = OkHttpClient(),
+            storageRootManager = storageRootManager,
+            localLibraryImporter = harness.localLibraryImporter,
+            siteRegistryProvider = { registry },
+            dispatchers = harness.dispatchers,
+            cacheRootOverride = File(root, "reading-cache").apply { mkdirs() },
+            requireAndroidImageDecoder = false,
+        )
+
+        val localUri = LocalLibraryImporter.buildLocalUri(importedBook.id)
+        val viewModel = GalleryDetailViewModel(
+            route = RavenRoute.GalleryDetail(SiteId.LOCAL.value, importedBook.id, localUri),
+            siteRegistry = registry,
+            pageLoader = RepositoryReaderPageLoader(realPageRepo),
+            localLibraryImporter = harness.localLibraryImporter,
+            downloadGateway = FakeGalleryDownloadGateway(),
+            exportGateway = harness.exportGateway,
+            historyRepository = harness.historyRepository,
+            favoriteRepository = harness.favoriteRepository,
+            shelfRepository = harness.shelfRepository,
+            bookmarkRepository = harness.bookmarkRepository,
+            blockedTermsRepository = harness.blockedTermsRepository,
+            subscriptionRepository = harness.subscriptionRepository,
+            preferencesRepository = harness.preferencesRepository,
+            dispatchers = harness.dispatchers,
+            clock = harness.clock,
+        )
+
+        advanceUntilIdle()
+
+        val state = viewModel.uiState.value
+        assertFalse(state.isLoading)
+        assertTrue(state.isLocal)
+        assertTrue(state.canOpenOffline)
+        assertTrue(state.isOfflineComplete)
+        assertEquals("本地测试漫", state.detail?.item?.title)
+        assertEquals(3, state.detail?.pageCount)
+        assertNotNull(state.localSizeLabel)
+    }
+
+    @Test
+    fun `selective page download validates custom ranges and enqueues full or partial selection`() = runTest(mainDispatcherRule.dispatcher) {
+        val harness = ReaderTestHarness(mainDispatcherRule.dispatcher, tempFolder.newFolder())
+        val detail = sampleGalleryDetail(SiteId.HITOMI, mediaId = "ht-9", pageCount = 10)
+        val registry = SiteRegistry(
+            listOf(FakeGallerySitePlugin(sampleSiteDescriptor(SiteId.HITOMI), detailHandler = { detail })),
+        )
+        val downloadGateway = FakeGalleryDownloadGateway()
+        val loader = FakeReaderPageLoader(
+            detailLoader = { _, _, _, _ -> OfflineGallerySnapshot(detail, emptyList(), emptyList(), "", false) },
+        )
+
+        val viewModel = GalleryDetailViewModel(
+            route = RavenRoute.GalleryDetail(SiteId.HITOMI.value, "ht-9", detail.item.url),
+            siteRegistry = registry,
+            pageLoader = loader,
+            localLibraryImporter = harness.localLibraryImporter,
+            downloadGateway = downloadGateway,
+            exportGateway = harness.exportGateway,
+            historyRepository = harness.historyRepository,
+            favoriteRepository = harness.favoriteRepository,
+            shelfRepository = harness.shelfRepository,
+            bookmarkRepository = harness.bookmarkRepository,
+            blockedTermsRepository = harness.blockedTermsRepository,
+            subscriptionRepository = harness.subscriptionRepository,
+            preferencesRepository = harness.preferencesRepository,
+            dispatchers = harness.dispatchers,
+            clock = harness.clock,
+        )
+        advanceUntilIdle()
+
+        // Open sheet & enter invalid range -> validation error blocks submit
+        viewModel.openDownloadSheet()
+        viewModel.updateDownloadRangeInput("1, 15-20")
+        assertNotNull(viewModel.uiState.value.downloadSheet.validationError)
+        viewModel.confirmDownload()
+        advanceUntilIdle()
+        assertTrue(downloadGateway.calls.isEmpty())
+
+        // Valid selective range "1, 3, 5-8" -> parsed [1, 3, 5, 6, 7, 8]
+        viewModel.updateDownloadRangeInput("1, 3, 5-8")
+        assertNull(viewModel.uiState.value.downloadSheet.validationError)
+        assertEquals(listOf(1, 3, 5, 6, 7, 8), viewModel.uiState.value.downloadSheet.parsedPages)
+        viewModel.confirmDownload()
+        advanceUntilIdle()
+        assertEquals(1, downloadGateway.calls.size)
+        assertEquals(listOf(1, 3, 5, 6, 7, 8), downloadGateway.calls.single().selectedPages)
+        assertFalse(viewModel.uiState.value.downloadSheet.visible)
+
+        // Whole book download -> selectedPages = null
+        viewModel.openDownloadSheet()
+        viewModel.setDownloadAll(true)
+        viewModel.confirmDownload()
+        advanceUntilIdle()
+        assertEquals(2, downloadGateway.calls.size)
+        assertNull(downloadGateway.calls.last().selectedPages)
+    }
+
+    @Test
+    fun `embedded videos section preserves Cosplaytele Cossora HLS embeds separately from gallery pages`() = runTest(mainDispatcherRule.dispatcher) {
+        val harness = ReaderTestHarness(mainDispatcherRule.dispatcher, tempFolder.newFolder())
+        val embeddedVideo = MediaItem(
+            siteId = SiteId.COSPLAYTELE,
+            id = "cossora-vid-1",
+            url = "https://cosplaytele.example/video/cossora-1",
+            kind = MediaKind.VIDEO,
+            title = "Cosplaytele Bonus HLS Clip",
+            durationSeconds = 95,
+        )
+        val detail = sampleGalleryDetail(
+            siteId = SiteId.COSPLAYTELE,
+            mediaId = "ct-88",
+            pageCount = 15,
+            kind = MediaKind.PHOTO,
+            embeddedVideos = listOf(embeddedVideo),
+        )
+        val registry = SiteRegistry(
+            listOf(
+                FakeGallerySitePlugin(
+                    sampleSiteDescriptor(
+                        SiteId.COSPLAYTELE,
+                        primaryKind = MediaKind.PHOTO,
+                        capabilities = setOf(SiteCapability.DUAL_MEDIA, SiteCapability.TAGS),
+                    ),
+                    detailHandler = { detail },
+                ),
+            ),
+        )
+        val loader = FakeReaderPageLoader(
+            detailLoader = { _, _, _, _ -> OfflineGallerySnapshot(detail, emptyList(), emptyList(), "", false) },
+        )
+
+        val viewModel = GalleryDetailViewModel(
+            route = RavenRoute.GalleryDetail(SiteId.COSPLAYTELE.value, "ct-88", detail.item.url),
+            siteRegistry = registry,
+            pageLoader = loader,
+            localLibraryImporter = harness.localLibraryImporter,
+            downloadGateway = FakeGalleryDownloadGateway(),
+            exportGateway = harness.exportGateway,
+            historyRepository = harness.historyRepository,
+            favoriteRepository = harness.favoriteRepository,
+            shelfRepository = harness.shelfRepository,
+            bookmarkRepository = harness.bookmarkRepository,
+            blockedTermsRepository = harness.blockedTermsRepository,
+            subscriptionRepository = harness.subscriptionRepository,
+            preferencesRepository = harness.preferencesRepository,
+            dispatchers = harness.dispatchers,
+            clock = harness.clock,
+        )
+        advanceUntilIdle()
+
+        val loaded = viewModel.uiState.value.detail
+        assertNotNull(loaded)
+        assertEquals(15, loaded!!.pageCount)
+        assertEquals(1, loaded.embeddedVideos.size)
+        assertEquals("cossora-vid-1", loaded.embeddedVideos.single().id)
+        assertEquals(MediaKind.VIDEO, loaded.embeddedVideos.single().kind)
+    }
+
+    @Test
+    fun `exhentai auth gate triggers on SiteException AuthRequired and recovers after sign-in`() = runTest(mainDispatcherRule.dispatcher) {
+        val harness = ReaderTestHarness(mainDispatcherRule.dispatcher, tempFolder.newFolder())
+        val detail = sampleGalleryDetail(SiteId.EXHENTAI, mediaId = "ex-77", pageCount = 8)
+        val plugin = FakeGallerySitePlugin(
+            descriptor = sampleSiteDescriptor(
+                SiteId.EXHENTAI,
+                displayName = "ExHentai",
+                capabilities = setOf(SiteCapability.AUTH, SiteCapability.ORIGINAL_IMAGES),
+                requiresAuthGate = true,
+            ),
+            detailHandler = { detail },
+            requiresAuthGateFlag = true,
+            isAuthenticated = false,
+        )
+        var throwAuthOnLoad = true
+        val loader = FakeReaderPageLoader(
+            detailLoader = { _, _, _, _ ->
+                if (throwAuthOnLoad) {
+                    throw SiteException.AuthRequired("ExHentai 需要有效 Cookie", siteId = SiteId.EXHENTAI)
+                }
+                OfflineGallerySnapshot(detail, emptyList(), emptyList(), "", false)
+            },
+        )
+        val registry = SiteRegistry(listOf(plugin))
+
+        val viewModel = GalleryDetailViewModel(
+            route = RavenRoute.GalleryDetail(SiteId.EXHENTAI.value, "ex-77", detail.item.url),
+            siteRegistry = registry,
+            pageLoader = loader,
+            localLibraryImporter = harness.localLibraryImporter,
+            downloadGateway = FakeGalleryDownloadGateway(),
+            exportGateway = harness.exportGateway,
+            historyRepository = harness.historyRepository,
+            favoriteRepository = harness.favoriteRepository,
+            shelfRepository = harness.shelfRepository,
+            bookmarkRepository = harness.bookmarkRepository,
+            blockedTermsRepository = harness.blockedTermsRepository,
+            subscriptionRepository = harness.subscriptionRepository,
+            preferencesRepository = harness.preferencesRepository,
+            dispatchers = harness.dispatchers,
+            clock = harness.clock,
+        )
+        advanceUntilIdle()
+
+        // Gate active while unauthenticated
+        assertTrue(viewModel.uiState.value.authRequired)
+        assertNull(viewModel.uiState.value.detail)
+
+        // Even when authState flips true, SiteException.AuthRequired still triggers auth gate cleanly
+        plugin.isAuthenticated = true
+        viewModel.loadDetail(forceRefresh = true)
+        advanceUntilIdle()
+        assertTrue(viewModel.uiState.value.authRequired)
+        assertEquals("ExHentai 需要有效 Cookie", viewModel.uiState.value.authMessage)
+
+        // Once session succeeds, retry loads detail cleanly
+        throwAuthOnLoad = false
+        viewModel.loadDetail(forceRefresh = true)
+        advanceUntilIdle()
+        assertFalse(viewModel.uiState.value.authRequired)
+        assertEquals("ex-77", viewModel.uiState.value.detail?.item?.id)
+    }
+
+    @Test
+    fun `exportCbz builds valid archive and emits RequestSaveDocument event`() = runTest(mainDispatcherRule.dispatcher) {
+        val harness = ReaderTestHarness(mainDispatcherRule.dispatcher, tempFolder.newFolder())
+        val detail = sampleGalleryDetail(SiteId.NHENTAI, mediaId = "nh-cbz", pageCount = 3)
+        val registry = SiteRegistry(
+            listOf(FakeGallerySitePlugin(sampleSiteDescriptor(SiteId.NHENTAI), detailHandler = { detail })),
+        )
+        val loader = FakeReaderPageLoader(
+            detailLoader = { _, _, _, _ -> OfflineGallerySnapshot(detail, emptyList(), emptyList(), "", false) },
+        )
+        val viewModel = GalleryDetailViewModel(
+            route = RavenRoute.GalleryDetail(SiteId.NHENTAI.value, "nh-cbz", detail.item.url),
+            siteRegistry = registry,
+            pageLoader = loader,
+            localLibraryImporter = harness.localLibraryImporter,
+            downloadGateway = FakeGalleryDownloadGateway(),
+            exportGateway = harness.exportGateway,
+            historyRepository = harness.historyRepository,
+            favoriteRepository = harness.favoriteRepository,
+            shelfRepository = harness.shelfRepository,
+            bookmarkRepository = harness.bookmarkRepository,
+            blockedTermsRepository = harness.blockedTermsRepository,
+            subscriptionRepository = harness.subscriptionRepository,
+            preferencesRepository = harness.preferencesRepository,
+            dispatchers = harness.dispatchers,
+            clock = harness.clock,
+        )
+        advanceUntilIdle()
+
+        viewModel.events.test {
+            viewModel.exportCbz(selectedPages = listOf(1, 3))
+            advanceUntilIdle()
+
+            val event = awaitItem() as GalleryDetailEvent.RequestSaveDocument
+            assertTrue(event.suggestedFileName.endsWith(".cbz"))
+            val cbzFile = event.prepared.files.single().file
+            ZipFile(cbzFile).use { zip ->
+                val names = zip.entries().toList().map { it.name }
+                assertEquals(listOf("000001.png", "000003.png"), names)
+            }
+            harness.exportGateway.removeStagingFolder(event.prepared.folder)
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+}

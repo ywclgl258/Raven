@@ -1,0 +1,987 @@
+package com.raven.app.feature.player
+
+import android.graphics.Bitmap
+import android.os.Build
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.rounded.ArrowBack
+import androidx.compose.material.icons.rounded.Bedtime
+import androidx.compose.material.icons.rounded.Close
+import androidx.compose.material.icons.rounded.FastForward
+import androidx.compose.material.icons.rounded.Fullscreen
+import androidx.compose.material.icons.rounded.FullscreenExit
+import androidx.compose.material.icons.rounded.Lock
+import androidx.compose.material.icons.rounded.LockOpen
+import androidx.compose.material.icons.rounded.Pause
+import androidx.compose.material.icons.rounded.PictureInPictureAlt
+import androidx.compose.material.icons.rounded.PlayArrow
+import androidx.compose.material.icons.rounded.Refresh
+import androidx.compose.material.icons.rounded.Replay
+import androidx.compose.material.icons.rounded.SkipNext
+import androidx.compose.material.icons.rounded.Tune
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableLongStateOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import com.raven.app.core.designsystem.component.RavenFormatters
+import com.raven.app.core.designsystem.theme.LocalRavenColors
+import com.raven.app.core.designsystem.theme.LocalReduceTransparency
+import com.raven.app.core.designsystem.theme.RavenFrostedBox
+import com.raven.app.core.designsystem.theme.RavenShapes
+import com.raven.app.core.designsystem.theme.RavenTabularTextStyle
+import com.raven.app.core.designsystem.theme.ravenSpringPress
+import com.raven.app.core.media.playback.VideoLoopRange
+
+/**
+ * Full player overlay stack: frosted top/bottom control chrome, A-B marked scrubber, lock mode
+ * unlock pill, long-press temporary speed pill, notice toast, buffering indicator, playback error
+ * card, and end-of-video sequential queue confirmation card.
+ */
+@Composable
+internal fun PlayerControlsOverlay(
+    uiState: PlayerUiState,
+    controlsVisible: Boolean,
+    unlockPillVisible: Boolean,
+    scrubbingPreviewFrame: Bitmap?,
+    onBackClick: () -> Unit,
+    onTogglePlayPause: () -> Unit,
+    onScrubStart: () -> Unit,
+    onScrubPositionChange: (Long) -> Unit,
+    onScrubCommit: (Long) -> Unit,
+    onOpenSpeedSheet: () -> Unit,
+    onOpenQualitySheet: () -> Unit,
+    onToggleFullscreen: () -> Unit,
+    onToggleLock: () -> Unit,
+    onRequestPip: () -> Unit,
+    onOpenSleepTimerSheet: () -> Unit,
+    onOpenSettingsSheet: () -> Unit,
+    onRetry: () -> Unit,
+    onOpenSiteAccount: () -> Unit,
+    onOpenExternalPlayers: () -> Unit,
+    onConfirmQueueNext: () -> Unit,
+    onEndQueue: () -> Unit,
+    onDismissNotice: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val colors = LocalRavenColors.current
+    val reduceTransparency = LocalReduceTransparency.current
+    val supportsPip = Build.VERSION.SDK_INT >= Build.VERSION_CODES.O
+
+    Box(modifier = modifier.fillMaxSize()) {
+        // 1. Lock mode: hide all controls, expose only subtle left "解锁画面" pill
+        if (uiState.isLocked) {
+            AnimatedVisibility(
+                visible = unlockPillVisible,
+                enter = fadeIn(),
+                exit = fadeOut(),
+                modifier = Modifier
+                    .align(Alignment.CenterStart)
+                    .padding(start = 16.dp),
+            ) {
+                RavenFrostedBox(
+                    shape = RavenShapes.PillShape,
+                    reduceTransparency = reduceTransparency,
+                    borderColor = colors.rimHighlight,
+                    modifier = Modifier
+                        .ravenSpringPress()
+                        .clickable(role = Role.Button, onClick = onToggleLock)
+                        .testTag(PlayerTestTags.PLAYER_UNLOCK_PILL),
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .heightIn(min = 44.dp)
+                            .padding(horizontal = 14.dp, vertical = 10.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
+                        Icon(
+                            imageVector = Icons.Rounded.Lock,
+                            contentDescription = "解锁画面",
+                            tint = colors.crimson,
+                            modifier = Modifier.size(18.dp),
+                        )
+                        Text(
+                            text = "解锁画面",
+                            style = MaterialTheme.typography.labelLarge,
+                            color = colors.inkPrimary,
+                        )
+                    }
+                }
+            }
+            return@Box
+        }
+
+        // 2. Main Frosted Top & Bottom Control Chrome
+        AnimatedVisibility(
+            visible = controlsVisible && !uiState.showQueueNextOverlay,
+            enter = fadeIn(),
+            exit = fadeOut(),
+            modifier = Modifier.fillMaxSize(),
+        ) {
+            Box(modifier = Modifier.fillMaxSize()) {
+                // Top scrim + frosted header bar
+                PlayerTopBar(
+                    uiState = uiState,
+                    supportsPip = supportsPip,
+                    onBackClick = onBackClick,
+                    onOpenQualitySheet = onOpenQualitySheet,
+                    onOpenSleepTimerSheet = onOpenSleepTimerSheet,
+                    onToggleLock = onToggleLock,
+                    onRequestPip = onRequestPip,
+                    onOpenSettingsSheet = onOpenSettingsSheet,
+                    modifier = Modifier.align(Alignment.TopCenter),
+                )
+
+                // Center Play / Pause / Replay medallion when ready and not errored
+                if (!uiState.isBuffering && uiState.loadError == null && uiState.playbackError == null) {
+                    RavenFrostedBox(
+                        shape = CircleShape,
+                        reduceTransparency = reduceTransparency,
+                        borderColor = colors.rimHighlight,
+                        contentAlignment = Alignment.Center,
+                        modifier = Modifier
+                            .align(Alignment.Center)
+                            .size(58.dp)
+                            .ravenSpringPress()
+                            .clickable(role = Role.Button, onClick = onTogglePlayPause),
+                    ) {
+                        Icon(
+                            imageVector = when {
+                                uiState.isEnded -> Icons.Rounded.Replay
+                                uiState.isPlaying -> Icons.Rounded.Pause
+                                else -> Icons.Rounded.PlayArrow
+                            },
+                            contentDescription = if (uiState.isPlaying) "暂停" else "播放",
+                            tint = colors.inkPrimary,
+                            modifier = Modifier.size(30.dp),
+                        )
+                    }
+                }
+
+                // Bottom scrim + scrubber with A-B markers + controls row
+                PlayerBottomBar(
+                    uiState = uiState,
+                    previewFrame = scrubbingPreviewFrame,
+                    onTogglePlayPause = onTogglePlayPause,
+                    onScrubStart = onScrubStart,
+                    onScrubPositionChange = onScrubPositionChange,
+                    onScrubCommit = onScrubCommit,
+                    onOpenSpeedSheet = onOpenSpeedSheet,
+                    onOpenQualitySheet = onOpenQualitySheet,
+                    onToggleFullscreen = onToggleFullscreen,
+                    modifier = Modifier.align(Alignment.BottomCenter),
+                )
+            }
+        }
+
+        // 3. Long-press temporary playback speed pill (always visible above controls while held)
+        AnimatedVisibility(
+            visible = uiState.isTemporarySpeedActive,
+            enter = fadeIn(),
+            exit = fadeOut(),
+            modifier = Modifier
+                .align(Alignment.TopCenter)
+                .padding(top = if (uiState.isFullscreen) 24.dp else 14.dp),
+        ) {
+            RavenFrostedBox(
+                shape = RavenShapes.PillShape,
+                reduceTransparency = reduceTransparency,
+                borderColor = colors.rimHighlight,
+                modifier = Modifier.testTag(PlayerTestTags.PLAYER_TEMP_SPEED_PILL),
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 7.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.FastForward,
+                        contentDescription = null,
+                        tint = colors.crimson,
+                        modifier = Modifier.size(16.dp),
+                    )
+                    Text(
+                        text = "倍速播放中 ${formatSpeedLabel(uiState.temporarySpeedValue)}",
+                        style = RavenTabularTextStyle.copy(fontWeight = FontWeight.SemiBold),
+                        color = colors.inkPrimary,
+                    )
+                }
+            }
+        }
+
+        // 4. Transient notice banner (stall downgrade, expired stream refresh, resume, loop)
+        AnimatedVisibility(
+            visible = !uiState.noticeMessage.isNullOrBlank() && !uiState.isTemporarySpeedActive,
+            enter = fadeIn(),
+            exit = fadeOut(),
+            modifier = Modifier
+                .align(Alignment.TopCenter)
+                .padding(top = if (controlsVisible) 58.dp else 14.dp, start = 20.dp, end = 20.dp),
+        ) {
+            val notice = uiState.noticeMessage.orEmpty()
+            RavenFrostedBox(
+                shape = RavenShapes.PillShape,
+                reduceTransparency = reduceTransparency,
+                borderColor = colors.hairline,
+                modifier = Modifier
+                    .clickable(onClick = onDismissNotice)
+                    .testTag(PlayerTestTags.PLAYER_NOTICE_BANNER),
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 7.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Text(
+                        text = notice,
+                        style = MaterialTheme.typography.labelMedium,
+                        color = colors.inkPrimary,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+            }
+        }
+
+        // 5. Buffering or loading spinner
+        if ((uiState.isBuffering || uiState.isLoadingDetail || uiState.isRefreshingExpiredStream) &&
+            uiState.loadError == null &&
+            uiState.playbackError == null
+        ) {
+            Column(
+                modifier = Modifier.align(Alignment.Center),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                CircularProgressIndicator(
+                    color = colors.crimson,
+                    strokeWidth = 3.dp,
+                    modifier = Modifier.size(36.dp),
+                )
+                if (uiState.isRefreshingExpiredStream) {
+                    Text(
+                        text = "正在刷新播放地址…",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = colors.inkPrimary,
+                    )
+                }
+            }
+        }
+
+        // 6. Error overlay inside video viewport
+        val activeError = uiState.loadError ?: uiState.playbackError
+        if (activeError != null && !uiState.isRefreshingExpiredStream) {
+            PlayerSurfaceErrorOverlay(
+                message = activeError,
+                requiresAuth = uiState.requiresAuth,
+                hasExternalPlayers = uiState.externalPlayers.isNotEmpty() || uiState.url.startsWith("http"),
+                onRetry = onRetry,
+                onOpenSiteAccount = onOpenSiteAccount,
+                onOpenExternalPlayers = onOpenExternalPlayers,
+                modifier = Modifier.align(Alignment.Center),
+            )
+        }
+
+        // 7. End-of-video Sequential Queue Next confirmation overlay
+        val queue = uiState.queue
+        if (uiState.showQueueNextOverlay && queue?.nextItem != null) {
+            PlayerQueueEndedOverlay(
+                queue = queue,
+                onConfirmNext = onConfirmQueueNext,
+                onEndQueue = onEndQueue,
+                modifier = Modifier.align(Alignment.Center),
+            )
+        }
+    }
+}
+
+@Composable
+private fun PlayerTopBar(
+    uiState: PlayerUiState,
+    supportsPip: Boolean,
+    onBackClick: () -> Unit,
+    onOpenQualitySheet: () -> Unit,
+    onOpenSleepTimerSheet: () -> Unit,
+    onToggleLock: () -> Unit,
+    onRequestPip: () -> Unit,
+    onOpenSettingsSheet: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val colors = LocalRavenColors.current
+
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .background(
+                Brush.verticalGradient(
+                    colors = listOf(
+                        colors.canvas.copy(alpha = 0.84f),
+                        colors.canvas.copy(alpha = 0.36f),
+                        Color.Transparent,
+                    ),
+                ),
+            )
+            .then(if (uiState.isFullscreen) Modifier.statusBarsPadding() else Modifier)
+            .padding(horizontal = 6.dp, vertical = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        IconButton(onClick = onBackClick) {
+            Icon(
+                imageVector = Icons.AutoMirrored.Rounded.ArrowBack,
+                contentDescription = "返回",
+                tint = colors.inkPrimary,
+            )
+        }
+
+        Row(
+            modifier = Modifier.weight(1f),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Text(
+                text = uiState.title.ifBlank { "视频播放" },
+                style = MaterialTheme.typography.titleMedium,
+                color = colors.inkPrimary,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f, fill = false),
+            )
+            PlayerMiniControlPill(
+                text = uiState.activeQualityLabel,
+                highlighted = uiState.isOffline || uiState.isLocal,
+                enabled = uiState.canChooseQuality,
+                onClick = onOpenQualitySheet,
+                modifier = Modifier.testTag(PlayerTestTags.PLAYER_QUALITY_PILL),
+            )
+        }
+
+        if (uiState.sleepTimer.isActive) {
+            PlayerMiniControlPill(
+                text = uiState.sleepTimer.formattedRemaining,
+                highlighted = true,
+                leadingIcon = Icons.Rounded.Bedtime,
+                onClick = onOpenSleepTimerSheet,
+                modifier = Modifier.testTag(PlayerTestTags.PLAYER_SLEEP_INDICATOR),
+            )
+        }
+
+        IconButton(
+            onClick = onToggleLock,
+            modifier = Modifier.testTag(PlayerTestTags.PLAYER_LOCK_BUTTON),
+        ) {
+            Icon(
+                imageVector = Icons.Rounded.LockOpen,
+                contentDescription = "锁屏",
+                tint = colors.inkPrimary,
+                modifier = Modifier.size(20.dp),
+            )
+        }
+
+        if (supportsPip) {
+            IconButton(
+                onClick = onRequestPip,
+                modifier = Modifier.testTag(PlayerTestTags.PLAYER_PIP_BUTTON),
+            ) {
+                Icon(
+                    imageVector = Icons.Rounded.PictureInPictureAlt,
+                    contentDescription = "画中画",
+                    tint = colors.inkPrimary,
+                    modifier = Modifier.size(20.dp),
+                )
+            }
+        }
+
+        IconButton(
+            onClick = onOpenSettingsSheet,
+            modifier = Modifier.testTag(PlayerTestTags.PLAYER_MORE_BUTTON),
+        ) {
+            Icon(
+                imageVector = Icons.Rounded.Tune,
+                contentDescription = "播放设置",
+                tint = colors.inkPrimary,
+                modifier = Modifier.size(21.dp),
+            )
+        }
+    }
+}
+
+@Composable
+private fun PlayerBottomBar(
+    uiState: PlayerUiState,
+    previewFrame: Bitmap?,
+    onTogglePlayPause: () -> Unit,
+    onScrubStart: () -> Unit,
+    onScrubPositionChange: (Long) -> Unit,
+    onScrubCommit: (Long) -> Unit,
+    onOpenSpeedSheet: () -> Unit,
+    onOpenQualitySheet: () -> Unit,
+    onToggleFullscreen: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val colors = LocalRavenColors.current
+    val durationMs = uiState.effectiveDurationMs
+    var isScrubbing by remember { mutableStateOf(false) }
+    var scrubPositionMs by remember { mutableLongStateOf(0L) }
+
+    val displayedPositionMs = if (isScrubbing) scrubPositionMs else uiState.positionMs
+
+    Column(
+        modifier = modifier
+            .fillMaxWidth()
+            .background(
+                Brush.verticalGradient(
+                    colors = listOf(
+                        Color.Transparent,
+                        colors.canvas.copy(alpha = 0.45f),
+                        colors.canvas.copy(alpha = 0.88f),
+                    ),
+                ),
+            )
+            .padding(horizontal = 10.dp, vertical = 6.dp),
+        verticalArrangement = Arrangement.spacedBy(2.dp),
+    ) {
+        if (isScrubbing && previewFrame != null) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(bottom = 6.dp),
+                contentAlignment = Alignment.Center,
+            ) {
+                SeekPreviewThumbnailCard(
+                    bitmap = previewFrame,
+                    timestampLabel = RavenFormatters.formatDurationMs(scrubPositionMs),
+                )
+            }
+        }
+
+        PlayerAbScrubber(
+            positionMs = displayedPositionMs,
+            bufferedPositionMs = uiState.bufferedPositionMs,
+            durationMs = durationMs,
+            loopRange = uiState.loopRange,
+            onScrubStart = { targetMs ->
+                isScrubbing = true
+                scrubPositionMs = targetMs
+                onScrubStart()
+                onScrubPositionChange(targetMs)
+            },
+            onScrubMove = { targetMs ->
+                scrubPositionMs = targetMs
+                onScrubPositionChange(targetMs)
+            },
+            onScrubEnd = { targetMs ->
+                isScrubbing = false
+                onScrubCommit(targetMs)
+            },
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 6.dp),
+        )
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            IconButton(
+                onClick = onTogglePlayPause,
+                modifier = Modifier.testTag(PlayerTestTags.PLAYER_PLAY_PAUSE),
+            ) {
+                Icon(
+                    imageVector = when {
+                        uiState.isEnded -> Icons.Rounded.Replay
+                        uiState.isPlaying -> Icons.Rounded.Pause
+                        else -> Icons.Rounded.PlayArrow
+                    },
+                    contentDescription = if (uiState.isPlaying) "暂停" else "播放",
+                    tint = colors.inkPrimary,
+                    modifier = Modifier.size(24.dp),
+                )
+            }
+
+            val timeText = "${RavenFormatters.formatDurationMs(displayedPositionMs)} / " +
+                if (durationMs > 0L) RavenFormatters.formatDurationMs(durationMs) else "--:--"
+            Text(
+                text = timeText,
+                style = RavenTabularTextStyle.copy(
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Medium,
+                ),
+                color = colors.inkPrimary,
+                maxLines = 1,
+                modifier = Modifier.testTag(PlayerTestTags.PLAYER_TIME_LABEL),
+            )
+
+            if (uiState.loopRange.hasStart) {
+                Spacer(modifier = Modifier.width(4.dp))
+                PlayerMiniControlPill(
+                    text = if (uiState.loopRange.isActive) "A-B" else "A",
+                    highlighted = true,
+                    onClick = {},
+                    enabled = false,
+                )
+            }
+
+            Spacer(modifier = Modifier.weight(1f))
+
+            PlayerMiniControlPill(
+                text = uiState.activeSpeedLabel,
+                highlighted = uiState.sessionUserSpeed != null || uiState.effectivePlaybackSpeed != 1.0f,
+                onClick = onOpenSpeedSheet,
+                modifier = Modifier.testTag(PlayerTestTags.PLAYER_SPEED_PILL),
+            )
+
+            Spacer(modifier = Modifier.width(4.dp))
+
+            PlayerMiniControlPill(
+                text = uiState.activeQualityLabel,
+                highlighted = false,
+                enabled = uiState.canChooseQuality,
+                onClick = onOpenQualitySheet,
+                modifier = Modifier.testTag(PlayerTestTags.PLAYER_BOTTOM_QUALITY_PILL),
+            )
+
+            IconButton(
+                onClick = onToggleFullscreen,
+                modifier = Modifier.testTag(PlayerTestTags.PLAYER_FULLSCREEN_BUTTON),
+            ) {
+                Icon(
+                    imageVector = if (uiState.isFullscreen) {
+                        Icons.Rounded.FullscreenExit
+                    } else {
+                        Icons.Rounded.Fullscreen
+                    },
+                    contentDescription = if (uiState.isFullscreen) "退出全屏" else "全屏",
+                    tint = colors.inkPrimary,
+                    modifier = Modifier.size(24.dp),
+                )
+            }
+        }
+    }
+}
+
+/**
+ * Custom cinema scrubber rendering buffered track, Raven Crimson played progress, active thumb,
+ * and A-B loop range span + A/B markers.
+ */
+@Composable
+internal fun PlayerAbScrubber(
+    positionMs: Long,
+    bufferedPositionMs: Long,
+    durationMs: Long,
+    loopRange: VideoLoopRange,
+    onScrubStart: (Long) -> Unit,
+    onScrubMove: (Long) -> Unit,
+    onScrubEnd: (Long) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val colors = LocalRavenColors.current
+    val durationState by rememberUpdatedState(durationMs)
+    val startCb by rememberUpdatedState(onScrubStart)
+    val moveCb by rememberUpdatedState(onScrubMove)
+    val endCb by rememberUpdatedState(onScrubEnd)
+
+    var trackWidthPx by remember { mutableFloatStateOf(1f) }
+    var dragFraction by remember { mutableFloatStateOf(0f) }
+
+    val playedFraction = if (durationMs > 0L) {
+        (positionMs.toFloat() / durationMs.toFloat()).coerceIn(0f, 1f)
+    } else {
+        0f
+    }
+    val bufferedFraction = if (durationMs > 0L) {
+        (bufferedPositionMs.toFloat() / durationMs.toFloat()).coerceIn(0f, 1f)
+    } else {
+        0f
+    }
+
+    Box(
+        modifier = modifier
+            .height(28.dp)
+            .onSizeChanged { trackWidthPx = it.width.toFloat().coerceAtLeast(1f) }
+            .testTag(PlayerTestTags.PLAYER_SCRUBBER)
+            .pointerInput(Unit) {
+                detectTapGestures { offset ->
+                    val dur = durationState
+                    if (dur <= 0L) return@detectTapGestures
+                    val frac = (offset.x / trackWidthPx).coerceIn(0f, 1f)
+                    val target = (dur * frac).toLong()
+                    startCb(target)
+                    endCb(target)
+                }
+            }
+            .pointerInput(Unit) {
+                detectHorizontalDragGestures(
+                    onDragStart = { offset ->
+                        val dur = durationState
+                        if (dur <= 0L) return@detectHorizontalDragGestures
+                        dragFraction = (offset.x / trackWidthPx).coerceIn(0f, 1f)
+                        startCb((dur * dragFraction).toLong())
+                    },
+                    onHorizontalDrag = { change, dragAmount ->
+                        val dur = durationState
+                        if (dur <= 0L) return@detectHorizontalDragGestures
+                        change.consume()
+                        dragFraction = (dragFraction + dragAmount / trackWidthPx).coerceIn(0f, 1f)
+                        moveCb((dur * dragFraction).toLong())
+                    },
+                    onDragEnd = {
+                        val dur = durationState
+                        if (dur > 0L) endCb((dur * dragFraction).toLong())
+                    },
+                    onDragCancel = {
+                        val dur = durationState
+                        if (dur > 0L) endCb((dur * dragFraction).toLong())
+                    },
+                )
+            },
+        contentAlignment = Alignment.Center,
+    ) {
+        Canvas(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(20.dp),
+        ) {
+            val trackHeight = 3.5.dp.toPx()
+            val centerY = size.height / 2f
+            val topY = centerY - trackHeight / 2f
+            val corner = CornerRadius(trackHeight / 2f, trackHeight / 2f)
+
+            // Base track
+            drawRoundRect(
+                color = colors.surface3.copy(alpha = 0.85f),
+                topLeft = Offset(0f, topY),
+                size = Size(size.width, trackHeight),
+                cornerRadius = corner,
+            )
+
+            // Buffered track
+            if (bufferedFraction > 0f) {
+                drawRoundRect(
+                    color = colors.inkSecondary.copy(alpha = 0.40f),
+                    topLeft = Offset(0f, topY),
+                    size = Size(size.width * bufferedFraction, trackHeight),
+                    cornerRadius = corner,
+                )
+            }
+
+            // Played progress track (Raven Crimson)
+            if (playedFraction > 0f) {
+                drawRoundRect(
+                    color = colors.crimson,
+                    topLeft = Offset(0f, topY),
+                    size = Size(size.width * playedFraction, trackHeight),
+                    cornerRadius = corner,
+                )
+            }
+
+            // A-B loop range & markers
+            if (durationMs > 0L && loopRange.hasStart) {
+                val startFrac = (loopRange.startMs.toFloat() / durationMs.toFloat()).coerceIn(0f, 1f)
+                val startX = size.width * startFrac
+                if (loopRange.isActive) {
+                    val endFrac = (loopRange.endMs.toFloat() / durationMs.toFloat()).coerceIn(startFrac, 1f)
+                    val endX = size.width * endFrac
+                    drawRoundRect(
+                        color = colors.warning.copy(alpha = 0.85f),
+                        topLeft = Offset(startX, topY - 1.dp.toPx()),
+                        size = Size((endX - startX).coerceAtLeast(2.dp.toPx()), trackHeight + 2.dp.toPx()),
+                        cornerRadius = corner,
+                    )
+                    // B marker pin
+                    drawLine(
+                        color = colors.warning,
+                        start = Offset(endX, centerY - 7.dp.toPx()),
+                        end = Offset(endX, centerY + 7.dp.toPx()),
+                        strokeWidth = 2.dp.toPx(),
+                    )
+                }
+                // A marker pin
+                drawLine(
+                    color = colors.warning,
+                    start = Offset(startX, centerY - 7.dp.toPx()),
+                    end = Offset(startX, centerY + 7.dp.toPx()),
+                    strokeWidth = 2.dp.toPx(),
+                )
+            }
+
+            // Scrubber thumb
+            val thumbX = (size.width * playedFraction).coerceIn(6.dp.toPx(), (size.width - 6.dp.toPx()).coerceAtLeast(6.dp.toPx()))
+            drawCircle(
+                color = colors.inkPrimary,
+                radius = 6.dp.toPx(),
+                center = Offset(thumbX, centerY),
+            )
+            drawCircle(
+                color = colors.crimson,
+                radius = 2.5.dp.toPx(),
+                center = Offset(thumbX, centerY),
+            )
+        }
+    }
+}
+
+@Composable
+private fun PlayerMiniControlPill(
+    text: String,
+    highlighted: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    enabled: Boolean = true,
+    leadingIcon: androidx.compose.ui.graphics.vector.ImageVector? = null,
+) {
+    val colors = LocalRavenColors.current
+    val bg = if (highlighted) colors.crimson.copy(alpha = 0.22f) else colors.badgeBackdrop
+    val border = if (highlighted) colors.crimson.copy(alpha = 0.55f) else colors.rimHighlight
+    val ink = if (highlighted) colors.crimson else colors.inkPrimary
+
+    Row(
+        modifier = modifier
+            .clip(RavenShapes.PillShape)
+            .background(bg)
+            .border(0.5.dp, border, RavenShapes.PillShape)
+            .then(
+                if (enabled) {
+                    Modifier
+                        .ravenSpringPress()
+                        .clickable(role = Role.Button, onClick = onClick)
+                } else {
+                    Modifier
+                },
+            )
+            .padding(horizontal = 9.dp, vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        if (leadingIcon != null) {
+            Icon(
+                imageVector = leadingIcon,
+                contentDescription = null,
+                tint = ink,
+                modifier = Modifier.size(13.dp),
+            )
+        }
+        Text(
+            text = text,
+            style = RavenTabularTextStyle.copy(
+                fontSize = 11.sp,
+                fontWeight = FontWeight.SemiBold,
+            ),
+            color = ink,
+            maxLines = 1,
+        )
+    }
+}
+
+@Composable
+private fun PlayerSurfaceErrorOverlay(
+    message: String,
+    requiresAuth: Boolean,
+    hasExternalPlayers: Boolean,
+    onRetry: () -> Unit,
+    onOpenSiteAccount: () -> Unit,
+    onOpenExternalPlayers: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val colors = LocalRavenColors.current
+    val reduceTransparency = LocalReduceTransparency.current
+
+    RavenFrostedBox(
+        shape = RavenShapes.CardShape,
+        reduceTransparency = reduceTransparency,
+        borderColor = colors.rimHighlight,
+        modifier = modifier.padding(horizontal = 24.dp),
+    ) {
+        Column(
+            modifier = Modifier.padding(horizontal = 18.dp, vertical = 16.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            Text(
+                text = message,
+                style = MaterialTheme.typography.bodyMedium,
+                color = colors.inkPrimary,
+                maxLines = 3,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Button(
+                    onClick = if (requiresAuth) onOpenSiteAccount else onRetry,
+                    shape = RavenShapes.PillShape,
+                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = colors.primaryCtaContainer,
+                        contentColor = colors.primaryCtaInk,
+                    ),
+                ) {
+                    if (!requiresAuth) {
+                        Icon(
+                            imageVector = Icons.Rounded.Refresh,
+                            contentDescription = null,
+                            modifier = Modifier.size(16.dp),
+                        )
+                        Spacer(modifier = Modifier.width(4.dp))
+                    }
+                    Text(
+                        text = if (requiresAuth) "前往登录" else "重试",
+                        style = MaterialTheme.typography.labelLarge,
+                    )
+                }
+
+                if (hasExternalPlayers) {
+                    OutlinedButton(
+                        onClick = onOpenExternalPlayers,
+                        shape = RavenShapes.PillShape,
+                        contentPadding = PaddingValues(horizontal = 14.dp, vertical = 8.dp),
+                        colors = ButtonDefaults.outlinedButtonColors(
+                            containerColor = colors.surface2,
+                            contentColor = colors.inkPrimary,
+                        ),
+                    ) {
+                        Text(
+                            text = "站外播放",
+                            style = MaterialTheme.typography.labelMedium,
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun PlayerQueueEndedOverlay(
+    queue: PlayerQueueUiState,
+    onConfirmNext: () -> Unit,
+    onEndQueue: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val colors = LocalRavenColors.current
+    val reduceTransparency = LocalReduceTransparency.current
+    val nextItem = queue.nextItem ?: return
+
+    RavenFrostedBox(
+        shape = RavenShapes.CardShape,
+        reduceTransparency = reduceTransparency,
+        borderColor = colors.rimHighlight,
+        modifier = modifier.padding(horizontal = 24.dp),
+    ) {
+        Column(
+            modifier = Modifier.padding(horizontal = 18.dp, vertical = 16.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            Text(
+                text = "队列下一项 (${queue.currentIndex + 2} / ${queue.totalCount})",
+                style = RavenTabularTextStyle.copy(fontWeight = FontWeight.SemiBold),
+                color = colors.crimson,
+            )
+            Text(
+                text = nextItem.title,
+                style = MaterialTheme.typography.titleMedium,
+                color = colors.inkPrimary,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Button(
+                    onClick = onConfirmNext,
+                    shape = RavenShapes.PillShape,
+                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 10.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = colors.primaryCtaContainer,
+                        contentColor = colors.primaryCtaInk,
+                    ),
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.SkipNext,
+                        contentDescription = null,
+                        modifier = Modifier.size(18.dp),
+                    )
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text(
+                        text = "立即播放",
+                        style = MaterialTheme.typography.labelLarge,
+                    )
+                }
+                OutlinedButton(
+                    onClick = onEndQueue,
+                    shape = RavenShapes.PillShape,
+                    contentPadding = PaddingValues(horizontal = 14.dp, vertical = 10.dp),
+                    colors = ButtonDefaults.outlinedButtonColors(
+                        containerColor = colors.surface2,
+                        contentColor = colors.inkSecondary,
+                    ),
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.Close,
+                        contentDescription = null,
+                        modifier = Modifier.size(16.dp),
+                    )
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text(
+                        text = "结束队列",
+                        style = MaterialTheme.typography.labelMedium,
+                    )
+                }
+            }
+        }
+    }
+}

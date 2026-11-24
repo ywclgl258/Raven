@@ -1,0 +1,1012 @@
+package com.raven.app.feature.library
+
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.rounded.ArrowBack
+import androidx.compose.material.icons.outlined.Build
+import androidx.compose.material.icons.outlined.DeleteOutline
+import androidx.compose.material.icons.outlined.Download
+import androidx.compose.material.icons.outlined.FilterList
+import androidx.compose.material.icons.outlined.Folder
+import androidx.compose.material.icons.outlined.KeyboardArrowDown
+import androidx.compose.material.icons.outlined.KeyboardArrowUp
+import androidx.compose.material.icons.outlined.MoreVert
+import androidx.compose.material.icons.outlined.OfflinePin
+import androidx.compose.material.icons.outlined.Pause
+import androidx.compose.material.icons.outlined.PlayArrow
+import androidx.compose.material.icons.outlined.Refresh
+import androidx.compose.material.icons.outlined.Sync
+import androidx.compose.material.icons.outlined.Verified
+import androidx.compose.material.icons.outlined.VerticalAlignTop
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.raven.app.core.designsystem.component.RavenBottomSheet
+import com.raven.app.core.designsystem.component.RavenCrimsonProgressBar
+import com.raven.app.core.designsystem.component.RavenEmptyState
+import com.raven.app.core.designsystem.component.RavenFilterChip
+import com.raven.app.core.designsystem.component.RavenFilterChipRow
+import com.raven.app.core.designsystem.component.RavenFormatters
+import com.raven.app.core.designsystem.component.RavenGroupedDivider
+import com.raven.app.core.designsystem.component.RavenGroupedRow
+import com.raven.app.core.designsystem.component.RavenGroupedSection
+import com.raven.app.core.designsystem.component.RavenImage
+import com.raven.app.core.designsystem.component.RavenSearchField
+import com.raven.app.core.designsystem.component.RavenStatusPill
+import com.raven.app.core.designsystem.component.RavenStatusTone
+import com.raven.app.core.designsystem.component.RavenTopBar
+import com.raven.app.core.designsystem.theme.LocalRavenColors
+import com.raven.app.core.designsystem.theme.RavenShapes
+import com.raven.app.core.designsystem.theme.ravenSpringPress
+import com.raven.app.core.designsystem.theme.tabular
+import com.raven.app.core.model.DownloadItem
+import com.raven.app.core.model.DownloadKind
+import com.raven.app.core.model.DownloadStatus
+import org.koin.androidx.compose.koinViewModel
+import kotlin.math.roundToInt
+
+/**
+ * Unified Downloads Center (`DownloadsScreen`) managing Video (Media3) & Gallery/Comic downloads.
+ */
+@Composable
+fun DownloadsScreen(
+    navigator: LibraryNavigator,
+    modifier: Modifier = Modifier,
+    viewModel: DownloadsViewModel = koinViewModel(),
+) {
+    val uiState by viewModel.uiState.collectAsStateWithLifecycle()
+    val colors = LocalRavenColors.current
+
+    var activeMenuTarget by remember { mutableStateOf<DownloadItem?>(null) }
+    var groupEditTarget by remember { mutableStateOf<DownloadItem?>(null) }
+    var deleteConfirmTarget by remember { mutableStateOf<DownloadItem?>(null) }
+
+    Column(
+        modifier = modifier
+            .fillMaxSize()
+            .background(colors.canvas)
+            .testTag("downloads_screen"),
+    ) {
+        RavenTopBar(
+            title = "下载中心",
+            subtitle = "已完成 ${uiState.completedCount} 项 · ${RavenFormatters.formatByteSize(uiState.totalCompletedBytes)}",
+            navigationIcon = {
+                IconButton(onClick = navigator::navigateBack) {
+                    Icon(
+                        imageVector = Icons.AutoMirrored.Rounded.ArrowBack,
+                        contentDescription = "返回",
+                        tint = colors.inkPrimary,
+                    )
+                }
+            },
+            actions = {
+                IconButton(
+                    onClick = viewModel::syncFromDisk,
+                    enabled = !uiState.isSyncingDisk,
+                    modifier = Modifier.testTag("downloads_sync_disk_button"),
+                ) {
+                    if (uiState.isSyncingDisk) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(18.dp),
+                            strokeWidth = 2.dp,
+                            color = colors.crimson,
+                        )
+                    } else {
+                        Icon(
+                            imageVector = Icons.Outlined.Sync,
+                            contentDescription = "同步磁盘离线记录",
+                            tint = colors.inkPrimary,
+                        )
+                    }
+                }
+                IconButton(
+                    onClick = viewModel::toggleFiltersExpanded,
+                    modifier = Modifier.testTag("downloads_filter_toggle_button"),
+                ) {
+                    Icon(
+                        imageVector = Icons.Outlined.FilterList,
+                        contentDescription = "展开筛选",
+                        tint = if (uiState.filtersExpanded || uiState.activeExtraFilterCount > 0) {
+                            colors.crimson
+                        } else {
+                            colors.inkPrimary
+                        },
+                    )
+                }
+            },
+        )
+
+        LazyColumn(
+            modifier = Modifier.fillMaxSize(),
+            contentPadding = PaddingValues(top = 10.dp, bottom = 28.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            // Network policy warning banner
+            if (!uiState.networkPolicy.isConnected) {
+                item(key = "dl_net_offline") {
+                    LibraryFeedbackBanner(
+                        message = "当前无网络连接，下载任务将在恢复连接后自动继续",
+                        tone = RavenStatusTone.WARNING,
+                        modifier = Modifier.padding(horizontal = 16.dp),
+                    )
+                }
+            } else if (uiState.networkPolicy.unmeteredOnly && uiState.networkPolicy.isMetered) {
+                item(key = "dl_net_metered") {
+                    LibraryFeedbackBanner(
+                        message = "当前为移动计费网络，已按「仅 Wi-Fi 下载」策略暂停传输",
+                        tone = RavenStatusTone.WARNING,
+                        modifier = Modifier.padding(horizontal = 16.dp),
+                    )
+                }
+            }
+
+            // Active batch enqueue banner
+            if (uiState.batchProgress.isRunning || uiState.batchProgress.errors.isNotEmpty()) {
+                item(key = "dl_batch_banner") {
+                    val bp = uiState.batchProgress
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp)
+                            .clip(RavenShapes.CardShape)
+                            .background(colors.surface1)
+                            .border(0.5.dp, colors.hairline, RavenShapes.CardShape)
+                            .padding(12.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text(
+                                text = if (bp.isRunning) {
+                                    "正在批量加入下载（${bp.processed} / ${bp.total}）"
+                                } else {
+                                    "批量加入完成（成功 ${bp.added} / ${bp.total}）"
+                                },
+                                style = MaterialTheme.typography.labelLarge.tabular(),
+                                color = colors.inkPrimary,
+                            )
+                            if (bp.isRunning) {
+                                TextButton(onClick = viewModel::cancelBatchEnqueue) {
+                                    Text("取消", color = colors.error)
+                                }
+                            }
+                        }
+                        if (bp.total > 0) {
+                            LinearProgressIndicator(
+                                progress = { (bp.processed.toFloat() / bp.total.toFloat()).coerceIn(0f, 1f) },
+                                color = colors.crimson,
+                                trackColor = colors.surface3,
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                        }
+                        if (bp.errors.isNotEmpty()) {
+                            Text(
+                                text = bp.errors.take(2).joinToString("\n"),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = colors.error,
+                            )
+                        }
+                    }
+                }
+            }
+
+            if (!uiState.message.isNullOrBlank()) {
+                item(key = "dl_msg") {
+                    LibraryFeedbackBanner(
+                        message = uiState.message.orEmpty(),
+                        tone = RavenStatusTone.ACCENT,
+                        onDismiss = viewModel::clearMessage,
+                        modifier = Modifier.padding(horizontal = 16.dp),
+                    )
+                }
+            }
+
+            // Status filter tabs: 全部 / 进行中 / 已完成 / 需处理
+            item(key = "dl_status_tabs") {
+                RavenFilterChipRow(
+                    items = DownloadStatusTab.entries,
+                    selectedItem = uiState.selectedTab,
+                    labelProvider = { tab -> "${tab.label} ${uiState.countForTab(tab)}" },
+                    onItemSelected = viewModel::selectTab,
+                    keyProvider = { it.name },
+                    modifier = Modifier.testTag("downloads_status_tabs"),
+                )
+            }
+
+            // Batch Controls Row (Pause All / Resume All / Retry Failed)
+            if (uiState.activeTransferCount > 0 || uiState.pausedCount > 0 || uiState.failedCount > 0) {
+                item(key = "dl_batch_controls") {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        if (uiState.activeTransferCount > 0) {
+                            OutlinedButton(
+                                onClick = viewModel::pauseAll,
+                                shape = RavenShapes.PillShape,
+                                border = BorderStroke(0.5.dp, colors.outlineSubtle),
+                                colors = ButtonDefaults.outlinedButtonColors(
+                                    containerColor = colors.surface1,
+                                    contentColor = colors.inkPrimary,
+                                ),
+                                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
+                                modifier = Modifier.testTag("downloads_pause_all_button"),
+                            ) {
+                                Icon(Icons.Outlined.Pause, contentDescription = null, modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text("全部暂停", style = MaterialTheme.typography.labelMedium)
+                            }
+                        }
+                        if (uiState.pausedCount > 0) {
+                            OutlinedButton(
+                                onClick = viewModel::resumeAll,
+                                shape = RavenShapes.PillShape,
+                                border = BorderStroke(0.5.dp, colors.outlineSubtle),
+                                colors = ButtonDefaults.outlinedButtonColors(
+                                    containerColor = colors.surface1,
+                                    contentColor = colors.inkPrimary,
+                                ),
+                                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
+                                modifier = Modifier.testTag("downloads_resume_all_button"),
+                            ) {
+                                Icon(Icons.Outlined.PlayArrow, contentDescription = null, modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text("全部继续", style = MaterialTheme.typography.labelMedium)
+                            }
+                        }
+                        if (uiState.failedCount > 0) {
+                            OutlinedButton(
+                                onClick = viewModel::retryAllFailed,
+                                shape = RavenShapes.PillShape,
+                                border = BorderStroke(0.5.dp, colors.crimson.copy(alpha = 0.45f)),
+                                colors = ButtonDefaults.outlinedButtonColors(
+                                    containerColor = colors.crimson.copy(alpha = 0.10f),
+                                    contentColor = colors.crimson,
+                                ),
+                                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
+                                modifier = Modifier.testTag("downloads_retry_all_button"),
+                            ) {
+                                Icon(Icons.Outlined.Refresh, contentDescription = null, modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text("重试失败 (${uiState.failedCount})", style = MaterialTheme.typography.labelMedium)
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Collapsible Type / Site / Group filters + search
+            item(key = "dl_collapsible_filters") {
+                AnimatedVisibility(visible = uiState.filtersExpanded) {
+                    Column(
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                        modifier = Modifier.testTag("downloads_extra_filters"),
+                    ) {
+                        RavenSearchField(
+                            query = uiState.searchQuery,
+                            onQueryChange = viewModel::updateSearchQuery,
+                            placeholder = "搜索下载标题、站点或分组…",
+                            modifier = Modifier.padding(horizontal = 16.dp),
+                        )
+                        RavenFilterChipRow(
+                            items = DownloadKindFilter.entries,
+                            selectedItem = uiState.kindFilter,
+                            labelProvider = { it.label },
+                            onItemSelected = viewModel::selectKindFilter,
+                            keyProvider = { it.name },
+                        )
+                        LibrarySiteFilterChips(
+                            options = uiState.siteOptions,
+                            selectedSiteId = uiState.siteFilter,
+                            onSelectSite = viewModel::selectSiteFilter,
+                        )
+                        if (uiState.availableGroups.isNotEmpty()) {
+                            val groupOptions: List<String?> = remember(uiState.availableGroups) {
+                                listOf(null) + uiState.availableGroups
+                            }
+                            RavenFilterChipRow(
+                                items = groupOptions,
+                                selectedItem = uiState.groupFilter,
+                                labelProvider = { it ?: "全部分组" },
+                                onItemSelected = viewModel::selectGroupFilter,
+                                keyProvider = { it ?: "_all_groups" },
+                            )
+                        }
+                        if (uiState.activeExtraFilterCount > 0 || uiState.searchQuery.isNotBlank()) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 16.dp),
+                                horizontalArrangement = Arrangement.End,
+                            ) {
+                                TextButton(onClick = viewModel::resetExtraFilters) {
+                                    Text("清除筛选", color = colors.crimson)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            if (uiState.items.isEmpty()) {
+                item(key = "dl_empty") {
+                    RavenEmptyState(
+                        title = if (uiState.allCount == 0) "还没有下载任务" else "当前分类下暂无下载项",
+                        message = if (uiState.allCount == 0) {
+                            "在视频详情页、漫画详情页或片单「离线准备」中可以将作品缓存到本地离线观看。"
+                        } else {
+                            "切换上方状态标签或清除筛选条件即可查看其他下载任务。"
+                        },
+                        icon = Icons.Outlined.Download,
+                    )
+                }
+            } else {
+                items(
+                    items = uiState.items,
+                    key = { it.id },
+                ) { item ->
+                    DownloadItemCard(
+                        item = item,
+                        siteLabel = uiState.siteLabels[item.siteId] ?: item.siteId.value,
+                        onPrimaryClick = {
+                            when (item.status) {
+                                DownloadStatus.COMPLETED -> openDownloadedItem(navigator, item)
+                                DownloadStatus.DOWNLOADING,
+                                DownloadStatus.QUEUED,
+                                DownloadStatus.RETRY_WAIT -> viewModel.pause(item.id)
+                                DownloadStatus.PAUSED -> viewModel.resume(item.id)
+                                DownloadStatus.FAILED,
+                                DownloadStatus.CANCELLED -> viewModel.retry(item.id)
+                            }
+                        },
+                        onMenuClick = { activeMenuTarget = item },
+                        modifier = Modifier.padding(horizontal = 16.dp),
+                    )
+                }
+            }
+        }
+    }
+
+    // Per-Item Action Bottom Sheet
+    activeMenuTarget?.let { item ->
+        DownloadItemActionSheet(
+            item = item,
+            siteLabel = uiState.siteLabels[item.siteId] ?: item.siteId.value,
+            onOpenOffline = if (item.status == DownloadStatus.COMPLETED) {
+                { openDownloadedItem(navigator, item) }
+            } else {
+                null
+            },
+            onPause = if (item.status.isActiveTransfer()) {
+                { viewModel.pause(item.id) }
+            } else {
+                null
+            },
+            onResume = if (item.status == DownloadStatus.PAUSED) {
+                { viewModel.resume(item.id) }
+            } else {
+                null
+            },
+            onRetry = if (item.status.needsAttention()) {
+                { viewModel.retry(item.id) }
+            } else {
+                null
+            },
+            onPrioritize = if (item.kind != DownloadKind.VIDEO && item.status.isInProgressBucket()) {
+                { viewModel.prioritize(item.id) }
+            } else {
+                null
+            },
+            onMoveUp = if (item.kind != DownloadKind.VIDEO && item.status.isInProgressBucket()) {
+                { viewModel.movePriority(item.id, +1) }
+            } else {
+                null
+            },
+            onMoveDown = if (item.kind != DownloadKind.VIDEO && item.status.isInProgressBucket()) {
+                { viewModel.movePriority(item.id, -1) }
+            } else {
+                null
+            },
+            onEditGroup = { groupEditTarget = item },
+            onInspectIntegrity = if (item.kind != DownloadKind.VIDEO) {
+                { viewModel.inspectIntegrity(item) }
+            } else {
+                null
+            },
+            onDelete = { deleteConfirmTarget = item },
+            onDismiss = { activeMenuTarget = null },
+        )
+    }
+
+    // Group Assignment Sheet
+    groupEditTarget?.let { item ->
+        DownloadGroupEditorSheet(
+            item = item,
+            existingGroups = uiState.availableGroups,
+            onSave = { group -> viewModel.setGroup(item.id, group) },
+            onDismiss = { groupEditTarget = null },
+        )
+    }
+
+    // Integrity Audit & Repair Sheet
+    uiState.integrityState?.let { state ->
+        GalleryIntegrityAuditSheet(
+            state = state,
+            onRepair = { viewModel.repairGallery(state.item) },
+            onDismiss = viewModel::dismissIntegritySheet,
+        )
+    }
+
+    // Delete Confirmation Sheet
+    deleteConfirmTarget?.let { item ->
+        LibraryConfirmBottomSheet(
+            title = "删除下载「${item.title}」？",
+            message = "将移除下载记录并清理对应的本地缓存文件。",
+            confirmLabel = "确认删除",
+            onConfirm = { viewModel.delete(item) },
+            onDismiss = { deleteConfirmTarget = null },
+        )
+    }
+}
+
+@Composable
+private fun DownloadItemCard(
+    item: DownloadItem,
+    siteLabel: String,
+    onPrimaryClick: () -> Unit,
+    onMenuClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val colors = LocalRavenColors.current
+    val tone = when (item.status) {
+        DownloadStatus.COMPLETED -> RavenStatusTone.SUCCESS
+        DownloadStatus.DOWNLOADING -> RavenStatusTone.ACCENT
+        DownloadStatus.QUEUED, DownloadStatus.PAUSED, DownloadStatus.RETRY_WAIT -> RavenStatusTone.WARNING
+        DownloadStatus.FAILED, DownloadStatus.CANCELLED -> RavenStatusTone.ERROR
+    }
+
+    Column(
+        modifier = modifier
+            .fillMaxWidth()
+            .clip(RavenShapes.CardShape)
+            .background(colors.surface1)
+            .border(0.5.dp, colors.hairline, RavenShapes.CardShape)
+            .ravenSpringPress()
+            .clickable(role = Role.Button, onClick = onPrimaryClick)
+            .padding(12.dp)
+            .testTag("download_card_${item.id}"),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Box(
+                modifier = Modifier
+                    .width(if (item.kind == DownloadKind.VIDEO) 96.dp else 62.dp)
+                    .height(if (item.kind == DownloadKind.VIDEO) 58.dp else 82.dp)
+                    .clip(RavenShapes.ControlShape)
+                    .background(colors.surface2)
+                    .border(0.5.dp, colors.hairline, RavenShapes.ControlShape),
+            ) {
+                RavenImage(
+                    url = item.coverUrl,
+                    siteId = item.siteId,
+                    contentDescription = item.title,
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier.fillMaxSize(),
+                )
+            }
+
+            Column(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                Text(
+                    text = item.title,
+                    style = MaterialTheme.typography.titleSmall,
+                    color = colors.inkPrimary,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    RavenStatusPill(text = item.status.displayLabel(), tone = tone)
+                    RavenStatusPill(text = "$siteLabel · ${item.kind.displayLabel()}")
+                    if (item.groupName.isNotBlank()) {
+                        RavenStatusPill(text = item.groupName)
+                    }
+                }
+
+                val detailLine = buildList {
+                    if (item.kind != DownloadKind.VIDEO && item.totalUnits > 0) {
+                        add("${item.completedUnits} / ${item.totalUnits} 页")
+                    } else if (item.status != DownloadStatus.COMPLETED && item.progressFraction > 0f) {
+                        add("${(item.progressFraction * 100f).roundToInt()}%")
+                    }
+                    item.quality?.takeIf { it.isNotBlank() }?.let { add(it) }
+                    val sizeBytes = item.totalBytes ?: item.downloadedBytes
+                    if (sizeBytes > 0L) add(RavenFormatters.formatByteSize(sizeBytes))
+                }.joinToString(" · ")
+
+                if (detailLine.isNotEmpty()) {
+                    Text(
+                        text = detailLine,
+                        style = MaterialTheme.typography.bodySmall.tabular(),
+                        color = colors.inkSecondary,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+
+                if (item.status == DownloadStatus.RETRY_WAIT) {
+                    Text(
+                        text = formatRetryCountdown(item.retryAtEpochMs),
+                        style = MaterialTheme.typography.labelSmall.tabular(),
+                        color = colors.warning,
+                    )
+                } else if (item.status == DownloadStatus.FAILED) {
+                    val errText = buildString {
+                        item.errorCategory?.let { append("${it.displayLabel()}：") }
+                        append(item.errorMessage?.takeIf { it.isNotBlank() } ?: "下载失败")
+                    }
+                    Text(
+                        text = errText,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = colors.error,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+            }
+
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(2.dp),
+            ) {
+                IconButton(
+                    onClick = onPrimaryClick,
+                    modifier = Modifier
+                        .size(38.dp)
+                        .clip(CircleShape)
+                        .background(colors.surface2),
+                ) {
+                    Icon(
+                        imageVector = when (item.status) {
+                            DownloadStatus.COMPLETED -> Icons.Outlined.OfflinePin
+                            DownloadStatus.DOWNLOADING,
+                            DownloadStatus.QUEUED,
+                            DownloadStatus.RETRY_WAIT -> Icons.Outlined.Pause
+                            DownloadStatus.PAUSED -> Icons.Outlined.PlayArrow
+                            DownloadStatus.FAILED,
+                            DownloadStatus.CANCELLED -> Icons.Outlined.Refresh
+                        },
+                        contentDescription = "执行快捷操作",
+                        tint = if (item.status == DownloadStatus.COMPLETED) colors.success else colors.inkPrimary,
+                        modifier = Modifier.size(18.dp),
+                    )
+                }
+                IconButton(
+                    onClick = onMenuClick,
+                    modifier = Modifier.size(34.dp),
+                ) {
+                    Icon(
+                        imageVector = Icons.Outlined.MoreVert,
+                        contentDescription = "更多选项",
+                        tint = colors.inkSecondary,
+                        modifier = Modifier.size(18.dp),
+                    )
+                }
+            }
+        }
+
+        if (item.status != DownloadStatus.COMPLETED && item.progressFraction > 0f) {
+            RavenCrimsonProgressBar(
+                fraction = item.progressFraction,
+                trackHeight = 2.5.dp,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RavenShapes.PillShape),
+            )
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun DownloadItemActionSheet(
+    item: DownloadItem,
+    siteLabel: String,
+    onOpenOffline: (() -> Unit)?,
+    onPause: (() -> Unit)?,
+    onResume: (() -> Unit)?,
+    onRetry: (() -> Unit)?,
+    onPrioritize: (() -> Unit)?,
+    onMoveUp: (() -> Unit)?,
+    onMoveDown: (() -> Unit)?,
+    onEditGroup: () -> Unit,
+    onInspectIntegrity: (() -> Unit)?,
+    onDelete: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    RavenBottomSheet(
+        onDismissRequest = onDismiss,
+        title = item.title,
+        subtitle = "$siteLabel · ${item.status.displayLabel()}",
+        modifier = Modifier.testTag("download_item_sheet"),
+    ) {
+        Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            RavenGroupedSection {
+                var addedRow = false
+                if (onOpenOffline != null) {
+                    addedRow = true
+                    RavenGroupedRow(
+                        title = "离线打开",
+                        icon = Icons.Outlined.OfflinePin,
+                        showChevron = true,
+                        onClick = {
+                            onDismiss()
+                            onOpenOffline()
+                        },
+                    )
+                }
+                if (onPause != null) {
+                    if (addedRow) RavenGroupedDivider(insetWithIcon = true)
+                    addedRow = true
+                    RavenGroupedRow(
+                        title = "暂停下载",
+                        icon = Icons.Outlined.Pause,
+                        onClick = {
+                            onDismiss()
+                            onPause()
+                        },
+                    )
+                }
+                if (onResume != null) {
+                    if (addedRow) RavenGroupedDivider(insetWithIcon = true)
+                    addedRow = true
+                    RavenGroupedRow(
+                        title = "继续下载",
+                        icon = Icons.Outlined.PlayArrow,
+                        onClick = {
+                            onDismiss()
+                            onResume()
+                        },
+                    )
+                }
+                if (onRetry != null) {
+                    if (addedRow) RavenGroupedDivider(insetWithIcon = true)
+                    addedRow = true
+                    RavenGroupedRow(
+                        title = "立即重试",
+                        icon = Icons.Outlined.Refresh,
+                        onClick = {
+                            onDismiss()
+                            onRetry()
+                        },
+                    )
+                }
+                if (onPrioritize != null) {
+                    if (addedRow) RavenGroupedDivider(insetWithIcon = true)
+                    addedRow = true
+                    RavenGroupedRow(
+                        title = "置顶优先下载",
+                        icon = Icons.Outlined.VerticalAlignTop,
+                        onClick = {
+                            onDismiss()
+                            onPrioritize()
+                        },
+                    )
+                }
+                if (onMoveUp != null) {
+                    if (addedRow) RavenGroupedDivider(insetWithIcon = true)
+                    addedRow = true
+                    RavenGroupedRow(
+                        title = "提高队列优先级",
+                        icon = Icons.Outlined.KeyboardArrowUp,
+                        onClick = {
+                            onDismiss()
+                            onMoveUp()
+                        },
+                    )
+                }
+                if (onMoveDown != null) {
+                    if (addedRow) RavenGroupedDivider(insetWithIcon = true)
+                    addedRow = true
+                    RavenGroupedRow(
+                        title = "降低队列优先级",
+                        icon = Icons.Outlined.KeyboardArrowDown,
+                        onClick = {
+                            onDismiss()
+                            onMoveDown()
+                        },
+                    )
+                }
+                if (addedRow) RavenGroupedDivider(insetWithIcon = true)
+                RavenGroupedRow(
+                    title = "设置分组",
+                    value = item.groupName.ifBlank { "未分组" },
+                    icon = Icons.Outlined.Folder,
+                    showChevron = true,
+                    onClick = {
+                        onDismiss()
+                        onEditGroup()
+                    },
+                )
+                if (onInspectIntegrity != null) {
+                    RavenGroupedDivider(insetWithIcon = true)
+                    RavenGroupedRow(
+                        title = "检查完整性与修复缺页",
+                        subtitle = "逐页校验已下载图片是否缺失或损坏",
+                        icon = Icons.Outlined.Verified,
+                        showChevron = true,
+                        onClick = {
+                            onDismiss()
+                            onInspectIntegrity()
+                        },
+                        modifier = Modifier.testTag("download_inspect_integrity_row"),
+                    )
+                }
+            }
+
+            RavenGroupedSection {
+                RavenGroupedRow(
+                    title = "删除下载与缓存文件",
+                    icon = Icons.Outlined.DeleteOutline,
+                    destructive = true,
+                    onClick = {
+                        onDismiss()
+                        onDelete()
+                    },
+                )
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
+@Composable
+private fun DownloadGroupEditorSheet(
+    item: DownloadItem,
+    existingGroups: List<String>,
+    onSave: (String) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val colors = LocalRavenColors.current
+    var groupName by rememberSaveable(item.id) { mutableStateOf(item.groupName) }
+
+    RavenBottomSheet(
+        onDismissRequest = onDismiss,
+        title = "设置下载分组",
+        subtitle = item.title,
+        modifier = Modifier.testTag("download_group_sheet"),
+    ) {
+        Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            LibraryTextInputField(
+                value = groupName,
+                onValueChange = { groupName = it.take(40) },
+                placeholder = "留空则清除分组，例如：长途离线、合集",
+            )
+            if (existingGroups.isNotEmpty()) {
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    existingGroups.forEach { existing ->
+                        RavenFilterChip(
+                            label = existing,
+                            selected = groupName.trim() == existing,
+                            onClick = { groupName = existing },
+                        )
+                    }
+                }
+            }
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                OutlinedButton(
+                    onClick = onDismiss,
+                    shape = RavenShapes.PillShape,
+                    border = BorderStroke(0.5.dp, colors.outlineSubtle),
+                    modifier = Modifier
+                        .weight(1f)
+                        .heightIn(min = 48.dp),
+                ) {
+                    Text("取消", color = colors.inkPrimary)
+                }
+                Button(
+                    onClick = {
+                        onSave(groupName.trim())
+                        onDismiss()
+                    },
+                    shape = RavenShapes.PillShape,
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = colors.primaryCtaContainer,
+                        contentColor = colors.primaryCtaInk,
+                    ),
+                    modifier = Modifier
+                        .weight(1f)
+                        .heightIn(min = 48.dp),
+                ) {
+                    Text("保存分组", style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.SemiBold))
+                }
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun GalleryIntegrityAuditSheet(
+    state: IntegrityAuditDialogState,
+    onRepair: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val colors = LocalRavenColors.current
+    RavenBottomSheet(
+        onDismissRequest = onDismiss,
+        title = "完整性检查与修复",
+        subtitle = state.item.title,
+        modifier = Modifier.testTag("download_integrity_sheet"),
+    ) {
+        Column(
+            modifier = Modifier.fillMaxWidth(),
+            verticalArrangement = Arrangement.spacedBy(14.dp),
+        ) {
+            when {
+                state.isChecking -> {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 18.dp),
+                        horizontalArrangement = Arrangement.spacedBy(12.dp, Alignment.CenterHorizontally),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(20.dp),
+                            strokeWidth = 2.dp,
+                            color = colors.crimson,
+                        )
+                        Text(
+                            text = "正在逐页校验已下载文件…",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = colors.inkSecondary,
+                        )
+                    }
+                }
+
+                !state.errorMessage.isNullOrBlank() -> {
+                    LibraryFeedbackBanner(
+                        message = state.errorMessage,
+                        tone = RavenStatusTone.ERROR,
+                    )
+                }
+
+                state.audit != null -> {
+                    val audit = state.audit
+                    RavenGroupedSection(title = "校验报告") {
+                        RavenGroupedRow(
+                            title = "整体状态",
+                            value = if (audit.isComplete) "完整无损" else "发现缺页或损坏",
+                            icon = if (audit.isComplete) Icons.Outlined.Verified else Icons.Outlined.Build,
+                            iconTint = if (audit.isComplete) colors.success else colors.warning,
+                        )
+                        RavenGroupedDivider(insetWithIcon = true)
+                        RavenGroupedRow(title = "总页数", value = "${audit.totalPages} 页")
+                        RavenGroupedDivider()
+                        RavenGroupedRow(title = "完好页", value = "${audit.validPages.size} 页")
+                        RavenGroupedDivider()
+                        RavenGroupedRow(title = "缺失页", value = "${audit.missingPages.size} 页")
+                        RavenGroupedDivider()
+                        RavenGroupedRow(title = "损坏页", value = "${audit.corruptPages.size} 页")
+                        RavenGroupedDivider()
+                        RavenGroupedRow(title = "已占空间", value = RavenFormatters.formatByteSize(audit.totalBytes))
+                    }
+
+                    if (!audit.isComplete) {
+                        Button(
+                            onClick = onRepair,
+                            enabled = !state.isRepairing,
+                            shape = RavenShapes.PillShape,
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = colors.primaryCtaContainer,
+                                contentColor = colors.primaryCtaInk,
+                            ),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .heightIn(min = 48.dp)
+                                .ravenSpringPress()
+                                .testTag("download_repair_button"),
+                        ) {
+                            Text(
+                                text = if (state.isRepairing) {
+                                    "正在提交修复…"
+                                } else {
+                                    "修复缺失与损坏页 (${audit.missingPages.size + audit.corruptPages.size} 页)"
+                                },
+                                style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Bold),
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+private fun openDownloadedItem(
+    navigator: LibraryNavigator,
+    item: DownloadItem,
+) {
+    if (item.kind == DownloadKind.VIDEO) {
+        navigator.openVideo(
+            siteId = item.siteId,
+            mediaId = item.mediaId,
+            url = item.url,
+            title = item.title,
+            coverUrl = item.coverUrl,
+            offlineOnly = true,
+        )
+    } else {
+        navigator.openReader(
+            siteId = item.siteId,
+            mediaId = item.mediaId,
+            url = item.url,
+            startPage = 1,
+            offlineOnly = true,
+        )
+    }
+}
