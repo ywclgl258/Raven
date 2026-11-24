@@ -2,7 +2,7 @@
 
 > **适用读者**：首次接手、日常维护、评审 PR 或为 Raven 扩展新功能模块/页面的 Android 工程师  
 > **代码基准**：`d:\Raven` · Application ID `com.raven.app`（Debug：`com.raven.app.debug`）· 17 模块 Clean Architecture  
-> **关联手册**：架构总览见 [ARCHITECTURE.md](ARCHITECTURE.md) · 站点插件见 [SITE_PLUGIN_GUIDE.md](SITE_PLUGIN_GUIDE.md) · 设计与 UI 见 [DESIGN_AND_UI_GUIDE.md](DESIGN_AND_UI_GUIDE.md) · 数据/媒体/安全见 [DATA_MEDIA_SECURITY.md](DATA_MEDIA_SECURITY.md)
+> **关联手册**：仓库与发布红线见 [AGENTS.md](../AGENTS.md) · 签名与发布指南见 [SIGNING.md](SIGNING.md) · 架构总览见 [ARCHITECTURE.md](ARCHITECTURE.md) · 站点插件见 [SITE_PLUGIN_GUIDE.md](SITE_PLUGIN_GUIDE.md) · 设计与 UI 见 [DESIGN_AND_UI_GUIDE.md](DESIGN_AND_UI_GUIDE.md) · 数据/媒体/安全见 [DATA_MEDIA_SECURITY.md](DATA_MEDIA_SECURITY.md)
 
 ---
 
@@ -215,8 +215,8 @@ flowchart TB
 # 构建 Debug APK（输出：app/build/outputs/apk/debug/app-debug.apk）
 .\gradlew.bat :app:assembleDebug --no-daemon
 
-# 构建 Release APK（启用 R8 混淆与资源裁剪，需先配置外部签名，见 §6.2）
-.\gradlew.bat :app:assembleRelease --no-daemon
+# 构建 Release APK（启用 R8 混淆与资源裁剪，强校验外部签名，详见 §6.2 与 docs/SIGNING.md）
+.\gradlew.bat :app:validateReleaseSigning :app:assembleRelease --no-daemon
 ```
 
 ### 3.3 真机 / 模拟器安装、冒烟测试与 Logcat 排错
@@ -472,5 +472,8 @@ viewModel { params ->
 - **R8 混淆与资源裁剪**：`app/build.gradle.kts` 的 `release` buildType 已开启 `isMinifyEnabled = true` 与 `isShrinkResources = true`，并使用 `app/proguard-rules.pro` 保护 `kotlinx.serialization`（`com.raven.app.core.model.**`、`Companion`、`KSerializer`）及 Koin `ViewModel` 构造函数。新增反射或序列化边界类时，务必检查是否需要补充 keep 规则并在 Release 包上实测。
 - **签名密钥严禁入库**：
   - `.gitignore` 已明确忽略 `local.properties`、`*.keystore`、`*.jks`、`signing.properties`。
-  - 正式发布密钥库（`.jks` / `.keystore`）与密码文件必须存放在**仓库目录外部**（例如通过环境变量或仓库外绝对路径加载），**绝不可**写入 `gradle.properties`、`app/build.gradle.kts` 或任何已跟踪文件。
-- **保持签名证书一致性**：应用内更新器 `RavenUpdater`（位于 `:feature:settings`）通过 `AndroidApkSignatureVerifier` 强校验待安装 APK 与当前已安装应用的签名摘要一致，因此面向用户发布的 Release 包必须长期使用同一套发布密钥签名。
+  - 正式发布密钥库（`raven-release.jks`）与 `signing.properties` 必须存放在仓库目录外部的单一配置目录（`RAVEN_SIGNING_HOME`，默认 `%USERPROFILE%\.raven\signing\` / `~/.raven/signing/`），**绝不可**写入 `gradle.properties`、`app/build.gradle.kts` 或任何已跟踪文件。
+- **保持签名证书一致性（双重防线）**：
+  - 构建期：`app/build.gradle.kts` 已将 `:app:validateReleaseSigning` 强绑定到 `assembleRelease` / `bundleRelease` / `packageRelease`，强制核对外部密钥与根目录 `release.properties` 中锁定的 `releaseCertificate` SHA-256 一致。
+  - 运行期：应用内更新器 `RavenUpdater`（位于 `:feature:settings`）通过 `AndroidApkSignatureVerifier` 与 `BuildConfig.RELEASE_CERT_SHA256` 强校验待安装 APK 的包名、非降级版本号及签名摘要。
+  - 完整配置模板、密钥备份清单、CI Secrets 注入与 `apksigner` 验签命令请参阅 **[SIGNING.md](SIGNING.md)** 及 **[AGENTS.md](../AGENTS.md)**。

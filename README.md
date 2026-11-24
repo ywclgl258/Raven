@@ -11,6 +11,8 @@ Raven（**渡鸦**）是一款采用 **17 模块 Clean Architecture** 构建的�
 
 | 文档 | 定位 | 适用场景 / 核心内容 |
 |---|---|---|
+| **[AGENTS.md](AGENTS.md)** | 仓库协作与发布红线（Agent / IDE / CI 必读） | 核心工程不变量、正式版统一打包与签名一致性红线、锁定 SHA-256 指纹、Debug/Release 边界、交付前 `apksigner` 强制验签清单 |
+| **[docs/SIGNING.md](docs/SIGNING.md)** | 正式发布签名与覆盖安装操作指南 | 签名一致性原因、外部 `RAVEN_SIGNING_HOME/signing.properties` 占位模板、密钥备份清单、多机与 GitHub Actions CI 注入、`validateReleaseSigning` + `RavenUpdater` 双重校验与 `apksigner` 验签步骤 |
 | **[docs/ONBOARDING.md](docs/ONBOARDING.md)** | 新开发者接手与日常开发指南 | 5 分钟环境配置、Windows `kotlin.incremental=false` / AGP 9 / API 37 红线、17 模块全景地图、常用命令速查、8 条代码红线（含 ICU `PatternNative` 正则与自动播放不自动全屏）、新增页面/Feature 7 步 SOP、Git 与 Release 签名规范 |
 | **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** | 系统架构与工程蓝图 | 17 模块依赖 DAG、Koin 13 模块装配约定、设计令牌、25 路由契约、Room 18 表与 DataStore 17 键、加密备份线协议与 14 条站点协议不变量 |
 | **[docs/SITE_PLUGIN_GUIDE.md](docs/SITE_PLUGIN_GUIDE.md)** | 站点插件架构、19 站维护与新站接入 | 组合式 `SitePlugin` SPI 与 10 项可选能力、`SiteKit` 9 个协议工具、19 站维护总表与排障手册、从零接入第 20 个新站的实战骨架与契约测试 |
