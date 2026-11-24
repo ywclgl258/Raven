@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="raven_video_download_channel">视频下载</string>
+    <string name="raven_gallery_download_channel">图集下载</string>
+</resources>

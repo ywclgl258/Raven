@@ -33,8 +33,8 @@ kotlin {
 
 dependencies {
     api(project(":core:model"))
-    implementation(project(":core:common"))
-    implementation(project(":core:site-spi"))
+    api(project(":core:common"))
+    api(project(":core:site-spi"))
     implementation(project(":core:network"))
     implementation(project(":core:database"))
 
