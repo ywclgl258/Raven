@@ -1082,8 +1082,8 @@ class WordPressPhotoEngine(
         private val TITLE_PHOTO_COUNT_REGEX = Regex("(\\d+)\\s*photos?", RegexOption.IGNORE_CASE)
         private val FILE_SIZE_REGEX = Regex("\\b\\d+(?:\\.\\d+)?\\s*(?:MB|GB)\\b", RegexOption.IGNORE_CASE)
 
-        private val IMAGES_JSON_ARRAY_REGEX = Regex("\"images\"\\s*:\\s*\\[(.*?)]", RegexOption.DOT_MATCHES_ALL)
-        private val ESCAPED_IMAGES_ARRAY_REGEX = Regex("\\\\\"images\\\\\"\\s*:\\s*\\[(.*?)]", RegexOption.DOT_MATCHES_ALL)
+        private val IMAGES_JSON_ARRAY_REGEX = Regex("\"images\"\\s*:\\s*\\[(.*?)\\]", RegexOption.DOT_MATCHES_ALL)
+        private val ESCAPED_IMAGES_ARRAY_REGEX = Regex("\\\\\"images\\\\\"\\s*:\\s*\\[(.*?)\\]", RegexOption.DOT_MATCHES_ALL)
         private val UUID_REGEX = Regex("[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}", RegexOption.IGNORE_CASE)
 
         private val GALLERY_EPIC_COSERS_REGEX = Regex("^/en/cosers/(\\d+)/?$")

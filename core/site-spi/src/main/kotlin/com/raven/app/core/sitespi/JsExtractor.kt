@@ -5,7 +5,7 @@ package com.raven.app.core.sitespi
  * (e.g., KVS `flashvars`, Jable `player_aaaa`, WNACG `document.writeln`, Next.js RSC Flight).
  */
 object JsExtractor {
-    private val nextFlightRegex = Regex("""self\.__next_f\.push\(\[\s*1\s*,\s*"((?:\\.|[^"\\])*)"\s*]\)""")
+    private val nextFlightRegex = Regex("""self\.__next_f\.push\(\[\s*1\s*,\s*"((?:\\.|[^"\\])*)"\s*\]\)""")
 
     /**
      * Locates [marker] (e.g., `"player_aaaa"`, `"flashvars"`) and extracts the following string-aware

@@ -22,8 +22,8 @@ object RouPngProtocol {
     const val MAX_UNWRAPPED_BYTES: Int = 64 * 1024 * 1024
 
     private val rouHlsPathRegex = Regex("^https?://[^/]+/api/hls/", RegexOption.IGNORE_CASE)
-    private val evExactRegex = Regex("""ev:\s*\${'$'}R\[\d+]\s*=\s*\{d:"([^"]+)",k:(\d+)}""")
-    private val evFallbackRegex = Regex("""\{d:"([A-Za-z0-9+/=]{40,})",k:(\d+)}""")
+    private val evExactRegex = Regex("""ev:\s*\${'$'}R\[\d+\]\s*=\s*\{d:"([^"]+)",k:(\d+)\}""")
+    private val evFallbackRegex = Regex("""\{d:"([A-Za-z0-9+/=]{40,})",k:(\d+)\}""")
 
     fun isRouHlsUrl(url: String): Boolean =
         rouHlsPathRegex.containsMatchIn(url) ||
