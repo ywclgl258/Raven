@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="1024"
+    android:viewportHeight="1024">
+
+    <group
+        android:pivotX="512"
+        android:pivotY="512"
+        android:scaleX="0.68"
+        android:scaleY="0.68">
+
+        <group>
+            <clip-path android:pathData="M 0,0 L 1024,0 L 1024,1024 L 0,1024 Z M 620,394 L 594,423 L 643,435 L 803,410 C 749,402 684,395 620,394 Z M 238,459 L 278,508 L 350,516 Z M 260,551 L 296,592 L 370,596 Z" />
+
+            <path android:pathData="M 224,464 C 218,366 262,278 348,229 C 421,187 510,183 584,210 C 631,227 667,254 696,291 C 752,319 811,357 858,397 C 868,406 862,418 848,421 C 775,439 705,461 641,487 C 608,543 560,576 503,590 L 590,721 L 491,674 L 446,784 L 374,688 L 275,768 L 298,620 C 246,580 219,526 224,464 Z">
+                <aapt:attr name="android:fillColor">
+                    <gradient
+                        android:endX="512"
+                        android:endY="784"
+                        android:startX="512"
+                        android:startY="183"
+                        android:type="linear">
+                        <item
+                            android:color="#FFFFFFFF"
+                            android:offset="0.0" />
+                        <item
+                            android:color="#FFD8D5D9"
+                            android:offset="1.0" />
+                    </gradient>
+                </aapt:attr>
+            </path>
+
+            <path
+                android:fillColor="#FFC9C7CC"
+                android:pathData="M 696,291 C 752,319 811,357 858,397 C 868,406 862,418 848,421 C 775,439 705,461 641,487 L 598,446 L 672,376 Z" />
+
+            <path
+                android:fillColor="#FFE4E1E4"
+                android:pathData="M 594,337 L 672,376 L 598,446 L 641,487 C 608,543 560,576 503,590 L 462,505 C 526,469 576,407 594,337 Z" />
+
+            <path
+                android:fillColor="#FFCCC9CE"
+                android:pathData="M 462,505 L 503,590 L 590,721 L 491,674 L 446,784 L 374,688 Z" />
+        </group>
+
+        <path
+            android:fillColor="#FFFF4D58"
+            android:pathData="M 558,283 L 610,291 L 600,331 L 551,320 Z" />
+    </group>
+</vector>
