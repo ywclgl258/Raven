@@ -29,6 +29,7 @@ import coil3.request.ImageRequest
 import coil3.request.crossfade
 import com.raven.app.core.designsystem.theme.LocalMotionReduced
 import com.raven.app.core.designsystem.theme.LocalRavenColors
+import com.raven.app.core.designsystem.theme.RavenMotion
 import com.raven.app.core.model.SiteId
 
 /**
@@ -52,7 +53,7 @@ fun RavenImage(
     siteId: SiteId? = null,
     contentDescription: String? = null,
     contentScale: ContentScale = ContentScale.Crop,
-    crossfadeMillis: Int = 180,
+    crossfadeMillis: Int = RavenMotion.IMAGE_CROSSFADE_MILLIS,
     placeholderTopColor: Color = LocalRavenColors.current.surface2,
     placeholderBottomColor: Color = LocalRavenColors.current.surface1,
     showErrorIcon: Boolean = true,

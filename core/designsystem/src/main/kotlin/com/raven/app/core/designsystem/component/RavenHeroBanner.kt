@@ -1,7 +1,11 @@
 package com.raven.app.core.designsystem.component
 
 import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.snap
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -47,9 +51,13 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
@@ -99,6 +107,7 @@ fun RavenHeroBanner(
     val colors = LocalRavenColors.current
     val motionReduced = LocalMotionReduced.current
     val reduceTransparency = LocalReduceTransparency.current
+    val haptic = LocalHapticFeedback.current
     val pagerState = rememberPagerState(pageCount = { items.size })
     val scope = rememberCoroutineScope()
     var paused by rememberSaveable { mutableStateOf(false) }
@@ -110,6 +119,16 @@ fun RavenHeroBanner(
             val nextPage = (pagerState.currentPage + 1) % items.size
             pagerState.animateScrollToPage(nextPage)
         }
+    }
+
+    val specularRimBrush = remember(colors.inkPrimary, colors.hairline) {
+        Brush.verticalGradient(
+            colors = listOf(
+                colors.inkPrimary.copy(alpha = 0.22f),
+                colors.inkPrimary.copy(alpha = 0.08f),
+                colors.hairline,
+            ),
+        )
     }
 
     Box(
@@ -125,10 +144,20 @@ fun RavenHeroBanner(
         ) { pageIndex ->
             val item = items[pageIndex]
             val saved = isInWatchLater(item)
+            val watchLaterIconTint by animateColorAsState(
+                targetValue = if (saved) colors.crimson else colors.secondaryCtaInk,
+                animationSpec = if (motionReduced) {
+                    snap()
+                } else {
+                    tween(durationMillis = RavenMotion.CHIP_TRANSITION_DURATION_MS)
+                },
+                label = "heroWatchLaterIconTint",
+            )
 
             Box(
                 modifier = Modifier
                     .fillMaxSize()
+                    .clipToBounds()
                     .clickable(role = Role.Button) { onItemClick(item) },
             ) {
                 RavenImage(
@@ -136,7 +165,17 @@ fun RavenHeroBanner(
                     siteId = item.siteId,
                     contentDescription = item.title,
                     contentScale = ContentScale.Crop,
-                    modifier = Modifier.fillMaxSize(),
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .graphicsLayer {
+                            if (!motionReduced && pageIndex < pagerState.pageCount) {
+                                val offset = pagerState.getOffsetDistanceInPages(pageIndex)
+                                val transform = RavenMotion.computeHeroPageTransform(offset)
+                                translationX = transform.parallaxFraction * size.width
+                                scaleX = transform.artworkScale
+                                scaleY = transform.artworkScale
+                            }
+                        },
                 )
 
                 // Top status-bar scrim + capped ambient hero glow (strictly <= 0.18f)
@@ -182,6 +221,14 @@ fun RavenHeroBanner(
                     modifier = Modifier
                         .align(Alignment.BottomStart)
                         .fillMaxWidth()
+                        .graphicsLayer {
+                            if (!motionReduced && pageIndex < pagerState.pageCount) {
+                                val offset = pagerState.getOffsetDistanceInPages(pageIndex)
+                                val transform = RavenMotion.computeHeroPageTransform(offset)
+                                alpha = transform.contentAlpha
+                                translationX = offset.coerceIn(-1f, 1f) * size.width * 0.05f
+                            }
+                        }
                         .padding(
                             start = 16.dp,
                             end = 16.dp,
@@ -206,7 +253,10 @@ fun RavenHeroBanner(
                     ) {
                         val playInteraction = remember { MutableInteractionSource() }
                         Button(
-                            onClick = { onPlayClick(item) },
+                            onClick = {
+                                haptic.performHapticFeedback(HapticFeedbackType.Confirm)
+                                onPlayClick(item)
+                            },
                             interactionSource = playInteraction,
                             shape = RavenShapes.PillShape,
                             contentPadding = PaddingValues(horizontal = 20.dp, vertical = 12.dp),
@@ -238,7 +288,8 @@ fun RavenHeroBanner(
                         RavenFrostedBox(
                             shape = RavenShapes.PillShape,
                             reduceTransparency = reduceTransparency,
-                            borderColor = colors.rimHighlight,
+                            borderColor = Color.Transparent,
+                            borderWidth = 0.dp,
                             modifier = Modifier
                                 .weight(1f)
                                 .heightIn(min = 48.dp)
@@ -247,7 +298,12 @@ fun RavenHeroBanner(
                                     interactionSource = watchLaterInteraction,
                                     indication = null,
                                     role = Role.Button,
-                                    onClick = { onWatchLaterClick(item) },
+                                    onClick = {
+                                        haptic.performHapticFeedback(
+                                            if (saved) HapticFeedbackType.ToggleOff else HapticFeedbackType.ToggleOn,
+                                        )
+                                        onWatchLaterClick(item)
+                                    },
                                 )
                                 .testTag("hero_watch_later_cta"),
                             contentAlignment = Alignment.Center,
@@ -256,6 +312,11 @@ fun RavenHeroBanner(
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .background(colors.secondaryCtaContainer)
+                                    .border(
+                                        width = 0.75.dp,
+                                        brush = specularRimBrush,
+                                        shape = RavenShapes.PillShape,
+                                    )
                                     .padding(horizontal = 16.dp, vertical = 12.dp),
                                 horizontalArrangement = Arrangement.Center,
                                 verticalAlignment = Alignment.CenterVertically,
@@ -263,7 +324,7 @@ fun RavenHeroBanner(
                                 Icon(
                                     imageVector = if (saved) Icons.Rounded.Check else Icons.Rounded.Add,
                                     contentDescription = null,
-                                    tint = if (saved) colors.crimson else colors.secondaryCtaInk,
+                                    tint = watchLaterIconTint,
                                     modifier = Modifier.size(18.dp),
                                 )
                                 Spacer(modifier = Modifier.width(6.dp))
@@ -281,7 +342,7 @@ fun RavenHeroBanner(
             }
         }
 
-        // Bottom page indicators + pause/resume carousel toggle
+        // Bottom Apple TV+ expanding pill indicators + pause/resume carousel toggle
         if (items.size > 1) {
             Row(
                 modifier = Modifier
@@ -299,11 +360,31 @@ fun RavenHeroBanner(
                     repeat(items.size) { index ->
                         val active = pagerState.currentPage == index
                         val dotWidth by animateDpAsState(
-                            targetValue = if (active) 20.dp else 6.dp,
+                            targetValue = if (active) 22.dp else 6.dp,
+                            animationSpec = if (motionReduced) {
+                                snap()
+                            } else {
+                                spring(
+                                    dampingRatio = Spring.DampingRatioNoBouncy,
+                                    stiffness = Spring.StiffnessMedium,
+                                )
+                            },
                             label = "heroDotWidth",
                         )
                         val dotColor by animateColorAsState(
-                            targetValue = if (active) colors.crimson else colors.inkTertiary.copy(alpha = 0.65f),
+                            targetValue = if (active) {
+                                colors.crimson
+                            } else {
+                                colors.inkPrimary.copy(alpha = 0.36f)
+                            },
+                            animationSpec = if (motionReduced) {
+                                snap()
+                            } else {
+                                tween(
+                                    durationMillis = RavenMotion.CHIP_TRANSITION_DURATION_MS,
+                                    easing = RavenMotion.AppleDecelerationEasing,
+                                )
+                            },
                             label = "heroDotColor",
                         )
                         Box(
@@ -313,14 +394,20 @@ fun RavenHeroBanner(
                                 .clip(CircleShape)
                                 .background(dotColor)
                                 .clickable {
-                                    scope.launch { pagerState.animateScrollToPage(index) }
+                                    if (!active) {
+                                        haptic.performHapticFeedback(HapticFeedbackType.SegmentTick)
+                                        scope.launch { pagerState.animateScrollToPage(index) }
+                                    }
                                 },
                         )
                     }
                 }
 
                 IconButton(
-                    onClick = { paused = !paused },
+                    onClick = {
+                        haptic.performHapticFeedback(HapticFeedbackType.ContextClick)
+                        paused = !paused
+                    },
                     modifier = Modifier
                         .defaultMinSize(minWidth = 48.dp, minHeight = 48.dp)
                         .semantics {
@@ -333,7 +420,7 @@ fun RavenHeroBanner(
                             .size(30.dp)
                             .clip(CircleShape)
                             .background(colors.badgeBackdrop)
-                            .border(0.5.dp, colors.hairline, CircleShape),
+                            .border(0.5.dp, colors.rimHighlight, CircleShape),
                         contentAlignment = Alignment.Center,
                     ) {
                         Icon(

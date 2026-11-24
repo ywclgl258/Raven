@@ -1,6 +1,7 @@
 package com.raven.app.core.designsystem.theme
 
 import android.os.Build
+import androidx.compose.animation.core.CubicBezierEasing
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.snap
@@ -11,10 +12,13 @@ import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.waitForUpOrCancellation
 import androidx.compose.foundation.interaction.InteractionSource
+import androidx.compose.foundation.interaction.PressInteraction
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.Immutable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -32,9 +36,13 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import kotlin.math.abs
+import kotlin.math.roundToInt
 
 /** Whether frosted blur layers should degrade to a clean opaque dark scrim (`#121216 @ 92%`). */
 val LocalReduceTransparency = staticCompositionLocalOf { false }
@@ -42,10 +50,41 @@ val LocalReduceTransparency = staticCompositionLocalOf { false }
 /** Whether motion/shimmer/spring animations should snap for accessibility or reduced-motion settings. */
 val LocalMotionReduced = staticCompositionLocalOf { false }
 
+/**
+ * Computed artwork parallax offset, subtle zoom scale, and foreground copy alpha for a single
+ * page inside a Hero carousel pager.
+ */
+@Immutable
+data class RavenHeroPageTransform(
+    val parallaxFraction: Float,
+    val artworkScale: Float,
+    val contentAlpha: Float,
+)
+
 object RavenMotion {
-    const val SPRING_PRESSED_SCALE: Float = 0.97f
+    /** Crisp Apple HIG tactile press scale (zero wobble with [Spring.DampingRatioNoBouncy]). */
+    const val SPRING_PRESSED_SCALE: Float = 0.968f
     const val AMBIENT_GLOW_MAX_ALPHA: Float = RavenColors.AMBIENT_GLOW_MAX_ALPHA
     val DefaultFrostBlurRadius: Dp = 18.dp
+
+    /** Apple HIG smooth deceleration curve used across navigation transitions and micro-motion. */
+    val AppleDecelerationEasing: CubicBezierEasing = CubicBezierEasing(0.22f, 1f, 0.36f, 1f)
+
+    /** Navigation choreography timing & parallax constants. */
+    const val TAB_TRANSITION_DURATION_MS: Int = 220
+    const val PUSH_TRANSITION_DURATION_MS: Int = 320
+    const val POP_TRANSITION_DURATION_MS: Int = 280
+    const val CHIP_TRANSITION_DURATION_MS: Int = 180
+    const val IMAGE_CROSSFADE_MILLIS: Int = 220
+
+    const val TAB_ENTER_INITIAL_SCALE: Float = 0.985f
+    const val PUSH_EXIT_PARALLAX_FRACTION: Float = 0.18f
+    const val PUSH_EXIT_ALPHA: Float = 0.72f
+    const val POP_ENTER_PARALLAX_DIVISOR: Int = 5
+
+    /** Hero pager parallax tuning constants. */
+    const val HERO_PARALLAX_FACTOR: Float = 0.22f
+    const val HERO_MAX_EXTRA_SCALE: Float = 0.045f
 
     /** Clamps any requested ambient hero glow alpha strictly into `0f..0.18f`. */
     fun clampAmbientGlowAlpha(alpha: Float): Float {
@@ -58,10 +97,52 @@ object RavenMotion {
         sdkInt: Int = Build.VERSION.SDK_INT,
         reduceTransparency: Boolean = false,
     ): Boolean = !reduceTransparency && sdkInt >= Build.VERSION_CODES.S
+
+    /**
+     * Computes horizontal parent offset in pixels during an iOS-style push transition (`-18%`).
+     */
+    fun computeNavPushParentExitOffset(fullWidth: Int): Int {
+        if (fullWidth <= 0) return 0
+        return -(fullWidth * PUSH_EXIT_PARALLAX_FRACTION).roundToInt()
+    }
+
+    /**
+     * Computes horizontal parent entry offset in pixels during an iOS-style pop transition (`-20%`).
+     */
+    fun computeNavPopParentEnterOffset(fullWidth: Int): Int {
+        if (fullWidth <= 0) return 0
+        return -(fullWidth / POP_ENTER_PARALLAX_DIVISOR)
+    }
+
+    /**
+     * Computes Apple TV+ / Netflix Hero carousel artwork parallax fraction, subtle zoom scale, and
+     * foreground alpha from a signed page offset (`pagerState.getOffsetDistanceInPages(page)`).
+     *
+     * Because `|parallaxFraction| <= HERO_PARALLAX_FACTOR * |offset| < |offset|`, opposing artwork
+     * edges never enter the clipped viewport during swipes.
+     */
+    fun computeHeroPageTransform(pageOffset: Float): RavenHeroPageTransform {
+        if (!pageOffset.isFinite()) {
+            return RavenHeroPageTransform(
+                parallaxFraction = 0f,
+                artworkScale = 1f,
+                contentAlpha = 1f,
+            )
+        }
+        val clamped = pageOffset.coerceIn(-1f, 1f)
+        val absOffset = abs(clamped)
+        val rawParallax = -clamped * HERO_PARALLAX_FACTOR
+        return RavenHeroPageTransform(
+            parallaxFraction = if (rawParallax == 0f) 0f else rawParallax,
+            artworkScale = 1f + (absOffset * HERO_MAX_EXTRA_SCALE),
+            contentAlpha = (1f - absOffset * 0.65f).coerceIn(0.35f, 1f),
+        )
+    }
 }
 
 /**
- * Tactile spring press scale (`1.0f -> 0.97f`) matching Apple HIG physical responsiveness.
+ * Tactile spring press scale (`1.0f -> 0.968f`) matching Apple HIG physical responsiveness
+ * with crisp critically damped recovery (`DampingRatioNoBouncy`, `StiffnessMedium`, zero wobble).
  *
  * When [interactionSource] is supplied, press state tracks Compose's interaction stream directly
  * (including keyboard/talkback presses). When omitted, a non-consuming pointer observer detects
@@ -90,8 +171,8 @@ fun Modifier.ravenSpringPress(
             snap()
         } else {
             spring(
-                dampingRatio = Spring.DampingRatioMediumBouncy,
-                stiffness = Spring.StiffnessMediumLow,
+                dampingRatio = Spring.DampingRatioNoBouncy,
+                stiffness = Spring.StiffnessMedium,
             )
         },
         label = "ravenSpringPress",
@@ -117,6 +198,40 @@ fun Modifier.ravenSpringPress(
     this.then(observerModifier).graphicsLayer {
         scaleX = scale
         scaleY = scale
+    }
+}
+
+/**
+ * Reusable Apple-style tactile haptic modifier that triggers only on confirmed press release
+ * (never during a cancelled scroll drag) without consuming downstream pointer events.
+ */
+fun Modifier.ravenPressHaptic(
+    interactionSource: InteractionSource? = null,
+    hapticType: HapticFeedbackType = HapticFeedbackType.ContextClick,
+    enabled: Boolean = true,
+): Modifier = composed {
+    val haptic = LocalHapticFeedback.current
+    if (interactionSource != null) {
+        LaunchedEffect(interactionSource, enabled, hapticType) {
+            if (!enabled) return@LaunchedEffect
+            interactionSource.interactions.collect { interaction ->
+                if (interaction is PressInteraction.Release) {
+                    haptic.performHapticFeedback(hapticType)
+                }
+            }
+        }
+        this
+    } else {
+        this.pointerInput(enabled, hapticType) {
+            if (!enabled) return@pointerInput
+            awaitEachGesture {
+                awaitFirstDown(requireUnconsumed = false)
+                val up = waitForUpOrCancellation()
+                if (up != null) {
+                    haptic.performHapticFeedback(hapticType)
+                }
+            }
+        }
     }
 }
 
@@ -213,10 +328,16 @@ fun RavenFrostedBox(
     Box(
         modifier = modifier
             .clip(shape)
-            .border(
-                width = borderWidth,
-                color = if (frosted) RavenColors.RimHighlight else borderColor,
-                shape = shape,
+            .then(
+                if (borderWidth > 0.dp && borderColor != Color.Transparent) {
+                    Modifier.border(
+                        width = borderWidth,
+                        color = if (frosted) RavenColors.RimHighlight else borderColor,
+                        shape = shape,
+                    )
+                } else {
+                    Modifier
+                },
             ),
         contentAlignment = contentAlignment,
     ) {

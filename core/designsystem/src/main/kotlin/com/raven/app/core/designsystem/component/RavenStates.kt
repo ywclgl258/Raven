@@ -1,11 +1,20 @@
 package com.raven.app.core.designsystem.component
 
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.EnterTransition
+import androidx.compose.animation.ExitTransition
+import androidx.compose.animation.SizeTransform
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -40,10 +49,12 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -51,9 +62,11 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.raven.app.core.designsystem.theme.LocalMotionReduced
 import com.raven.app.core.designsystem.theme.LocalRavenColors
+import com.raven.app.core.designsystem.theme.RavenMotion
 import com.raven.app.core.designsystem.theme.RavenShapes
 import com.raven.app.core.designsystem.theme.RavenTabularTextStyle
 import com.raven.app.core.designsystem.theme.ravenSpringPress
+import com.raven.app.core.designsystem.theme.tabular
 
 /**
  * Semantic tone for [RavenStatusPill].
@@ -465,6 +478,56 @@ fun RavenCompactRowSkeleton(
                     .height(11.dp),
             )
         }
+    }
+}
+
+/**
+ * Apple HIG tabular numeric counter with directional vertical odometer transitions
+ * (automatically snaps when [LocalMotionReduced] is enabled).
+ */
+@Composable
+fun RavenAnimatedCounter(
+    count: Int,
+    modifier: Modifier = Modifier,
+    style: TextStyle = RavenTabularTextStyle,
+    color: Color = LocalRavenColors.current.inkPrimary,
+    formatter: (Int) -> String = { it.toString() },
+) {
+    val motionReduced = LocalMotionReduced.current
+    AnimatedContent(
+        targetState = count,
+        transitionSpec = {
+            if (motionReduced) {
+                EnterTransition.None togetherWith ExitTransition.None
+            } else {
+                val increasing = targetState >= initialState
+                val spec = tween<androidx.compose.ui.unit.IntOffset>(
+                    durationMillis = RavenMotion.CHIP_TRANSITION_DURATION_MS,
+                    easing = RavenMotion.AppleDecelerationEasing,
+                )
+                val fadeSpec = tween<Float>(
+                    durationMillis = RavenMotion.CHIP_TRANSITION_DURATION_MS,
+                    easing = RavenMotion.AppleDecelerationEasing,
+                )
+                val enter = slideInVertically(animationSpec = spec) { fullHeight ->
+                    if (increasing) fullHeight / 2 else -fullHeight / 2
+                } + fadeIn(animationSpec = fadeSpec)
+                val exit = slideOutVertically(animationSpec = spec) { fullHeight ->
+                    if (increasing) -fullHeight / 2 else fullHeight / 2
+                } + fadeOut(animationSpec = fadeSpec)
+                (enter togetherWith exit).using(SizeTransform(clip = false))
+            }
+        },
+        modifier = modifier,
+        label = "ravenAnimatedCounter",
+    ) { value ->
+        Text(
+            text = formatter(value),
+            style = style.tabular(),
+            color = color,
+            maxLines = 1,
+            softWrap = false,
+        )
     }
 }
 

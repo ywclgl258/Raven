@@ -1,6 +1,14 @@
 package com.raven.app
 
 import android.net.Uri
+import androidx.compose.animation.EnterTransition
+import androidx.compose.animation.ExitTransition
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
@@ -37,6 +45,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.navigation.NavDestination
 import androidx.navigation.NavDestination.Companion.hasRoute
 import androidx.navigation.NavGraph.Companion.findStartDestination
 import androidx.navigation.NavHostController
@@ -52,7 +61,9 @@ import com.raven.app.core.designsystem.component.RavenGroupedSection
 import com.raven.app.core.designsystem.component.RavenStatusPill
 import com.raven.app.core.designsystem.component.RavenStatusTone
 import com.raven.app.core.designsystem.component.RavenTopDestination
+import com.raven.app.core.designsystem.theme.LocalMotionReduced
 import com.raven.app.core.designsystem.theme.LocalRavenColors
+import com.raven.app.core.designsystem.theme.RavenMotion
 import com.raven.app.core.designsystem.theme.RavenShapes
 import com.raven.app.core.model.AuthorRef
 import com.raven.app.core.model.RavenRoute
@@ -577,6 +588,7 @@ fun RavenAppShell(
     val badges = remember(unreadInboxCount) {
         if (unreadInboxCount > 0) mapOf(RavenTopDestination.PROFILE to unreadInboxCount) else emptyMap()
     }
+    val motionReduced = LocalMotionReduced.current
 
     RavenAdaptiveScaffold(
         currentDestination = activeTopDestination ?: lastTopDestination,
@@ -588,6 +600,48 @@ fun RavenAppShell(
         NavHost(
             navController = navController,
             startDestination = RavenRoute.Home,
+            enterTransition = {
+                if (motionReduced) {
+                    EnterTransition.None
+                } else if (targetState.destination.isTopLevelTabDestination()) {
+                    ravenTabEnterTransition()
+                } else {
+                    ravenPushEnterTransition()
+                }
+            },
+            exitTransition = {
+                if (motionReduced) {
+                    ExitTransition.None
+                } else if (targetState.destination.isTopLevelTabDestination()) {
+                    ravenTabExitTransition()
+                } else {
+                    ravenPushParentExitTransition()
+                }
+            },
+            popEnterTransition = {
+                if (motionReduced) {
+                    EnterTransition.None
+                } else if (
+                    initialState.destination.isTopLevelTabDestination() &&
+                    targetState.destination.isTopLevelTabDestination()
+                ) {
+                    ravenTabEnterTransition()
+                } else {
+                    ravenPopParentEnterTransition()
+                }
+            },
+            popExitTransition = {
+                if (motionReduced) {
+                    ExitTransition.None
+                } else if (
+                    initialState.destination.isTopLevelTabDestination() &&
+                    targetState.destination.isTopLevelTabDestination()
+                ) {
+                    ravenTabExitTransition()
+                } else {
+                    ravenPopExitTransition()
+                }
+            },
             modifier = Modifier
                 .fillMaxSize()
                 .background(LocalRavenColors.current.canvas),
@@ -879,3 +933,80 @@ private fun SharedLinkConfirmationSheet(
         }
     }
 }
+
+private fun NavDestination.isTopLevelTabDestination(): Boolean =
+    hasRoute<RavenRoute.Home>() ||
+        hasRoute<RavenRoute.Explore>() ||
+        hasRoute<RavenRoute.Search>() ||
+        hasRoute<RavenRoute.Library>() ||
+        hasRoute<RavenRoute.Profile>()
+
+private fun ravenTabEnterTransition(): EnterTransition =
+    fadeIn(
+        animationSpec = tween(
+            durationMillis = RavenMotion.TAB_TRANSITION_DURATION_MS,
+            easing = RavenMotion.AppleDecelerationEasing,
+        ),
+    ) + scaleIn(
+        initialScale = RavenMotion.TAB_ENTER_INITIAL_SCALE,
+        animationSpec = tween(
+            durationMillis = RavenMotion.TAB_TRANSITION_DURATION_MS,
+            easing = RavenMotion.AppleDecelerationEasing,
+        ),
+    )
+
+private fun ravenTabExitTransition(): ExitTransition =
+    fadeOut(
+        animationSpec = tween(
+            durationMillis = RavenMotion.TAB_TRANSITION_DURATION_MS - 40,
+            easing = RavenMotion.AppleDecelerationEasing,
+        ),
+    )
+
+private fun ravenPushEnterTransition(): EnterTransition =
+    slideInHorizontally(
+        animationSpec = tween(
+            durationMillis = RavenMotion.PUSH_TRANSITION_DURATION_MS,
+            easing = RavenMotion.AppleDecelerationEasing,
+        ),
+        initialOffsetX = { fullWidth -> fullWidth },
+    )
+
+private fun ravenPushParentExitTransition(): ExitTransition =
+    slideOutHorizontally(
+        animationSpec = tween(
+            durationMillis = RavenMotion.PUSH_TRANSITION_DURATION_MS,
+            easing = RavenMotion.AppleDecelerationEasing,
+        ),
+        targetOffsetX = RavenMotion::computeNavPushParentExitOffset,
+    ) + fadeOut(
+        animationSpec = tween(
+            durationMillis = RavenMotion.PUSH_TRANSITION_DURATION_MS,
+            easing = RavenMotion.AppleDecelerationEasing,
+        ),
+        targetAlpha = RavenMotion.PUSH_EXIT_ALPHA,
+    )
+
+private fun ravenPopParentEnterTransition(): EnterTransition =
+    slideInHorizontally(
+        animationSpec = tween(
+            durationMillis = RavenMotion.POP_TRANSITION_DURATION_MS,
+            easing = RavenMotion.AppleDecelerationEasing,
+        ),
+        initialOffsetX = RavenMotion::computeNavPopParentEnterOffset,
+    ) + fadeIn(
+        animationSpec = tween(
+            durationMillis = RavenMotion.POP_TRANSITION_DURATION_MS,
+            easing = RavenMotion.AppleDecelerationEasing,
+        ),
+        initialAlpha = RavenMotion.PUSH_EXIT_ALPHA,
+    )
+
+private fun ravenPopExitTransition(): ExitTransition =
+    slideOutHorizontally(
+        animationSpec = tween(
+            durationMillis = RavenMotion.POP_TRANSITION_DURATION_MS,
+            easing = RavenMotion.AppleDecelerationEasing,
+        ),
+        targetOffsetX = { fullWidth -> fullWidth },
+    )

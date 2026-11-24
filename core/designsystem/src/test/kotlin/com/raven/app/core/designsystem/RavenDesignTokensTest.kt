@@ -102,8 +102,12 @@ class RavenDesignTokensTest {
 
     @Test
     fun `motion enforces spring press scale, ambient glow cap, and API 31 blur gating`() {
-        assertEquals(0.97f, RavenMotion.SPRING_PRESSED_SCALE, 0.0001f)
+        assertEquals(0.968f, RavenMotion.SPRING_PRESSED_SCALE, 0.0001f)
         assertEquals(0.18f, RavenMotion.AMBIENT_GLOW_MAX_ALPHA, 0.0001f)
+        assertEquals(220, RavenMotion.IMAGE_CROSSFADE_MILLIS)
+        assertEquals(220, RavenMotion.TAB_TRANSITION_DURATION_MS)
+        assertEquals(0.985f, RavenMotion.TAB_ENTER_INITIAL_SCALE, 0.0001f)
+        assertEquals(0.72f, RavenMotion.PUSH_EXIT_ALPHA, 0.0001f)
 
         assertEquals(0f, RavenMotion.clampAmbientGlowAlpha(-0.5f), 0.0001f)
         assertEquals(0f, RavenMotion.clampAmbientGlowAlpha(Float.NaN), 0.0001f)
@@ -119,6 +123,46 @@ class RavenDesignTokensTest {
         assertTrue(RavenMotion.supportsNativeBlur(sdkInt = 36, reduceTransparency = false))
         assertFalse(RavenMotion.supportsNativeBlur(sdkInt = 31, reduceTransparency = true))
         assertFalse(RavenMotion.supportsNativeBlur(sdkInt = 36, reduceTransparency = true))
+    }
+
+    @Test
+    fun `hero parallax and navigation transition math stay bounded and gap-free`() {
+        val rest = RavenMotion.computeHeroPageTransform(0f)
+        assertEquals(0f, rest.parallaxFraction, 0.0001f)
+        assertEquals(1f, rest.artworkScale, 0.0001f)
+        assertEquals(1f, rest.contentAlpha, 0.0001f)
+
+        // Non-finite inputs safely fall back to rest transform
+        assertEquals(rest, RavenMotion.computeHeroPageTransform(Float.NaN))
+        assertEquals(rest, RavenMotion.computeHeroPageTransform(Float.POSITIVE_INFINITY))
+        assertEquals(rest, RavenMotion.computeHeroPageTransform(Float.NEGATIVE_INFINITY))
+
+        // Swiping left (pageOffset = -0.5) lags artwork slightly right (+parallax) without exposing edges
+        val leftHalf = RavenMotion.computeHeroPageTransform(-0.5f)
+        assertEquals(0.11f, leftHalf.parallaxFraction, 0.0001f)
+        assertTrue(kotlin.math.abs(leftHalf.parallaxFraction) < 0.5f)
+        assertEquals(1.0225f, leftHalf.artworkScale, 0.0001f)
+        assertEquals(0.675f, leftHalf.contentAlpha, 0.0001f)
+
+        // Incoming right page (pageOffset = +1.0, or overscrolled +2.5 clamped to +1.0)
+        val rightFull = RavenMotion.computeHeroPageTransform(2.5f)
+        assertEquals(-RavenMotion.HERO_PARALLAX_FACTOR, rightFull.parallaxFraction, 0.0001f)
+        assertEquals(1f + RavenMotion.HERO_MAX_EXTRA_SCALE, rightFull.artworkScale, 0.0001f)
+        assertEquals(0.35f, rightFull.contentAlpha, 0.0001f)
+
+        // iOS parallax navigation offsets (-18% push parent exit, -20% pop parent enter)
+        assertEquals(-180, RavenMotion.computeNavPushParentExitOffset(1000))
+        assertEquals(0, RavenMotion.computeNavPushParentExitOffset(0))
+        assertEquals(0, RavenMotion.computeNavPushParentExitOffset(-400))
+
+        assertEquals(-200, RavenMotion.computeNavPopParentEnterOffset(1000))
+        assertEquals(0, RavenMotion.computeNavPopParentEnterOffset(0))
+        assertEquals(0, RavenMotion.computeNavPopParentEnterOffset(-400))
+
+        // Apple deceleration curve starts at 0, accelerates early, and lands at 1
+        assertEquals(0f, RavenMotion.AppleDecelerationEasing.transform(0f), 0.0001f)
+        assertTrue(RavenMotion.AppleDecelerationEasing.transform(0.5f) > 0.7f)
+        assertEquals(1f, RavenMotion.AppleDecelerationEasing.transform(1f), 0.0001f)
     }
 
     @Test

@@ -1,5 +1,9 @@
 package com.raven.app.core.designsystem.component
 
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.snap
+import androidx.compose.animation.core.spring
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -14,6 +18,7 @@ import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -43,19 +48,23 @@ import androidx.compose.material3.NavigationBarItemDefaults
 import androidx.compose.material3.NavigationDrawerItemDefaults
 import androidx.compose.material3.NavigationRailItemDefaults
 import androidx.compose.material3.Text
-import androidx.compose.material3.VerticalDivider
 import androidx.compose.material3.adaptive.currentWindowAdaptiveInfo
 import androidx.compose.material3.adaptive.navigationsuite.NavigationSuiteDefaults
 import androidx.compose.material3.adaptive.navigationsuite.NavigationSuiteScaffold
 import androidx.compose.material3.adaptive.navigationsuite.NavigationSuiteType
 import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
@@ -69,6 +78,7 @@ import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.window.core.layout.WindowSizeClass
+import com.raven.app.core.designsystem.theme.LocalMotionReduced
 import com.raven.app.core.designsystem.theme.LocalRavenColors
 import com.raven.app.core.designsystem.theme.LocalReduceTransparency
 import com.raven.app.core.designsystem.theme.RavenColors
@@ -159,6 +169,7 @@ fun RavenAdaptiveScaffold(
     content: @Composable () -> Unit,
 ) {
     val colors = LocalRavenColors.current
+    val haptic = LocalHapticFeedback.current
     val adaptiveInfo = currentWindowAdaptiveInfo()
     val layoutType = when {
         !showNavigation -> NavigationSuiteType.None
@@ -196,6 +207,17 @@ fun RavenAdaptiveScaffold(
         ),
     )
 
+    val horizontalSpecularHairline = remember(colors.hairline, colors.rimHighlight) {
+        Brush.horizontalGradient(
+            colors = listOf(colors.hairline, colors.rimHighlight, colors.hairline),
+        )
+    }
+    val verticalSpecularHairline = remember(colors.hairline, colors.rimHighlight) {
+        Brush.verticalGradient(
+            colors = listOf(colors.hairline, colors.rimHighlight, colors.hairline),
+        )
+    }
+
     NavigationSuiteScaffold(
         modifier = modifier.testTag("raven_adaptive_scaffold"),
         layoutType = layoutType,
@@ -215,12 +237,17 @@ fun RavenAdaptiveScaffold(
                 val badgeCount = badges[destination] ?: 0
                 item(
                     selected = selected,
-                    onClick = { onDestinationSelected(destination) },
+                    onClick = {
+                        if (!selected) {
+                            haptic.performHapticFeedback(HapticFeedbackType.SegmentTick)
+                        }
+                        onDestinationSelected(destination)
+                    },
                     modifier = Modifier.testTag(destination.testTag),
                     icon = {
-                        Icon(
-                            imageVector = if (selected) destination.selectedIcon else destination.unselectedIcon,
-                            contentDescription = destination.label,
+                        RavenNavDestinationIcon(
+                            destination = destination,
+                            selected = selected,
                         )
                     },
                     label = {
@@ -260,27 +287,55 @@ fun RavenAdaptiveScaffold(
             content()
             when (layoutType) {
                 NavigationSuiteType.NavigationBar -> {
-                    HorizontalDivider(
+                    Box(
                         modifier = Modifier
                             .align(Alignment.BottomCenter)
-                            .fillMaxWidth(),
-                        thickness = 0.5.dp,
-                        color = colors.hairline,
+                            .fillMaxWidth()
+                            .height(0.5.dp)
+                            .background(horizontalSpecularHairline),
                     )
                 }
                 NavigationSuiteType.NavigationRail -> {
-                    VerticalDivider(
+                    Box(
                         modifier = Modifier
                             .align(Alignment.CenterStart)
-                            .fillMaxHeight(),
-                        thickness = 0.5.dp,
-                        color = colors.hairline,
+                            .fillMaxHeight()
+                            .width(0.5.dp)
+                            .background(verticalSpecularHairline),
                     )
                 }
                 else -> Unit
             }
         }
     }
+}
+
+@Composable
+private fun RavenNavDestinationIcon(
+    destination: RavenTopDestination,
+    selected: Boolean,
+) {
+    val motionReduced = LocalMotionReduced.current
+    val iconScale by animateFloatAsState(
+        targetValue = if (selected) 1.10f else 1.0f,
+        animationSpec = if (motionReduced) {
+            snap()
+        } else {
+            spring(
+                dampingRatio = Spring.DampingRatioMediumBouncy,
+                stiffness = Spring.StiffnessMedium,
+            )
+        },
+        label = "ravenNavIconScale",
+    )
+    Icon(
+        imageVector = if (selected) destination.selectedIcon else destination.unselectedIcon,
+        contentDescription = destination.label,
+        modifier = Modifier.graphicsLayer {
+            scaleX = iconScale
+            scaleY = iconScale
+        },
+    )
 }
 
 /**
@@ -308,7 +363,7 @@ fun RavenTopBar(
                     .fillMaxWidth()
                     .statusBarsPadding()
                     .heightIn(min = 56.dp)
-                    .padding(horizontal = 12.dp, vertical = 4.dp),
+                    .padding(horizontal = 12.dp, vertical = 6.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 if (navigationIcon != null) {
@@ -415,6 +470,7 @@ fun RavenSiteSwitcherPill(
 ) {
     val colors = LocalRavenColors.current
     val reduceTransparency = LocalReduceTransparency.current
+    val haptic = LocalHapticFeedback.current
     val interactionSource = remember { MutableInteractionSource() }
     val kindIcon = when (mediaKind) {
         MediaKind.VIDEO -> Icons.Outlined.Movie
@@ -437,7 +493,10 @@ fun RavenSiteSwitcherPill(
                 interactionSource = interactionSource,
                 indication = null,
                 role = Role.Button,
-                onClick = onClick,
+                onClick = {
+                    haptic.performHapticFeedback(HapticFeedbackType.ContextClick)
+                    onClick()
+                },
             )
             .testTag("raven_site_switcher_pill"),
         contentAlignment = Alignment.CenterStart,

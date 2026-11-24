@@ -31,7 +31,9 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shadow
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -63,9 +65,15 @@ fun RavenVideoCard(
     showMetadata: Boolean = true,
 ) {
     val colors = LocalRavenColors.current
+    val haptic = LocalHapticFeedback.current
     val interactionSource = remember { MutableInteractionSource() }
     val durationLabel = remember(item.durationSeconds) { RavenFormatters.formatDuration(item.durationSeconds) }
     val metadataLine = subtitleOverride ?: remember(item) { buildMediaMetadataLine(item) }
+    val posterGlassRim = remember(colors.rimHighlight, colors.hairline) {
+        Brush.verticalGradient(
+            colors = listOf(colors.rimHighlight, colors.hairline),
+        )
+    }
 
     Column(
         modifier = modifier
@@ -74,7 +82,12 @@ fun RavenVideoCard(
                 interactionSource = interactionSource,
                 indication = null,
                 onClick = onClick,
-                onLongClick = onLongClick,
+                onLongClick = onLongClick?.let { callback ->
+                    {
+                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                        callback()
+                    }
+                },
             )
             .testTag("raven_video_card_${item.id}"),
         verticalArrangement = Arrangement.spacedBy(7.dp),
@@ -84,8 +97,7 @@ fun RavenVideoCard(
                 .fillMaxWidth()
                 .aspectRatio(RavenFormatters.VIDEO_ASPECT_RATIO)
                 .clip(RavenShapes.CardShape)
-                .background(colors.surface1)
-                .border(0.5.dp, colors.hairline, RavenShapes.CardShape),
+                .background(colors.surface1),
         ) {
             RavenImage(
                 url = item.coverUrl,
@@ -137,6 +149,13 @@ fun RavenVideoCard(
                         .fillMaxWidth(),
                 )
             }
+
+            // Inner 0.5dp translucent glass rim rendered over artwork so dark posters pop off #09090B OLED canvas
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .border(0.5.dp, posterGlassRim, RavenShapes.CardShape),
+            )
         }
 
         Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
@@ -238,6 +257,7 @@ fun RavenGalleryCard(
     showCaption: Boolean = true,
 ) {
     val colors = LocalRavenColors.current
+    val haptic = LocalHapticFeedback.current
     val interactionSource = remember { MutableInteractionSource() }
     var resolvedRatio by remember(item.compositeKey) { mutableStateOf<Float?>(null) }
     val effectiveRatio = RavenFormatters.clampAspectRatio(
@@ -245,6 +265,11 @@ fun RavenGalleryCard(
     )
     val pageLabel = remember(item.pageCount) { RavenFormatters.formatPageCount(item.pageCount) }
     val metadataLine = remember(item) { buildMediaMetadataLine(item) }
+    val posterGlassRim = remember(colors.rimHighlight, colors.hairline) {
+        Brush.verticalGradient(
+            colors = listOf(colors.rimHighlight, colors.hairline),
+        )
+    }
 
     Column(
         modifier = modifier
@@ -253,7 +278,12 @@ fun RavenGalleryCard(
                 interactionSource = interactionSource,
                 indication = null,
                 onClick = onClick,
-                onLongClick = onLongClick,
+                onLongClick = onLongClick?.let { callback ->
+                    {
+                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                        callback()
+                    }
+                },
             )
             .testTag("raven_gallery_card_${item.id}"),
         verticalArrangement = Arrangement.spacedBy(6.dp),
@@ -263,8 +293,7 @@ fun RavenGalleryCard(
                 .fillMaxWidth()
                 .aspectRatio(effectiveRatio)
                 .clip(RavenShapes.CardShape)
-                .background(colors.surface1)
-                .border(0.5.dp, colors.hairline, RavenShapes.CardShape),
+                .background(colors.surface1),
         ) {
             RavenImage(
                 url = item.coverUrl,
@@ -308,6 +337,13 @@ fun RavenGalleryCard(
                         .fillMaxWidth(),
                 )
             }
+
+            // Inner 0.5dp translucent glass rim rendered over poster artwork
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .border(0.5.dp, posterGlassRim, RavenShapes.CardShape),
+            )
         }
 
         if (showCaption) {
@@ -350,6 +386,7 @@ fun RavenCompactMediaRow(
     trailingContent: (@Composable () -> Unit)? = null,
 ) {
     val colors = LocalRavenColors.current
+    val haptic = LocalHapticFeedback.current
     val interactionSource = remember { MutableInteractionSource() }
     val isVideo = item.kind == MediaKind.VIDEO
     val thumbWidth = if (isVideo) 118.dp else 68.dp
@@ -375,7 +412,12 @@ fun RavenCompactMediaRow(
                 interactionSource = interactionSource,
                 indication = null,
                 onClick = onClick,
-                onLongClick = onLongClick,
+                onLongClick = onLongClick?.let { callback ->
+                    {
+                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                        callback()
+                    }
+                },
             )
             .padding(10.dp)
             .testTag("raven_compact_row_${item.id}"),
@@ -387,8 +429,7 @@ fun RavenCompactMediaRow(
                 .width(thumbWidth)
                 .height(thumbHeight)
                 .clip(RavenShapes.ControlShape)
-                .background(colors.surface2)
-                .border(0.5.dp, colors.hairline, RavenShapes.ControlShape),
+                .background(colors.surface2),
         ) {
             RavenImage(
                 url = item.coverUrl,
@@ -427,6 +468,12 @@ fun RavenCompactMediaRow(
                         .fillMaxWidth(),
                 )
             }
+
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .border(0.5.dp, colors.hairline, RavenShapes.ControlShape),
+            )
         }
 
         Column(

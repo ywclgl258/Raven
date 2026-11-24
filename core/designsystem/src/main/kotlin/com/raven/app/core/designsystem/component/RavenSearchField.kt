@@ -1,6 +1,9 @@
 package com.raven.app.core.designsystem.component
 
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.snap
+import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.background
@@ -34,13 +37,17 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.raven.app.core.designsystem.theme.LocalMotionReduced
 import com.raven.app.core.designsystem.theme.LocalRavenColors
+import com.raven.app.core.designsystem.theme.RavenMotion
 import com.raven.app.core.designsystem.theme.RavenShapes
 
 /**
@@ -63,6 +70,8 @@ fun RavenSearchField(
     trailingContent: (@Composable () -> Unit)? = null,
 ) {
     val colors = LocalRavenColors.current
+    val motionReduced = LocalMotionReduced.current
+    val haptic = LocalHapticFeedback.current
     var focused by remember { mutableStateOf(false) }
     var textFieldValueState by remember {
         mutableStateOf(
@@ -96,10 +105,30 @@ fun RavenSearchField(
 
     val currentText = textFieldValueState.text
 
-    val borderColor = when {
-        focused -> colors.crimson.copy(alpha = 0.75f)
-        else -> colors.hairline
-    }
+    val borderColor by animateColorAsState(
+        targetValue = if (focused) colors.crimson.copy(alpha = 0.78f) else colors.hairline,
+        animationSpec = if (motionReduced) {
+            snap()
+        } else {
+            tween(
+                durationMillis = RavenMotion.CHIP_TRANSITION_DURATION_MS,
+                easing = RavenMotion.AppleDecelerationEasing,
+            )
+        },
+        label = "ravenSearchBorderColor",
+    )
+    val searchIconTint by animateColorAsState(
+        targetValue = if (focused) colors.inkPrimary else colors.inkSecondary,
+        animationSpec = if (motionReduced) {
+            snap()
+        } else {
+            tween(
+                durationMillis = RavenMotion.CHIP_TRANSITION_DURATION_MS,
+                easing = RavenMotion.AppleDecelerationEasing,
+            )
+        },
+        label = "ravenSearchIconTint",
+    )
 
     Row(
         modifier = modifier
@@ -119,7 +148,7 @@ fun RavenSearchField(
         Icon(
             imageVector = Icons.Rounded.Search,
             contentDescription = null,
-            tint = if (focused) colors.inkPrimary else colors.inkSecondary,
+            tint = searchIconTint,
             modifier = Modifier.size(20.dp),
         )
 
@@ -175,6 +204,7 @@ fun RavenSearchField(
         ) {
             IconButton(
                 onClick = {
+                    haptic.performHapticFeedback(HapticFeedbackType.ContextClick)
                     textFieldValueState = TextFieldValue(text = "", selection = TextRange.Zero)
                     pendingDispatched.clear()
                     if (lastExternalQuery.isNotEmpty()) {

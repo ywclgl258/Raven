@@ -1,6 +1,9 @@
 package com.raven.app.core.designsystem.component
 
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.EnterTransition
+import androidx.compose.animation.ExitTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -19,7 +22,9 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
+import com.raven.app.core.designsystem.theme.LocalMotionReduced
 import com.raven.app.core.designsystem.theme.LocalRavenColors
+import com.raven.app.core.designsystem.theme.RavenMotion
 import com.raven.app.core.model.ComicLanguage
 
 /** Localized display label for [ComicLanguage] shared across language bar, explore, and settings. */
@@ -44,11 +49,40 @@ fun RavenLanguageBar(
     showBottomHairline: Boolean = true,
 ) {
     val colors = LocalRavenColors.current
+    val motionReduced = LocalMotionReduced.current
 
     AnimatedVisibility(
         visible = visible,
-        enter = expandVertically() + fadeIn(),
-        exit = shrinkVertically() + fadeOut(),
+        enter = if (motionReduced) {
+            EnterTransition.None
+        } else {
+            expandVertically(
+                animationSpec = tween(
+                    durationMillis = RavenMotion.TAB_TRANSITION_DURATION_MS,
+                    easing = RavenMotion.AppleDecelerationEasing,
+                ),
+            ) + fadeIn(
+                animationSpec = tween(
+                    durationMillis = RavenMotion.CHIP_TRANSITION_DURATION_MS,
+                    easing = RavenMotion.AppleDecelerationEasing,
+                ),
+            )
+        },
+        exit = if (motionReduced) {
+            ExitTransition.None
+        } else {
+            shrinkVertically(
+                animationSpec = tween(
+                    durationMillis = RavenMotion.CHIP_TRANSITION_DURATION_MS,
+                    easing = RavenMotion.AppleDecelerationEasing,
+                ),
+            ) + fadeOut(
+                animationSpec = tween(
+                    durationMillis = RavenMotion.CHIP_TRANSITION_DURATION_MS - 30,
+                    easing = RavenMotion.AppleDecelerationEasing,
+                ),
+            )
+        },
         modifier = modifier.fillMaxWidth(),
     ) {
         Column(

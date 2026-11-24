@@ -1,8 +1,13 @@
 package com.raven.app.core.designsystem.component
 
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.snap
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -26,16 +31,22 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.raven.app.core.designsystem.theme.LocalMotionReduced
 import com.raven.app.core.designsystem.theme.LocalRavenColors
 import com.raven.app.core.designsystem.theme.RavenShapes
 import com.raven.app.core.designsystem.theme.tabular
@@ -53,6 +64,11 @@ fun RavenGroupedSection(
     content: @Composable ColumnScope.() -> Unit,
 ) {
     val colors = LocalRavenColors.current
+    val sectionRimBrush = remember(colors.rimHighlight, colors.hairline) {
+        Brush.verticalGradient(
+            colors = listOf(colors.rimHighlight, colors.hairline),
+        )
+    }
 
     Column(
         modifier = modifier.fillMaxWidth(),
@@ -76,7 +92,7 @@ fun RavenGroupedSection(
                 .fillMaxWidth()
                 .clip(RavenShapes.CardShape)
                 .background(colors.surface1)
-                .border(0.5.dp, colors.hairline, RavenShapes.CardShape),
+                .border(0.5.dp, sectionRimBrush, RavenShapes.CardShape),
             content = content,
         )
 
@@ -128,6 +144,20 @@ fun RavenGroupedRow(
     trailingContent: (@Composable () -> Unit)? = null,
 ) {
     val colors = LocalRavenColors.current
+    val motionReduced = LocalMotionReduced.current
+    val haptic = LocalHapticFeedback.current
+    val interactionSource = remember { MutableInteractionSource() }
+    val pressed by interactionSource.collectIsPressedAsState()
+    val rowBackdropColor by animateColorAsState(
+        targetValue = if (pressed && enabled && onClick != null) {
+            colors.surface2.copy(alpha = 0.72f)
+        } else {
+            Color.Transparent
+        },
+        animationSpec = if (motionReduced) snap() else tween(durationMillis = 120),
+        label = "ravenGroupedRowPressHighlight",
+    )
+
     val resolvedTitleColor = when {
         !enabled -> colors.inkTertiary
         destructive -> colors.error
@@ -145,9 +175,14 @@ fun RavenGroupedRow(
 
     val clickModifier = if (onClick != null) {
         Modifier.clickable(
+            interactionSource = interactionSource,
+            indication = null,
             enabled = enabled,
             role = Role.Button,
-            onClick = onClick,
+            onClick = {
+                haptic.performHapticFeedback(HapticFeedbackType.ContextClick)
+                onClick()
+            },
         )
     } else {
         Modifier
@@ -157,6 +192,7 @@ fun RavenGroupedRow(
         modifier = modifier
             .fillMaxWidth()
             .heightIn(min = 52.dp)
+            .background(rowBackdropColor)
             .then(clickModifier)
             .padding(horizontal = 16.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -166,7 +202,8 @@ fun RavenGroupedRow(
                 modifier = Modifier
                     .size(32.dp)
                     .clip(RavenShapes.ControlShape)
-                    .background(resolvedIconBg),
+                    .background(resolvedIconBg)
+                    .border(0.5.dp, colors.hairline, RavenShapes.ControlShape),
                 contentAlignment = Alignment.Center,
             ) {
                 Icon(
@@ -245,6 +282,15 @@ fun RavenGroupedSwitchRow(
     enabled: Boolean = true,
 ) {
     val colors = LocalRavenColors.current
+    val motionReduced = LocalMotionReduced.current
+    val haptic = LocalHapticFeedback.current
+    val interactionSource = remember { MutableInteractionSource() }
+    val pressed by interactionSource.collectIsPressedAsState()
+    val switchBackdropColor by animateColorAsState(
+        targetValue = if (pressed && enabled) colors.surface2.copy(alpha = 0.72f) else Color.Transparent,
+        animationSpec = if (motionReduced) snap() else tween(durationMillis = 120),
+        label = "ravenSwitchRowPressHighlight",
+    )
 
     RavenGroupedRow(
         title = title,
@@ -253,12 +299,21 @@ fun RavenGroupedSwitchRow(
         iconTint = iconTint,
         iconContainerColor = iconContainerColor,
         enabled = enabled,
-        modifier = modifier.toggleable(
-            value = checked,
-            enabled = enabled,
-            role = Role.Switch,
-            onValueChange = onCheckedChange,
-        ),
+        modifier = modifier
+            .background(switchBackdropColor)
+            .toggleable(
+                value = checked,
+                enabled = enabled,
+                interactionSource = interactionSource,
+                indication = null,
+                role = Role.Switch,
+                onValueChange = { nextChecked ->
+                    haptic.performHapticFeedback(
+                        if (nextChecked) HapticFeedbackType.ToggleOn else HapticFeedbackType.ToggleOff,
+                    )
+                    onCheckedChange(nextChecked)
+                },
+            ),
         trailingContent = {
             Switch(
                 checked = checked,
