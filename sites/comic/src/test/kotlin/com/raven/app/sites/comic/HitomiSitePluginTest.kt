@@ -268,6 +268,45 @@ class HitomiSitePluginTest {
             FeedRequest(SiteId.HITOMI, query = "cat dog", sort = FeedSort.POPULAR),
         )
         assertEquals(listOf("300", "400"), popRes.items.map { it.id })
+
+        // cat AND dog with oldest sort -> ascending numeric gallery IDs [300, 400]
+        val oldestRes = plugin.searchSource!!.search(
+            FeedRequest(SiteId.HITOMI, query = "cat dog", sort = FeedSort.OLDEST),
+        )
+        assertEquals(listOf("300", "400"), oldestRes.items.map { it.id })
+
+        // cat AND dog with newest sort -> descending numeric gallery IDs [400, 300]
+        val newestRes = plugin.searchSource!!.search(
+            FeedRequest(SiteId.HITOMI, query = "cat dog", sort = FeedSort.NEWEST),
+        )
+        assertEquals(listOf("400", "300"), newestRes.items.map { it.id })
+
+        assertEquals(
+            listOf(FeedSort.NEWEST, FeedSort.OLDEST, FeedSort.POPULAR),
+            plugin.searchSource!!.supportedSearchSorts(SearchScope.ALL),
+        )
+    }
+
+    @Test
+    fun `hitomi oldest sort reads nozomi tail in ascending order via HTTP 206 Range`() = runTest {
+        val http = FakeHttpClientAdapter()
+        val allIds = (1020 downTo 1001).toList() // 20 items: newest=1020, oldest=1001
+        http.onUrlText("${HitomiSitePlugin.CDN_BASE}/gg.js", sampleGgJs)
+        http.onBinaryWithRange("${HitomiSitePlugin.CDN_BASE}/index-all.nozomi", packBigEndianInts(allIds))
+        http.onMatch({ req -> req.url.startsWith("${HitomiSitePlugin.CDN_BASE}/galleries/") && req.url.endsWith(".js") }) { req ->
+            val id = req.url.substringAfterLast('/').removeSuffix(".js").toInt()
+            FakeHttpClientAdapter.htmlResponse(req.url, galleryJs(id))
+        }
+
+        val plugin = HitomiSitePlugin(http)
+        val page1 = plugin.feedSource.loadFeed(FeedRequest(SiteId.HITOMI, sort = FeedSort.OLDEST, page = 1))
+        assertEquals((1001..1012).map { it.toString() }, page1.items.map { it.id })
+        assertTrue(page1.hasMore)
+        assertEquals(2, page1.totalPages)
+
+        val page2 = plugin.feedSource.loadFeed(FeedRequest(SiteId.HITOMI, sort = FeedSort.OLDEST, page = 2))
+        assertEquals((1013..1020).map { it.toString() }, page2.items.map { it.id })
+        assertFalse(page2.hasMore)
     }
 
     @Test

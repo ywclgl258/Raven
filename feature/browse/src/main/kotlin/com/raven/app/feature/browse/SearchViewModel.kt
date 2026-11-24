@@ -95,6 +95,9 @@ data class SearchUiState(
     val supportsLanguageFilter: Boolean = false,
     val sort: FeedSort = FeedSort.RELEVANCE,
     val availableSorts: List<FeedSort> = listOf(FeedSort.RELEVANCE),
+    val nativeSorts: List<FeedSort> = listOf(FeedSort.RELEVANCE),
+    val localSorts: List<FeedSort> = emptyList(),
+    val isLocalSortActive: Boolean = false,
     val comicLanguage: ComicLanguage = ComicLanguage.ALL,
     val advancedFilters: AdvancedSearchFilters = AdvancedSearchFilters(),
     val tagSuggestions: List<TagSuggestion> = emptyList(),
@@ -159,6 +162,7 @@ private data class SingleSiteResultState(
     val errorMessage: String? = null,
     val paginationErrorMessage: String? = null,
     val rawItems: List<MediaItem> = emptyList(),
+    val fetchedSort: FeedSort? = null,
     val isDirectoryResults: Boolean = false,
     val currentPage: Int = 1,
     val nextPage: Int? = null,
@@ -168,6 +172,7 @@ private data class SingleSiteResultState(
 
 private data class CrossSiteResultState(
     val hasSearched: Boolean = false,
+    val fetchedSort: FeedSort? = null,
     val bucketsBySite: Map<SiteId, CrossSiteBucketState> = emptyMap(),
 )
 
@@ -281,17 +286,26 @@ class SearchViewModel(
             ComicLanguage.ALL
         }
 
-        val availableSorts = buildList {
-            add(FeedSort.RELEVANCE)
-            activeDescriptor?.feedSorts?.forEach { sort ->
-                if (sort !in this) add(sort)
-            }
+        val singleNativeSorts = resolveNativeSearchSorts(activePlugin, effectiveScope)
+        val singleLocalSorts = buildLocalFallbackSorts(
+            primaryKind = activeDescriptor?.primaryKind,
+            nativeSorts = singleNativeSorts,
+        )
+        val nativeSorts = when (input.mode) {
+            SearchMode.SINGLE_SITE -> singleNativeSorts
+            SearchMode.CROSS_SITE -> CROSS_SITE_SORTS
         }
-        val effectiveSort = if (input.sort == FeedSort.DEFAULT || input.sort !in availableSorts) {
-            availableSorts.first()
-        } else {
-            input.sort
+        val localSorts = when (input.mode) {
+            SearchMode.SINGLE_SITE -> singleLocalSorts
+            SearchMode.CROSS_SITE -> emptyList()
         }
+        val availableSorts = nativeSorts + localSorts
+        val effectiveSort = when {
+            input.sort == FeedSort.DEFAULT -> nativeSorts.first()
+            input.sort in availableSorts -> input.sort
+            else -> nativeSorts.first()
+        }
+        val isLocalSortActive = input.mode == SearchMode.SINGLE_SITE && effectiveSort !in singleNativeSorts
 
         // TagDictionary live suggestions from active trailing query token
         val activeToken = extractLastQueryToken(input.query)
@@ -305,12 +319,17 @@ class SearchViewModel(
         val activeSiteBlocked = blockedBySite[activeSiteId].orEmpty()
 
         val singleAligned = single.siteId == activeSiteId
-        val filteredSingleItems = if (singleAligned) {
+        val baseSingleItems = if (singleAligned) {
             single.rawItems
                 .filter { ContentFilter.isAllowed(it, activeSiteBlocked) }
                 .withLocalizedTags(tagDictionary, translateTags)
         } else {
             emptyList()
+        }
+        val filteredSingleItems = if (isLocalSortActive && !single.isDirectoryResults) {
+            sortMediaItemsClientSide(baseSingleItems, effectiveSort)
+        } else {
+            baseSingleItems
         }
 
         // Selected cross-site sources: empty persisted list means ALL searchable sites
@@ -337,7 +356,16 @@ class SearchViewModel(
         } else {
             mediaBuckets
         }
-        val mixedMediaItems = interleaveBuckets(visibleMediaBuckets)
+        val interleavedMediaItems = interleaveBuckets(visibleMediaBuckets)
+        val mixedMediaItems = if (
+            input.mode == SearchMode.CROSS_SITE &&
+            effectiveSort != FeedSort.RELEVANCE &&
+            effectiveSort != FeedSort.DEFAULT
+        ) {
+            sortMediaItemsClientSide(interleavedMediaItems, effectiveSort)
+        } else {
+            interleavedMediaItems
+        }
 
         SearchUiState(
             mode = input.mode,
@@ -354,6 +382,9 @@ class SearchViewModel(
             supportsLanguageFilter = supportsLang,
             sort = effectiveSort,
             availableSorts = availableSorts,
+            nativeSorts = nativeSorts,
+            localSorts = localSorts,
+            isLocalSortActive = isLocalSortActive,
             comicLanguage = effectiveLanguage,
             advancedFilters = input.advancedFilters,
             tagSuggestions = suggestions,
@@ -469,12 +500,32 @@ class SearchViewModel(
     }
 
     fun selectSort(sort: FeedSort) {
-        if (inputState.value.sort == sort) return
+        val current = inputState.value
+        if (current.sort == sort) return
         inputState.update { it.copy(sort = sort) }
-        if (inputState.value.mode == SearchMode.SINGLE_SITE &&
-            (inputState.value.query.isNotBlank() || !inputState.value.advancedFilters.isEmpty)
-        ) {
-            submitSearch()
+
+        val hasQuery = current.query.isNotBlank()
+        val hasFilters = !current.advancedFilters.isEmpty
+        when (current.mode) {
+            SearchMode.SINGLE_SITE -> {
+                if (!hasQuery && !hasFilters) return
+                val singleSnap = singleSiteState.value
+                val plugin = singleSnap.siteId?.let { siteRegistry.get(it) }
+                if (singleSnap.hasSearched && plugin != null) {
+                    val nativeSorts = resolveNativeSearchSorts(plugin, current.scope)
+                    val targetServerSort = resolveCompatibleServerSort(nativeSorts, sort)
+                    if (singleSnap.fetchedSort == targetServerSort) {
+                        return
+                    }
+                }
+                submitSearch()
+            }
+            SearchMode.CROSS_SITE -> {
+                if (!hasQuery) return
+                if (crossSiteState.value.hasSearched) {
+                    submitSearch()
+                }
+            }
         }
     }
 
@@ -593,7 +644,11 @@ class SearchViewModel(
             val cleanName = rawName.trim()
                 .ifBlank { fallbackName }
                 .take(SubscriptionRepository.MAX_SAVED_SEARCH_NAME_LENGTH)
-            val effectiveSort = if (input.sort == FeedSort.DEFAULT) FeedSort.RELEVANCE else input.sort
+            val effectiveSort = when {
+                input.sort != FeedSort.DEFAULT -> input.sort
+                input.mode == SearchMode.CROSS_SITE -> FeedSort.RELEVANCE
+                else -> resolveNativeSearchSorts(siteRegistry.get(activeSiteId), input.scope).first()
+            }
             val effectiveLanguage = input.languageOverride ?: settings.languageFor(activeSiteId)
 
             val saved = subscriptionRepository.saveSavedSearch(
@@ -693,6 +748,7 @@ class SearchViewModel(
                 SearchMode.CROSS_SITE -> runCrossSiteSearch(
                     targetSiteIds = selectedCross,
                     query = trimmedQuery,
+                    requestedSort = currentInput.sort.takeUnless { it == FeedSort.DEFAULT } ?: FeedSort.RELEVANCE,
                 )
             }
         }
@@ -768,7 +824,14 @@ class SearchViewModel(
                     isLoadingMore = false,
                 )
             }
-            val resultBucket = executeCrossSiteQuery(plugin = plugin, query = query, page = 1, cursor = null)
+            val requestedSort = inputState.value.sort.takeUnless { it == FeedSort.DEFAULT } ?: FeedSort.RELEVANCE
+            val resultBucket = executeCrossSiteQuery(
+                plugin = plugin,
+                query = query,
+                requestedSort = requestedSort,
+                page = 1,
+                cursor = null,
+            )
             updateCrossBucket(siteId) { resultBucket }
         }
     }
@@ -780,6 +843,13 @@ class SearchViewModel(
         if (!existing.hasMore || existing.isLoadingMore || existing.status != CrossSiteStatus.SUCCESS) return
         val plugin = siteRegistry.get(siteId) ?: return
         val searchSource = plugin.searchSource ?: return
+        val requestedSort = crossSiteState.value.fetchedSort
+            ?: inputState.value.sort.takeUnless { it == FeedSort.DEFAULT }
+            ?: FeedSort.RELEVANCE
+        val siteSort = resolveCompatibleServerSort(
+            nativeSorts = resolveNativeSearchSorts(plugin, SearchScope.ALL),
+            requested = requestedSort,
+        )
 
         crossPerSiteJobs[siteId]?.cancel()
         crossPerSiteJobs[siteId] = viewModelScope.launch {
@@ -799,7 +869,7 @@ class SearchViewModel(
                         siteId = siteId,
                         query = query,
                         scope = SearchScope.ALL,
-                        sort = FeedSort.RELEVANCE,
+                        sort = siteSort,
                         language = lang,
                         page = nextPageNumber,
                         cursor = existing.nextCursor,
@@ -899,6 +969,7 @@ class SearchViewModel(
                     isLoading = false,
                     hasSearched = true,
                     rawItems = page.items.distinctBy { it.compositeKey },
+                    fetchedSort = request.sort,
                     isDirectoryResults = searchSource.isDirectorySearch ||
                         page.items.any { it.isDirectoryEntryItem() },
                     currentPage = 1,
@@ -920,13 +991,21 @@ class SearchViewModel(
         }
     }
 
-    private fun runCrossSiteSearch(targetSiteIds: List<SiteId>, query: String) {
+    private fun runCrossSiteSearch(
+        targetSiteIds: List<SiteId>,
+        query: String,
+        requestedSort: FeedSort,
+    ) {
         crossSearchJob?.cancel()
         cancelAllCrossSiteJobs()
 
         val plugins = targetSiteIds.mapNotNull { siteRegistry.get(it) }.filter { it.searchSource != null }
         if (plugins.isEmpty()) {
-            crossSiteState.value = CrossSiteResultState(hasSearched = true, bucketsBySite = emptyMap())
+            crossSiteState.value = CrossSiteResultState(
+                hasSearched = true,
+                fetchedSort = requestedSort,
+                bucketsBySite = emptyMap(),
+            )
             return
         }
 
@@ -939,6 +1018,7 @@ class SearchViewModel(
         }
         crossSiteState.value = CrossSiteResultState(
             hasSearched = true,
+            fetchedSort = requestedSort,
             bucketsBySite = initialBuckets,
         )
 
@@ -949,6 +1029,7 @@ class SearchViewModel(
                         val bucket = executeCrossSiteQuery(
                             plugin = plugin,
                             query = query,
+                            requestedSort = requestedSort,
                             page = 1,
                             cursor = null,
                         )
@@ -962,6 +1043,7 @@ class SearchViewModel(
     private suspend fun executeCrossSiteQuery(
         plugin: SitePlugin,
         query: String,
+        requestedSort: FeedSort,
         page: Int,
         cursor: String?,
     ): CrossSiteBucketState {
@@ -971,6 +1053,10 @@ class SearchViewModel(
             errorMessage = "不支持搜索",
         )
         val isDir = searchSource.isDirectorySearch
+        val siteSort = resolveCompatibleServerSort(
+            nativeSorts = resolveNativeSearchSorts(plugin, SearchScope.ALL),
+            requested = requestedSort,
+        )
 
         return crossSearchSemaphore.withPermit {
             try {
@@ -996,7 +1082,7 @@ class SearchViewModel(
                     siteId = plugin.id,
                     query = query,
                     scope = SearchScope.ALL,
-                    sort = FeedSort.RELEVANCE,
+                    sort = siteSort,
                     language = language,
                     page = page,
                     cursor = cursor,
@@ -1052,7 +1138,9 @@ class SearchViewModel(
         } else {
             ComicLanguage.ALL
         }
-        val effectiveSort = if (inputSnapshot.sort == FeedSort.DEFAULT) FeedSort.RELEVANCE else inputSnapshot.sort
+        val nativeSorts = resolveNativeSearchSorts(plugin, effectiveScope)
+        val requestedSort = if (inputSnapshot.sort == FeedSort.DEFAULT) nativeSorts.first() else inputSnapshot.sort
+        val effectiveSort = resolveCompatibleServerSort(nativeSorts, requestedSort)
         return FeedRequest(
             siteId = plugin.id,
             category = inputSnapshot.advancedFilters.category?.takeIf { it.isNotBlank() },
@@ -1110,5 +1198,94 @@ class SearchViewModel(
     companion object {
         const val MAX_CONCURRENT_CROSS_SITE_SEARCHES: Int = 3
         const val MAX_HISTORY_CHIPS: Int = 30
+
+        val CROSS_SITE_SORTS: List<FeedSort> = listOf(
+            FeedSort.RELEVANCE,
+            FeedSort.NEWEST,
+            FeedSort.OLDEST,
+            FeedSort.VIEWS,
+            FeedSort.LIKES,
+            FeedSort.RATING,
+            FeedSort.POPULAR,
+            FeedSort.DURATION,
+        )
+
+        private val VIDEO_LOCAL_FALLBACK_SORTS: List<FeedSort> = listOf(
+            FeedSort.NEWEST,
+            FeedSort.OLDEST,
+            FeedSort.VIEWS,
+            FeedSort.LIKES,
+            FeedSort.RATING,
+            FeedSort.DURATION,
+        )
+
+        private val GALLERY_LOCAL_FALLBACK_SORTS: List<FeedSort> = listOf(
+            FeedSort.NEWEST,
+            FeedSort.OLDEST,
+            FeedSort.VIEWS,
+            FeedSort.LIKES,
+            FeedSort.RATING,
+        )
+
+        internal fun resolveNativeSearchSorts(
+            plugin: SitePlugin?,
+            scope: SearchScope,
+        ): List<FeedSort> {
+            if (plugin == null) return listOf(FeedSort.RELEVANCE)
+            val explicit = plugin.searchSource?.supportedSearchSorts(scope).orEmpty()
+            if (explicit.isNotEmpty()) return explicit.distinct()
+            val fromFeed = plugin.feedSource?.supportedSorts(
+                FeedRequest(
+                    siteId = plugin.id,
+                    query = "q",
+                    scope = scope,
+                ),
+            ).orEmpty()
+            if (fromFeed.isNotEmpty()) return fromFeed.distinct()
+            val fromDescriptor = plugin.descriptor.feedSorts
+            return if (fromDescriptor.isNotEmpty()) {
+                buildList {
+                    if (scope == SearchScope.ALL) add(FeedSort.RELEVANCE)
+                    fromDescriptor.forEach { if (it !in this) add(it) }
+                }
+            } else {
+                listOf(FeedSort.RELEVANCE)
+            }
+        }
+
+        internal fun buildLocalFallbackSorts(
+            primaryKind: MediaKind?,
+            nativeSorts: List<FeedSort>,
+        ): List<FeedSort> {
+            val candidates = if (primaryKind == MediaKind.VIDEO || primaryKind == null) {
+                VIDEO_LOCAL_FALLBACK_SORTS
+            } else {
+                GALLERY_LOCAL_FALLBACK_SORTS
+            }
+            return candidates.filter { it !in nativeSorts }
+        }
+
+        internal fun resolveCompatibleServerSort(
+            nativeSorts: List<FeedSort>,
+            requested: FeedSort,
+        ): FeedSort {
+            if (nativeSorts.isEmpty()) return requested.takeUnless { it == FeedSort.DEFAULT } ?: FeedSort.RELEVANCE
+            if (requested == FeedSort.DEFAULT) return nativeSorts.first()
+            if (requested in nativeSorts) return requested
+            val fallbacks: List<FeedSort> = when (requested) {
+                FeedSort.OLDEST -> listOf(FeedSort.NEWEST, FeedSort.RELEVANCE)
+                FeedSort.LIKES -> listOf(FeedSort.RATING, FeedSort.POPULAR, FeedSort.VIEWS)
+                FeedSort.RATING -> listOf(FeedSort.LIKES, FeedSort.POPULAR, FeedSort.VIEWS)
+                FeedSort.VIEWS -> listOf(FeedSort.POPULAR, FeedSort.TRENDING, FeedSort.LIKES)
+                FeedSort.POPULAR -> listOf(FeedSort.VIEWS, FeedSort.TRENDING, FeedSort.LIKES, FeedSort.RATING)
+                FeedSort.TRENDING -> listOf(FeedSort.POPULAR, FeedSort.VIEWS, FeedSort.NEWEST)
+                FeedSort.DURATION -> listOf(FeedSort.RELEVANCE, FeedSort.NEWEST)
+                FeedSort.NEWEST -> listOf(FeedSort.RELEVANCE)
+                FeedSort.RELEVANCE -> listOf(FeedSort.NEWEST)
+                FeedSort.RANDOM -> listOf(FeedSort.RELEVANCE, FeedSort.NEWEST)
+                FeedSort.DEFAULT -> emptyList()
+            }
+            return fallbacks.firstOrNull { it in nativeSorts } ?: nativeSorts.first()
+        }
     }
 }

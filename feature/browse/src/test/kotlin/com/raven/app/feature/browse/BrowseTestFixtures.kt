@@ -183,6 +183,7 @@ internal class FakeSitePlugin(
     private val directorySectionsList: List<SiteSectionSpec> = emptyList(),
     private val supportedScopesSet: Set<SearchScope> = descriptor.searchScopes.toSet(),
     private val supportedFiltersSet: Set<AdvancedFilterField> = descriptor.supportedFilters,
+    private val supportedSearchSortsProvider: ((SearchScope) -> List<FeedSort>)? = null,
     private val supportsExcludeTagsFlag: Boolean = false,
     private val isDirectorySearchFlag: Boolean = false,
     private val requiresAuthGateFlag: Boolean = descriptor.networkProfile.requiresAuthGate,
@@ -223,6 +224,8 @@ internal class FakeSitePlugin(
             override val supportedFilters: Set<AdvancedFilterField> = supportedFiltersSet
             override val supportsExcludeTags: Boolean = supportsExcludeTagsFlag
             override val isDirectorySearch: Boolean = isDirectorySearchFlag
+            override fun supportedSearchSorts(scope: SearchScope): List<FeedSort> =
+                supportedSearchSortsProvider?.invoke(scope) ?: emptyList()
         }
     } else {
         null
@@ -259,6 +262,12 @@ internal fun sampleMediaItem(
     title: String = "Title $id",
     tags: List<com.raven.app.core.model.TagRef> = emptyList(),
     extra: Map<String, String> = emptyMap(),
+    durationSeconds: Int? = if (kind == MediaKind.VIDEO) 620 else null,
+    pageCount: Int? = if (kind != MediaKind.VIDEO) 32 else null,
+    views: Long? = null,
+    likes: Long? = null,
+    rating: Float? = null,
+    dateLabel: String? = null,
 ): MediaItem = MediaItem(
     siteId = siteId,
     id = id,
@@ -266,8 +275,12 @@ internal fun sampleMediaItem(
     kind = kind,
     title = title,
     coverUrl = "https://${siteId.value}.example/thumb/$id.jpg",
-    durationSeconds = if (kind == MediaKind.VIDEO) 620 else null,
-    pageCount = if (kind != MediaKind.VIDEO) 32 else null,
+    durationSeconds = durationSeconds,
+    pageCount = pageCount,
+    views = views,
+    likes = likes,
+    rating = rating,
+    dateLabel = dateLabel,
     tags = tags,
     extra = extra,
 )

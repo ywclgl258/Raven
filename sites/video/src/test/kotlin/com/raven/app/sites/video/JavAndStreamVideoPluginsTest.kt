@@ -374,4 +374,93 @@ class JavAndStreamVideoPluginsTest {
         assertEquals(SearchScope.TAG, link.request.scope)
         assertEquals("cosplay", link.request.query)
     }
+
+    @Test
+    fun `missav, jable, pornhub, kbjfree, and rouvideo wire search sort params and supportedSearchSorts`() {
+        val http = FakeHttpClientAdapter()
+
+        // MissAV
+        val missav = MissavSitePlugin(http, rateLimitBackoffMs = 0L)
+        assertEquals(
+            listOf(FeedSort.RELEVANCE, FeedSort.NEWEST, FeedSort.VIEWS, FeedSort.LIKES, FeedSort.POPULAR),
+            missav.searchSource.supportedSearchSorts(SearchScope.ALL),
+        )
+        assertEquals(
+            "https://missav.ws/search/midv",
+            MissavSitePlugin.resolveFeedUrl(FeedRequest(SiteId.MISSAV, query = "midv", sort = FeedSort.RELEVANCE)),
+        )
+        assertEquals(
+            "https://missav.ws/search/midv?sort=released_at&page=2",
+            MissavSitePlugin.resolveFeedUrl(FeedRequest(SiteId.MISSAV, query = "midv", sort = FeedSort.NEWEST, page = 2)),
+        )
+        assertEquals(
+            "https://missav.ws/search/midv?sort=views",
+            MissavSitePlugin.resolveFeedUrl(FeedRequest(SiteId.MISSAV, query = "midv", sort = FeedSort.VIEWS)),
+        )
+        assertEquals(
+            "https://missav.ws/search/midv?sort=saved",
+            MissavSitePlugin.resolveFeedUrl(FeedRequest(SiteId.MISSAV, query = "midv", sort = FeedSort.LIKES)),
+        )
+        assertEquals(
+            "https://missav.ws/search/midv?sort=today_views",
+            MissavSitePlugin.resolveFeedUrl(FeedRequest(SiteId.MISSAV, query = "midv", sort = FeedSort.POPULAR)),
+        )
+        val savedLink = missav.linkResolver.resolve("https://missav.ws/search/midv?sort=saved") as ResolvedLink.Feed
+        assertEquals(FeedSort.LIKES, savedLink.request.sort)
+
+        // Jable
+        val jable = JableSitePlugin(http, rateLimitBackoffMs = 0L)
+        assertEquals(
+            listOf(FeedSort.NEWEST, FeedSort.VIEWS, FeedSort.POPULAR),
+            jable.searchSource.supportedSearchSorts(SearchScope.ALL),
+        )
+        assertEquals(
+            "https://jable.vip/vodsearch/midv-time----------/",
+            JableSitePlugin.resolveFeedUrl(FeedRequest(SiteId.JABLE, query = "midv", sort = FeedSort.NEWEST)),
+        )
+        assertEquals(
+            "https://jable.vip/vodsearch/midv-hits----------/",
+            JableSitePlugin.resolveFeedUrl(FeedRequest(SiteId.JABLE, query = "midv", sort = FeedSort.VIEWS)),
+        )
+
+        // Pornhub
+        val pornhub = PornhubSitePlugin(http, rateLimitBackoffMs = 0L)
+        assertEquals(
+            listOf(FeedSort.RELEVANCE, FeedSort.NEWEST, FeedSort.VIEWS, FeedSort.RATING, FeedSort.DURATION),
+            pornhub.searchSource.supportedSearchSorts(SearchScope.ALL),
+        )
+        assertEquals(listOf(FeedSort.NEWEST), pornhub.searchSource.supportedSearchSorts(SearchScope.AUTHOR))
+        assertEquals(
+            "https://www.pornhub.com/video/search?search=anime",
+            PornhubSitePlugin.resolveFeedUrl(FeedRequest(SiteId.PORNHUB, query = "anime", sort = FeedSort.RELEVANCE)),
+        )
+        assertEquals(
+            "https://www.pornhub.com/video/search?search=anime&o=mr&page=2",
+            PornhubSitePlugin.resolveFeedUrl(FeedRequest(SiteId.PORNHUB, query = "anime", sort = FeedSort.NEWEST, page = 2)),
+        )
+        assertEquals(
+            "https://www.pornhub.com/video/search?search=anime&o=mv",
+            PornhubSitePlugin.resolveFeedUrl(FeedRequest(SiteId.PORNHUB, query = "anime", sort = FeedSort.VIEWS)),
+        )
+        assertEquals(
+            "https://www.pornhub.com/video/search?search=anime&o=tr",
+            PornhubSitePlugin.resolveFeedUrl(FeedRequest(SiteId.PORNHUB, query = "anime", sort = FeedSort.RATING)),
+        )
+        assertEquals(
+            "https://www.pornhub.com/video/search?search=anime&o=tr",
+            PornhubSitePlugin.resolveFeedUrl(FeedRequest(SiteId.PORNHUB, query = "anime", sort = FeedSort.LIKES)),
+        )
+        assertEquals(
+            "https://www.pornhub.com/video/search?search=anime&o=lg",
+            PornhubSitePlugin.resolveFeedUrl(FeedRequest(SiteId.PORNHUB, query = "anime", sort = FeedSort.DURATION)),
+        )
+        val phSortedLink = pornhub.linkResolver.resolve("https://www.pornhub.com/video/search?search=anime&o=lg") as ResolvedLink.Feed
+        assertEquals(FeedSort.DURATION, phSortedLink.request.sort)
+
+        // KBJFree & rou.video
+        val kbj = KbjfreeSitePlugin(http, rateLimitBackoffMs = 0L)
+        assertEquals(listOf(FeedSort.NEWEST), kbj.searchSource.supportedSearchSorts(SearchScope.ALL))
+        val rou = RouvideoSitePlugin(http, rateLimitBackoffMs = 0L)
+        assertEquals(listOf(FeedSort.NEWEST), rou.searchSource.supportedSearchSorts(SearchScope.ALL))
+    }
 }

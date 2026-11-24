@@ -53,6 +53,7 @@ class GallerySitesPluginsTest {
 
         assertEquals(listOf(FeedSort.NEWEST, FeedSort.POPULAR), plugin.feedSource.supportedSorts(FeedRequest(SiteId.FOURKHD)))
         assertEquals(listOf(FeedSort.NEWEST), plugin.feedSource.supportedSorts(FeedRequest(SiteId.FOURKHD, query = "sample")))
+        assertEquals(listOf(FeedSort.NEWEST), plugin.searchSource.supportedSearchSorts(SearchScope.ALL))
         assertEquals(listOf(FeedSort.NEWEST), plugin.feedSource.supportedSorts(FeedRequest(SiteId.FOURKHD, category = "cosplay")))
         assertEquals(listOf(FeedSort.POPULAR), plugin.feedSource.supportedSorts(FeedRequest(SiteId.FOURKHD, section = "popular")))
 

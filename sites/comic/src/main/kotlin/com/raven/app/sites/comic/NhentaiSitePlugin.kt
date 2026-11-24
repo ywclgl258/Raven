@@ -83,7 +83,7 @@ class NhentaiSitePlugin(
 
         override fun supportedSorts(request: FeedRequest): List<FeedSort> =
             if (isPopularSection(request)) listOf(FeedSort.POPULAR)
-            else listOf(FeedSort.NEWEST, FeedSort.POPULAR)
+            else listOf(FeedSort.NEWEST, FeedSort.POPULAR, FeedSort.TRENDING)
     }
 
     override val searchSource: SearchSource = object : SearchSource {
@@ -99,6 +99,9 @@ class NhentaiSitePlugin(
         override val supportedFilters: Set<AdvancedFilterField> = SUPPORTED_FILTERS
 
         override val supportsExcludeTags: Boolean = true
+
+        override fun supportedSearchSorts(scope: SearchScope): List<FeedSort> =
+            listOf(FeedSort.NEWEST, FeedSort.POPULAR, FeedSort.TRENDING)
     }
 
     override val gallerySource: GallerySource = object : GallerySource {
@@ -227,7 +230,9 @@ class NhentaiSitePlugin(
     }
 
     private suspend fun loadDualLanguageFeed(request: FeedRequest): FeedPage {
-        val isPopular = isPopularSection(request) || request.sort == FeedSort.POPULAR
+        val isPopular = isPopularSection(request) ||
+            request.sort == FeedSort.POPULAR ||
+            request.sort == FeedSort.TRENDING
         val strategy = if (isPopular) DualMergeStrategy.INTERLEAVED else DualMergeStrategy.DESCENDING_NUMERIC_ID
 
         suspend fun fetchStreamSlice(language: ComicLanguage, page: Int, excludeChinese: Boolean): StreamSlice<MediaItem> {
@@ -298,9 +303,9 @@ class NhentaiSitePlugin(
             popularSection && terms.isEmpty() -> {
                 base.addPathSegments("galleries/popular").toString()
             }
-            terms.isNotEmpty() || request.sort == FeedSort.POPULAR -> {
+            terms.isNotEmpty() || request.sort == FeedSort.POPULAR || request.sort == FeedSort.TRENDING -> {
                 val sortParam = when {
-                    popularSection -> "popular-today"
+                    popularSection || request.sort == FeedSort.TRENDING -> "popular-today"
                     request.sort == FeedSort.POPULAR -> "popular"
                     else -> "date"
                 }
@@ -747,7 +752,7 @@ class NhentaiSitePlugin(
                 SiteCapability.CHARACTERS,
                 SiteCapability.LANGUAGE_FILTER,
             ),
-            feedSorts = listOf(FeedSort.NEWEST, FeedSort.POPULAR),
+            feedSorts = listOf(FeedSort.NEWEST, FeedSort.POPULAR, FeedSort.TRENDING),
             sections = buildList {
                 add(SiteSectionSpec(id = "latest", title = "最新画廊", defaultSort = FeedSort.NEWEST))
                 add(SiteSectionSpec(id = "popular", title = "今日热门", defaultSort = FeedSort.POPULAR))

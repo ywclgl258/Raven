@@ -103,9 +103,14 @@ class MissavSitePlugin(
         }
 
         override fun supportedSorts(request: FeedRequest): List<FeedSort> = when {
-            !request.query.isNullOrBlank() || !request.category.isNullOrBlank() -> listOf(FeedSort.NEWEST)
+            !request.query.isNullOrBlank() -> if (request.scope == SearchScope.ALL) {
+                listOf(FeedSort.RELEVANCE, FeedSort.NEWEST, FeedSort.VIEWS, FeedSort.LIKES, FeedSort.POPULAR)
+            } else {
+                listOf(FeedSort.NEWEST, FeedSort.VIEWS, FeedSort.LIKES, FeedSort.POPULAR)
+            }
+            !request.category.isNullOrBlank() -> listOf(FeedSort.NEWEST, FeedSort.VIEWS, FeedSort.LIKES, FeedSort.POPULAR)
             request.section == "popular" -> listOf(FeedSort.POPULAR)
-            else -> listOf(FeedSort.NEWEST, FeedSort.VIEWS)
+            else -> listOf(FeedSort.NEWEST, FeedSort.VIEWS, FeedSort.LIKES, FeedSort.POPULAR)
         }
     }
 
@@ -116,6 +121,12 @@ class MissavSitePlugin(
             SearchScope.TAG,
             SearchScope.AUTHOR,
         )
+        override fun supportedSearchSorts(scope: SearchScope): List<FeedSort> =
+            if (scope == SearchScope.ALL) {
+                listOf(FeedSort.RELEVANCE, FeedSort.NEWEST, FeedSort.VIEWS, FeedSort.LIKES, FeedSort.POPULAR)
+            } else {
+                listOf(FeedSort.NEWEST, FeedSort.VIEWS, FeedSort.LIKES, FeedSort.POPULAR)
+            }
     }
 
     override val videoSource: VideoSource = object : VideoSource {
@@ -218,19 +229,37 @@ class MissavSitePlugin(
             val page = VideoSiteSupport.queryParam(uri, "page")?.toIntOrNull()?.coerceAtLeast(1) ?: 1
             val sort = when (VideoSiteSupport.queryParam(uri, "sort")) {
                 "views" -> FeedSort.VIEWS
-                "monthly_views" -> FeedSort.POPULAR
-                else -> FeedSort.NEWEST
+                "saved" -> FeedSort.LIKES
+                "monthly_views", "today_views" -> FeedSort.POPULAR
+                "released_at", "published_at" -> FeedSort.NEWEST
+                else -> FeedSort.DEFAULT
             }
             return when (parts[0].lowercase()) {
                 "search" -> parts.getOrNull(1)?.takeIf { it.isNotBlank() }?.let {
-                    ResolvedLink.Feed(FeedRequest(SiteId.MISSAV, query = it, scope = SearchScope.ALL, page = page))
+                    ResolvedLink.Feed(
+                        FeedRequest(
+                            siteId = SiteId.MISSAV,
+                            query = it,
+                            scope = SearchScope.ALL,
+                            sort = if (sort == FeedSort.DEFAULT) FeedSort.RELEVANCE else sort,
+                            page = page,
+                        ),
+                    )
                 }
                 "genres" -> {
                     val slug = parts.getOrNull(1)?.takeIf { it.isNotBlank() }
                     if (slug == null) {
                         ResolvedLink.Directory(SiteId.MISSAV, "genres", "$BASE_URL/genres")
                     } else {
-                        ResolvedLink.Feed(FeedRequest(SiteId.MISSAV, query = slug, scope = SearchScope.TAG, page = page))
+                        ResolvedLink.Feed(
+                            FeedRequest(
+                                siteId = SiteId.MISSAV,
+                                query = slug,
+                                scope = SearchScope.TAG,
+                                sort = if (sort == FeedSort.DEFAULT) FeedSort.NEWEST else sort,
+                                page = page,
+                            ),
+                        )
                     }
                 }
                 "actresses" -> {
@@ -238,14 +267,32 @@ class MissavSitePlugin(
                     if (slug == null) {
                         ResolvedLink.Directory(SiteId.MISSAV, "actresses", "$BASE_URL/actresses")
                     } else {
-                        ResolvedLink.Feed(FeedRequest(SiteId.MISSAV, query = slug, scope = SearchScope.AUTHOR, page = page))
+                        ResolvedLink.Feed(
+                            FeedRequest(
+                                siteId = SiteId.MISSAV,
+                                query = slug,
+                                scope = SearchScope.AUTHOR,
+                                sort = if (sort == FeedSort.DEFAULT) FeedSort.NEWEST else sort,
+                                page = page,
+                            ),
+                        )
                     }
                 }
                 "uncensored-leak", "chinese-subtitle" -> ResolvedLink.Feed(
-                    FeedRequest(SiteId.MISSAV, category = parts[0].lowercase(), page = page),
+                    FeedRequest(
+                        siteId = SiteId.MISSAV,
+                        category = parts[0].lowercase(),
+                        sort = if (sort == FeedSort.DEFAULT) FeedSort.NEWEST else sort,
+                        page = page,
+                    ),
                 )
                 "new", "release" -> ResolvedLink.Feed(
-                    FeedRequest(SiteId.MISSAV, section = parts[0].lowercase(), sort = sort, page = page),
+                    FeedRequest(
+                        siteId = SiteId.MISSAV,
+                        section = parts[0].lowercase(),
+                        sort = if (sort == FeedSort.DEFAULT) FeedSort.NEWEST else sort,
+                        page = page,
+                    ),
                 )
                 else -> null
             }
@@ -278,7 +325,7 @@ class MissavSitePlugin(
                 SiteCapability.MIRRORS,
             ),
             accessNote = "受限时切换镜像",
-            feedSorts = listOf(FeedSort.NEWEST, FeedSort.VIEWS, FeedSort.POPULAR),
+            feedSorts = listOf(FeedSort.NEWEST, FeedSort.VIEWS, FeedSort.LIKES, FeedSort.POPULAR),
             sections = listOf(
                 SiteSectionSpec("new", "最近更新", "刚上架的作品", defaultSort = FeedSort.NEWEST),
                 SiteSectionSpec("release", "新作上市", defaultSort = FeedSort.NEWEST),
@@ -309,29 +356,35 @@ class MissavSitePlugin(
             val category = request.category?.trim().orEmpty()
             val section = request.section?.trim().orEmpty()
 
+            fun withSort(url: String, isSearch: Boolean): String {
+                val sortParam = when (request.sort) {
+                    FeedSort.NEWEST -> if (isSearch) "released_at" else null
+                    FeedSort.VIEWS -> "views"
+                    FeedSort.LIKES -> "saved"
+                    FeedSort.POPULAR -> if (isSearch) "today_views" else "monthly_views"
+                    else -> null
+                }
+                return if (sortParam != null) "$url?sort=$sortParam" else url
+            }
+
             if (query.isNotEmpty()) {
                 val encoded = HtmlUrlCleaner.encodePathSegment(query)
-                return when (request.scope) {
-                    SearchScope.TAG -> paged("$base/genres/$encoded")
-                    SearchScope.AUTHOR -> paged("$base/actresses/$encoded")
-                    SearchScope.ALL, SearchScope.CHARACTER -> paged("$base/search/$encoded")
+                val targetUrl = when (request.scope) {
+                    SearchScope.TAG -> withSort("$base/genres/$encoded", isSearch = false)
+                    SearchScope.AUTHOR -> withSort("$base/actresses/$encoded", isSearch = false)
+                    SearchScope.ALL, SearchScope.CHARACTER -> withSort("$base/search/$encoded", isSearch = true)
                 }
+                return paged(targetUrl)
             }
             if (category.isNotEmpty()) {
-                return paged("$base/${category.trim('/')}")
+                return paged(withSort("$base/${category.trim('/')}", isSearch = false))
             }
             if (section == "popular") {
                 return paged("$base/new?sort=monthly_views")
             }
 
             val path = section.ifBlank { "new" }.trim('/')
-            val sortParam = when (request.sort) {
-                FeedSort.VIEWS -> "views"
-                FeedSort.POPULAR -> "monthly_views"
-                else -> null
-            }
-            val url = if (sortParam != null) "$base/$path?sort=$sortParam" else "$base/$path"
-            return paged(url)
+            return paged(withSort("$base/$path", isSearch = false))
         }
 
         fun feedTitle(request: FeedRequest): String {

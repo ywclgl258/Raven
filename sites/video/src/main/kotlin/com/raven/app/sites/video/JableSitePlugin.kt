@@ -93,7 +93,7 @@ class JableSitePlugin(
 
         override fun supportedSorts(request: FeedRequest): List<FeedSort> = when {
             request.section == "hot" -> listOf(FeedSort.POPULAR)
-            !request.query.isNullOrBlank() -> listOf(FeedSort.NEWEST, FeedSort.POPULAR)
+            !request.query.isNullOrBlank() -> listOf(FeedSort.NEWEST, FeedSort.VIEWS, FeedSort.POPULAR)
             else -> listOf(FeedSort.NEWEST)
         }
     }
@@ -101,6 +101,8 @@ class JableSitePlugin(
     override val searchSource: SearchSource = object : SearchSource {
         override suspend fun search(request: FeedRequest): FeedPage = feedSource.loadFeed(request)
         override val supportedScopes: Set<SearchScope> = setOf(SearchScope.ALL)
+        override fun supportedSearchSorts(scope: SearchScope): List<FeedSort> =
+            listOf(FeedSort.NEWEST, FeedSort.VIEWS, FeedSort.POPULAR)
     }
 
     override val videoSource: VideoSource = object : VideoSource {
@@ -262,7 +264,11 @@ class JableSitePlugin(
 
             if (query.isNotEmpty()) {
                 val encoded = HtmlUrlCleaner.encodeQueryParam(query)
-                val sortSuffix = if (request.sort == FeedSort.POPULAR) "-hits" else "-time"
+                val sortSuffix = if (request.sort == FeedSort.POPULAR || request.sort == FeedSort.VIEWS) {
+                    "-hits"
+                } else {
+                    "-time"
+                }
                 val path = if (page <= 1) {
                     "/vodsearch/$encoded$sortSuffix----------/"
                 } else {

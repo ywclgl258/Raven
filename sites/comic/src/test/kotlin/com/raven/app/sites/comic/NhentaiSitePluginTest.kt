@@ -241,4 +241,27 @@ class NhentaiSitePluginTest {
         val catFeed = resolver.resolve("https://nhentai.net/category/manga/") as ResolvedLink.Feed
         assertEquals("manga", catFeed.request.category)
     }
+
+    @Test
+    fun `nhentai search wires date, popular, popular-today sort params and supportedSearchSorts`() {
+        val plugin = NhentaiSitePlugin(FakeHttpClientAdapter())
+        assertEquals(
+            listOf(FeedSort.NEWEST, FeedSort.POPULAR, FeedSort.TRENDING),
+            plugin.searchSource.supportedSearchSorts(SearchScope.ALL),
+        )
+        val newestUrl = ComicUrl.requireParse(
+            plugin.resolveApiUrl(FeedRequest(SiteId.NHENTAI, query = "elf", sort = FeedSort.NEWEST)),
+        )
+        assertEquals("date", newestUrl.queryParameter("sort"))
+
+        val popularUrl = ComicUrl.requireParse(
+            plugin.resolveApiUrl(FeedRequest(SiteId.NHENTAI, query = "elf", sort = FeedSort.POPULAR)),
+        )
+        assertEquals("popular", popularUrl.queryParameter("sort"))
+
+        val trendingUrl = ComicUrl.requireParse(
+            plugin.resolveApiUrl(FeedRequest(SiteId.NHENTAI, query = "elf", sort = FeedSort.TRENDING)),
+        )
+        assertEquals("popular-today", trendingUrl.queryParameter("sort"))
+    }
 }

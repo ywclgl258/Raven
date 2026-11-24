@@ -93,7 +93,7 @@ class HitomiSitePlugin(
         override suspend fun loadFeed(request: FeedRequest): FeedPage = executeFeed(request)
 
         override fun supportedSorts(request: FeedRequest): List<FeedSort> =
-            listOf(FeedSort.NEWEST, FeedSort.POPULAR)
+            listOf(FeedSort.NEWEST, FeedSort.OLDEST, FeedSort.POPULAR)
     }
 
     override val searchSource: SearchSource = object : SearchSource {
@@ -111,6 +111,9 @@ class HitomiSitePlugin(
         )
 
         override val supportsExcludeTags: Boolean = true
+
+        override fun supportedSearchSorts(scope: SearchScope): List<FeedSort> =
+            listOf(FeedSort.NEWEST, FeedSort.OLDEST, FeedSort.POPULAR)
     }
 
     override val gallerySource: GallerySource = object : GallerySource {
@@ -211,6 +214,7 @@ class HitomiSitePlugin(
         }
         val query = buildQuery(request)
         val popular = isPopularRequest(request)
+        val oldest = !popular && request.sort == FeedSort.OLDEST
         val languages = request.language.languageKeys()
         val singlePositiveFacet = if (query.isBlank()) {
             null
@@ -223,7 +227,7 @@ class HitomiSitePlugin(
         var nextCursor: String? = null
         var hasMore: Boolean
 
-        if (query.isBlank() && languages.size > 1) {
+        if (query.isBlank() && languages.size > 1 && !oldest) {
             val merged = mergeDualLanguageNozomi(request, popular)
             pageIds = merged.items
             nextCursor = merged.nextCursor
@@ -233,20 +237,39 @@ class HitomiSitePlugin(
             (query.isBlank() && languages.size == 1)
         ) {
             val facet = languages.singleOrNull()?.let { "language:$it" } ?: singlePositiveFacet.orEmpty()
-            val offset = (request.page - 1L) * PAGE_BYTES
-            val payload = fetchBinary(
-                url = nozomiUrl(facet, popular),
-                offset = offset,
-                length = PAGE_BYTES,
-                allowMissing = true,
-            )
-            pageIds = decodeNozomiIds(payload.bytes)
-            val totalIds = payload.totalBytes / 4L
-            val computedTotalPages = ((totalIds + PAGE_SIZE - 1) / PAGE_SIZE).toInt().coerceAtLeast(1)
-            totalPages = computedTotalPages
-            hasMore = request.page < computedTotalPages && pageIds.isNotEmpty()
+            val url = nozomiUrl(facet, popular)
+            if (oldest) {
+                val probe = fetchBinary(url = url, offset = 0L, length = 4, allowMissing = true)
+                val totalBytes = probe.totalBytes
+                val totalIds = totalBytes / 4L
+                val computedTotalPages = ((totalIds + PAGE_SIZE - 1) / PAGE_SIZE).toInt().coerceAtLeast(1)
+                val endByte = totalBytes - (request.page - 1L) * PAGE_BYTES
+                pageIds = if (totalBytes <= 0L || endByte <= 0L) {
+                    emptyList()
+                } else {
+                    val startByte = maxOf(0L, endByte - PAGE_BYTES)
+                    val sliceLen = (endByte - startByte).toInt()
+                    val payload = fetchBinary(url = url, offset = startByte, length = sliceLen, allowMissing = true)
+                    decodeNozomiIds(payload.bytes).asReversed()
+                }
+                totalPages = computedTotalPages
+                hasMore = request.page < computedTotalPages && pageIds.isNotEmpty()
+            } else {
+                val offset = (request.page - 1L) * PAGE_BYTES
+                val payload = fetchBinary(
+                    url = url,
+                    offset = offset,
+                    length = PAGE_BYTES,
+                    allowMissing = true,
+                )
+                pageIds = decodeNozomiIds(payload.bytes)
+                val totalIds = payload.totalBytes / 4L
+                val computedTotalPages = ((totalIds + PAGE_SIZE - 1) / PAGE_SIZE).toInt().coerceAtLeast(1)
+                totalPages = computedTotalPages
+                hasMore = request.page < computedTotalPages && pageIds.isNotEmpty()
+            }
         } else {
-            val allIds = executeSearch(query, popular, request.language)
+            val allIds = executeSearch(query, popular, request.language, oldest = oldest)
             val start = (request.page - 1) * PAGE_SIZE
             pageIds = if (start < allIds.size) allIds.subList(start, minOf(start + PAGE_SIZE, allIds.size)) else emptyList()
             val computedTotalPages = ((allIds.size + PAGE_SIZE - 1) / PAGE_SIZE).coerceAtLeast(1)
@@ -312,8 +335,9 @@ class HitomiSitePlugin(
         query: String,
         popular: Boolean,
         language: ComicLanguage,
+        oldest: Boolean = false,
     ): List<Int> {
-        val cacheKey = "$query|$popular|${language.name}"
+        val cacheKey = "$query|$popular|$oldest|${language.name}"
         searchCache.get(cacheKey)?.let { return it }
 
         val terms = if (query.isBlank()) emptyList() else parseTerms(query)
@@ -338,22 +362,28 @@ class HitomiSitePlugin(
 
         val languages = language.languageKeys()
         if (languages.isNotEmpty()) {
-            val baseCandidates = included.orEmpty()
+            val baseCandidates = included
             included = buildSet {
                 for (lang in languages) {
                     val langBytes = fetchBinary(nozomiUrl("language:$lang", popular = false), allowMissing = true).bytes
-                    addAll(orderedMatches(langBytes, baseCandidates))
+                    if (baseCandidates == null) {
+                        addAll(decodeNozomiIds(langBytes))
+                    } else {
+                        addAll(orderedMatches(langBytes, baseCandidates))
+                    }
                 }
             }
             if (included.isEmpty()) return emptyList()
         }
 
         val matchedSet = included.orEmpty()
-        val ordered = if (popular) {
-            val popBytes = fetchBinary(nozomiUrl("", popular = true)).bytes
-            orderedMatches(popBytes, matchedSet)
-        } else {
-            matchedSet.sortedDescending()
+        val ordered = when {
+            popular -> {
+                val popBytes = fetchBinary(nozomiUrl("", popular = true)).bytes
+                orderedMatches(popBytes, matchedSet)
+            }
+            oldest -> matchedSet.sorted()
+            else -> matchedSet.sortedDescending()
         }
 
         val finalIds = ordered.filter { it !in excluded }
@@ -832,7 +862,7 @@ class HitomiSitePlugin(
                 SiteCapability.CHARACTERS,
                 SiteCapability.LANGUAGE_FILTER,
             ),
-            feedSorts = listOf(FeedSort.NEWEST, FeedSort.POPULAR),
+            feedSorts = listOf(FeedSort.NEWEST, FeedSort.OLDEST, FeedSort.POPULAR),
             sections = buildList {
                 add(SiteSectionSpec(id = "latest", title = "最新画廊", defaultSort = FeedSort.NEWEST))
                 add(SiteSectionSpec(id = "popular", title = "年度热门", defaultSort = FeedSort.POPULAR))

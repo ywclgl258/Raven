@@ -59,6 +59,7 @@ interface SearchSource {
     val supportedFilters: Set<AdvancedFilterField> get() = emptySet()
     val supportsExcludeTags: Boolean get() = false
     val isDirectorySearch: Boolean get() = false
+    fun supportedSearchSorts(scope: SearchScope = SearchScope.ALL): List<FeedSort> = emptyList()
 }
 
 interface DirectorySource {

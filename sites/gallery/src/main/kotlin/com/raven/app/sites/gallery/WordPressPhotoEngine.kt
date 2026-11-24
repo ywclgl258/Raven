@@ -74,6 +74,9 @@ class WordPressPhotoEngine(
     override val isDirectorySearch: Boolean
         get() = config.directoryConfig?.isDirectorySearch == true
 
+    override fun supportedSearchSorts(scope: SearchScope): List<FeedSort> =
+        supportedSorts(FeedRequest(siteId = siteId, query = "search", scope = scope))
+
     // ---- FeedSource ----
 
     override fun supportedSorts(request: FeedRequest): List<FeedSort> =

@@ -110,6 +110,12 @@ class R34vSitePlugin(
             AdvancedFilterField.RATING,
         )
         override val supportsExcludeTags: Boolean = false
+        override fun supportedSearchSorts(scope: SearchScope): List<FeedSort> =
+            if (scope == SearchScope.ALL) {
+                descriptor.feedSorts
+            } else {
+                descriptor.feedSorts.filterNot { it == FeedSort.RELEVANCE }
+            }
     }
 
     override val videoSource: VideoSource = object : VideoSource {
@@ -438,6 +444,7 @@ class R34vSitePlugin(
                 FeedSort.RELEVANCE,
                 FeedSort.NEWEST,
                 FeedSort.VIEWS,
+                FeedSort.LIKES,
                 FeedSort.RATING,
                 FeedSort.DURATION,
                 FeedSort.RANDOM,
@@ -533,15 +540,17 @@ class R34vSitePlugin(
         private fun sortToParam(sort: FeedSort): String = when (sort) {
             FeedSort.NEWEST -> "post_date"
             FeedSort.VIEWS, FeedSort.POPULAR -> "video_viewed"
+            FeedSort.LIKES -> "most_favourited"
             FeedSort.RATING -> "rating"
             FeedSort.DURATION -> "duration"
             FeedSort.RANDOM -> "pseudo_rand"
-            FeedSort.RELEVANCE, FeedSort.DEFAULT, FeedSort.TRENDING -> ""
+            FeedSort.RELEVANCE, FeedSort.DEFAULT, FeedSort.TRENDING, FeedSort.OLDEST -> ""
         }
 
         private fun parseSortParam(raw: String?): FeedSort = when (raw?.lowercase()) {
             "post_date" -> FeedSort.NEWEST
             "video_viewed" -> FeedSort.VIEWS
+            "most_favourited" -> FeedSort.LIKES
             "rating" -> FeedSort.RATING
             "duration" -> FeedSort.DURATION
             "pseudo_rand" -> FeedSort.RANDOM

@@ -104,6 +104,7 @@ class KbjfreeSitePlugin(
     override val searchSource: SearchSource = object : SearchSource {
         override suspend fun search(request: FeedRequest): FeedPage = feedSource.loadFeed(request)
         override val supportedScopes: Set<SearchScope> = setOf(SearchScope.ALL)
+        override fun supportedSearchSorts(scope: SearchScope): List<FeedSort> = listOf(FeedSort.NEWEST)
     }
 
     override val videoSource: VideoSource = object : VideoSource {

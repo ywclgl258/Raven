@@ -215,6 +215,8 @@ class EhSharedEngine(
 
     override fun supportedSorts(request: FeedRequest): List<FeedSort> = listOf(FeedSort.NEWEST)
 
+    override fun supportedSearchSorts(scope: SearchScope): List<FeedSort> = listOf(FeedSort.NEWEST)
+
     fun resolveFeedUrl(request: FeedRequest): String {
         val cursorRaw = request.cursor?.trim().orEmpty()
         if (cursorRaw.isNotEmpty()) {

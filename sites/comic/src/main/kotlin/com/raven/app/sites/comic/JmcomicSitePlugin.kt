@@ -77,8 +77,8 @@ class JmcomicSitePlugin(
 
         override fun supportedSorts(request: FeedRequest): List<FeedSort> = when {
             isChaptersRequest(request) -> emptyList()
-            !request.query.isNullOrBlank() -> listOf(FeedSort.RELEVANCE)
-            else -> listOf(FeedSort.NEWEST)
+            !request.query.isNullOrBlank() -> SEARCH_SORTS
+            else -> listOf(FeedSort.NEWEST, FeedSort.VIEWS, FeedSort.LIKES, FeedSort.POPULAR)
         }
     }
 
@@ -86,6 +86,8 @@ class JmcomicSitePlugin(
         override suspend fun search(request: FeedRequest): FeedPage = executeFeed(request)
 
         override val supportedScopes: Set<SearchScope> = setOf(SearchScope.ALL)
+
+        override fun supportedSearchSorts(scope: SearchScope): List<FeedSort> = SEARCH_SORTS
     }
 
     override val gallerySource: GallerySource = object : GallerySource {
@@ -387,10 +389,12 @@ class JmcomicSitePlugin(
             throw SiteException.ParseError("页码无效：${request.page}", siteId = SiteId.JMCOMIC)
         }
         var builder = ComicUrl.requireParse(descriptor.baseUrl, SiteId.JMCOMIC)
+        val sortParam = sortToQueryParam(request.sort)
         val query = request.query?.trim().orEmpty()
         if (query.isNotEmpty()) {
             builder = builder.addPathSegments("search/photos")
                 .addQueryParameter("search_query", query)
+            if (sortParam != null) builder = builder.addQueryParameter("o", sortParam)
             if (request.page > 1) builder = builder.addQueryParameter("page", request.page.toString())
             return builder.toString()
         }
@@ -401,7 +405,7 @@ class JmcomicSitePlugin(
         if (categorySlug != null) {
             builder = builder.addPathSegment(categorySlug)
         }
-        builder = builder.addQueryParameter("o", "mr")
+        builder = builder.addQueryParameter("o", sortParam ?: "mr")
         if (request.page > 1) builder = builder.addQueryParameter("page", request.page.toString())
         return builder.toString()
     }
@@ -685,19 +689,18 @@ class JmcomicSitePlugin(
         return when {
             url.encodedPath == SEARCH_PATH -> {
                 val query = url.queryParameter("search_query")?.takeIf { it.isNotBlank() } ?: return null
-                FeedRequest(siteId = SiteId.JMCOMIC, query = query, sort = FeedSort.RELEVANCE, page = page)
+                val sort = parseSortQueryParam(url.queryParameter("o")) ?: FeedSort.RELEVANCE
+                FeedRequest(siteId = SiteId.JMCOMIC, query = query, sort = sort, page = page)
             }
             url.encodedPath == CATALOGUE_PATH -> {
-                if (url.queryParameter("o") == "mr") {
-                    FeedRequest(siteId = SiteId.JMCOMIC, section = "latest", sort = FeedSort.NEWEST, page = page)
-                } else {
-                    null
-                }
+                val sort = parseSortQueryParam(url.queryParameter("o")) ?: return null
+                FeedRequest(siteId = SiteId.JMCOMIC, section = "latest", sort = sort, page = page)
             }
             url.encodedPath.startsWith("$CATALOGUE_PATH/") -> {
                 val slug = url.pathSegments.getOrNull(1)?.lowercase()
-                if (url.pathSegments.size == 2 && slug in CATEGORY_SLUGS && url.queryParameter("o") == "mr") {
-                    FeedRequest(siteId = SiteId.JMCOMIC, category = slug, sort = FeedSort.NEWEST, page = page)
+                val sort = parseSortQueryParam(url.queryParameter("o"))
+                if (url.pathSegments.size == 2 && slug in CATEGORY_SLUGS && sort != null) {
+                    FeedRequest(siteId = SiteId.JMCOMIC, category = slug, sort = sort, page = page)
                 } else {
                     null
                 }
@@ -841,6 +844,30 @@ class JmcomicSitePlugin(
         private val SCRIPT_VAR_REGEX =
             Regex("""(?:^|(?<=[;\r\n]))\s*(?:var|let|const)\s+(scramble_id|aid|speed)\s*=\s*(['"]?)([0-9]*)\2\s*;""")
 
+        val SEARCH_SORTS: List<FeedSort> = listOf(
+            FeedSort.RELEVANCE,
+            FeedSort.NEWEST,
+            FeedSort.VIEWS,
+            FeedSort.LIKES,
+            FeedSort.POPULAR,
+        )
+
+        private fun sortToQueryParam(sort: FeedSort): String? = when (sort) {
+            FeedSort.NEWEST -> "mr"
+            FeedSort.VIEWS -> "mv"
+            FeedSort.LIKES -> "tf"
+            FeedSort.POPULAR -> "mp"
+            else -> null
+        }
+
+        private fun parseSortQueryParam(raw: String?): FeedSort? = when (raw?.lowercase()) {
+            "mr" -> FeedSort.NEWEST
+            "mv" -> FeedSort.VIEWS
+            "tf" -> FeedSort.LIKES
+            "mp" -> FeedSort.POPULAR
+            else -> null
+        }
+
         val DESCRIPTOR: SiteDescriptor = SiteDescriptor(
             id = SiteId.JMCOMIC,
             displayName = "JMComic",
@@ -856,7 +883,7 @@ class JmcomicSitePlugin(
                 SiteCapability.MIRRORS,
             ),
             accessNote = "自动选择镜像",
-            feedSorts = listOf(FeedSort.NEWEST, FeedSort.RELEVANCE),
+            feedSorts = listOf(FeedSort.NEWEST, FeedSort.VIEWS, FeedSort.LIKES, FeedSort.POPULAR, FeedSort.RELEVANCE),
             sections = buildList {
                 add(SiteSectionSpec(id = "latest", title = "最新漫画", defaultSort = FeedSort.NEWEST))
                 CATEGORIES.forEach { (key, title) ->

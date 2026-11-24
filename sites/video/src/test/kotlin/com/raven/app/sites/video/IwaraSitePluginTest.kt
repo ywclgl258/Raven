@@ -286,10 +286,50 @@ class IwaraSitePluginTest {
         ) as ResolvedLink.Feed
         assertEquals(MediaKind.PHOTO, apiResolved.request.mediaKind)
         assertEquals(3, apiResolved.request.page)
-        assertEquals(FeedSort.RATING, apiResolved.request.sort)
+        assertEquals(FeedSort.LIKES, apiResolved.request.sort)
         assertEquals("render", apiResolved.request.query)
         assertEquals(listOf("4k"), apiResolved.request.advancedFilters.includeTags)
 
         assertNull(plugin.linkResolver.resolve("http://apiq.iwara.tv/videos?page=0"))
+    }
+
+    @Test
+    fun `iwara search wires native sort params and advertises supportedSearchSorts`() {
+        val plugin = IwaraSitePlugin(FakeHttpClientAdapter(), InMemorySiteSessionStore())
+        assertEquals(
+            listOf(
+                FeedSort.RELEVANCE,
+                FeedSort.NEWEST,
+                FeedSort.TRENDING,
+                FeedSort.POPULAR,
+                FeedSort.VIEWS,
+                FeedSort.LIKES,
+            ),
+            plugin.searchSource.supportedSearchSorts(SearchScope.ALL),
+        )
+        assertEquals(
+            "https://apiq.iwara.tv/search?page=0&limit=20&type=videos&query=miku",
+            IwaraSitePlugin.resolveFeedUrl(FeedRequest(SiteId.IWARA, query = "miku", sort = FeedSort.RELEVANCE)),
+        )
+        assertEquals(
+            "https://apiq.iwara.tv/search?page=0&limit=20&type=videos&query=miku&sort=date",
+            IwaraSitePlugin.resolveFeedUrl(FeedRequest(SiteId.IWARA, query = "miku", sort = FeedSort.NEWEST)),
+        )
+        assertEquals(
+            "https://apiq.iwara.tv/search?page=0&limit=20&type=videos&query=miku&sort=views",
+            IwaraSitePlugin.resolveFeedUrl(FeedRequest(SiteId.IWARA, query = "miku", sort = FeedSort.VIEWS)),
+        )
+        assertEquals(
+            "https://apiq.iwara.tv/search?page=0&limit=20&type=videos&query=miku&sort=likes",
+            IwaraSitePlugin.resolveFeedUrl(FeedRequest(SiteId.IWARA, query = "miku", sort = FeedSort.LIKES)),
+        )
+        assertEquals(
+            "https://apiq.iwara.tv/search?page=0&limit=20&type=videos&query=miku&sort=trending",
+            IwaraSitePlugin.resolveFeedUrl(FeedRequest(SiteId.IWARA, query = "miku", sort = FeedSort.TRENDING)),
+        )
+        assertEquals(
+            "https://apiq.iwara.tv/search?page=0&limit=20&type=videos&query=miku&sort=popularity",
+            IwaraSitePlugin.resolveFeedUrl(FeedRequest(SiteId.IWARA, query = "miku", sort = FeedSort.POPULAR)),
+        )
     }
 }

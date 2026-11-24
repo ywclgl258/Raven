@@ -16,11 +16,14 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
@@ -32,6 +35,7 @@ import androidx.compose.foundation.lazy.staggeredgrid.rememberLazyStaggeredGridS
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowRight
+import androidx.compose.material.icons.automirrored.rounded.Sort
 import androidx.compose.material.icons.outlined.BookmarkAdded
 import androidx.compose.material.icons.outlined.BookmarkBorder
 import androidx.compose.material.icons.outlined.DeleteOutline
@@ -40,10 +44,12 @@ import androidx.compose.material.icons.outlined.History
 import androidx.compose.material.icons.outlined.Lock
 import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material.icons.outlined.Tune
+import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Tag
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -67,11 +73,15 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.raven.app.core.common.TagSuggestion
+import com.raven.app.core.designsystem.component.RavenBottomSheet
 import com.raven.app.core.designsystem.component.RavenEmptyState
 import com.raven.app.core.designsystem.component.RavenErrorState
 import com.raven.app.core.designsystem.component.RavenFilterChip
 import com.raven.app.core.designsystem.component.RavenFilterChipRow
 import com.raven.app.core.designsystem.component.RavenGalleryCard
+import com.raven.app.core.designsystem.component.RavenGroupedDivider
+import com.raven.app.core.designsystem.component.RavenGroupedRow
+import com.raven.app.core.designsystem.component.RavenGroupedSection
 import com.raven.app.core.designsystem.component.RavenLoadingSkeleton
 import com.raven.app.core.designsystem.component.RavenSearchField
 import com.raven.app.core.designsystem.component.RavenSiteSwitcherPill
@@ -185,11 +195,13 @@ fun SearchScreenContent(
 ) {
     val colors = LocalRavenColors.current
     var showSiteSwitcher by rememberSaveable { mutableStateOf(false) }
+    var showSortSheet by rememberSaveable { mutableStateOf(false) }
     var showAdvancedSheet by rememberSaveable { mutableStateOf(false) }
     var showSaveSearchSheet by rememberSaveable { mutableStateOf(false) }
     var actionTargetItem by remember { mutableStateOf<MediaItem?>(null) }
 
     val activeSite = uiState.activeSite
+    val isCustomSort = uiState.sort != uiState.nativeSorts.firstOrNull()
 
     Column(
         modifier = modifier
@@ -373,44 +385,44 @@ fun SearchScreenContent(
             }
         }
 
-        // Mode-specific controls row
+        // Mode-specific controls row (prominent Sort chip ALWAYS pinned at position 0)
         when (uiState.mode) {
             SearchMode.SINGLE_SITE -> {
-                if (uiState.supportedScopes.size > 1 || uiState.availableSorts.size > 1) {
-                    LazyRow(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(top = 4.dp)
-                            .testTag("search_single_controls_row"),
-                        contentPadding = PaddingValues(horizontal = 16.dp),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        if (uiState.supportedScopes.size > 1) {
-                            items(uiState.supportedScopes, key = { "scope_${it.name}" }) { scope ->
-                                RavenFilterChip(
-                                    label = scope.displayLabel(),
-                                    selected = uiState.scope == scope,
-                                    onClick = { onSelectScope(scope) },
-                                    modifier = Modifier.testTag("search_scope_${scope.name.lowercase()}"),
-                                )
-                            }
-                        }
-                        if (uiState.availableSorts.size > 1) {
-                            items(uiState.availableSorts, key = { "sort_${it.name}" }) { sort ->
-                                RavenFilterChip(
-                                    label = sort.displayLabel(),
-                                    selected = uiState.sort == sort,
-                                    onClick = { onSelectSort(sort) },
-                                    modifier = Modifier.testTag("search_sort_${sort.name.lowercase()}"),
-                                )
-                            }
+                LazyRow(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 4.dp)
+                        .testTag("search_single_controls_row"),
+                    contentPadding = PaddingValues(horizontal = 16.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    item(key = "search_sort_chip") {
+                        RavenFilterChip(
+                            label = "排序：${uiState.sort.displayLabel()}",
+                            selected = isCustomSort,
+                            leadingIcon = Icons.AutoMirrored.Rounded.Sort,
+                            onClick = { showSortSheet = true },
+                            modifier = Modifier.testTag("search_sort_chip"),
+                        )
+                    }
+                    if (uiState.supportedScopes.size > 1) {
+                        items(uiState.supportedScopes, key = { "scope_${it.name}" }) { scope ->
+                            RavenFilterChip(
+                                label = scope.displayLabel(),
+                                selected = uiState.scope == scope,
+                                onClick = { onSelectScope(scope) },
+                                modifier = Modifier.testTag("search_scope_${scope.name.lowercase()}"),
+                            )
                         }
                     }
                 }
             }
             SearchMode.CROSS_SITE -> {
                 CrossSiteSourceSelectorBar(
+                    sort = uiState.sort,
+                    isCustomSort = isCustomSort,
+                    onOpenSortSheet = { showSortSheet = true },
                     searchableSites = uiState.searchableSites,
                     selectedSiteIds = uiState.selectedCrossSiteIds,
                     onToggleSite = onToggleCrossSite,
@@ -507,14 +519,29 @@ fun SearchScreenContent(
         )
     }
 
+    if (showSortSheet) {
+        SearchSortPickerSheet(
+            mode = uiState.mode,
+            activeSiteName = activeSite?.displayName,
+            selectedSort = uiState.sort,
+            nativeSorts = uiState.nativeSorts,
+            localSorts = uiState.localSorts,
+            onSelectSort = { sort ->
+                onSelectSort(sort)
+                showSortSheet = false
+            },
+            onDismiss = { showSortSheet = false },
+        )
+    }
+
     if (showSaveSearchSheet) {
         val suggested = uiState.query.trim().ifBlank {
             "${activeSite?.shortName ?: "Raven"} 高级筛选"
         }
         val summary = if (uiState.mode == SearchMode.CROSS_SITE) {
-            "跨站搜索 · ${uiState.selectedCrossSiteIds.size} 个站点"
+            "跨站搜索 · ${uiState.selectedCrossSiteIds.size} 个站点 · ${uiState.sort.displayLabel()}"
         } else {
-            "${activeSite?.displayName ?: "当前站点"} · ${uiState.scope.displayLabel()}"
+            "${activeSite?.displayName ?: "当前站点"} · ${uiState.scope.displayLabel()} · ${uiState.sort.displayLabel()}"
         }
         SaveSearchSheet(
             suggestedName = suggested,
@@ -537,6 +564,94 @@ fun SearchScreenContent(
                 onSubmitSearch()
             },
         )
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun SearchSortPickerSheet(
+    mode: SearchMode,
+    activeSiteName: String?,
+    selectedSort: FeedSort,
+    nativeSorts: List<FeedSort>,
+    localSorts: List<FeedSort>,
+    onSelectSort: (FeedSort) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val colors = LocalRavenColors.current
+    val subtitle = when (mode) {
+        SearchMode.CROSS_SITE -> "向各站点请求最匹配排序，并按所选条件合并重排"
+        SearchMode.SINGLE_SITE -> activeSiteName?.let { "当前站点：$it" }
+    }
+    RavenBottomSheet(
+        onDismissRequest = onDismiss,
+        title = "排序方式",
+        subtitle = subtitle,
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .verticalScroll(rememberScrollState())
+                .testTag("search_sort_sheet"),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            if (nativeSorts.isNotEmpty()) {
+                RavenGroupedSection(
+                    title = if (mode == SearchMode.SINGLE_SITE && localSorts.isNotEmpty()) "站点原生排序" else null,
+                ) {
+                    nativeSorts.forEachIndexed { idx, sort ->
+                        if (idx > 0) RavenGroupedDivider()
+                        val selected = selectedSort == sort
+                        RavenGroupedRow(
+                            title = sort.displayLabel(),
+                            trailingContent = if (selected) {
+                                {
+                                    Icon(
+                                        imageVector = Icons.Rounded.Check,
+                                        contentDescription = "已选中",
+                                        tint = colors.crimson,
+                                    )
+                                }
+                            } else {
+                                null
+                            },
+                            onClick = { onSelectSort(sort) },
+                            modifier = Modifier.testTag("search_sort_${sort.name.lowercase()}"),
+                        )
+                    }
+                }
+            }
+
+            if (mode == SearchMode.SINGLE_SITE && localSorts.isNotEmpty()) {
+                RavenGroupedSection(
+                    title = "已加载结果排序",
+                    footer = "当前站点搜索接口未原生提供以下排序，将在已加载结果内实时重排",
+                ) {
+                    localSorts.forEachIndexed { idx, sort ->
+                        if (idx > 0) RavenGroupedDivider()
+                        val selected = selectedSort == sort
+                        RavenGroupedRow(
+                            title = sort.displayLabel(),
+                            trailingContent = if (selected) {
+                                {
+                                    Icon(
+                                        imageVector = Icons.Rounded.Check,
+                                        contentDescription = "已选中",
+                                        tint = colors.crimson,
+                                    )
+                                }
+                            } else {
+                                null
+                            },
+                            onClick = { onSelectSort(sort) },
+                            modifier = Modifier.testTag("search_sort_${sort.name.lowercase()}"),
+                        )
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(4.dp))
+        }
     }
 }
 
@@ -606,6 +721,9 @@ private fun ModeSegment(
 
 @Composable
 private fun CrossSiteSourceSelectorBar(
+    sort: FeedSort,
+    isCustomSort: Boolean,
+    onOpenSortSheet: () -> Unit,
     searchableSites: List<SiteDescriptor>,
     selectedSiteIds: List<SiteId>,
     onToggleSite: (SiteId) -> Unit,
@@ -624,6 +742,15 @@ private fun CrossSiteSourceSelectorBar(
         horizontalArrangement = Arrangement.spacedBy(6.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
+        item(key = "search_sort_chip") {
+            RavenFilterChip(
+                label = "排序：${sort.displayLabel()}",
+                selected = isCustomSort,
+                leadingIcon = Icons.AutoMirrored.Rounded.Sort,
+                onClick = onOpenSortSheet,
+                modifier = Modifier.testTag("search_sort_chip"),
+            )
+        }
         item(key = "cross_select_all") {
             RavenFilterChip(
                 label = "全部 (${searchableSites.size})",

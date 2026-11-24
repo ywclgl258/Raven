@@ -99,7 +99,12 @@ class PornhubSitePlugin(
         }
 
         override fun supportedSorts(request: FeedRequest): List<FeedSort> = when {
-            !request.query.isNullOrBlank() || !request.category.isNullOrBlank() -> listOf(FeedSort.NEWEST)
+            !request.query.isNullOrBlank() -> if (request.scope == SearchScope.AUTHOR) {
+                listOf(FeedSort.NEWEST)
+            } else {
+                SEARCH_SORTS
+            }
+            !request.category.isNullOrBlank() -> listOf(FeedSort.NEWEST)
             request.section == "mostviewed" -> listOf(FeedSort.VIEWS)
             request.section == "toprated" -> listOf(FeedSort.RATING)
             else -> descriptor.feedSorts
@@ -113,6 +118,8 @@ class PornhubSitePlugin(
             SearchScope.TAG,
             SearchScope.AUTHOR,
         )
+        override fun supportedSearchSorts(scope: SearchScope): List<FeedSort> =
+            if (scope == SearchScope.AUTHOR) listOf(FeedSort.NEWEST) else SEARCH_SORTS
     }
 
     override val videoSource: VideoSource = object : VideoSource {
@@ -210,7 +217,14 @@ class PornhubSitePlugin(
                 } else {
                     SearchScope.ALL
                 }
-                return ResolvedLink.Feed(FeedRequest(SiteId.PORNHUB, query = q, scope = scope, page = page))
+                val sort = when (VideoSiteSupport.queryParam(uri, "o")?.lowercase()) {
+                    "mr" -> FeedSort.NEWEST
+                    "mv" -> FeedSort.VIEWS
+                    "tr" -> FeedSort.RATING
+                    "lg" -> FeedSort.DURATION
+                    else -> FeedSort.RELEVANCE
+                }
+                return ResolvedLink.Feed(FeedRequest(SiteId.PORNHUB, query = q, scope = scope, sort = sort, page = page))
             }
 
             val parts = VideoSiteSupport.pathSegments(uri)
@@ -267,6 +281,14 @@ class PornhubSitePlugin(
         private val slugCleanupRegex = Regex("[^a-z0-9]+")
         private val json = Json { ignoreUnknownKeys = true; isLenient = true }
 
+        val SEARCH_SORTS: List<FeedSort> = listOf(
+            FeedSort.RELEVANCE,
+            FeedSort.NEWEST,
+            FeedSort.VIEWS,
+            FeedSort.RATING,
+            FeedSort.DURATION,
+        )
+
         val DESCRIPTOR: SiteDescriptor = SiteDescriptor(
             id = SiteId.PORNHUB,
             displayName = "Pornhub",
@@ -285,7 +307,7 @@ class PornhubSitePlugin(
                 SiteCapability.RELATED,
                 SiteCapability.STREAM_QUALITIES,
             ),
-            feedSorts = listOf(FeedSort.NEWEST, FeedSort.VIEWS, FeedSort.RATING),
+            feedSorts = listOf(FeedSort.NEWEST, FeedSort.VIEWS, FeedSort.RATING, FeedSort.DURATION),
             sections = listOf(
                 SiteSectionSpec("newest", "最新", "刚发布的视频", defaultSort = FeedSort.NEWEST),
                 SiteSectionSpec("mostviewed", "最多播放", defaultSort = FeedSort.VIEWS),
@@ -313,10 +335,17 @@ class PornhubSitePlugin(
             val section = request.section?.trim().orEmpty()
 
             if (query.isNotEmpty()) {
+                val searchOrder = when (request.sort) {
+                    FeedSort.NEWEST -> "&o=mr"
+                    FeedSort.VIEWS, FeedSort.POPULAR -> "&o=mv"
+                    FeedSort.RATING, FeedSort.LIKES -> "&o=tr"
+                    FeedSort.DURATION -> "&o=lg"
+                    else -> ""
+                }
                 return when (request.scope) {
-                    SearchScope.TAG -> "$base/video/search?search=${HtmlUrlCleaner.encodePathSegment(query)}&t=tag$ampPage"
+                    SearchScope.TAG -> "$base/video/search?search=${HtmlUrlCleaner.encodePathSegment(query)}&t=tag$searchOrder$ampPage"
                     SearchScope.AUTHOR -> "$base/pornstar/${slugify(query)}$qPage"
-                    SearchScope.ALL, SearchScope.CHARACTER -> "$base/video/search?search=${HtmlUrlCleaner.encodePathSegment(query)}$ampPage"
+                    SearchScope.ALL, SearchScope.CHARACTER -> "$base/video/search?search=${HtmlUrlCleaner.encodePathSegment(query)}$searchOrder$ampPage"
                 }
             }
             if (category.isNotEmpty()) {
@@ -330,7 +359,8 @@ class PornhubSitePlugin(
                 section == "mostviewed" -> "mv"
                 section == "toprated" -> "tr"
                 request.sort == FeedSort.VIEWS || request.sort == FeedSort.POPULAR -> "mv"
-                request.sort == FeedSort.RATING -> "tr"
+                request.sort == FeedSort.RATING || request.sort == FeedSort.LIKES -> "tr"
+                request.sort == FeedSort.DURATION -> "lg"
                 else -> "cm"
             }
             return "$base/video?o=$order$ampPage"
@@ -352,7 +382,8 @@ class PornhubSitePlugin(
             val sec = request.section?.trim().orEmpty()
             return DESCRIPTOR.sections.firstOrNull { it.id == sec }?.title ?: when (request.sort) {
                 FeedSort.VIEWS, FeedSort.POPULAR -> "最多播放"
-                FeedSort.RATING -> "评分最高"
+                FeedSort.RATING, FeedSort.LIKES -> "评分最高"
+                FeedSort.DURATION -> "最长时长"
                 else -> "最新"
             }
         }

@@ -118,9 +118,11 @@ enum class SiteCapability {
 enum class FeedSort {
     DEFAULT,
     NEWEST,
+    OLDEST,
     POPULAR,
     TRENDING,
     VIEWS,
+    LIKES,
     RATING,
     DURATION,
     RELEVANCE,

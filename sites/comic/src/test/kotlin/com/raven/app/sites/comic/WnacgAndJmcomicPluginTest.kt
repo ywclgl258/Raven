@@ -374,4 +374,40 @@ class WnacgAndJmcomicPluginTest {
             // expected
         }
     }
+
+    @Test
+    fun `jmcomic search wires o=mr, mv, tf, mp sort params, parses links, and advertises supportedSearchSorts`() {
+        val plugin = JmcomicSitePlugin(FakeHttpClientAdapter())
+        assertEquals(
+            listOf(FeedSort.RELEVANCE, FeedSort.NEWEST, FeedSort.VIEWS, FeedSort.LIKES, FeedSort.POPULAR),
+            plugin.searchSource.supportedSearchSorts(SearchScope.ALL),
+        )
+        assertEquals(
+            "https://jmcomic-zzz.one/search/photos?search_query=elf",
+            plugin.resolveFeedUrl(FeedRequest(SiteId.JMCOMIC, query = "elf", sort = FeedSort.RELEVANCE)),
+        )
+        assertEquals(
+            "https://jmcomic-zzz.one/search/photos?search_query=elf&o=mr",
+            plugin.resolveFeedUrl(FeedRequest(SiteId.JMCOMIC, query = "elf", sort = FeedSort.NEWEST)),
+        )
+        assertEquals(
+            "https://jmcomic-zzz.one/search/photos?search_query=elf&o=mv",
+            plugin.resolveFeedUrl(FeedRequest(SiteId.JMCOMIC, query = "elf", sort = FeedSort.VIEWS)),
+        )
+        assertEquals(
+            "https://jmcomic-zzz.one/search/photos?search_query=elf&o=tf",
+            plugin.resolveFeedUrl(FeedRequest(SiteId.JMCOMIC, query = "elf", sort = FeedSort.LIKES)),
+        )
+        assertEquals(
+            "https://jmcomic-zzz.one/search/photos?search_query=elf&o=mp&page=2",
+            plugin.resolveFeedUrl(FeedRequest(SiteId.JMCOMIC, query = "elf", sort = FeedSort.POPULAR, page = 2)),
+        )
+
+        val parsedLikes = plugin.parseFeedLink(
+            ComicUrl.requireParse("https://jmcomic-zzz.one/search/photos?search_query=elf&o=tf&page=3"),
+        )
+        assertNotNull(parsedLikes)
+        assertEquals(FeedSort.LIKES, parsedLikes!!.sort)
+        assertEquals(3, parsedLikes.page)
+    }
 }

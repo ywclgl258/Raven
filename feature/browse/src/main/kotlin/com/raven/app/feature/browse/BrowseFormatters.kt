@@ -14,13 +14,15 @@ import com.raven.app.core.model.SiteException
 
 fun FeedSort.displayLabel(): String = when (this) {
     FeedSort.DEFAULT -> "默认"
-    FeedSort.NEWEST -> "最新"
-    FeedSort.POPULAR -> "热门"
-    FeedSort.TRENDING -> "趋势"
-    FeedSort.VIEWS -> "最多观看"
-    FeedSort.RATING -> "最高评分"
-    FeedSort.DURATION -> "时长"
     FeedSort.RELEVANCE -> "相关度"
+    FeedSort.NEWEST -> "最新"
+    FeedSort.OLDEST -> "最旧"
+    FeedSort.VIEWS -> "最多播放"
+    FeedSort.LIKES -> "最多赞"
+    FeedSort.POPULAR -> "最热门"
+    FeedSort.TRENDING -> "趋势飙升"
+    FeedSort.RATING -> "最高评分"
+    FeedSort.DURATION -> "最长时长"
     FeedSort.RANDOM -> "随机"
 }
 
@@ -195,4 +197,97 @@ internal fun mergeUniqueMediaItems(
     val seen = existing.mapTo(HashSet(existing.size + incoming.size)) { it.compositeKey }
     val appended = incoming.filter { seen.add(it.compositeKey) }
     return if (appended.isEmpty()) existing else existing + appended
+}
+
+private val DATE_SORT_KEY_REGEX = Regex("(\\d{4})[-/.](\\d{1,2})[-/.](\\d{1,2})(?:[T\\s](\\d{1,2}):(\\d{2}))?")
+
+internal fun parseDateSortKey(raw: String?): Long? {
+    val text = raw?.trim().orEmpty()
+    if (text.isEmpty()) return null
+    val match = DATE_SORT_KEY_REGEX.find(text) ?: return null
+    val year = match.groupValues[1].toLongOrNull() ?: return null
+    val month = match.groupValues[2].toLongOrNull()?.coerceIn(1L, 12L) ?: return null
+    val day = match.groupValues[3].toLongOrNull()?.coerceIn(1L, 31L) ?: return null
+    val hour = match.groupValues[4].toLongOrNull()?.coerceIn(0L, 23L) ?: 0L
+    val minute = match.groupValues[5].toLongOrNull()?.coerceIn(0L, 59L) ?: 0L
+    return ((((year * 100L + month) * 100L + day) * 100L + hour) * 100L) + minute
+}
+
+internal fun sortMediaItemsClientSide(
+    items: List<MediaItem>,
+    sort: FeedSort,
+): List<MediaItem> {
+    if (items.size <= 1) return items
+    return when (sort) {
+        FeedSort.DEFAULT, FeedSort.RELEVANCE, FeedSort.TRENDING, FeedSort.RANDOM -> items
+        FeedSort.VIEWS -> items.withIndex()
+            .sortedWith(
+                compareBy<IndexedValue<MediaItem>> { it.value.views == null }
+                    .thenByDescending { it.value.views ?: Long.MIN_VALUE }
+                    .thenBy { it.index },
+            )
+            .map { it.value }
+        FeedSort.LIKES -> items.withIndex()
+            .sortedWith(
+                compareBy<IndexedValue<MediaItem>> { it.value.likes == null }
+                    .thenByDescending { it.value.likes ?: Long.MIN_VALUE }
+                    .thenBy { it.value.rating == null }
+                    .thenByDescending { it.value.rating ?: Float.NEGATIVE_INFINITY }
+                    .thenBy { it.index },
+            )
+            .map { it.value }
+        FeedSort.RATING -> items.withIndex()
+            .sortedWith(
+                compareBy<IndexedValue<MediaItem>> { it.value.rating == null }
+                    .thenByDescending { it.value.rating ?: Float.NEGATIVE_INFINITY }
+                    .thenBy { it.value.likes == null }
+                    .thenByDescending { it.value.likes ?: Long.MIN_VALUE }
+                    .thenBy { it.index },
+            )
+            .map { it.value }
+        FeedSort.DURATION -> items.withIndex()
+            .sortedWith(
+                compareBy<IndexedValue<MediaItem>> { it.value.durationSeconds == null }
+                    .thenByDescending { it.value.durationSeconds ?: Int.MIN_VALUE }
+                    .thenBy { it.value.pageCount == null }
+                    .thenByDescending { it.value.pageCount ?: Int.MIN_VALUE }
+                    .thenBy { it.index },
+            )
+            .map { it.value }
+        FeedSort.POPULAR -> items.withIndex()
+            .sortedWith(
+                compareBy<IndexedValue<MediaItem>> {
+                    it.value.views == null && it.value.likes == null && it.value.rating == null
+                }
+                    .thenByDescending { it.value.views ?: Long.MIN_VALUE }
+                    .thenByDescending { it.value.likes ?: Long.MIN_VALUE }
+                    .thenByDescending { it.value.rating ?: Float.NEGATIVE_INFINITY }
+                    .thenBy { it.index },
+            )
+            .map { it.value }
+        FeedSort.NEWEST -> {
+            val keyed = items.mapIndexed { idx, item -> Triple(idx, item, parseDateSortKey(item.dateLabel)) }
+            if (keyed.any { it.third != null }) {
+                keyed.sortedWith(
+                    compareBy<Triple<Int, MediaItem, Long?>> { it.third == null }
+                        .thenByDescending { it.third ?: Long.MIN_VALUE }
+                        .thenBy { it.first },
+                ).map { it.second }
+            } else {
+                items
+            }
+        }
+        FeedSort.OLDEST -> {
+            val keyed = items.mapIndexed { idx, item -> Triple(idx, item, parseDateSortKey(item.dateLabel)) }
+            if (keyed.any { it.third != null }) {
+                keyed.sortedWith(
+                    compareBy<Triple<Int, MediaItem, Long?>> { it.third == null }
+                        .thenBy { it.third ?: Long.MAX_VALUE }
+                        .thenByDescending { it.first },
+                ).map { it.second }
+            } else {
+                items.asReversed()
+            }
+        }
+    }
 }

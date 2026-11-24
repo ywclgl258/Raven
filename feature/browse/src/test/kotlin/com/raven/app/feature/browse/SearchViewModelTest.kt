@@ -5,6 +5,7 @@ import com.raven.app.core.model.AdvancedFilterField
 import com.raven.app.core.model.AdvancedSearchFilters
 import com.raven.app.core.model.ComicLanguage
 import com.raven.app.core.model.FeedPage
+import com.raven.app.core.model.FeedSort
 import com.raven.app.core.model.MediaKind
 import com.raven.app.core.model.RavenRoute
 import com.raven.app.core.model.SearchScope
@@ -347,4 +348,244 @@ class SearchViewModelTest {
                 cancelAndIgnoreRemainingEvents()
             }
         }
+
+    @Test
+    fun `single-site search forwards native sorts to SearchSource and applies local fallback for non-native sorts`() =
+        runTest(mainDispatcherRule.dispatcher) {
+            val harness = BrowseTestHarness(mainDispatcherRule.dispatcher)
+            val r34Plugin = FakeSitePlugin(
+                descriptor = SiteDescriptor(
+                    id = SiteId.R34V,
+                    displayName = "Rule34Video",
+                    shortName = "R34V",
+                    primaryKind = MediaKind.VIDEO,
+                    defaultHost = "rule34video.com",
+                    capabilities = setOf(SiteCapability.SEARCH),
+                ),
+                supportedSearchSortsProvider = {
+                    listOf(FeedSort.RELEVANCE, FeedSort.NEWEST, FeedSort.VIEWS, FeedSort.LIKES)
+                },
+                searchHandler = { req ->
+                    FeedPage(
+                        items = listOf(
+                            sampleMediaItem(
+                                SiteId.R34V,
+                                "newest_${req.sort.name}",
+                                MediaKind.VIDEO,
+                                views = 100L,
+                                likes = 10L,
+                                dateLabel = "2026-03-01",
+                            ),
+                            sampleMediaItem(
+                                SiteId.R34V,
+                                "oldest_${req.sort.name}",
+                                MediaKind.VIDEO,
+                                views = 500L,
+                                likes = 50L,
+                                dateLabel = "2024-01-15",
+                            ),
+                        ),
+                    )
+                },
+            )
+
+            val vm = SearchViewModel(
+                initialRoute = RavenRoute.Search(),
+                siteRegistry = SiteRegistry(listOf(r34Plugin)),
+                preferencesRepository = harness.preferencesRepository,
+                searchHistoryRepository = harness.searchHistoryRepository,
+                subscriptionRepository = harness.subscriptionRepository,
+                blockedTermsRepository = harness.blockedTermsRepository,
+                historyRepository = harness.historyRepository,
+                shelfRepository = harness.shelfRepository,
+                dispatchers = harness.dispatchers,
+            )
+
+            vm.uiState.test {
+                advanceUntilIdle()
+                val idle = expectMostRecentItem()
+                assertEquals(
+                    listOf(FeedSort.RELEVANCE, FeedSort.NEWEST, FeedSort.VIEWS, FeedSort.LIKES),
+                    idle.nativeSorts,
+                )
+                assertTrue(FeedSort.OLDEST in idle.localSorts)
+                assertTrue(FeedSort.DURATION in idle.localSorts)
+
+                vm.updateQuery("cyber")
+                vm.submitSearch()
+                advanceUntilIdle()
+                assertEquals(FeedSort.RELEVANCE, r34Plugin.searchRequests.last().sort)
+
+                // Selecting native VIEWS reloads server with FeedSort.VIEWS
+                vm.selectSort(FeedSort.VIEWS)
+                advanceUntilIdle()
+                val viewsState = expectMostRecentItem()
+                assertEquals(FeedSort.VIEWS, viewsState.sort)
+                assertFalse(viewsState.isLocalSortActive)
+                assertEquals(FeedSort.VIEWS, r34Plugin.searchRequests.last().sort)
+
+                // Selecting native LIKES reloads server with FeedSort.LIKES
+                vm.selectSort(FeedSort.LIKES)
+                advanceUntilIdle()
+                val likesState = expectMostRecentItem()
+                assertEquals(FeedSort.LIKES, likesState.sort)
+                assertEquals(FeedSort.LIKES, r34Plugin.searchRequests.last().sort)
+
+                // Selecting non-native OLDEST fetches compatible NEWEST from server and sorts oldest-first locally
+                vm.selectSort(FeedSort.OLDEST)
+                advanceUntilIdle()
+                val oldestState = expectMostRecentItem()
+                assertEquals(FeedSort.OLDEST, oldestState.sort)
+                assertTrue(oldestState.isLocalSortActive)
+                assertEquals(FeedSort.NEWEST, r34Plugin.searchRequests.last().sort)
+                assertEquals(
+                    listOf("oldest_NEWEST", "newest_NEWEST"),
+                    oldestState.singleSiteItems.map { it.id },
+                )
+
+                cancelAndIgnoreRemainingEvents()
+            }
+        }
+
+    @Test
+    fun `cross-site search dispatches compatible sorts per site, merges deterministically, and preserves sort in SavedSearch`() =
+        runTest(mainDispatcherRule.dispatcher) {
+            val harness = BrowseTestHarness(mainDispatcherRule.dispatcher)
+            val siteA = FakeSitePlugin(
+                descriptor = SiteDescriptor(SiteId.R34V, "R34V", primaryKind = MediaKind.VIDEO, defaultHost = "a.example"),
+                supportedSearchSortsProvider = { listOf(FeedSort.RELEVANCE, FeedSort.NEWEST, FeedSort.VIEWS, FeedSort.LIKES, FeedSort.DURATION) },
+                searchHandler = { req ->
+                    FeedPage(
+                        items = listOf(
+                            sampleMediaItem(
+                                SiteId.R34V,
+                                "a_mid",
+                                MediaKind.VIDEO,
+                                views = 1_500L,
+                                likes = 200L,
+                                durationSeconds = 900,
+                                dateLabel = "2025-06-01",
+                            ),
+                        ),
+                        nextPage = if (req.page == 1) 2 else null,
+                        hasMore = req.page == 1,
+                    )
+                },
+            )
+            val siteB = FakeSitePlugin(
+                descriptor = SiteDescriptor(SiteId.HITOMI, "Hitomi", primaryKind = MediaKind.COMIC, defaultHost = "b.example"),
+                supportedSearchSortsProvider = { listOf(FeedSort.NEWEST, FeedSort.OLDEST, FeedSort.POPULAR) },
+                searchHandler = {
+                    FeedPage(
+                        items = listOf(
+                            sampleMediaItem(
+                                SiteId.HITOMI,
+                                "b_top",
+                                MediaKind.COMIC,
+                                views = 9_000L,
+                                likes = 800L,
+                                durationSeconds = 120,
+                                dateLabel = "2023-02-10",
+                            ),
+                            sampleMediaItem(
+                                SiteId.HITOMI,
+                                "b_low",
+                                MediaKind.COMIC,
+                                views = 300L,
+                                likes = 40L,
+                                durationSeconds = 1_800,
+                                dateLabel = "2026-04-20",
+                            ),
+                        ),
+                    )
+                },
+            )
+
+            val vm = SearchViewModel(
+                initialRoute = RavenRoute.Search(crossSite = true),
+                siteRegistry = SiteRegistry(listOf(siteA, siteB)),
+                preferencesRepository = harness.preferencesRepository,
+                searchHistoryRepository = harness.searchHistoryRepository,
+                subscriptionRepository = harness.subscriptionRepository,
+                blockedTermsRepository = harness.blockedTermsRepository,
+                historyRepository = harness.historyRepository,
+                shelfRepository = harness.shelfRepository,
+                dispatchers = harness.dispatchers,
+            )
+
+            vm.uiState.test {
+                advanceUntilIdle()
+                vm.updateQuery("elf")
+                vm.submitSearch()
+                advanceUntilIdle()
+
+                // Switch to VIEWS -> R34V gets VIEWS, Hitomi gets compatible POPULAR, merged list sorted by views desc
+                vm.selectSort(FeedSort.VIEWS)
+                advanceUntilIdle()
+                val byViews = expectMostRecentItem()
+                assertEquals(FeedSort.VIEWS, byViews.sort)
+                assertEquals(FeedSort.VIEWS, siteA.searchRequests.last().sort)
+                assertEquals(FeedSort.POPULAR, siteB.searchRequests.last().sort)
+                assertEquals(listOf("b_top", "a_mid", "b_low"), byViews.crossSiteMediaItems.map { it.id })
+
+                // Load more on siteA keeps the active sort (VIEWS), never reverts to RELEVANCE
+                vm.loadMoreCrossSite(SiteId.R34V)
+                advanceUntilIdle()
+                assertEquals(FeedSort.VIEWS, siteA.searchRequests.last().sort)
+                assertEquals(2, siteA.searchRequests.last().page)
+
+                // Switch to LIKES -> sorted by likes desc
+                vm.selectSort(FeedSort.LIKES)
+                advanceUntilIdle()
+                val byLikes = expectMostRecentItem()
+                assertEquals(FeedSort.LIKES, siteA.searchRequests.last().sort)
+                assertEquals(listOf("b_top", "a_mid", "b_low"), byLikes.crossSiteMediaItems.map { it.id })
+
+                // Switch to OLDEST -> Hitomi gets native OLDEST, R34V gets compatible NEWEST, merged sorted oldest-first
+                vm.selectSort(FeedSort.OLDEST)
+                advanceUntilIdle()
+                val byOldest = expectMostRecentItem()
+                assertEquals(FeedSort.OLDEST, siteB.searchRequests.last().sort)
+                assertEquals(FeedSort.NEWEST, siteA.searchRequests.last().sort)
+                assertEquals(listOf("b_top", "a_mid", "b_low"), byOldest.crossSiteMediaItems.map { it.id })
+
+                // Switch to DURATION -> sorted by durationSeconds desc
+                vm.selectSort(FeedSort.DURATION)
+                advanceUntilIdle()
+                val byDuration = expectMostRecentItem()
+                assertEquals(FeedSort.DURATION, siteA.searchRequests.last().sort)
+                assertEquals(listOf("b_low", "a_mid", "b_top"), byDuration.crossSiteMediaItems.map { it.id })
+
+                // Save current search preserves FeedSort.DURATION and restoring re-applies it
+                vm.saveCurrentSearch("最长精灵")
+                advanceUntilIdle()
+                val saved = expectMostRecentItem().savedSearches.single()
+                assertEquals(FeedSort.DURATION, saved.sort)
+
+                vm.selectSort(FeedSort.NEWEST)
+                advanceUntilIdle()
+                assertEquals(FeedSort.NEWEST, expectMostRecentItem().sort)
+
+                vm.applySavedSearch(saved)
+                advanceUntilIdle()
+                assertEquals(FeedSort.DURATION, expectMostRecentItem().sort)
+
+                cancelAndIgnoreRemainingEvents()
+            }
+        }
+
+    @Test
+    fun `feed sort display labels cover every enum entry in Chinese`() {
+        assertEquals("默认", FeedSort.DEFAULT.displayLabel())
+        assertEquals("相关度", FeedSort.RELEVANCE.displayLabel())
+        assertEquals("最新", FeedSort.NEWEST.displayLabel())
+        assertEquals("最旧", FeedSort.OLDEST.displayLabel())
+        assertEquals("最多播放", FeedSort.VIEWS.displayLabel())
+        assertEquals("最多赞", FeedSort.LIKES.displayLabel())
+        assertEquals("最热门", FeedSort.POPULAR.displayLabel())
+        assertEquals("趋势飙升", FeedSort.TRENDING.displayLabel())
+        assertEquals("最高评分", FeedSort.RATING.displayLabel())
+        assertEquals("最长时长", FeedSort.DURATION.displayLabel())
+        assertEquals("随机", FeedSort.RANDOM.displayLabel())
+    }
 }

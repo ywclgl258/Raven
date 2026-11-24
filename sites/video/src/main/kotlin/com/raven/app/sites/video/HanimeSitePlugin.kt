@@ -109,11 +109,11 @@ class HanimeSitePlugin(
         }
 
         override fun supportedSorts(request: FeedRequest): List<FeedSort> = when {
-            !request.query.isNullOrBlank() -> listOf(FeedSort.RELEVANCE)
+            !request.query.isNullOrBlank() -> SEARCH_SORTS
             request.section in setOf("today", "week", "month") -> listOf(FeedSort.POPULAR)
-            request.section == "liked" -> listOf(FeedSort.RATING)
+            request.section == "liked" -> listOf(FeedSort.LIKES)
             request.section.isNullOrBlank() || request.section == "recent" -> descriptor.feedSorts
-            else -> listOf(FeedSort.NEWEST)
+            else -> listOf(FeedSort.NEWEST, FeedSort.VIEWS, FeedSort.LIKES, FeedSort.POPULAR, FeedSort.DURATION)
         }
     }
 
@@ -126,6 +126,7 @@ class HanimeSitePlugin(
         )
         override val supportedFilters: Set<AdvancedFilterField> = descriptor.supportedFilters
         override val supportsExcludeTags: Boolean = true
+        override fun supportedSearchSorts(scope: SearchScope): List<FeedSort> = SEARCH_SORTS
     }
 
     override val videoSource: VideoSource = object : VideoSource {
@@ -272,13 +273,14 @@ class HanimeSitePlugin(
                 month = month,
             )
 
+            val resolvedSort = parseHanimeSort(sortParam)
             return when {
                 query != null -> ResolvedLink.Feed(
                     FeedRequest(
                         siteId = SiteId.HANIME1,
                         query = query,
                         scope = SearchScope.ALL,
-                        sort = FeedSort.RELEVANCE,
+                        sort = resolvedSort ?: FeedSort.RELEVANCE,
                         page = page,
                         advancedFilters = filters,
                     ),
@@ -288,6 +290,7 @@ class HanimeSitePlugin(
                         siteId = SiteId.HANIME1,
                         query = tags.first(),
                         scope = SearchScope.TAG,
+                        sort = resolvedSort ?: FeedSort.DEFAULT,
                         page = page,
                         advancedFilters = filters,
                     ),
@@ -296,6 +299,7 @@ class HanimeSitePlugin(
                     FeedRequest(
                         siteId = SiteId.HANIME1,
                         category = genre,
+                        sort = resolvedSort ?: FeedSort.DEFAULT,
                         page = page,
                         advancedFilters = filters,
                     ),
@@ -355,6 +359,15 @@ class HanimeSitePlugin(
             "新番預告",
         )
 
+        val SEARCH_SORTS: List<FeedSort> = listOf(
+            FeedSort.RELEVANCE,
+            FeedSort.NEWEST,
+            FeedSort.VIEWS,
+            FeedSort.LIKES,
+            FeedSort.POPULAR,
+            FeedSort.DURATION,
+        )
+
         val DESCRIPTOR: SiteDescriptor = SiteDescriptor(
             id = SiteId.HANIME1,
             displayName = "Hanime1",
@@ -377,7 +390,8 @@ class HanimeSitePlugin(
             feedSorts = listOf(
                 FeedSort.NEWEST,
                 FeedSort.VIEWS,
-                FeedSort.RATING,
+                FeedSort.LIKES,
+                FeedSort.POPULAR,
                 FeedSort.DURATION,
             ),
             sections = listOf(
@@ -387,7 +401,7 @@ class HanimeSitePlugin(
                 SiteSectionSpec("week", "本週排行", defaultSort = FeedSort.POPULAR),
                 SiteSectionSpec("month", "本月排行", defaultSort = FeedSort.POPULAR),
                 SiteSectionSpec("popular", "觀看次數", defaultSort = FeedSort.VIEWS),
-                SiteSectionSpec("liked", "讚好比例", defaultSort = FeedSort.RATING),
+                SiteSectionSpec("liked", "讚好比例", defaultSort = FeedSort.LIKES),
                 SiteSectionSpec("裏番", "裏番", category = "裏番"),
                 SiteSectionSpec("泡麵番", "泡麵番", category = "泡麵番"),
                 SiteSectionSpec("Motion Anime", "Motion Anime", category = "Motion Anime"),
@@ -472,15 +486,11 @@ class HanimeSitePlugin(
             f.includeTags.map { it.trim() }.filter { it.isNotEmpty() }.forEach { tagValues.add(it) }
 
             val mappedSort = sortToHanime(request.sort)
-            if (params["genre"] == null && params["query"] == null && tagValues.isEmpty()) {
-                if ((section.isEmpty() || section == "recent") &&
-                    request.sort in setOf(FeedSort.VIEWS, FeedSort.RATING, FeedSort.DURATION, FeedSort.NEWEST, FeedSort.POPULAR)
-                ) {
-                    if (mappedSort.isNotEmpty()) params["sort"] = mappedSort
-                }
-                if (params["sort"] == null) {
-                    params["sort"] = mappedSort.ifBlank { "最新上市" }
-                }
+            if (mappedSort.isNotEmpty() && (params["sort"] == null || section.isEmpty() || section == "recent")) {
+                params["sort"] = mappedSort
+            }
+            if (params["genre"] == null && params["query"] == null && tagValues.isEmpty() && params["sort"] == null) {
+                params["sort"] = "最新上市"
             }
 
             val page = request.page.coerceAtLeast(1)
@@ -501,10 +511,19 @@ class HanimeSitePlugin(
         private fun sortToHanime(sort: FeedSort): String = when (sort) {
             FeedSort.NEWEST -> "最新上傳"
             FeedSort.VIEWS -> "觀看次數"
-            FeedSort.RATING -> "讚好比例"
+            FeedSort.LIKES, FeedSort.RATING -> "讚好比例"
             FeedSort.DURATION -> "時長最長"
             FeedSort.POPULAR, FeedSort.RANDOM, FeedSort.TRENDING -> "本日排行"
-            FeedSort.RELEVANCE, FeedSort.DEFAULT -> ""
+            FeedSort.RELEVANCE, FeedSort.DEFAULT, FeedSort.OLDEST -> ""
+        }
+
+        private fun parseHanimeSort(raw: String?): FeedSort? = when (raw) {
+            "最新上市", "最新上傳" -> FeedSort.NEWEST
+            "觀看次數" -> FeedSort.VIEWS
+            "讚好比例" -> FeedSort.LIKES
+            "時長最長" -> FeedSort.DURATION
+            "本日排行", "本週排行", "本月排行" -> FeedSort.POPULAR
+            else -> null
         }
 
         fun parseCards(doc: Document, baseUrl: String = BASE_URL): List<MediaItem> =

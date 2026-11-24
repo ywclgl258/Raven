@@ -444,4 +444,69 @@ class R34vAndHanimeSitePluginTest {
             // expected
         }
     }
+
+    @Test
+    fun `r34v and hanime1 wire real server-side search sort params and supportedSearchSorts`() {
+        val r34v = R34vSitePlugin(FakeHttpClientAdapter(), InMemorySiteSessionStore())
+        assertEquals(
+            listOf(
+                FeedSort.RELEVANCE,
+                FeedSort.NEWEST,
+                FeedSort.VIEWS,
+                FeedSort.LIKES,
+                FeedSort.RATING,
+                FeedSort.DURATION,
+                FeedSort.RANDOM,
+            ),
+            r34v.searchSource.supportedSearchSorts(SearchScope.ALL),
+        )
+        assertFalse(FeedSort.RELEVANCE in r34v.searchSource.supportedSearchSorts(SearchScope.TAG))
+        assertEquals(
+            "https://rule34video.com/search/elf/",
+            R34vSitePlugin.resolveFeedUrl(FeedRequest(SiteId.R34V, query = "elf", sort = FeedSort.RELEVANCE)),
+        )
+        assertEquals(
+            "https://rule34video.com/search/elf/?sort_by=most_favourited",
+            R34vSitePlugin.resolveFeedUrl(FeedRequest(SiteId.R34V, query = "elf", sort = FeedSort.LIKES)),
+        )
+        assertEquals(
+            "https://rule34video.com/search/elf/?sort_by=video_viewed",
+            R34vSitePlugin.resolveFeedUrl(FeedRequest(SiteId.R34V, query = "elf", sort = FeedSort.VIEWS)),
+        )
+        assertEquals(
+            "https://rule34video.com/search/elf/?sort_by=duration",
+            R34vSitePlugin.resolveFeedUrl(FeedRequest(SiteId.R34V, query = "elf", sort = FeedSort.DURATION)),
+        )
+        val favLink = r34v.linkResolver.resolve("https://rule34video.com/search/elf/?sort_by=most_favourited") as ResolvedLink.Feed
+        assertEquals(FeedSort.LIKES, favLink.request.sort)
+
+        val hanime = HanimeSitePlugin(FakeHttpClientAdapter(), InMemorySiteSessionStore())
+        assertEquals(
+            listOf(
+                FeedSort.RELEVANCE,
+                FeedSort.NEWEST,
+                FeedSort.VIEWS,
+                FeedSort.LIKES,
+                FeedSort.POPULAR,
+                FeedSort.DURATION,
+            ),
+            hanime.searchSource.supportedSearchSorts(SearchScope.ALL),
+        )
+        val hViews = HanimeSitePlugin.resolveFeedUrl(FeedRequest(SiteId.HANIME1, query = "elf", sort = FeedSort.VIEWS))
+        assertTrue(hViews.contains("query=elf"))
+        assertTrue(hViews.contains("sort=%E8%A7%80%E7%9C%8B%E6%AC%A1%E6%95%B8"))
+        val hLikes = HanimeSitePlugin.resolveFeedUrl(FeedRequest(SiteId.HANIME1, query = "elf", sort = FeedSort.LIKES))
+        assertTrue(hLikes.contains("sort=%E8%AE%9A%E5%A5%BD%E6%AF%94%E4%BE%8B"))
+        val hNewest = HanimeSitePlugin.resolveFeedUrl(FeedRequest(SiteId.HANIME1, query = "elf", sort = FeedSort.NEWEST))
+        assertTrue(hNewest.contains("sort=%E6%9C%80%E6%96%B0%E4%B8%8A%E5%82%B3"))
+        val hPopular = HanimeSitePlugin.resolveFeedUrl(FeedRequest(SiteId.HANIME1, query = "elf", sort = FeedSort.POPULAR))
+        assertTrue(hPopular.contains("sort=%E6%9C%AC%E6%97%A5%E6%8E%92%E8%A1%8C"))
+        val hDuration = HanimeSitePlugin.resolveFeedUrl(FeedRequest(SiteId.HANIME1, query = "elf", sort = FeedSort.DURATION))
+        assertTrue(hDuration.contains("sort=%E6%99%82%E9%95%B7%E6%9C%80%E9%95%B7"))
+        val hRelevance = HanimeSitePlugin.resolveFeedUrl(FeedRequest(SiteId.HANIME1, query = "elf", sort = FeedSort.RELEVANCE))
+        assertFalse(hRelevance.contains("sort="))
+
+        val hLink = hanime.linkResolver.resolve(hViews) as ResolvedLink.Feed
+        assertEquals(FeedSort.VIEWS, hLink.request.sort)
+    }
 }

@@ -79,6 +79,8 @@ class WnacgSitePlugin(
             AdvancedFilterField.CATEGORY,
             AdvancedFilterField.LANGUAGE,
         )
+
+        override fun supportedSearchSorts(scope: SearchScope): List<FeedSort> = listOf(FeedSort.NEWEST)
     }
 
     override val gallerySource: GallerySource = object : GallerySource {

@@ -237,7 +237,7 @@ class IwaraSitePlugin(
 
         override fun supportedSorts(request: FeedRequest): List<FeedSort> = when (request.section) {
             "popular" -> listOf(FeedSort.POPULAR)
-            "liked", "image-likes" -> listOf(FeedSort.RATING)
+            "liked", "image-likes" -> listOf(FeedSort.LIKES)
             "subscriptions" -> listOf(FeedSort.NEWEST)
             else -> {
                 val isSearch = request.scope == SearchScope.ALL && !request.query.isNullOrBlank()
@@ -258,6 +258,12 @@ class IwaraSitePlugin(
             AdvancedFilterField.DURATION,
         )
         override val supportsExcludeTags: Boolean = false
+        override fun supportedSearchSorts(scope: SearchScope): List<FeedSort> =
+            if (scope == SearchScope.ALL) {
+                descriptor.feedSorts
+            } else {
+                descriptor.feedSorts.filterNot { it == FeedSort.RELEVANCE }
+            }
     }
 
     override val videoSource: VideoSource = object : VideoSource {
@@ -624,16 +630,16 @@ class IwaraSitePlugin(
                 FeedSort.NEWEST,
                 FeedSort.TRENDING,
                 FeedSort.POPULAR,
-                FeedSort.RATING,
                 FeedSort.VIEWS,
+                FeedSort.LIKES,
             ),
             sections = listOf(
                 SiteSectionSpec("trending", "趋势榜", "看看最近受到关注的作品", defaultSort = FeedSort.TRENDING, mediaKind = MediaKind.VIDEO),
                 SiteSectionSpec("latest", "最新上传", defaultSort = FeedSort.NEWEST, mediaKind = MediaKind.VIDEO),
                 SiteSectionSpec("images", "最新图库", "图片与图集，使用独立图库接口", defaultSort = FeedSort.NEWEST, mediaKind = MediaKind.PHOTO),
-                SiteSectionSpec("image-likes", "图库点赞榜", defaultSort = FeedSort.RATING, mediaKind = MediaKind.PHOTO),
+                SiteSectionSpec("image-likes", "图库点赞榜", defaultSort = FeedSort.LIKES, mediaKind = MediaKind.PHOTO),
                 SiteSectionSpec("popular", "热门榜", defaultSort = FeedSort.POPULAR, mediaKind = MediaKind.VIDEO),
-                SiteSectionSpec("liked", "点赞榜", defaultSort = FeedSort.RATING, mediaKind = MediaKind.VIDEO),
+                SiteSectionSpec("liked", "点赞榜", defaultSort = FeedSort.LIKES, mediaKind = MediaKind.VIDEO),
                 SiteSectionSpec("views", "播放榜", defaultSort = FeedSort.VIEWS, mediaKind = MediaKind.VIDEO),
                 SiteSectionSpec("subscriptions", "关注动态", "已关注作者的最新作品，需要在设置中登录", defaultSort = FeedSort.NEWEST, mediaKind = MediaKind.VIDEO),
             ),
@@ -712,7 +718,7 @@ class IwaraSitePlugin(
                     FeedSort.TRENDING -> "trending"
                     FeedSort.POPULAR -> "popularity"
                     FeedSort.VIEWS -> "views"
-                    FeedSort.RATING -> "likes"
+                    FeedSort.LIKES, FeedSort.RATING -> "likes"
                     else -> "date"
                 }
             }
@@ -1088,7 +1094,7 @@ class IwaraSitePlugin(
             "trending" -> FeedSort.TRENDING
             "popularity" -> FeedSort.POPULAR
             "views" -> FeedSort.VIEWS
-            "likes" -> FeedSort.RATING
+            "likes" -> FeedSort.LIKES
             "date" -> FeedSort.NEWEST
             else -> FeedSort.DEFAULT
         }

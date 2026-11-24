@@ -98,6 +98,7 @@ class RouvideoSitePlugin(
     override val searchSource: SearchSource = object : SearchSource {
         override suspend fun search(request: FeedRequest): FeedPage = feedSource.loadFeed(request)
         override val supportedScopes: Set<SearchScope> = setOf(SearchScope.ALL, SearchScope.TAG)
+        override fun supportedSearchSorts(scope: SearchScope): List<FeedSort> = listOf(FeedSort.NEWEST)
     }
 
     override val videoSource: VideoSource = object : VideoSource {
