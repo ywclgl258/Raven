@@ -7,6 +7,21 @@ Raven（**渡鸦**）是一款采用 **17 模块 Clean Architecture** 构建的�
 
 ---
 
+## 开发与接手文档索引
+
+| 文档 | 定位 | 适用场景 / 核心内容 |
+|---|---|---|
+| **[docs/ONBOARDING.md](docs/ONBOARDING.md)** | 新开发者接手与日常开发指南 | 5 分钟环境配置、Windows `kotlin.incremental=false` / AGP 9 / API 37 红线、17 模块全景地图、常用命令速查、8 条代码红线（含 ICU `PatternNative` 正则与自动播放不自动全屏）、新增页面/Feature 7 步 SOP、Git 与 Release 签名规范 |
+| **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** | 系统架构与工程蓝图 | 17 模块依赖 DAG、Koin 13 模块装配约定、设计令牌、25 路由契约、Room 18 表与 DataStore 17 键、加密备份线协议与 14 条站点协议不变量 |
+| **[docs/SITE_PLUGIN_GUIDE.md](docs/SITE_PLUGIN_GUIDE.md)** | 站点插件架构、19 站维护与新站接入 | 组合式 `SitePlugin` SPI 与 10 项可选能力、`SiteKit` 9 个协议工具、19 站维护总表与排障手册、从零接入第 20 个新站的实战骨架与契约测试 |
+| **[docs/DESIGN_AND_UI_GUIDE.md](docs/DESIGN_AND_UI_GUIDE.md)** | 设计系统与 UI 架构手册 | 品牌与自适应图标（`0.68` 安全区缩放）、色板/排版(`tnum`)/圆角/动效磨砂令牌、`:core:designsystem` 全量组件目录、3-Activity 拓扑与 25 路由、Feature Navigator 解耦、无障碍与 `testTag` 规范 |
+| **[docs/DATA_MEDIA_SECURITY.md](docs/DATA_MEDIA_SECURITY.md)** | 数据、网络、媒体内核与安全备份手册 | Room 18 表/11 仓储与 Schema 升版迁移、5 类 OkHttp 客户端与单例 Coil 3、Media3 播放与 4 级缓存、阅读器预读与反混淆、双引擎下载/双存储根迁移、`SessionVault` / `SiteAuthActivity` / `RVNBK01` 备份与签名更新器 |
+| **[docs/audit-env.md](docs/audit-env.md)** | 历史审计：构建环境与工具链基线 | JDK 17、Android SDK API 36、Gradle 缓存、Windows 增量编译与 API 37 依赖断层实测依据 |
+| **[docs/audit-app-ux.md](docs/audit-app-ux.md)** | 历史审计：应用架构与 UX 重构输入 | 旧版 R34V 功能盘点与 Raven 现代化重构对比基线 |
+| **[docs/audit-sites.md](docs/audit-sites.md)** | 历史审计：19 站网络协议规范基准 | 19 个在线站点的抓包/协议细节与边界条件基线 |
+
+---
+
 ## 核心亮点
 
 - **Dark Obsidian × Apple HIG × Netflix Cinema 设计系统**
@@ -63,11 +78,14 @@ Raven（**渡鸦**）是一款采用 **17 模块 Clean Architecture** 构建的�
 
 ## 构建与测试
 
-环境要求：**JDK 17** · **Android SDK API 36**（`compileSdk = 36`, `targetSdk = 36`, `minSdk = 24`, `buildTools = 36.0.0`）· **Gradle Wrapper `9.1.0`**。
+环境要求：**JDK 17** · **Android SDK API 36**（`compileSdk = 36`, `targetSdk = 36`, `minSdk = 24`, `buildTools = 36.0.0`）· **Gradle Wrapper `9.1.0`** · **AGP `9.0.1`**（内置 Kotlin，覆盖至 `2.3.21`）。首次构建需在根目录创建 `local.properties` 指定 `sdk.dir`（已纳入 `.gitignore`）。
 
 ```powershell
-# 运行全部 17 模块 JVM 单元测试
-.\gradlew.bat testDebugUnitTest --no-daemon
+# 运行全部 17 模块 JVM 单元测试（3 个 Pure JVM 模块 :test + 14 个 Android 模块 testDebugUnitTest，共 273 条 @Test）
+.\gradlew.bat :core:model:test :core:common:test :core:site-spi:test testDebugUnitTest --no-daemon
+
+# 仅运行单模块单测（推荐日常开发，适配 Windows kotlin.incremental=false 环境）
+.\gradlew.bat :feature:player:testDebugUnitTest --no-daemon
 
 # 构建 Debug APK（输出至 app/build/outputs/apk/debug/app-debug.apk）
 .\gradlew.bat :app:assembleDebug --no-daemon
@@ -75,8 +93,8 @@ Raven（**渡鸦**）是一款采用 **17 模块 Clean Architecture** 构建的�
 # 运行 Android Lint 静态检查
 .\gradlew.bat :app:lintDebug --no-daemon
 
-# 在已连接设备或模拟器上运行 Compose 冒烟测试
+# 在已连接设备或模拟器上运行离线 Compose 冒烟测试（RavenSmokeAndroidTest，3 条用例）
 .\gradlew.bat :app:connectedDebugAndroidTest --no-daemon
 ```
 
-更详尽的架构设计、持久化表结构与站点协议不变量请参阅 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)。
+> **代码基线说明**：文档已按 HEAD `2210c8d` 核对（含 `8d4a7b3` Android ART ICU `PatternNative` 正则转义修复及 `2210c8d` 视频自动播放默认不自动全屏修复）。初次上手请从 [docs/ONBOARDING.md](docs/ONBOARDING.md) 开始，按需查阅上方**开发与接手文档索引**中的专题手册。
