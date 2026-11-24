@@ -49,7 +49,7 @@ dependencies {
     api(libs.androidx.compose.material.icons.extended)
     api(libs.androidx.compose.material3.adaptive)
     api(libs.androidx.compose.material3.adaptive.navigation.suite)
-    implementation(libs.coil.compose)
+    api(libs.coil.compose)
 
     debugImplementation(libs.androidx.compose.ui.tooling)
 

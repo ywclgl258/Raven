@@ -1,0 +1,346 @@
+package com.raven.app.core.network
+
+import com.raven.app.core.common.AppDispatchers
+import com.raven.app.core.common.DefaultAppDispatchers
+import com.raven.app.core.model.SiteException
+import com.raven.app.core.model.SiteId
+import com.raven.app.core.sitespi.HttpClientAdapter
+import com.raven.app.core.sitespi.SiteHttpMethod
+import com.raven.app.core.sitespi.SiteHttpRequest
+import com.raven.app.core.sitespi.SiteHttpResponse
+import com.raven.app.core.sitespi.SiteRegistry
+import com.raven.app.core.sitespi.SiteSessionStore
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.withContext
+import okhttp3.CacheControl
+import okhttp3.Call
+import okhttp3.Callback
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
+import okhttp3.MediaType.Companion.toMediaTypeOrNull
+import okhttp3.Request
+import okhttp3.RequestBody.Companion.toRequestBody
+import okhttp3.Response
+import java.io.IOException
+import java.security.cert.CertificateException
+import java.util.concurrent.TimeUnit
+import javax.net.ssl.SSLException
+import kotlin.coroutines.resume
+import kotlin.coroutines.resumeWithException
+
+/**
+ * Deterministic mapper from HTTP responses and transport exceptions to Raven's sealed [SiteException].
+ */
+object SiteHttpErrorMapper {
+    private val contentMarkers = listOf(
+        "entry-title",
+        "generate-columns",
+        "post-thumbnail",
+        "wp-content",
+        "<main",
+        "<article",
+        "id=\"content",
+        "class=\"content",
+        "video-card",
+        "video-item-container",
+        "video-img-box",
+        "pcVideoListItem",
+        "thumbnail group",
+    )
+
+    fun isChallengeHtml(body: String): Boolean {
+        if (body.contains("Checking your browser", ignoreCase = true)) return true
+        if (body.contains("Just a moment", ignoreCase = true)) return true
+        if (body.contains("cf-mitigated", ignoreCase = true)) return true
+        if (body.contains("DDoS-Guard", ignoreCase = true) && !body.contains("class=\"thumbs")) return true
+        if (body.contains("challenge-platform", ignoreCase = true) && !hasPageContent(body)) return true
+        return false
+    }
+
+    fun isChallengeResponse(response: SiteHttpResponse, bodyText: String = response.bodyText()): Boolean {
+        if (response.header("cf-mitigated")?.equals("challenge", ignoreCase = true) == true) return true
+        return isChallengeHtml(bodyText)
+    }
+
+    fun fromResponse(
+        response: SiteHttpResponse,
+        siteId: SiteId? = null,
+        checkChallenge: Boolean = false,
+    ): SiteException? {
+        if (response.isSuccessful) {
+            if (checkChallenge && isChallengeResponse(response)) {
+                return SiteException.Forbidden(
+                    isChallenge = true,
+                    message = "站点要求浏览器验证，请稍后重试或调整网络",
+                    siteId = siteId,
+                )
+            }
+            return null
+        }
+        return when (response.code) {
+            401 -> SiteException.AuthRequired(
+                message = "需要登录验证 (HTTP 401)",
+                siteId = siteId,
+            )
+            403 -> {
+                val challenge = isChallengeResponse(response)
+                SiteException.Forbidden(
+                    isChallenge = challenge,
+                    message = if (challenge) "站点触发浏览器验证挑战 (HTTP 403)" else "访问被拒绝 (HTTP 403)",
+                    siteId = siteId,
+                )
+            }
+            404 -> SiteException.NotFound(
+                message = "目标资源不存在 (HTTP 404)",
+                siteId = siteId,
+            )
+            429 -> SiteException.RateLimited(
+                retryAfterSeconds = response.retryAfterSeconds,
+                message = "请求过于频繁，已被限流 (HTTP 429)",
+                siteId = siteId,
+            )
+            509 -> SiteException.QuotaExceeded(
+                message = "图片或流量配额已用尽 (HTTP 509)",
+                siteId = siteId,
+            )
+            else -> SiteException.Network(
+                message = "请求失败：HTTP ${response.code}",
+                siteId = siteId,
+            )
+        }
+    }
+
+    fun fromThrowable(error: Throwable, siteId: SiteId? = null): SiteException {
+        if (error is SiteException) return error
+        if (isTlsFailure(error)) {
+            return SiteException.TlsError(
+                message = "TLS 安全连接失败：${error.message.orEmpty()}",
+                siteId = siteId,
+                cause = error,
+            )
+        }
+        return SiteException.Network(
+            message = "网络请求失败：${error.message.orEmpty()}",
+            siteId = siteId,
+            cause = error,
+        )
+    }
+
+    fun isTlsFailure(error: Throwable): Boolean {
+        var current: Throwable? = error
+        var depth = 0
+        while (current != null && depth < 12) {
+            if (current is SSLException || current is CertificateException) {
+                return true
+            }
+            current = current.cause
+            depth++
+        }
+        return false
+    }
+
+    private fun hasPageContent(body: String): Boolean =
+        body.contains("</video", ignoreCase = true) ||
+            body.contains("class=\"thumbs", ignoreCase = true) ||
+            contentMarkers.any { body.contains(it, ignoreCase = true) }
+}
+
+/**
+ * Production implementation of [HttpClientAdapter] (`:core:site-spi`).
+ *
+ * - Runs [HostPacer] in the suspend coroutine layer BEFORE dispatching OkHttp calls (zero `Thread.sleep`).
+ * - Verifies `request.authEpoch` against [SiteSessionStore] before and after execution so stale
+ *   authenticated requests (e.g. Iwara subscriptions after logout/login) abort cleanly.
+ * - Routes through pre-built shared clients in [RavenOkHttpPool] (incl. [MediaRedirectCache] on
+ *   `MEDIA` requests and strict host-scoped headers/cookies).
+ * - Maps transport & TLS errors to typed [SiteException] (`TlsError`, `Network`, `Cancelled`)
+ *   while returning [SiteHttpResponse] for HTTP status inspection by site plugins, and provides
+ *   [executeChecked] for full HTTP-status -> [SiteException] throwing semantics.
+ */
+class SiteHttpClient(
+    private val okHttpPool: RavenOkHttpPool,
+    private val hostPacer: HostPacer,
+    private val sessionStore: SiteSessionStore,
+    private val networkMonitor: NetworkMonitor,
+    private val rateLimitLog: RateLimitLog,
+    private val siteRegistryProvider: () -> SiteRegistry,
+    private val dispatchers: AppDispatchers = DefaultAppDispatchers(),
+) : HttpClientAdapter {
+
+    constructor(
+        okHttpPool: RavenOkHttpPool,
+        hostPacer: HostPacer,
+        sessionStore: SiteSessionStore,
+        networkMonitor: NetworkMonitor,
+        rateLimitLog: RateLimitLog,
+        siteRegistry: SiteRegistry,
+        dispatchers: AppDispatchers = DefaultAppDispatchers(),
+    ) : this(
+        okHttpPool = okHttpPool,
+        hostPacer = hostPacer,
+        sessionStore = sessionStore,
+        networkMonitor = networkMonitor,
+        rateLimitLog = rateLimitLog,
+        siteRegistryProvider = { siteRegistry },
+        dispatchers = dispatchers,
+    )
+
+    override fun currentRouteKey(urls: List<String>): String = networkMonitor.currentRouteKey(urls)
+
+    override suspend fun execute(request: SiteHttpRequest): SiteHttpResponse {
+        val httpUrl = request.url.toHttpUrlOrNull()
+            ?: throw SiteException.Network("无效的请求地址：${request.url}", siteId = request.siteId)
+
+        val registry = siteRegistryProvider()
+        val plugin = request.siteId?.let { registry.get(it) } ?: registry.findForMediaHost(httpUrl.host)
+        val effectiveSiteId = request.siteId ?: plugin?.id
+
+        verifyAuthEpoch(request.authEpoch, effectiveSiteId)
+
+        // Suspend coroutine rate pacing BEFORE entering OkHttp (ZERO Thread.sleep!).
+        hostPacer.paceForRequest(
+            host = httpUrl.host,
+            encodedPath = httpUrl.encodedPath,
+            kind = request.kind,
+            descriptor = plugin?.descriptor,
+        )
+
+        // Re-check authEpoch in case session changed while waiting in HostPacer.
+        verifyAuthEpoch(request.authEpoch, effectiveSiteId)
+
+        val okHttpRequest = buildOkHttpRequest(request, httpUrl.toString(), effectiveSiteId)
+        val client = okHttpPool.clientFor(request)
+
+        val response = withContext(dispatchers.io) {
+            try {
+                executeCancellable(client, okHttpRequest, request.timeoutMs)
+            } catch (ce: CancellationException) {
+                throw ce
+            } catch (se: SiteException) {
+                throw se
+            } catch (e: Throwable) {
+                throw SiteHttpErrorMapper.fromThrowable(e, effectiveSiteId)
+            }
+        }
+
+        // Reject stale authenticated response if session epoch mutated in flight.
+        verifyAuthEpoch(request.authEpoch, effectiveSiteId)
+
+        if (response.code == 429) {
+            val retryLabel = response.retryAfterSeconds?.let { "${it}s" } ?: "default"
+            rateLimitLog.record(httpUrl.host, "HTTP 429 (Retry-After=$retryLabel)")
+        }
+
+        return response
+    }
+
+    /**
+     * Executes [request] and throws a typed [SiteException] (`RateLimited`, `AuthRequired`,
+     * `Forbidden`, `NotFound`, `QuotaExceeded`, `Network`) if the HTTP response is non-2xx
+     * (or an anti-bot challenge when [checkChallenge] is true).
+     */
+    suspend fun executeChecked(
+        request: SiteHttpRequest,
+        checkChallenge: Boolean = false,
+    ): SiteHttpResponse {
+        val response = execute(request)
+        val error = SiteHttpErrorMapper.fromResponse(
+            response = response,
+            siteId = request.siteId,
+            checkChallenge = checkChallenge,
+        )
+        if (error != null) throw error
+        return response
+    }
+
+    private fun verifyAuthEpoch(expectedEpoch: Long?, siteId: SiteId?) {
+        if (expectedEpoch == null || siteId == null) return
+        val current = sessionStore.authEpoch(siteId)
+        if (current != expectedEpoch) {
+            throw SiteException.Cancelled(
+                message = "会话状态已变更 (${siteId.value}: expected=$expectedEpoch, actual=$current)",
+                siteId = siteId,
+            )
+        }
+    }
+
+    private fun buildOkHttpRequest(
+        request: SiteHttpRequest,
+        url: String,
+        effectiveSiteId: SiteId?,
+    ): Request {
+        val builder = Request.Builder()
+            .url(url)
+            .tag(SiteRequestTag::class.java, SiteRequestTag(siteId = effectiveSiteId, siteRequest = request))
+
+        for ((name, value) in request.headers) {
+            builder.header(name, value)
+        }
+        request.rangeHeader?.takeIf { it.isNotBlank() }?.let { range ->
+            builder.header("Range", range)
+        }
+        if (!request.allowCache) {
+            builder.cacheControl(CacheControl.Builder().noCache().noStore().build())
+        }
+
+        when (request.method) {
+            SiteHttpMethod.GET -> builder.get()
+            SiteHttpMethod.HEAD -> builder.head()
+            SiteHttpMethod.POST -> {
+                val mediaType = request.contentType?.toMediaTypeOrNull()
+                val rawBody = (request.body ?: ByteArray(0)).toRequestBody(mediaType)
+                val body = if (!request.allowRetry) SingleUseRequestBody(rawBody) else rawBody
+                builder.post(body)
+            }
+        }
+        return builder.build()
+    }
+
+    private suspend fun executeCancellable(
+        client: okhttp3.OkHttpClient,
+        request: Request,
+        timeoutMs: Long?,
+    ): SiteHttpResponse = suspendCancellableCoroutine { continuation ->
+        val call = client.newCall(request)
+        if (timeoutMs != null && timeoutMs > 0L) {
+            call.timeout().timeout(timeoutMs, TimeUnit.MILLISECONDS)
+        }
+        continuation.invokeOnCancellation { call.cancel() }
+        call.enqueue(object : Callback {
+            override fun onFailure(call: Call, e: IOException) {
+                if (!continuation.isCancelled) {
+                    continuation.resumeWithException(e)
+                }
+            }
+
+            override fun onResponse(call: Call, response: Response) {
+                try {
+                    val result = response.use { res ->
+                        val bytes = res.body?.bytes() ?: ByteArray(0)
+                        val headersMap = LinkedHashMap<String, MutableList<String>>()
+                        val okHeaders = res.headers
+                        for (i in 0 until okHeaders.size) {
+                            val name = okHeaders.name(i)
+                            val value = okHeaders.value(i)
+                            headersMap.getOrPut(name) { mutableListOf() }.add(value)
+                        }
+                        SiteHttpResponse(
+                            code = res.code,
+                            finalUrl = res.request.url.toString(),
+                            headers = headersMap,
+                            body = bytes,
+                            fromCache = res.networkResponse == null && res.cacheResponse != null,
+                        )
+                    }
+                    if (!continuation.isCancelled) {
+                        continuation.resume(result)
+                    }
+                } catch (e: Throwable) {
+                    if (!continuation.isCancelled) {
+                        continuation.resumeWithException(e)
+                    }
+                }
+            }
+        })
+    }
+}
