@@ -607,4 +607,79 @@ class PlayerViewModelTest {
         assertEquals(loopsWhileStarted, harness.playbackPort.loopTickCount)
         assertEquals(stallsWhileStarted, harness.playbackPort.stallTickCount)
     }
+
+    @Test
+    fun autoFullscreenDefaultsToFalseAndAutoplayNeverEmitsRequestAutoFullscreen() = runTest {
+        val harness = PlayerTestHarness(mainDispatcherRule.dispatcher)
+        val (registry, _) = buildRegistry()
+
+        // Default model & settings have autoFullscreen = false
+        assertFalse(PlaybackPreferences().autoFullscreen)
+        assertFalse(harness.preferencesRepository.currentSettings().autoFullscreen)
+
+        val vm = harness.createViewModel(registry)
+        val collectedEffects = mutableListOf<PlayerSideEffect>()
+        val collectJob = launch { vm.sideEffects.collect { collectedEffects += it } }
+
+        // 1. Default settings + autoplay = true -> never emits RequestAutoFullscreen
+        vm.open(
+            PlayerLaunchArgs(
+                siteId = SiteId.R34V,
+                mediaId = "v-auto-default",
+                url = "https://r34v.example/video/v-auto-default",
+                autoplay = true,
+            ),
+        )
+        advanceUntilIdle()
+        harness.playbackPort.simulateVideoSize(1920, 1080)
+        advanceUntilIdle()
+
+        assertFalse(vm.uiState.value.playbackPreferences.autoFullscreen)
+        assertTrue(collectedEffects.none { it is PlayerSideEffect.RequestAutoFullscreen })
+
+        // 2. Even when autoFullscreen is explicitly enabled globally & per-site, autoplay = true MUST NOT auto-fullscreen
+        harness.preferencesRepository.setAutoFullscreen(true)
+        harness.preferencesRepository.savePlaybackPreferences(
+            PlaybackPreferences(siteId = SiteId.R34V, autoFullscreen = true),
+        )
+        vm.open(
+            PlayerLaunchArgs(
+                siteId = SiteId.R34V,
+                mediaId = "v-auto-enabled",
+                url = "https://r34v.example/video/v-auto-enabled",
+                autoplay = true,
+            ),
+            forceReload = true,
+        )
+        advanceUntilIdle()
+        harness.playbackPort.simulateVideoSize(1920, 1080)
+        advanceUntilIdle()
+
+        assertTrue(collectedEffects.none { it is PlayerSideEffect.RequestAutoFullscreen })
+
+        // 3. Explicit manual play (autoplay = false) with opt-in autoFullscreen = true triggers once after play()
+        vm.open(
+            PlayerLaunchArgs(
+                siteId = SiteId.R34V,
+                mediaId = "v-manual-enabled",
+                url = "https://r34v.example/video/v-manual-enabled",
+                autoplay = false,
+            ),
+            forceReload = true,
+        )
+        advanceUntilIdle()
+        harness.playbackPort.simulateVideoSize(1920, 1080)
+        advanceUntilIdle()
+        // Still paused -> must not jump to fullscreen before user clicks Play
+        assertTrue(collectedEffects.none { it is PlayerSideEffect.RequestAutoFullscreen })
+
+        // Manual play triggers one-shot RequestAutoFullscreen(landscape = true)
+        vm.play()
+        advanceUntilIdle()
+        val autoFsEffects = collectedEffects.filterIsInstance<PlayerSideEffect.RequestAutoFullscreen>()
+        assertEquals(1, autoFsEffects.size)
+        assertTrue(autoFsEffects.single().landscape)
+
+        collectJob.cancel()
+    }
 }

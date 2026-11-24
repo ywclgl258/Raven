@@ -318,7 +318,7 @@ class SettingsDataStore(
             siteLanguages = languages,
             siteExploreFilters = exploreFilters,
             translateTags = prefs[Keys.TRANSLATE_TAGS] ?: true,
-            autoFullscreen = prefs[Keys.AUTO_FULLSCREEN] ?: true,
+            autoFullscreen = prefs[Keys.AUTO_FULLSCREEN] ?: false,
             preferredQuality = prefs[Keys.PREFERRED_QUALITY]
                 ?.trim()
                 ?.takeIf(String::isNotEmpty)

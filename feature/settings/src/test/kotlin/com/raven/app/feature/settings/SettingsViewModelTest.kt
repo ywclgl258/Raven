@@ -172,12 +172,13 @@ class SettingsViewModelTest {
             val initial = expectMostRecentItem()
             assertEquals(5, initial.authSites.size)
             assertTrue(initial.authSites.first { it.descriptor.id == SiteId.R34V }.authState.isAuthenticated)
+            assertFalse(initial.settings.autoFullscreen)
             assertEquals(2, initial.readingCache.totalPages)
             assertEquals(3072L, initial.readingCache.totalBytes)
 
             vm.setReduceTransparency(true)
             vm.setTranslateTags(false)
-            vm.setAutoFullscreen(false)
+            vm.setAutoFullscreen(true)
             vm.setPreferredQuality("1080p")
             vm.setDefaultPlaybackSpeed(1.62f) // snaps to 1.50x
             vm.setStreamCacheEnabled(true)
@@ -189,7 +190,7 @@ class SettingsViewModelTest {
             val updated = expectMostRecentItem()
             assertTrue(updated.settings.reduceTransparency)
             assertFalse(updated.settings.translateTags)
-            assertFalse(updated.settings.autoFullscreen)
+            assertTrue(updated.settings.autoFullscreen)
             assertEquals("1080p", updated.settings.preferredQuality)
             assertEquals(1.5f, updated.settings.defaultPlaybackSpeed, 0.001f)
             assertTrue(updated.settings.streamCacheEnabled)
@@ -199,6 +200,7 @@ class SettingsViewModelTest {
 
             // Verify DataStore persistence matches UI state
             val persisted = db.preferencesRepository.currentSettings()
+            assertTrue(persisted.autoFullscreen)
             assertEquals("1080p", persisted.preferredQuality)
             assertEquals(1.5f, persisted.defaultPlaybackSpeed, 0.001f)
             cancelAndIgnoreRemainingEvents()

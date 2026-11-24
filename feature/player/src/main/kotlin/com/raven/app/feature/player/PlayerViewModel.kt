@@ -906,9 +906,11 @@ class PlayerViewModel(
                     runCatching { persistWatchProgressInternal(target, force = true) }
                 }
 
-                // 3. One-shot auto-fullscreen matching video aspect ratio
+                // 3. One-shot auto-fullscreen matching video aspect ratio (never on autoplay)
                 val local = localState.value
-                if (engine.isInitialized &&
+                if (!target.autoplay &&
+                    engine.isInitialized &&
+                    engine.isPlaying &&
                     engine.videoWidth > 0 &&
                     engine.videoHeight > 0 &&
                     engine.siteId == target.siteId &&
@@ -951,6 +953,7 @@ class PlayerViewModel(
                 autoFullscreen = appSettings.autoFullscreen,
             ),
         )
+        effectivePlaybackPrefs.value = effectivePrefs
 
         val initialSpeed = (localState.value.sessionUserSpeed ?: effectivePrefs.defaultSpeed)
             .coerceIn(PlayerSessionController.MIN_SPEED, PlayerSessionController.MAX_SPEED)

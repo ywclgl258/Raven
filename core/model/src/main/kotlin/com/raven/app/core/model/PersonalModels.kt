@@ -223,7 +223,7 @@ data class PlaybackPreferences(
     val seekStepSeconds: Int = 10,
     val gestureSensitivitySeconds: Int = 90,
     val preferredQuality: String = "auto",
-    val autoFullscreen: Boolean = true,
+    val autoFullscreen: Boolean = false,
     val autoDownload: Boolean = false,
 )
 

@@ -256,7 +256,7 @@ fun SettingsScreenContent(
                     RavenGroupedDivider(insetWithIcon = true)
                     RavenGroupedSwitchRow(
                         title = "视频自动全屏",
-                        subtitle = "播放时按视频横竖屏比例自动进入全屏视图",
+                        subtitle = "手动点击播放时按视频方向自动进入全屏（自动播放不自动全屏）",
                         icon = Icons.Outlined.Fullscreen,
                         checked = uiState.settings.autoFullscreen,
                         onCheckedChange = onToggleAutoFullscreen,

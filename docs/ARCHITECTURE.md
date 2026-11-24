@@ -340,7 +340,7 @@ All DAOs expose `Flow<List<T>>` / `Flow<T?>` so Compose screens react atomically
 | `site_language_<siteId>` | `String` | `"ALL"` | Per-site `ComicLanguage` (`ALL`/`CHINESE`/`JAPANESE`/`CHINESE_AND_JAPANESE`) |
 | `site_explore_filter_<siteId>` | `String` (JSON) | `""` | Last Explore filter state per site |
 | `translate_tags` | `Boolean` | `true` | Enable 165-entry (and extensible) Chinese tag translation |
-| `auto_fullscreen` | `Boolean` | `true` | Auto-enter fullscreen matching video orientation |
+| `auto_fullscreen` | `Boolean` | `false` | Auto-enter fullscreen matching video orientation on manual play (autoplay never auto-fullscreens) |
 | `preferred_quality` | `String` | `"auto"` | Default playback quality preference |
 | `default_playback_speed` | `Float` | `1.0f` | Global default playback speed (`0.25..3.0`) |
 | `stream_cache_enabled` | `Boolean` | `false` | Optional 512 MiB LRU Media3 stream cache |

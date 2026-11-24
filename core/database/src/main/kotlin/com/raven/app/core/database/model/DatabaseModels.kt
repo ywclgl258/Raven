@@ -40,7 +40,7 @@ data class AppSettings(
     val siteLanguages: Map<SiteId, ComicLanguage> = emptyMap(),
     val siteExploreFilters: Map<SiteId, ExploreFilterState> = emptyMap(),
     val translateTags: Boolean = true,
-    val autoFullscreen: Boolean = true,
+    val autoFullscreen: Boolean = false,
     val preferredQuality: String = DEFAULT_PREFERRED_QUALITY,
     val defaultPlaybackSpeed: Float = DEFAULT_PLAYBACK_SPEED,
     val streamCacheEnabled: Boolean = false,

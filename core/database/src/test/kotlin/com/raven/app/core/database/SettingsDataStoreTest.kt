@@ -32,7 +32,7 @@ class SettingsDataStoreTest {
             assertEquals(AppSettings(), initial)
             assertEquals(SiteId.R34V, initial.activeSiteId)
             assertTrue(initial.translateTags)
-            assertTrue(initial.autoFullscreen)
+            assertFalse(initial.autoFullscreen)
             assertEquals("auto", initial.preferredQuality)
             assertEquals(1.0f, initial.defaultPlaybackSpeed, 0.001f)
             assertFalse(initial.streamCacheEnabled)
@@ -75,8 +75,8 @@ class SettingsDataStoreTest {
             settingsStore.setTranslateTags(false)
             assertFalse(awaitItem().translateTags)
 
-            settingsStore.setAutoFullscreen(false)
-            assertFalse(awaitItem().autoFullscreen)
+            settingsStore.setAutoFullscreen(true)
+            assertTrue(awaitItem().autoFullscreen)
 
             settingsStore.setPreferredQuality("1080p")
             assertEquals("1080p", awaitItem().preferredQuality)

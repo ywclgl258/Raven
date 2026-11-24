@@ -410,7 +410,7 @@ private fun PlayerSettingsSheet(
 
                 RavenGroupedSwitchRow(
                     title = "自动匹配视频方向全屏",
-                    subtitle = "加载完成后按横竖屏比例进入全屏",
+                    subtitle = "手动点击播放时按视频方向自动进入全屏（自动播放不自动全屏）",
                     checked = prefs.autoFullscreen,
                     onCheckedChange = onUpdateAutoFullscreen,
                     icon = Icons.Rounded.Fullscreen,
