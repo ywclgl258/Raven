@@ -138,38 +138,42 @@ internal fun ReaderThumbnailsSheet(
         title = "页面缩略图",
         subtitle = "当前第 ${uiState.currentPage} / ${uiState.totalPages} 页 · 点击直达",
         contentPadding = PaddingValues(horizontal = 12.dp, vertical = 10.dp),
-        modifier = Modifier
-            .fillMaxHeight(0.85f)
-            .testTag(ReaderTestTags.READER_THUMBNAILS_SHEET),
+        modifier = Modifier.testTag(ReaderTestTags.READER_THUMBNAILS_SHEET),
     ) {
-        LazyVerticalGrid(
-            columns = GridCells.Adaptive(minSize = 104.dp),
-            state = gridState,
-            contentPadding = PaddingValues(bottom = 24.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
+        Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .weight(1f, fill = true),
+                .fillMaxHeight(0.85f),
         ) {
-            items(
-                items = uiState.pageNumbers,
-                key = { pageNum -> "thumb_$pageNum" },
-            ) { pageNumber ->
-                val isCurrent = pageNumber == uiState.currentPage
-                val loaded = uiState.bufferState.pages[pageNumber]
-                val pageMeta = pagesByIndex[pageNumber]
-                ReaderThumbnailCell(
-                    siteId = uiState.siteId,
-                    pageNumber = pageNumber,
-                    pageMeta = pageMeta,
-                    loadedBitmap = loaded?.bitmap,
-                    offlineOnly = uiState.offlineOnly,
-                    isCurrent = isCurrent,
-                    isBookmarked = pageNumber in bookmarkedPages,
-                    onLoadThumbnailBitmap = onLoadThumbnailBitmap,
-                    onClick = { onSelectPage(pageNumber) },
-                )
+            LazyVerticalGrid(
+                columns = GridCells.Adaptive(minSize = 104.dp),
+                state = gridState,
+                contentPadding = PaddingValues(bottom = 24.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1f, fill = true),
+            ) {
+                items(
+                    items = uiState.pageNumbers,
+                    key = { pageNum -> "thumb_$pageNum" },
+                ) { pageNumber ->
+                    val isCurrent = pageNumber == uiState.currentPage
+                    val loaded = uiState.bufferState.pages[pageNumber]
+                    val pageMeta = pagesByIndex[pageNumber]
+                    ReaderThumbnailCell(
+                        siteId = uiState.siteId,
+                        pageNumber = pageNumber,
+                        pageMeta = pageMeta,
+                        loadedBitmap = loaded?.bitmap,
+                        offlineOnly = uiState.offlineOnly,
+                        isCurrent = isCurrent,
+                        isBookmarked = pageNumber in bookmarkedPages,
+                        onLoadThumbnailBitmap = onLoadThumbnailBitmap,
+                        onClick = { onSelectPage(pageNumber) },
+                    )
+                }
             }
         }
     }
@@ -434,14 +438,12 @@ internal fun ReaderSettingsSheet(
         } else {
             "来源默认设置 · ${uiState.siteDisplayName}"
         },
-        modifier = Modifier
-            .fillMaxHeight(0.88f)
-            .testTag(ReaderTestTags.READER_SETTINGS_SHEET),
+        modifier = Modifier.testTag(ReaderTestTags.READER_SETTINGS_SHEET),
     ) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .weight(1f, fill = true)
+                .fillMaxHeight(0.88f)
                 .verticalScroll(rememberScrollState()),
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {

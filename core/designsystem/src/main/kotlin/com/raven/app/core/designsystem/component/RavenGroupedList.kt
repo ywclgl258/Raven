@@ -116,6 +116,7 @@ fun RavenGroupedRow(
     title: String,
     modifier: Modifier = Modifier,
     subtitle: String? = null,
+    subtitleMaxLines: Int = 3,
     value: String? = null,
     icon: ImageVector? = null,
     iconTint: Color = LocalRavenColors.current.inkPrimary,
@@ -194,7 +195,7 @@ fun RavenGroupedRow(
                     text = subtitle,
                     style = MaterialTheme.typography.bodySmall,
                     color = if (enabled) colors.inkSecondary else colors.inkTertiary,
-                    maxLines = 3,
+                    maxLines = subtitleMaxLines,
                     overflow = TextOverflow.Ellipsis,
                 )
             }

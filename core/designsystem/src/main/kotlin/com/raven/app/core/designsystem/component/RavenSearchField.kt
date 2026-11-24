@@ -35,7 +35,9 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.raven.app.core.designsystem.theme.LocalRavenColors
@@ -62,6 +64,37 @@ fun RavenSearchField(
 ) {
     val colors = LocalRavenColors.current
     var focused by remember { mutableStateOf(false) }
+    var textFieldValueState by remember {
+        mutableStateOf(
+            TextFieldValue(
+                text = query,
+                selection = TextRange(query.length),
+            ),
+        )
+    }
+    val pendingDispatched = remember { ArrayDeque<String>() }
+    var lastExternalQuery by remember { mutableStateOf(query) }
+
+    if (query != lastExternalQuery) {
+        lastExternalQuery = query
+        val matchedIndex = pendingDispatched.indexOf(query)
+        if (matchedIndex >= 0) {
+            repeat(matchedIndex + 1) { pendingDispatched.removeFirst() }
+        } else if (query != textFieldValueState.text) {
+            pendingDispatched.clear()
+            textFieldValueState = TextFieldValue(
+                text = query,
+                selection = TextRange(query.length),
+            )
+        }
+    } else if (!focused && query != textFieldValueState.text && pendingDispatched.isEmpty()) {
+        textFieldValueState = TextFieldValue(
+            text = query,
+            selection = TextRange(query.length),
+        )
+    }
+
+    val currentText = textFieldValueState.text
 
     val borderColor = when {
         focused -> colors.crimson.copy(alpha = 0.75f)
@@ -98,7 +131,7 @@ fun RavenSearchField(
                 .padding(vertical = 10.dp),
             contentAlignment = Alignment.CenterStart,
         ) {
-            if (query.isEmpty()) {
+            if (currentText.isEmpty()) {
                 Text(
                     text = placeholder,
                     style = MaterialTheme.typography.bodyMedium,
@@ -108,8 +141,18 @@ fun RavenSearchField(
                 )
             }
             BasicTextField(
-                value = query,
-                onValueChange = onQueryChange,
+                value = textFieldValueState,
+                onValueChange = { updated ->
+                    val textChanged = updated.text != textFieldValueState.text
+                    textFieldValueState = updated
+                    if (textChanged) {
+                        if (pendingDispatched.size >= 32) {
+                            pendingDispatched.removeFirst()
+                        }
+                        pendingDispatched.addLast(updated.text)
+                        onQueryChange(updated.text)
+                    }
+                },
                 enabled = enabled,
                 readOnly = readOnly,
                 singleLine = true,
@@ -117,7 +160,7 @@ fun RavenSearchField(
                 cursorBrush = SolidColor(colors.crimson),
                 keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
                 keyboardActions = KeyboardActions(
-                    onSearch = { onSearch?.invoke(query) },
+                    onSearch = { onSearch?.invoke(textFieldValueState.text) },
                 ),
                 modifier = Modifier
                     .fillMaxWidth()
@@ -126,12 +169,17 @@ fun RavenSearchField(
         }
 
         AnimatedVisibility(
-            visible = query.isNotEmpty() && enabled && !readOnly,
+            visible = currentText.isNotEmpty() && enabled && !readOnly,
             enter = fadeIn(),
             exit = fadeOut(),
         ) {
             IconButton(
                 onClick = {
+                    textFieldValueState = TextFieldValue(text = "", selection = TextRange.Zero)
+                    pendingDispatched.clear()
+                    if (lastExternalQuery.isNotEmpty()) {
+                        pendingDispatched.addLast("")
+                    }
                     if (onClear != null) {
                         onClear()
                     } else {

@@ -14,9 +14,9 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
-import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -176,35 +176,36 @@ fun RavenRankedVideoCard(
     badgeText: String? = null,
 ) {
     val colors = LocalRavenColors.current
-    val rankWidth = if (rank >= 10) 48.dp else 32.dp
+    val posterHeight = cardWidth / RavenFormatters.VIDEO_ASPECT_RATIO
+    val rankMinWidth = if (rank >= 10) 56.dp else 34.dp
 
     Row(
         modifier = modifier.testTag("raven_ranked_card_$rank"),
-        verticalAlignment = Alignment.Bottom,
+        verticalAlignment = Alignment.Top,
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
     ) {
         Box(
             modifier = Modifier
-                .width(rankWidth)
-                .padding(bottom = 18.dp),
+                .widthIn(min = rankMinWidth)
+                .height(posterHeight),
             contentAlignment = Alignment.BottomEnd,
         ) {
             Text(
                 text = rank.coerceAtLeast(1).toString(),
                 style = MaterialTheme.typography.displayLarge.tabular().copy(
-                    fontSize = 54.sp,
-                    lineHeight = 54.sp,
+                    fontSize = 52.sp,
+                    lineHeight = 52.sp,
                     fontWeight = FontWeight.Black,
-                    letterSpacing = (-2.5).sp,
+                    letterSpacing = (-2).sp,
                     shadow = Shadow(
                         color = colors.canvas,
-                        offset = Offset(3f, 2f),
+                        offset = Offset(2f, 2f),
                         blurRadius = 6f,
                     ),
                 ),
                 color = colors.inkPrimary.copy(alpha = 0.88f),
                 maxLines = 1,
                 softWrap = false,
-                modifier = Modifier.offset(x = 6.dp),
             )
         }
 

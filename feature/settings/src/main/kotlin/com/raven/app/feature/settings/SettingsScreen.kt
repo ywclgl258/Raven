@@ -181,7 +181,9 @@ fun SettingsScreenContent(
     val versionReadout = buildString {
         append("v${uiState.appInfo.versionName}")
         append(" (${uiState.appInfo.versionCode})")
-        if (uiState.appInfo.isDebug) append(" · Debug")
+        if (uiState.appInfo.isDebug && !uiState.appInfo.versionName.contains("debug", ignoreCase = true)) {
+            append(" · Debug")
+        }
     }
 
     Column(
@@ -507,6 +509,7 @@ fun SettingsScreenContent(
                     RavenGroupedRow(
                         title = "当前版本",
                         subtitle = uiState.appInfo.packageName,
+                        subtitleMaxLines = 1,
                         value = versionReadout,
                         icon = Icons.Outlined.Info,
                         modifier = Modifier.testTag("settings_version_row"),
