@@ -86,7 +86,7 @@ flowchart TD
     cn --> csec & spi & com & mod
     cdb --> com & mod
     cd --> com & mod
-    csec --> com & mod
+    csec --> spi & com & mod
     spi --> com & mod
     com --> mod
 ```
@@ -243,7 +243,7 @@ Raven eliminates R34V's 4-Activity stacking leaks with a **clean 3-Activity boun
 
 ### 5.2 Type-Safe Navigation Compose Routes (`@Serializable`)
 
-All routes reside in `:core:designsystem` or `:app` navigation contracts (using `@Serializable` Kotlin objects/data classes with Navigation Compose `2.9.8`):
+All routes reside in `:core:model` (`com.raven.app.core.model.RavenRoute`) so `:core:designsystem`, all `:feature:*`, and `:app` share one exact Type-Safe Navigation Compose `2.9.8` contract:
 
 ```kotlin
 sealed interface RavenRoute {
