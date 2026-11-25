@@ -66,6 +66,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.TriStateCheckbox
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -86,6 +87,7 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.state.ToggleableState
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -101,6 +103,7 @@ import com.raven.app.core.designsystem.component.RavenGroupedDivider
 import com.raven.app.core.designsystem.component.RavenGroupedRow
 import com.raven.app.core.designsystem.component.RavenGroupedSection
 import com.raven.app.core.designsystem.component.RavenLoadingSkeleton
+import com.raven.app.core.designsystem.component.RavenPrimaryButton
 import com.raven.app.core.designsystem.component.RavenRankedVideoCard
 import com.raven.app.core.designsystem.component.RavenSearchField
 import com.raven.app.core.designsystem.component.RavenSectionHeader
@@ -175,9 +178,9 @@ fun SearchScreen(
         onApplySavedSearch = viewModel::applySavedSearch,
         onDeleteSavedSearch = viewModel::deleteSavedSearch,
         onDismissSavedNotice = viewModel::dismissSavedSearchNotice,
-        onToggleCrossSite = viewModel::toggleCrossSearchSite,
         onSelectAllCrossSites = viewModel::selectAllCrossSearchSites,
-        onSelectCrossSitesByKind = viewModel::selectCrossSearchSitesByKind,
+        onToggleCrossSitesByKind = viewModel::toggleCrossSearchSitesByKind,
+        onApplyCrossSites = viewModel::applyCrossSearchSites,
         onToggleCrossSiteFilter = viewModel::toggleCrossSiteResultFilter,
         onRetryCrossSite = viewModel::retryCrossSite,
         onLoadMoreCrossSite = viewModel::loadMoreCrossSite,
@@ -215,9 +218,9 @@ fun SearchScreenContent(
     onApplySavedSearch: (SavedSearch) -> Unit,
     onDeleteSavedSearch: (String) -> Unit,
     onDismissSavedNotice: () -> Unit,
-    onToggleCrossSite: (SiteId) -> Unit,
     onSelectAllCrossSites: () -> Unit,
-    onSelectCrossSitesByKind: (MediaKind) -> Unit,
+    onToggleCrossSitesByKind: (MediaKind) -> Unit,
+    onApplyCrossSites: (Collection<SiteId>) -> Unit,
     onToggleCrossSiteFilter: (SiteId) -> Unit,
     onRetryCrossSite: (SiteId) -> Unit,
     onLoadMoreCrossSite: (SiteId) -> Unit,
@@ -240,6 +243,7 @@ fun SearchScreenContent(
     var showAdvancedSheet by rememberSaveable { mutableStateOf(false) }
     var showDateRangeSheet by rememberSaveable { mutableStateOf(false) }
     var showSaveSearchSheet by rememberSaveable { mutableStateOf(false) }
+    var showSourceSheet by rememberSaveable { mutableStateOf(false) }
     var controlsVisible by rememberSaveable { mutableStateOf(true) }
     var actionTargetItem by remember { mutableStateOf<MediaItem?>(null) }
 
@@ -581,9 +585,9 @@ fun SearchScreenContent(
                             onOpenDateRangeSheet = { showDateRangeSheet = true },
                             searchableSites = uiState.searchableSites,
                             selectedSiteIds = uiState.selectedCrossSiteIds,
-                            onToggleSite = onToggleCrossSite,
                             onSelectAll = onSelectAllCrossSites,
-                            onSelectByKind = onSelectCrossSitesByKind,
+                            onOpenSourceSheet = { showSourceSheet = true },
+                            onToggleKind = onToggleCrossSitesByKind,
                         )
                     }
                 }
@@ -703,6 +707,18 @@ fun SearchScreenContent(
             onApply = onApplyAdvancedFilters,
             onReset = onResetAdvancedFilters,
             onDismiss = { showAdvancedSheet = false },
+        )
+    }
+
+    if (showSourceSheet) {
+        CrossSiteSourceSheet(
+            sites = uiState.searchableSites,
+            selectedIds = uiState.selectedCrossSiteIds,
+            onApply = { ids ->
+                onApplyCrossSites(ids)
+                showSourceSheet = false
+            },
+            onDismiss = { showSourceSheet = false },
         )
     }
 
@@ -927,12 +943,32 @@ private fun CrossSiteSourceSelectorBar(
     onOpenDateRangeSheet: () -> Unit,
     searchableSites: List<SiteDescriptor>,
     selectedSiteIds: List<SiteId>,
-    onToggleSite: (SiteId) -> Unit,
     onSelectAll: () -> Unit,
-    onSelectByKind: (MediaKind) -> Unit,
+    onOpenSourceSheet: () -> Unit,
+    onToggleKind: (MediaKind) -> Unit,
 ) {
     val selectedSet = remember(selectedSiteIds) { selectedSiteIds.toSet() }
     val allSelected = selectedSet.size == searchableSites.size
+    val kindGroups = remember(searchableSites) {
+        MediaKind.entries.mapNotNull { kind ->
+            val sites = searchableSites.filter { it.primaryKind == kind }
+            if (sites.isEmpty()) null else kind to sites
+        }
+    }
+    val sourceLabel = remember(selectedSet, kindGroups, allSelected) {
+        when {
+            allSelected -> "来源 · 全部"
+            kindGroups.size == 1 -> "来源 · ${selectedSet.size} 站"
+            else -> {
+                val fullySelected = kindGroups.filter { (_, sites) -> sites.all { it.id in selectedSet } }
+                if (fullySelected.size == 1) {
+                    "来源 · ${fullySelected.first().first.displayLabel()}"
+                } else {
+                    "来源 · ${selectedSet.size} 站"
+                }
+            }
+        }
+    }
 
     LazyRow(
         modifier = Modifier
@@ -966,26 +1002,141 @@ private fun CrossSiteSourceSelectorBar(
                 label = "全部 (${searchableSites.size})",
                 selected = allSelected,
                 onClick = onSelectAll,
+                modifier = Modifier.testTag("cross_site_select_all"),
             )
         }
-        items(MediaKind.entries, key = { "cross_kind_${it.name}" }) { kind ->
-            val kindIds = searchableSites.filter { it.primaryKind == kind }.map { it.id }.toSet()
+        item(key = "cross_source_chip") {
             RavenFilterChip(
-                label = kind.displayLabel(),
-                selected = !allSelected && kindIds.isNotEmpty() && selectedSet == kindIds,
-                onClick = { onSelectByKind(kind) },
+                label = sourceLabel,
+                selected = !allSelected,
+                leadingIcon = Icons.Outlined.Tune,
+                onClick = onOpenSourceSheet,
+                modifier = Modifier.testTag("cross_site_source_chip"),
             )
         }
-        items(searchableSites, key = { "cross_src_${it.id.value}" }) { site ->
+        items(kindGroups, key = { "cross_kind_${it.first.name}" }) { (kind, sites) ->
+            val kindIds = remember(sites) { sites.map { it.id }.toSet() }
+            val selectedCount = kindIds.count { it in selectedSet }
             RavenFilterChip(
-                label = site.shortName,
-                selected = site.id in selectedSet,
-                onClick = { onToggleSite(site.id) },
-                modifier = Modifier.testTag("cross_site_chip_${site.id.value}"),
+                label = if (selectedCount == kindIds.size) {
+                    "${kind.displayLabel()} ${kindIds.size}"
+                } else {
+                    "${kind.displayLabel()} $selectedCount/${kindIds.size}"
+                },
+                selected = selectedCount == kindIds.size,
+                onClick = { onToggleKind(kind) },
+                modifier = Modifier.testTag("cross_kind_chip_${kind.name.lowercase()}"),
             )
         }
     }
 }
+
+/**
+ * 跨站搜索来源面板：按大分类分组展示全部可搜索站点，支持分类级全选/取消与逐站多选，
+ * 应用后一次写回选择，避免逐站切换造成多次持久化。
+ */
+@OptIn(ExperimentalLayoutApi::class, ExperimentalMaterial3Api::class)
+@Composable
+private fun CrossSiteSourceSheet(
+    sites: List<SiteDescriptor>,
+    selectedIds: List<SiteId>,
+    onApply: (List<SiteId>) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val colors = LocalRavenColors.current
+    val allIds = remember(sites) { sites.map { it.id }.toSet() }
+    var draft by remember(selectedIds) { mutableStateOf(selectedIds.toSet()) }
+
+    RavenBottomSheet(
+        onDismissRequest = onDismiss,
+        title = "搜索来源",
+        subtitle = "已选 ${draft.size} / ${allIds.size} 个站点 · 可按分类或单站选择",
+        trailingAction = {
+            TextButton(onClick = { draft = allIds }) {
+                Text("全选", color = colors.crimson, fontWeight = FontWeight.SemiBold)
+            }
+        },
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .heightIn(max = 520.dp)
+                .verticalScroll(rememberScrollState())
+                .testTag("cross_site_source_sheet"),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            MediaKind.entries.forEach { kind ->
+                val kindSites = sites.filter { it.primaryKind == kind }
+                if (kindSites.isEmpty()) return@forEach
+                val kindIds = kindSites.map { it.id }.toSet()
+                val selectedCount = kindIds.count { it in draft }
+                RavenGroupedSection(
+                    title = "${kind.displayLabel()} · $selectedCount/${kindIds.size}",
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { draft = toggleCategory(draft, kindIds) }
+                            .padding(horizontal = 12.dp, vertical = 10.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    ) {
+                        TriStateCheckbox(
+                            state = when (selectedCount) {
+                                0 -> ToggleableState.Off
+                                kindIds.size -> ToggleableState.On
+                                else -> ToggleableState.Indeterminate
+                            },
+                            onClick = null,
+                        )
+                        Text(
+                            text = "全选${kind.displayLabel()}",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = colors.inkPrimary,
+                            fontWeight = FontWeight.Medium,
+                        )
+                        Spacer(Modifier.weight(1f))
+                        Text(
+                            text = "$selectedCount/${kindIds.size}",
+                            style = MaterialTheme.typography.labelMedium.tabular(),
+                            color = colors.inkSecondary,
+                        )
+                    }
+                    RavenGroupedDivider()
+                    FlowRow(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 12.dp, vertical = 10.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        kindSites.forEach { site ->
+                            RavenFilterChip(
+                                label = site.shortName,
+                                selected = site.id in draft,
+                                onClick = {
+                                    draft = if (site.id in draft) draft - site.id else draft + site.id
+                                },
+                                modifier = Modifier.testTag("source_site_${site.id.value}"),
+                            )
+                        }
+                    }
+                }
+            }
+
+            Spacer(Modifier.height(4.dp))
+            RavenPrimaryButton(
+                text = if (draft.isEmpty()) "至少选择 1 个站点" else "应用 · ${draft.size} 个站点",
+                onClick = { onApply(sites.map { it.id }.filter { it in draft }) },
+                enabled = draft.isNotEmpty(),
+                modifier = Modifier.fillMaxWidth(),
+            )
+        }
+    }
+}
+
+private fun toggleCategory(current: Set<SiteId>, kindIds: Set<SiteId>): Set<SiteId> =
+    if (current.containsAll(kindIds)) current - kindIds else current + kindIds
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable

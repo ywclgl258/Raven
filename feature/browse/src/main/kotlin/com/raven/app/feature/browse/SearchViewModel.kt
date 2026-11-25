@@ -749,15 +749,50 @@ class SearchViewModel(
         }
     }
 
-    fun selectCrossSearchSitesByKind(kind: MediaKind) {
-        val ids = searchableDescriptors.filter { it.primaryKind == kind }.map { it.id }
-        if (ids.isEmpty()) return
+    /**
+     * 按大分类整体切换跨站搜索来源：
+     * - 该分类已全部选中 → 从当前选择中移除（至少保留 1 个站点）；
+     * - 否则 → 把该分类全部站点并入当前选择。
+     * 选择集合等于全部可搜索站点时持久化为空列表（空列表语义即「全部」）。
+     */
+    fun toggleCrossSearchSitesByKind(kind: MediaKind) {
+        val kindIds = searchableDescriptors.filter { it.primaryKind == kind }.map { it.id }
+        if (kindIds.isEmpty()) return
         viewModelScope.launch {
             crossSitesMutex.withLock {
-                preferencesRepository.setCrossSearchSiteIds(ids)
+                val settings = preferencesRepository.currentSettings()
+                val current = settings.crossSearchSiteIds
+                    .filter { it in searchableIdSet }
+                    .ifEmpty { searchableDescriptors.map { it.id } }
+                val kindSet = kindIds.toSet()
+                val next = if (current.toSet().containsAll(kindSet)) {
+                    val remaining = current.filterNot { it in kindSet }
+                    if (remaining.isEmpty()) current else remaining
+                } else {
+                    (current + kindIds).distinct()
+                }
+                preferencesRepository.setCrossSearchSiteIds(normalizeCrossSiteSelection(next))
             }
         }
     }
+
+    /** 一次性应用来源选择（来源面板「应用」按钮）。空集合视为无效，保持原选择。 */
+    fun applyCrossSearchSites(siteIds: Collection<SiteId>) {
+        val cleaned = siteIds.distinct().filter { it in searchableIdSet }
+        if (cleaned.isEmpty()) return
+        viewModelScope.launch {
+            crossSitesMutex.withLock {
+                preferencesRepository.setCrossSearchSiteIds(normalizeCrossSiteSelection(cleaned))
+            }
+        }
+    }
+
+    private fun normalizeCrossSiteSelection(ids: List<SiteId>): List<SiteId> =
+        if (ids.size == searchableDescriptors.size && ids.toSet() == searchableIdSet) {
+            emptyList()
+        } else {
+            ids
+        }
 
     fun toggleCrossSiteResultFilter(siteId: SiteId) {
         inputState.update { current ->

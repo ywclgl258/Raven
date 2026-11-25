@@ -882,4 +882,91 @@ class SearchViewModelTest {
                 cancelAndIgnoreRemainingEvents()
             }
         }
+    @Test
+    fun `cross-site source selection supports category toggles and explicit site subsets`() =
+        runTest(mainDispatcherRule.dispatcher) {
+            val harness = BrowseTestHarness(mainDispatcherRule.dispatcher)
+            fun plugin(id: SiteId, kind: MediaKind, host: String) = FakeSitePlugin(
+                descriptor = SiteDescriptor(id, id.value, primaryKind = kind, defaultHost = host),
+                searchHandler = { FeedPage(items = emptyList()) },
+            )
+            val video = plugin(SiteId.R34V, MediaKind.VIDEO, "v.example")
+            val comic = plugin(SiteId.NHENTAI, MediaKind.COMIC, "c.example")
+            val comic2 = plugin(SiteId.JMCOMIC, MediaKind.COMIC, "c2.example")
+            val serial = plugin(SiteId.GUAZIMANHUA, MediaKind.SERIAL_COMIC, "s.example")
+            val photo = plugin(SiteId.FOURKHD, MediaKind.PHOTO, "p.example")
+
+            val vm = SearchViewModel(
+                siteRegistry = SiteRegistry(listOf(video, comic, comic2, serial, photo)),
+                preferencesRepository = harness.preferencesRepository,
+                searchHistoryRepository = harness.searchHistoryRepository,
+                subscriptionRepository = harness.subscriptionRepository,
+                blockedTermsRepository = harness.blockedTermsRepository,
+                historyRepository = harness.historyRepository,
+                shelfRepository = harness.shelfRepository,
+                dispatchers = harness.dispatchers,
+            )
+            advanceUntilIdle()
+
+            suspend fun persisted() = harness.preferencesRepository.currentSettings().crossSearchSiteIds
+
+            // 默认空列表语义为「全部站点」
+            assertEquals(emptyList<SiteId>(), persisted())
+            assertEquals(
+                listOf(SiteId.R34V, SiteId.NHENTAI, SiteId.JMCOMIC, SiteId.GUAZIMANHUA, SiteId.FOURKHD),
+                vm.uiState.first().selectedCrossSiteIds,
+            )
+
+            // 全选状态下按分类取消：视频整组被移除
+            vm.toggleCrossSearchSitesByKind(MediaKind.VIDEO)
+            advanceUntilIdle()
+            assertEquals(
+                listOf(SiteId.NHENTAI, SiteId.JMCOMIC, SiteId.GUAZIMANHUA, SiteId.FOURKHD),
+                persisted(),
+            )
+
+            // 再次切换该分类：整组加回，恢复「全部」并持久化为空
+            vm.toggleCrossSearchSitesByKind(MediaKind.VIDEO)
+            advanceUntilIdle()
+            assertEquals(emptyList<SiteId>(), persisted())
+
+            // 显式指定站点子集
+            vm.applyCrossSearchSites(listOf(SiteId.NHENTAI, SiteId.GUAZIMANHUA))
+            advanceUntilIdle()
+            assertEquals(listOf(SiteId.NHENTAI, SiteId.GUAZIMANHUA), persisted())
+            vm.uiState.test {
+                advanceUntilIdle()
+                assertEquals(
+                    listOf(SiteId.NHENTAI, SiteId.GUAZIMANHUA),
+                    expectMostRecentItem().selectedCrossSiteIds,
+                )
+                cancelAndIgnoreRemainingEvents()
+            }
+
+            // 仅在选中集合内对该分类做移除
+            vm.toggleCrossSearchSitesByKind(MediaKind.SERIAL_COMIC)
+            advanceUntilIdle()
+            assertEquals(listOf(SiteId.NHENTAI), persisted())
+
+            // 部分选中的分类再次切换时整组并入
+            vm.toggleCrossSearchSitesByKind(MediaKind.COMIC)
+            advanceUntilIdle()
+            assertEquals(listOf(SiteId.NHENTAI, SiteId.JMCOMIC), persisted())
+
+            // 移除后将为空时保留原选择
+            vm.toggleCrossSearchSitesByKind(MediaKind.COMIC)
+            advanceUntilIdle()
+            assertEquals(listOf(SiteId.NHENTAI, SiteId.JMCOMIC), persisted())
+
+            // 空集合应用无效，不会清空选择
+            vm.applyCrossSearchSites(emptyList())
+            advanceUntilIdle()
+            assertEquals(listOf(SiteId.NHENTAI, SiteId.JMCOMIC), persisted())
+
+            // 一键全选回到默认「全部」
+            vm.selectAllCrossSearchSites()
+            advanceUntilIdle()
+            assertEquals(emptyList<SiteId>(), persisted())
+        }
+
 }
