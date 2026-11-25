@@ -70,22 +70,33 @@ class RavenDesignTokensTest {
     }
 
     @Test
-    fun `typography enforces tight-tracked headers and tabular numerals`() {
-        val headerStyles = listOf(
-            RavenTypography.displayLarge,
+    fun `typography enforces HarmonyOS readable tracking and tabular numerals`() {
+        assertEquals((-0.1f), RavenTypography.displayLarge.letterSpacing.value, 0.001f)
+        val neutralStyles = listOf(
             RavenTypography.displayMedium,
+            RavenTypography.displaySmall,
             RavenTypography.headlineLarge,
             RavenTypography.headlineMedium,
+            RavenTypography.headlineSmall,
             RavenTypography.titleLarge,
             RavenTypography.titleMedium,
+            RavenTypography.titleSmall,
+            RavenTypography.bodyLarge,
+            RavenTypography.bodyMedium,
+            RavenTypography.bodySmall,
+            RavenTypography.labelLarge,
         )
-        headerStyles.forEach { style ->
+        neutralStyles.forEach { style ->
             assertTrue("Expected sp letterSpacing", style.letterSpacing.isSp)
-            assertTrue(
-                "Expected tight negative tracking in [-0.4sp, -0.2sp], got ${style.letterSpacing}",
-                style.letterSpacing.value in -0.4f..-0.2f,
+            assertEquals(
+                "Expected 0sp neutral tracking for HarmonyOS readability, got ${style.letterSpacing}",
+                0f,
+                style.letterSpacing.value,
+                0.001f,
             )
         }
+        assertTrue(RavenTypography.labelMedium.letterSpacing.value in 0f..0.1f)
+        assertTrue(RavenTypography.labelSmall.letterSpacing.value in 0f..0.1f)
 
         assertEquals(RAVEN_TABULAR_FONT_FEATURE, RavenTabularTextStyle.fontFeatureSettings)
         assertEquals("tnum", RavenTypography.bodyMedium.tabular().fontFeatureSettings)
@@ -179,10 +190,10 @@ class RavenDesignTokensTest {
         assertEquals(0, RavenMotion.computeNavPopParentEnterOffset(0))
         assertEquals(0, RavenMotion.computeNavPopParentEnterOffset(-400))
 
-        // Apple deceleration curve starts at 0, accelerates early, and lands at 1
-        assertEquals(0f, RavenMotion.AppleDecelerationEasing.transform(0f), 0.0001f)
-        assertTrue(RavenMotion.AppleDecelerationEasing.transform(0.5f) > 0.7f)
-        assertEquals(1f, RavenMotion.AppleDecelerationEasing.transform(1f), 0.0001f)
+        // HarmonyOS official Friction curve (0.2, 0.0, 0.1, 1.0) starts at 0, accelerates smoothly, and lands at 1
+        assertEquals(0f, RavenMotion.HarmonyDecelerationEasing.transform(0f), 0.0001f)
+        assertTrue(RavenMotion.HarmonyDecelerationEasing.transform(0.5f) in 0.75f..0.95f)
+        assertEquals(1f, RavenMotion.HarmonyDecelerationEasing.transform(1f), 0.0001f)
     }
 
     @Test

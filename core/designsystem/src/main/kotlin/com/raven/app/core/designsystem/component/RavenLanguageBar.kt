@@ -59,12 +59,12 @@ fun RavenLanguageBar(
             expandVertically(
                 animationSpec = tween(
                     durationMillis = RavenMotion.TAB_TRANSITION_DURATION_MS,
-                    easing = RavenMotion.AppleDecelerationEasing,
+                    easing = RavenMotion.HarmonyDecelerationEasing,
                 ),
             ) + fadeIn(
                 animationSpec = tween(
                     durationMillis = RavenMotion.CHIP_TRANSITION_DURATION_MS,
-                    easing = RavenMotion.AppleDecelerationEasing,
+                    easing = RavenMotion.HarmonyDecelerationEasing,
                 ),
             )
         },
@@ -74,12 +74,12 @@ fun RavenLanguageBar(
             shrinkVertically(
                 animationSpec = tween(
                     durationMillis = RavenMotion.CHIP_TRANSITION_DURATION_MS,
-                    easing = RavenMotion.AppleDecelerationEasing,
+                    easing = RavenMotion.HarmonyDecelerationEasing,
                 ),
             ) + fadeOut(
                 animationSpec = tween(
                     durationMillis = RavenMotion.CHIP_TRANSITION_DURATION_MS - 30,
-                    easing = RavenMotion.AppleDecelerationEasing,
+                    easing = RavenMotion.HarmonyDecelerationEasing,
                 ),
             )
         },

@@ -13,8 +13,9 @@ import androidx.compose.ui.unit.sp
 const val RAVEN_TABULAR_FONT_FEATURE: String = "tnum"
 
 /**
- * Apple HIG inspired typographic hierarchy tuned for OLED readability and 200% font-scale resilience.
- * Display and section headers use tight negative tracking (`-0.4.sp` to `-0.2.sp`) with semibold/bold weight.
+ * HarmonyOS readable typographic hierarchy on system sans-serif (`FontFamily.SansSerif`),
+ * tuned for OLED CJK/Latin readability and 200% font-scale resilience.
+ * Uses neutral tracking (`0.sp`, `-0.1.sp` on hero display) rather than tight negative compression.
  */
 val RavenTypography: Typography = Typography(
     displayLarge = TextStyle(
@@ -22,63 +23,63 @@ val RavenTypography: Typography = Typography(
         fontWeight = FontWeight.Bold,
         fontSize = 40.sp,
         lineHeight = 46.sp,
-        letterSpacing = (-0.4).sp,
+        letterSpacing = (-0.1).sp,
     ),
     displayMedium = TextStyle(
         fontFamily = FontFamily.SansSerif,
         fontWeight = FontWeight.Bold,
         fontSize = 32.sp,
         lineHeight = 38.sp,
-        letterSpacing = (-0.4).sp,
+        letterSpacing = 0.sp,
     ),
     displaySmall = TextStyle(
         fontFamily = FontFamily.SansSerif,
         fontWeight = FontWeight.Bold,
         fontSize = 28.sp,
         lineHeight = 34.sp,
-        letterSpacing = (-0.35).sp,
+        letterSpacing = 0.sp,
     ),
     headlineLarge = TextStyle(
         fontFamily = FontFamily.SansSerif,
         fontWeight = FontWeight.Bold,
         fontSize = 26.sp,
         lineHeight = 32.sp,
-        letterSpacing = (-0.35).sp,
+        letterSpacing = 0.sp,
     ),
     headlineMedium = TextStyle(
         fontFamily = FontFamily.SansSerif,
         fontWeight = FontWeight.Bold,
         fontSize = 22.sp,
         lineHeight = 28.sp,
-        letterSpacing = (-0.3).sp,
+        letterSpacing = 0.sp,
     ),
     headlineSmall = TextStyle(
         fontFamily = FontFamily.SansSerif,
         fontWeight = FontWeight.SemiBold,
         fontSize = 19.sp,
         lineHeight = 25.sp,
-        letterSpacing = (-0.25).sp,
+        letterSpacing = 0.sp,
     ),
     titleLarge = TextStyle(
         fontFamily = FontFamily.SansSerif,
         fontWeight = FontWeight.SemiBold,
         fontSize = 18.sp,
         lineHeight = 24.sp,
-        letterSpacing = (-0.25).sp,
+        letterSpacing = 0.sp,
     ),
     titleMedium = TextStyle(
         fontFamily = FontFamily.SansSerif,
         fontWeight = FontWeight.SemiBold,
         fontSize = 15.sp,
         lineHeight = 20.sp,
-        letterSpacing = (-0.2).sp,
+        letterSpacing = 0.sp,
     ),
     titleSmall = TextStyle(
         fontFamily = FontFamily.SansSerif,
         fontWeight = FontWeight.SemiBold,
         fontSize = 13.sp,
         lineHeight = 18.sp,
-        letterSpacing = (-0.1).sp,
+        letterSpacing = 0.sp,
     ),
     bodyLarge = TextStyle(
         fontFamily = FontFamily.SansSerif,
@@ -99,7 +100,7 @@ val RavenTypography: Typography = Typography(
         fontWeight = FontWeight.Normal,
         fontSize = 12.sp,
         lineHeight = 17.sp,
-        letterSpacing = 0.1.sp,
+        letterSpacing = 0.sp,
     ),
     labelLarge = TextStyle(
         fontFamily = FontFamily.SansSerif,
@@ -113,14 +114,14 @@ val RavenTypography: Typography = Typography(
         fontWeight = FontWeight.Medium,
         fontSize = 12.sp,
         lineHeight = 16.sp,
-        letterSpacing = 0.15.sp,
+        letterSpacing = 0.05.sp,
     ),
     labelSmall = TextStyle(
         fontFamily = FontFamily.SansSerif,
         fontWeight = FontWeight.Medium,
         fontSize = 11.sp,
         lineHeight = 14.sp,
-        letterSpacing = 0.2.sp,
+        letterSpacing = 0.1.sp,
     ),
 )
 

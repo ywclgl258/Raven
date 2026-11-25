@@ -14,6 +14,8 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.waitForUpOrCancellation
+import androidx.compose.foundation.interaction.FocusInteraction
+import androidx.compose.foundation.interaction.HoverInteraction
 import androidx.compose.foundation.interaction.InteractionSource
 import androidx.compose.foundation.interaction.PressInteraction
 import androidx.compose.foundation.interaction.collectIsPressedAsState
@@ -110,14 +112,18 @@ object RavenMotion {
     const val AMBIENT_GLOW_MAX_ALPHA: Float = RavenColors.AMBIENT_GLOW_MAX_ALPHA
     val DefaultFrostBlurRadius: Dp = 18.dp
 
-    /** Legacy deceleration alias preserved for source compatibility. */
-    val AppleDecelerationEasing: CubicBezierEasing = CubicBezierEasing(0.22f, 1f, 0.36f, 1f)
+    /** HarmonyOS Design official Friction curve `(0.2, 0.0, 0.1, 1.0)` for route, modal, sheet, and tab transitions. */
+    val HarmonyDecelerationEasing: CubicBezierEasing = CubicBezierEasing(0.2f, 0.0f, 0.1f, 1.0f)
 
-    /** HarmonyOS Design deceleration curve for modal, sheet, and route choreography. */
-    val HarmonyDecelerationEasing: CubicBezierEasing = CubicBezierEasing(0.18f, 0.96f, 0.28f, 1f)
-
-    /** HarmonyOS Design standard optical easing curve. */
+    /** HarmonyOS Design standard optical easing curve `(0.2, 0.0, 0.0, 1.0)` for micro-emphasis fades and highlights. */
     val HarmonyStandardEasing: CubicBezierEasing = CubicBezierEasing(0.20f, 0f, 0f, 1f)
+
+    /** Legacy deceleration alias preserved temporarily for source compatibility; delegates to [HarmonyDecelerationEasing]. */
+    @Deprecated(
+        message = "Use RavenMotion.HarmonyDecelerationEasing instead",
+        replaceWith = ReplaceWith("RavenMotion.HarmonyDecelerationEasing"),
+    )
+    val AppleDecelerationEasing: CubicBezierEasing = HarmonyDecelerationEasing
 
     /** Finger-tracking / instant press-down gravity spring (`damping = 0.92`, `stiffness = 620`). */
     fun <T> responsiveSpringSpec(): SpringSpec<T> = spring(
@@ -450,6 +456,8 @@ fun Modifier.ravenInteractiveLight(
 ): Modifier = composed {
     var pressOrigin by remember(interactionSource) { mutableStateOf(Offset.Unspecified) }
     var isPressed by remember(interactionSource) { mutableStateOf(false) }
+    var isHovered by remember(interactionSource) { mutableStateOf(false) }
+    var isFocused by remember(interactionSource) { mutableStateOf(false) }
     LaunchedEffect(interactionSource) {
         interactionSource.interactions.collect { interaction ->
             when (interaction) {
@@ -460,12 +468,22 @@ fun Modifier.ravenInteractiveLight(
                 is PressInteraction.Release,
                 is PressInteraction.Cancel,
                 -> isPressed = false
+                is HoverInteraction.Enter -> isHovered = true
+                is HoverInteraction.Exit -> isHovered = false
+                is FocusInteraction.Focus -> isFocused = true
+                is FocusInteraction.Unfocus -> isFocused = false
             }
         }
     }
     val motionReduced = LocalMotionReduced.current
+    val targetAlpha = when {
+        !enabled -> 0f
+        isPressed -> 1f
+        isHovered || isFocused -> 0.45f
+        else -> 0f
+    }
     val overlayAlpha by animateFloatAsState(
-        targetValue = if (isPressed && enabled) 1f else 0f,
+        targetValue = targetAlpha,
         animationSpec = if (motionReduced) {
             snap()
         } else if (isPressed) {

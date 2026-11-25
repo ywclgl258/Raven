@@ -408,7 +408,7 @@ fun RavenHeroBanner(
                             } else {
                                 tween(
                                     durationMillis = RavenMotion.CHIP_TRANSITION_DURATION_MS,
-                                    easing = RavenMotion.AppleDecelerationEasing,
+                                    easing = RavenMotion.HarmonyDecelerationEasing,
                                 )
                             },
                             label = "heroDotColor",

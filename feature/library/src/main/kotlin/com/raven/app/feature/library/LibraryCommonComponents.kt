@@ -406,9 +406,9 @@ internal fun LibraryMetricTile(
 }
 
 /**
- * Single-screen Obsidian confirmation bottom sheet.
+ * HarmonyOS confirmation dialog for destructive or critical library actions
+ * (delete download/shelf, clear history/favorites). Disables scrim dismissal when [destructive] is true.
  */
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 internal fun LibraryConfirmBottomSheet(
     title: String,
@@ -418,54 +418,17 @@ internal fun LibraryConfirmBottomSheet(
     onDismiss: () -> Unit,
     destructive: Boolean = true,
 ) {
-    val colors = LocalRavenColors.current
-
-    RavenBottomSheet(
+    com.raven.app.core.designsystem.component.RavenConfirmDialog(
         onDismissRequest = onDismiss,
         title = title,
-        subtitle = message,
-    ) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
-        ) {
-            OutlinedButton(
-                onClick = onDismiss,
-                shape = RavenShapes.PillShape,
-                border = BorderStroke(0.5.dp, colors.outlineSubtle),
-                colors = ButtonDefaults.outlinedButtonColors(
-                    containerColor = colors.surface1,
-                    contentColor = colors.inkPrimary,
-                ),
-                modifier = Modifier
-                    .weight(1f)
-                    .heightIn(min = 48.dp),
-            ) {
-                Text("取消", style = MaterialTheme.typography.labelLarge)
-            }
-
-            Button(
-                onClick = {
-                    onDismiss()
-                    onConfirm()
-                },
-                shape = RavenShapes.PillShape,
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = if (destructive) colors.error else colors.primaryCtaContainer,
-                    contentColor = if (destructive) colors.inkPrimary else colors.primaryCtaInk,
-                ),
-                modifier = Modifier
-                    .weight(1f)
-                    .heightIn(min = 48.dp)
-                    .ravenSpringPress(),
-            ) {
-                Text(
-                    text = confirmLabel,
-                    style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.SemiBold),
-                )
-            }
-        }
-    }
+        message = message,
+        confirmLabel = confirmLabel,
+        onConfirm = {
+            onDismiss()
+            onConfirm()
+        },
+        destructive = destructive,
+    )
 }
 
 /**

@@ -367,6 +367,7 @@ fun SiteAccountScreenContent(
     if (showCookieImportSheet && uiState.supportsCookieImport && site != null) {
         RavenBottomSheet(
             onDismissRequest = { if (!uiState.isSubmitting) showCookieImportSheet = false },
+            presentation = com.raven.app.core.designsystem.component.RavenSheetPresentation.Center,
             title = "手动导入 ${site.displayName} Cookie",
             subtitle = "将先联网验证本站访问权限，确认有效后才加密保存",
             modifier = Modifier.testTag("site_account_cookie_import_sheet"),

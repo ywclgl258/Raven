@@ -100,50 +100,55 @@ RavenTheme(reduceTransparency = appSettings.reduceTransparency) {
 
 ### 2.3 排版字阶与等宽数字（`RavenTypography.kt`）
 
-全站使用 `FontFamily.SansSerif`，Display / Headline / Title 采用紧负字距，并针对 200% 系统字体缩放预留合理行高：
+全站使用系统默认无衬线字体 `FontFamily.SansSerif`（不打包额外字体文件），采用 **HarmonyOS 可读性字距策略**（去强负字距压缩，正文与标题均为 `0.sp`，仅超大 `displayLarge` 为 `-0.1.sp`，小标签 `0.05..0.1.sp`），并针对 200% 系统字体缩放预留合理行高：
 
 | Material 3 样式 | `FontWeight` | `fontSize` | `lineHeight` | `letterSpacing` | 典型场景 |
 |---|---|---:|---:|---:|---|
-| `displayLarge` | `Bold` | `40.sp` | `46.sp` | `-0.4.sp` | Top 10 排行大号数字基座 |
-| `displayMedium` | `Bold` | `32.sp` | `38.sp` | `-0.4.sp` | 大屏展示标题 |
-| `displaySmall` | `Bold` | `28.sp` | `34.sp` | `-0.35.sp` | 引导/总览主标 |
-| `headlineLarge` | `Bold` | `26.sp` | `32.sp` | `-0.35.sp` | 详情页主标题 |
-| `headlineMedium` | `Bold` | `22.sp` | `28.sp` | `-0.3.sp` | Hero Banner 标题 |
-| `headlineSmall` | `SemiBold` | `19.sp` | `25.sp` | `-0.25.sp` | 次级页主标 |
-| `titleLarge` | `SemiBold` | `18.sp` | `24.sp` | `-0.25.sp` | `RavenTopBar`、`RavenSectionHeader`、`RavenBottomSheet` 标题 |
-| `titleMedium` | `SemiBold` | `15.sp` | `20.sp` | `-0.2.sp` | `RavenVideoCard` 标题 |
-| `titleSmall` | `SemiBold` | `13.sp` | `18.sp` | `-0.1.sp` | `RavenGalleryCard`、`RavenCompactMediaRow` 标题 |
+| `displayLarge` | `Bold` | `40.sp` | `46.sp` | `-0.1.sp` | Top 10 排行大号数字基座 |
+| `displayMedium` | `Bold` | `32.sp` | `38.sp` | `0.sp` | 大屏展示标题 |
+| `displaySmall` | `Bold` | `28.sp` | `34.sp` | `0.sp` | 引导/总览主标 |
+| `headlineLarge` | `Bold` | `26.sp` | `32.sp` | `0.sp` | 详情页主标题 |
+| `headlineMedium` | `Bold` | `22.sp` | `28.sp` | `0.sp` | Hero Banner 标题 |
+| `headlineSmall` | `SemiBold` | `19.sp` | `25.sp` | `0.sp` | 次级页主标 |
+| `titleLarge` | `SemiBold` | `18.sp` | `24.sp` | `0.sp` | `RavenTopBar`、`RavenSectionHeader`、`RavenBottomSheet` / `RavenDialog` 标题 |
+| `titleMedium` | `SemiBold` | `15.sp` | `20.sp` | `0.sp` | `RavenVideoCard` 标题 |
+| `titleSmall` | `SemiBold` | `13.sp` | `18.sp` | `0.sp` | `RavenGalleryCard`、`RavenCompactMediaRow` 标题 |
 | `bodyLarge` | `Normal` | `16.sp` | `23.sp` | `0.sp` | `RavenGroupedRow` 主文案、正文段落 |
-| `bodyMedium` | `Normal` | `14.sp` | `20.sp` | `0.sp` | 搜索框输入、空态/错误说明、状态提示 |
-| `bodySmall` | `Normal` | `12.sp` | `17.sp` | `0.1.sp` | 卡片元数据、分组副标题、脚注 |
-| `labelLarge` | `SemiBold` | `14.sp` | `18.sp` | `0.sp` | CTA 按钮、站点切换胶囊、筛选 Chip、滑块数值 |
-| `labelMedium` | `Medium` | `12.sp` | `16.sp` | `0.15.sp` | 分组节标题、查看全部按钮、`RavenTabularTextStyle` 基础样式 |
-| `labelSmall` | `Medium` | `11.sp` | `14.sp` | `0.2.sp` | 底部导航栏 / `NavigationRail` 标签 |
+| `bodyMedium` | `Normal` | `14.sp` | `20.sp` | `0.sp` | 搜索框输入、空态/错误说明、弹窗正文 |
+| `bodySmall` | `Normal` | `12.sp` | `17.sp` | `0.sp` | 卡片元数据、分组副标题、脚注 |
+| `labelLarge` | `SemiBold` | `14.sp` | `18.sp` | `0.sp` | `RavenButton`、站点切换胶囊、筛选 Chip、滑块数值 |
+| `labelMedium` | `Medium` | `12.sp` | `16.sp` | `0.05.sp` | 分组节标题、查看全部按钮、`RavenTabularTextStyle` 基础样式 |
+| `labelSmall` | `Medium` | `11.sp` | `14.sp` | `0.1.sp` | 底部导航栏 / `NavigationRail` / `NavigationDrawer` 标签 |
 
 **等宽数字强制规范（`RAVEN_TABULAR_FONT_FEATURE = "tnum"`）**：
 - 凡涉及动态刷新或纵向对齐的数字——**视频时长（`12:34`）、阅读页码（`14 / 120`）、观看/收藏数、字节大小（`1.5 MB`）、下载进度、倍速/音量/亮度 HUD、未读角标、Top 10 排名**——**必须**使用 `RavenTabularTextStyle` 或对任意样式调用 `.tabular()`（即 `copy(fontFeatureSettings = "tnum")`）。
 
 ### 2.4 形状几何（`RavenShapes.kt`）
 
+采用 HarmonyOS Design Z 轴分层圆角体系：
+
 | 常量 | 半径 / 形状 | 映射至 `MaterialShapes` | 适用组件 |
 |---|---|---|---|
-| `CardRadius` / `CardShape` | `14.dp` (`RoundedCornerShape(14.dp)`) | `medium` | 视频/图集卡片、`RavenCompactMediaRow`、`RavenGroupedSection` |
-| `SheetRadius` / `SheetShape` | `18.dp`（仅 `topStart` / `topEnd`） | `extraLarge` | `RavenBottomSheet`（`ModalBottomSheet`） |
-| `DialogRadius` / `DialogShape` | `18.dp` | `large` | 极少数确认型弹窗 |
-| `ControlRadius` / `ControlShape` | `10.dp` | `small` | 列表缩略图、分组图标底框、骨架屏条块 |
+| `MicroRadius` / `MicroShape` | `4.dp` | — | 微小角标/分割装饰 |
 | `BadgeRadius` / `BadgeShape` | `6.dp` | `extraSmall` | 封面角标（时长 / `42P` 页数） |
-| `PillShape` | `CircleShape` | — | 站点切换胶囊、搜索框、筛选 Chip、主/次 CTA、`RavenVisualHud`、`RavenStatusPill` |
+| `SmallRadius` / `SmallShape` | `8.dp` | — | 紧凑徽章/次级标签 |
+| `ControlRadius` / `ControlShape` | `12.dp` | `small` | 列表缩略图、分组图标底框、输入框、骨架屏条块 |
+| `CardRadius` / `CardShape` | `16.dp` | `medium` | 视频/图集卡片、`RavenCompactMediaRow`、`RavenGroupedSection` |
+| `ButtonRadius` / `ButtonShape` | `20.dp` | — | `RavenPrimaryButton` / `RavenSecondaryButton` / `RavenDangerButton` / `RavenTextButton` |
+| `DialogRadius` / `DialogShape` | `28.dp` | `large` | `RavenDialog` 家族、宽屏居中 `RavenBottomSheet` |
+| `SheetRadius` / `SheetShape` | `32.dp`（仅 `topStart` / `topEnd`） | `extraLarge` | 底部锚定 `RavenBottomSheet`（`BindSheet`） |
+| `PillShape` | `CircleShape` | — | 站点切换胶囊、搜索框、筛选 Chip、`RavenIconButton`、`RavenVisualHud`、`RavenStatusPill` |
 
 ### 2.5 动效、磨砂与环境光（`RavenMotion.kt`）
 
 | API | 关键参数与行为 | 兼容与降级规则 |
 |---|---|---|
-| `Modifier.ravenSpringPress(interactionSource, pressedScale = 0.97f, enabled)` | 弹簧按压缩放 `1.0f -> 0.97f`（`DampingRatioMediumBouncy` + `StiffnessMediumLow`）；传 `interactionSource` 时与 `clickable` 联动（含键盘/无障碍触发），未传时使用非消费 `pointerInput` 观察按压 | `LocalMotionReduced.current == true` 时降级为 `snap()`；`pressedScale` 钳制于 `0.90f..1.0f` |
-| `Modifier.ravenFrostedSurface(reduceTransparency, shape, borderColor, borderWidth)` | 容器直接应用暗色半透渐变（`Surface2 @ 78% -> Surface1 @ 84%`）+ `RimHighlight`，**不模糊前景文字与图标** | `API < 31` 或 `reduceTransparency = true` 时降级为 `FrostedFallbackScrim`（`#121216 @ 92%`）+ `Hairline` |
-| `Modifier.ravenFrostedBackdropLayer(reduceTransparency, shape, blurRadius = 18.dp)` | 仅用于背景层的原生模糊修饰符，内部调用 `Modifier.blur(blurRadius, BlurredEdgeTreatment(shape))`（**零第三方 `backdrop` 依赖**） | 同上，API 24–30 或 `reduceTransparency = true` 直接渲染不模糊暗色底 |
-| `RavenFrostedBox(...)` | 将 `ravenFrostedBackdropLayer`（`matchParentSize`）与清晰前景 `content` 分层组合的安全毛玻璃容器 | 自动读取 `LocalReduceTransparency.current` |
-| `Modifier.ambientHeroGlow(tint = Crimson, alpha = 0.14f)` | 在 Hero/详情顶栏绘制偏右上角 `(0.68w, 0.18h)` 径向微光 | 经 `RavenMotion.clampAmbientGlowAlpha(alpha)` **强制钳制在 `0f..0.18f`**（`NaN`/负值归 `0f`），绝不污染全局主题色 |
-| `RavenMotion.supportsNativeBlur(sdkInt, reduceTransparency)` | 纯函数判断 `!reduceTransparency && sdkInt >= Build.VERSION_CODES.S` | 便于 JVM 单测与组件统一分支 |
+| `RavenMotion.HarmonyDecelerationEasing` | HarmonyOS 官方 Friction 曲线 `CubicBezierEasing(0.2f, 0.0f, 0.1f, 1.0f)`，用于页面 push/pop、Tab、Sheet/Dialog 转场（旧别名 `AppleDecelerationEasing` 已 `@Deprecated` 并委托至此） | `LocalMotionReduced.current == true` 时统一 `snap()` |
+| `responsiveSpringSpec` / `interactiveSpringSpec` / `gentleSpatialSpringSpec` | 三组物理重力弹簧，用于手势跟手、按压回弹与可中断切换 | 减弱动效时退化为 `snap()` |
+| `Modifier.ravenSpringPress(interactionSource, pressedScale = 0.968f, enabled)` | 弹簧按压缩放 `1.0f -> 0.968f`，传 `interactionSource` 时与 `clickable` 联动 | `LocalMotionReduced.current == true` 时降级为 `snap()`；Disabled 无缩放 |
+| `Modifier.ravenInteractiveLight(interactionSource, shape, enabled, glowColor)` | HarmonyOS 指针起源径向互动光 + 顶部高光描边，同时响应 **Press / Mouse Hover / Keyboard Focus** | Disabled 无光效；`LocalMotionReduced` 时直接切换 |
+| `Modifier.ravenFrostedSurface` / `RavenFrostedBox` | 五档光学毛玻璃（`ULTRA_THIN` -> `ULTRA_THICK`）+ 顶部高光折射边，不模糊前景文字与图标 | `API < 31` 或 `reduceTransparency = true` 时降级为 `FrostedFallbackScrim`（`#121216 @ 92%`）+ `Hairline` |
+| `Modifier.ambientHeroGlow(tint = Crimson, alpha = 0.14f)` | 在 Hero/详情顶栏绘制偏右上角 `(0.68w, 0.18h)` 径向微光 | 经 `RavenMotion.clampAmbientGlowAlpha(alpha)` **强制钳制在 `0f..0.18f`**，绝不污染全局主题色 |
 
 ### 2.6 纯 Kotlin 格式化工具（`RavenFormatters.kt`）
 
@@ -196,7 +201,19 @@ RavenTheme(reduceTransparency = appSettings.reduceTransparency) {
 | `RavenGroupedRow` | `RavenGroupedList.kt` | `(title, modifier, subtitle = null, value = null, icon = null, iconTint, iconContainerColor, showChevron = false, destructive = false, enabled = true, onClick = null, trailingContent = null)` — 最小高度 `52.dp`，右侧 `value` 自动 `.tabular()` | — |
 | `RavenGroupedSwitchRow` | `RavenGroupedList.kt` | `(title, checked, onCheckedChange, modifier, subtitle = null, icon = null, ...)` — 整行可点 `Role.Switch`，激活轨道为 `Crimson` | — |
 | `RavenGroupedSliderRow` | `RavenGroupedList.kt` | `(title, value, onValueChange, valueLabel, modifier, subtitle = null, icon = null, valueRange = 0f..1f, steps = 0, enabled = true, onValueChangeFinished = null)` — 右上角实时等宽读数 + 绯红轨道滑块 | — |
-| `RavenBottomSheet` | `RavenBottomSheet.kt` | `(onDismissRequest, modifier, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true), title = null, subtitle = null, trailingAction = null, contentPadding = PaddingValues(16.dp, 14.dp), content)` — `Surface2`、`18dp` 顶圆角、自定义拖拽条、自带 `navigationBarsPadding()` + `imePadding()` | `raven_bottom_sheet` |
+| `RavenBottomSheet` / `RavenSheetSurface` | `RavenBottomSheet.kt` | `(onDismissRequest, modifier, sheetState, presentation = Bottom/Center/Auto, detent = Auto/Medium/Large/Fixed(dp), title, subtitle, trailingAction, contentPadding, dismissOnScrimClick = true, confirmValueChange, content)` — `Surface2`、`32dp` 顶圆角（宽屏居中 `28dp` / 最大宽 `480dp`）、支持 Esc 关闭、自带 `navigationBarsPadding()` + `imePadding()` | `raven_bottom_sheet` |
+| `RavenButton` 家族 + `RavenButtonRow` | `RavenButton.kt` | `RavenPrimaryButton`（Crimson / Cta）、`RavenSecondaryButton`、`RavenTextButton`、`RavenIconButton`、`RavenDangerButton`；三档高度 `Small(40dp)/Medium(48dp)/Large(52dp)`、单按钮最大 `448dp`、双按钮等宽 `12dp` 间距、三按钮及以上纵向 `12dp` 排列、内置 Loading/Success/Hover/Focus 与触感反馈 | — |
+| `RavenDialog` 家族 | `RavenDialog.kt` | `RavenDialog`、`RavenAlertDialog`、`RavenConfirmDialog`、`RavenInputDialog`、`RavenLoadingDialog`；宽度 `min(屏宽-32dp, 400dp)`、最大高度 `90%`、圆角 `28dp`、Esc 关闭、高风险 `destructive = true` 默认禁用点击遮罩误关 | `raven_dialog` |
+
+#### Sheet vs Dialog 选型表（强制约束）
+
+| 场景类型 | 选用组件 | 规则 |
+|---|---|---|
+| 高风险确认（删除、清空、登出、覆盖、重置） | `RavenConfirmDialog` / `RavenAlertDialog(destructive = true)` | 强打断模态，默认禁用 scrim 误关，主操作用 `RavenDangerButton` |
+| 单字段轻量输入（重命名、新建片单） | `RavenInputDialog` | 自动请求键盘焦点，支持回车确认与 Esc 取消 |
+| 筛选、排序、片单选择、轻量操作菜单 | `RavenBottomSheet(presentation = Bottom, detent = Medium/Auto)` | 手机底部弹出，支持拖拽与点击遮罩关闭 |
+| 登录/Cookie 导入、PIN 设置、网络诊断、更新详情 | `RavenBottomSheet(presentation = Center)` | 手机端底部弹出；折叠屏/平板/桌面（`>= 600dp`）自动居中为 `480dp` 面板 |
+| 多窗口自适应断点（`RavenWindowClass`） | `RavenLayout.kt` / `rememberRavenWindowClass()` | `COMPACT(<600dp)` 底栏、`MEDIUM(600-839dp)` Rail、`EXPANDED(840-1199dp)` Rail/双栏、`LARGE(>=1200dp)` Permanent Drawer |
 
 ### 3.4 媒体浮层、分站图片与状态反馈组件
 

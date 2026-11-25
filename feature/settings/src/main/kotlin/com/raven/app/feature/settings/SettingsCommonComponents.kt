@@ -4,21 +4,15 @@ import android.app.Activity
 import android.content.Context
 import android.content.ContextWrapper
 import android.view.WindowManager
-import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
@@ -28,13 +22,8 @@ import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.outlined.Visibility
 import androidx.compose.material.icons.outlined.VisibilityOff
 import androidx.compose.material.icons.outlined.WarningAmber
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
@@ -45,15 +34,17 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.raven.app.core.designsystem.component.RavenDangerButton
+import com.raven.app.core.designsystem.component.RavenIconButton
+import com.raven.app.core.designsystem.component.RavenPrimaryButton
+import com.raven.app.core.designsystem.component.RavenPrimaryButtonVariant
+import com.raven.app.core.designsystem.component.RavenSecondaryButton
 import com.raven.app.core.designsystem.component.RavenStatusTone
 import com.raven.app.core.designsystem.theme.LocalRavenColors
 import com.raven.app.core.designsystem.theme.RavenShapes
-import com.raven.app.core.designsystem.theme.ravenSpringPress
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -213,7 +204,7 @@ internal fun SettingsNoticeBanner(
 }
 
 /**
- * Obsidian high-contrast Netflix/Apple HIG primary pill CTA button with optional busy spinner.
+ * Settings primary button delegating to the unified [RavenPrimaryButton] / [RavenDangerButton] family.
  */
 @Composable
 internal fun SettingsPrimaryButton(
@@ -225,51 +216,30 @@ internal fun SettingsPrimaryButton(
     destructive: Boolean = false,
     icon: ImageVector? = null,
 ) {
-    val colors = LocalRavenColors.current
-    val containerColor = if (destructive) colors.error else colors.primaryCtaContainer
-    val contentColor = if (destructive) colors.inkPrimary else colors.primaryCtaInk
-
-    Button(
-        onClick = onClick,
-        enabled = enabled && !loading,
-        shape = RavenShapes.PillShape,
-        contentPadding = PaddingValues(horizontal = 20.dp, vertical = 12.dp),
-        colors = ButtonDefaults.buttonColors(
-            containerColor = containerColor,
-            contentColor = contentColor,
-            disabledContainerColor = colors.surface3,
-            disabledContentColor = colors.inkTertiary,
-        ),
-        modifier = modifier
-            .heightIn(min = 48.dp)
-            .ravenSpringPress(enabled = enabled && !loading),
-    ) {
-        if (loading) {
-            CircularProgressIndicator(
-                color = contentColor,
-                strokeWidth = 2.dp,
-                modifier = Modifier.size(16.dp),
-            )
-            Spacer(modifier = Modifier.width(8.dp))
-        } else if (icon != null) {
-            Icon(
-                imageVector = icon,
-                contentDescription = null,
-                modifier = Modifier.size(18.dp),
-            )
-            Spacer(modifier = Modifier.width(6.dp))
-        }
-        Text(
+    if (destructive) {
+        RavenDangerButton(
             text = text,
-            style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.SemiBold),
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
+            onClick = onClick,
+            modifier = modifier,
+            enabled = enabled,
+            loading = loading,
+            leadingIcon = icon,
+        )
+    } else {
+        RavenPrimaryButton(
+            text = text,
+            onClick = onClick,
+            modifier = modifier,
+            enabled = enabled,
+            loading = loading,
+            variant = RavenPrimaryButtonVariant.Cta,
+            leadingIcon = icon,
         )
     }
 }
 
 /**
- * Obsidian secondary pill button with crisp outline hairline.
+ * Settings secondary button delegating to the unified [RavenSecondaryButton] / [RavenDangerButton] family.
  */
 @Composable
 internal fun SettingsSecondaryButton(
@@ -280,39 +250,22 @@ internal fun SettingsSecondaryButton(
     destructive: Boolean = false,
     icon: ImageVector? = null,
 ) {
-    val colors = LocalRavenColors.current
-    val tint = if (destructive) colors.error else colors.inkPrimary
-    val borderColor = if (destructive) colors.error.copy(alpha = 0.45f) else colors.outlineSubtle
-
-    OutlinedButton(
-        onClick = onClick,
-        enabled = enabled,
-        shape = RavenShapes.PillShape,
-        border = BorderStroke(0.5.dp, if (enabled) borderColor else colors.hairline),
-        colors = ButtonDefaults.outlinedButtonColors(
-            containerColor = colors.surface2,
-            contentColor = tint,
-            disabledContainerColor = colors.surface1,
-            disabledContentColor = colors.inkTertiary,
-        ),
-        contentPadding = PaddingValues(horizontal = 18.dp, vertical = 12.dp),
-        modifier = modifier
-            .heightIn(min = 48.dp)
-            .ravenSpringPress(enabled = enabled),
-    ) {
-        if (icon != null) {
-            Icon(
-                imageVector = icon,
-                contentDescription = null,
-                modifier = Modifier.size(18.dp),
-            )
-            Spacer(modifier = Modifier.width(6.dp))
-        }
-        Text(
+    if (destructive) {
+        RavenDangerButton(
             text = text,
-            style = MaterialTheme.typography.labelLarge,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
+            onClick = onClick,
+            modifier = modifier,
+            enabled = enabled,
+            outlined = true,
+            leadingIcon = icon,
+        )
+    } else {
+        RavenSecondaryButton(
+            text = text,
+            onClick = onClick,
+            modifier = modifier,
+            enabled = enabled,
+            leadingIcon = icon,
         )
     }
 }
@@ -381,16 +334,12 @@ internal fun SettingsTextField(
         },
         trailingIcon = if (isPassword && onTogglePasswordVisibility != null) {
             {
-                IconButton(
+                RavenIconButton(
+                    icon = if (passwordVisible) Icons.Outlined.VisibilityOff else Icons.Outlined.Visibility,
+                    contentDescription = if (passwordVisible) "隐藏密码" else "显示密码",
                     onClick = onTogglePasswordVisibility,
-                    modifier = Modifier.defaultMinSize(minWidth = 48.dp, minHeight = 48.dp),
-                ) {
-                    Icon(
-                        imageVector = if (passwordVisible) Icons.Outlined.VisibilityOff else Icons.Outlined.Visibility,
-                        contentDescription = if (passwordVisible) "隐藏密码" else "显示密码",
-                        tint = colors.inkSecondary,
-                    )
-                }
+                    tint = colors.inkSecondary,
+                )
             }
         } else {
             null

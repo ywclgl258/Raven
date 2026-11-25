@@ -16,7 +16,6 @@ import androidx.compose.animation.scaleIn
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.togetherWith
-import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
@@ -24,13 +23,11 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
-import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -39,11 +36,8 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.ErrorOutline
 import androidx.compose.material.icons.outlined.Inbox
 import androidx.compose.material.icons.rounded.Refresh
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.State
@@ -210,26 +204,11 @@ fun RavenEmptyState(
 
         if (!actionLabel.isNullOrBlank() && onActionClick != null) {
             Spacer(modifier = Modifier.height(4.dp))
-            Button(
-                onClick = {
-                    feedback.perform(RavenFeedbackEffect.TAP)
-                    onActionClick()
-                },
-                shape = RavenShapes.PillShape,
-                contentPadding = PaddingValues(horizontal = 22.dp, vertical = 12.dp),
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = colors.primaryCtaContainer,
-                    contentColor = colors.primaryCtaInk,
-                ),
-                modifier = Modifier
-                    .heightIn(min = 48.dp)
-                    .ravenSpringPress(),
-            ) {
-                Text(
-                    text = actionLabel,
-                    style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.SemiBold),
-                )
-            }
+            RavenPrimaryButton(
+                text = actionLabel,
+                onClick = onActionClick,
+                variant = RavenPrimaryButtonVariant.Cta,
+            )
         }
     }
 }
@@ -299,63 +278,22 @@ fun RavenErrorState(
         Spacer(modifier = Modifier.height(4.dp))
 
         FlowRow(
-            horizontalArrangement = Arrangement.spacedBy(10.dp, Alignment.CenterHorizontally),
-            verticalArrangement = Arrangement.spacedBy(10.dp),
+            horizontalArrangement = Arrangement.spacedBy(12.dp, Alignment.CenterHorizontally),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            Button(
-                onClick = {
-                    feedback.perform(RavenFeedbackEffect.TAP)
-                    onRetry()
-                },
-                shape = RavenShapes.PillShape,
-                contentPadding = PaddingValues(horizontal = 22.dp, vertical = 12.dp),
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = colors.primaryCtaContainer,
-                    contentColor = colors.primaryCtaInk,
-                ),
-                modifier = Modifier
-                    .heightIn(min = 48.dp)
-                    .ravenSpringPress()
-                    .testTag("raven_error_retry"),
-            ) {
-                Icon(
-                    imageVector = Icons.Rounded.Refresh,
-                    contentDescription = null,
-                    modifier = Modifier.size(18.dp),
-                )
-                Spacer(modifier = Modifier.width(6.dp))
-                Text(
-                    text = retryLabel,
-                    style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.SemiBold),
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-            }
+            RavenPrimaryButton(
+                text = retryLabel,
+                onClick = onRetry,
+                variant = RavenPrimaryButtonVariant.Cta,
+                leadingIcon = Icons.Rounded.Refresh,
+                modifier = Modifier.testTag("raven_error_retry"),
+            )
 
             if (!secondaryActionLabel.isNullOrBlank() && onSecondaryActionClick != null) {
-                OutlinedButton(
-                    onClick = {
-                        feedback.perform(RavenFeedbackEffect.TAP)
-                        onSecondaryActionClick()
-                    },
-                    shape = RavenShapes.PillShape,
-                    border = BorderStroke(0.5.dp, colors.outlineSubtle),
-                    colors = ButtonDefaults.outlinedButtonColors(
-                        containerColor = colors.surface2,
-                        contentColor = colors.inkPrimary,
-                    ),
-                    contentPadding = PaddingValues(horizontal = 18.dp, vertical = 12.dp),
-                    modifier = Modifier
-                        .heightIn(min = 48.dp)
-                        .ravenSpringPress(),
-                ) {
-                    Text(
-                        text = secondaryActionLabel,
-                        style = MaterialTheme.typography.labelLarge,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                }
+                RavenSecondaryButton(
+                    text = secondaryActionLabel,
+                    onClick = onSecondaryActionClick,
+                )
             }
         }
     }

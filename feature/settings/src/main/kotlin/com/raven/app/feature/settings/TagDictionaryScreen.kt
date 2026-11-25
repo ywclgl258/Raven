@@ -311,34 +311,18 @@ fun TagDictionaryScreenContent(
     }
 
     if (showClearCommunitySheet) {
-        RavenBottomSheet(
+        com.raven.app.core.designsystem.component.RavenConfirmDialog(
             onDismissRequest = { showClearCommunitySheet = false },
             title = "清空社区词库缓存？",
-            subtitle = "将移除本地缓存的 ${stats.communityCount} 条 EhTagTranslation 译名，可随时重新同步。",
+            message = "将移除本地缓存的 ${stats.communityCount} 条 EhTagTranslation 译名，可随时重新同步。",
+            confirmLabel = "确认清空",
+            destructive = true,
+            onConfirm = {
+                showClearCommunitySheet = false
+                onClearCommunityCache()
+            },
             modifier = Modifier.testTag("tag_dictionary_clear_sheet"),
-        ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(10.dp),
-            ) {
-                SettingsSecondaryButton(
-                    text = "取消",
-                    onClick = { showClearCommunitySheet = false },
-                    modifier = Modifier.weight(1f),
-                )
-                SettingsPrimaryButton(
-                    text = "确认清空",
-                    destructive = true,
-                    onClick = {
-                        showClearCommunitySheet = false
-                        onClearCommunityCache()
-                    },
-                    modifier = Modifier
-                        .weight(1f)
-                        .testTag("tag_dictionary_clear_confirm_button"),
-                )
-            }
-        }
+        )
     }
 
     if (showEditorSheet) {

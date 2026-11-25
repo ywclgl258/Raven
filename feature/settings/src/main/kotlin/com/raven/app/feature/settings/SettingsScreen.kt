@@ -890,6 +890,7 @@ fun SettingsScreenContent(
         SettingsSheetKind.QUALITY -> {
             RavenBottomSheet(
                 onDismissRequest = { activeSheet = SettingsSheetKind.NONE },
+                detent = com.raven.app.core.designsystem.component.RavenSheetDetent.Medium,
                 title = "默认播放清晰度",
                 subtitle = "若片源无对应分辨率，将自动回落至最接近画质",
                 modifier = Modifier.testTag("settings_quality_sheet"),
@@ -996,6 +997,8 @@ private fun NetworkDiagnosticsSheet(
 
     RavenBottomSheet(
         onDismissRequest = onDismiss,
+        presentation = com.raven.app.core.designsystem.component.RavenSheetPresentation.Center,
+        detent = com.raven.app.core.designsystem.component.RavenSheetDetent.Large,
         title = "网络与代理诊断",
         subtitle = "实时检测系统代理、IPv4 优先 DNS、TLS 证书与站点连通性",
         modifier = Modifier.testTag("settings_diagnostics_sheet"),
@@ -1165,6 +1168,7 @@ private fun PrivacyPinSetupSheet(
 
     RavenBottomSheet(
         onDismissRequest = onDismiss,
+        presentation = com.raven.app.core.designsystem.component.RavenSheetPresentation.Center,
         title = if (hasExistingPin) "管理应用解锁 PIN" else "设置应用解锁 PIN",
         subtitle = "4 至 8 位数字，经加盐 PBKDF2 与 AndroidKeyStore 加密保存",
         modifier = Modifier.testTag("settings_pin_setup_sheet"),
@@ -1262,6 +1266,7 @@ private fun UpdateAvailableSheet(
 
     RavenBottomSheet(
         onDismissRequest = onDismiss,
+        presentation = com.raven.app.core.designsystem.component.RavenSheetPresentation.Center,
         title = "发现新版本 ${release.tagName}",
         subtitle = "${release.asset.fileName} · ${RavenFormatters.formatByteSize(release.asset.sizeBytes)}",
         modifier = Modifier.testTag("settings_update_sheet"),
@@ -1394,6 +1399,7 @@ private fun LicensesAndDisclaimerSheet(
 
     RavenBottomSheet(
         onDismissRequest = onDismiss,
+        presentation = com.raven.app.core.designsystem.component.RavenSheetPresentation.Center,
         title = "开源许可与免责说明",
         subtitle = "渡鸦 Raven v${appInfo.versionName}",
         modifier = Modifier.testTag("settings_licenses_sheet"),

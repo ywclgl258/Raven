@@ -309,38 +309,22 @@ fun BlockedTermsScreenContent(
     }
 
     if (showClearConfirmSheet) {
-        RavenBottomSheet(
+        com.raven.app.core.designsystem.component.RavenConfirmDialog(
             onDismissRequest = { showClearConfirmSheet = false },
             title = if (isGlobalScope) "清空全部全局屏蔽词？" else "清空本站全部屏蔽词？",
-            subtitle = if (isGlobalScope) {
+            message = if (isGlobalScope) {
                 "将移除全部 ${uiState.terms.size} 条全局屏蔽规则，各站点独立屏蔽词不受影响。"
             } else {
                 "将移除 $siteDisplayName 的全部 ${uiState.terms.size} 条屏蔽规则，全局屏蔽词与其他站点不受影响。"
             },
+            confirmLabel = "确认清空",
+            destructive = true,
+            onConfirm = {
+                showClearConfirmSheet = false
+                onClearAll()
+            },
             modifier = Modifier.testTag("blocked_terms_clear_sheet"),
-        ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(10.dp),
-            ) {
-                SettingsSecondaryButton(
-                    text = "取消",
-                    onClick = { showClearConfirmSheet = false },
-                    modifier = Modifier.weight(1f),
-                )
-                SettingsPrimaryButton(
-                    text = "确认清空",
-                    destructive = true,
-                    onClick = {
-                        showClearConfirmSheet = false
-                        onClearAll()
-                    },
-                    modifier = Modifier
-                        .weight(1f)
-                        .testTag("blocked_terms_clear_confirm_button"),
-                )
-            }
-        }
+        )
     }
 }
 

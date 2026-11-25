@@ -1,5 +1,6 @@
 package com.raven.app.core.designsystem
 
+import androidx.compose.animation.core.CubicBezierEasing
 import androidx.compose.ui.unit.dp
 import com.raven.app.core.designsystem.theme.RavenBreakpoint
 import com.raven.app.core.designsystem.theme.RavenFeedbackEffect
@@ -7,8 +8,10 @@ import com.raven.app.core.designsystem.theme.RavenLayout
 import com.raven.app.core.designsystem.theme.RavenMaterialTier
 import com.raven.app.core.designsystem.theme.RavenMotion
 import com.raven.app.core.designsystem.theme.RavenSoundSynthesizer
+import com.raven.app.core.designsystem.theme.RavenWindowClass
 import kotlin.math.abs
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -104,5 +107,40 @@ class RavenFeedbackAndMotionTest {
         assertEquals(-forwardOffset, backwardOffset)
         assertEquals(0, RavenMotion.computeTabSlideOffset(fullWidth = 1080, direction = 0))
         assertEquals(0, RavenMotion.computeTabSlideOffset(fullWidth = 0, direction = 1))
+    }
+
+    @Test
+    fun `harmony deceleration easing matches official friction cubic bezier 0_2 0_0 0_1 1_0`() {
+        val expected = CubicBezierEasing(0.2f, 0.0f, 0.1f, 1.0f)
+        for (step in 0..10) {
+            val fraction = step / 10f
+            assertEquals(
+                "Curve mismatch at t=$fraction",
+                expected.transform(fraction),
+                RavenMotion.HarmonyDecelerationEasing.transform(fraction),
+                0.0001f,
+            )
+        }
+    }
+
+    @Test
+    fun `window class and modal sizing helpers match HarmonyOS multi-device rules`() {
+        assertEquals(RavenWindowClass.COMPACT, RavenLayout.windowClassForWidth(360))
+        assertEquals(RavenWindowClass.COMPACT, RavenLayout.windowClassForWidth(599))
+        assertEquals(RavenWindowClass.MEDIUM, RavenLayout.windowClassForWidth(600))
+        assertEquals(RavenWindowClass.MEDIUM, RavenLayout.windowClassForWidth(839))
+        assertEquals(RavenWindowClass.EXPANDED, RavenLayout.windowClassForWidth(840))
+        assertEquals(RavenWindowClass.EXPANDED, RavenLayout.windowClassForWidth(1199))
+        assertEquals(RavenWindowClass.LARGE, RavenLayout.windowClassForWidth(1200))
+
+        assertEquals(328.dp, RavenLayout.computeDialogWidth(360))
+        assertEquals(400.dp, RavenLayout.computeDialogWidth(600))
+        assertEquals(400.dp, RavenLayout.computeDialogWidth(1280))
+        assertEquals(240.dp, RavenLayout.computeDialogWidth(240))
+
+        assertFalse(RavenLayout.supportsCenteredSheet(390))
+        assertFalse(RavenLayout.supportsCenteredSheet(599))
+        assertTrue(RavenLayout.supportsCenteredSheet(600))
+        assertTrue(RavenLayout.supportsCenteredSheet(1200))
     }
 }

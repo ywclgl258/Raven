@@ -7,6 +7,8 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsFocusedAsState
+import androidx.compose.foundation.interaction.collectIsHoveredAsState
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -152,11 +154,14 @@ fun RavenGroupedRow(
     val feedback = LocalRavenFeedback.current
     val interactionSource = remember { MutableInteractionSource() }
     val pressed by interactionSource.collectIsPressedAsState()
+    val hovered by interactionSource.collectIsHoveredAsState()
+    val focused by interactionSource.collectIsFocusedAsState()
     val rowBackdropColor by animateColorAsState(
-        targetValue = if (pressed && enabled && onClick != null) {
-            colors.surface2.copy(alpha = 0.72f)
-        } else {
-            Color.Transparent
+        targetValue = when {
+            !enabled || onClick == null -> Color.Transparent
+            pressed -> colors.surface2.copy(alpha = 0.72f)
+            hovered || focused -> colors.surface2.copy(alpha = 0.42f)
+            else -> Color.Transparent
         },
         animationSpec = if (motionReduced) snap() else tween(durationMillis = 120),
         label = "ravenGroupedRowPressHighlight",

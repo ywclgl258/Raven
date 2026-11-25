@@ -277,20 +277,19 @@ fun DuplicateScannerScreenContent(
         }
     }
 
-    // Safe single-page bottom sheet confirmation before removing any copy
+    // Strong-interruption HarmonyOS modal confirmation before removing any copy
     val pendingCopy = uiState.pendingDeleteCopy
     if (pendingCopy != null) {
         val sourceLabel = if (pendingCopy.source == DuplicateSource.LOCAL) "本地导入库" else "站点下载"
-        RavenBottomSheet(
+        com.raven.app.core.designsystem.component.RavenConfirmDialog(
             onDismissRequest = onDismissDelete,
             title = "确认删除此副本？",
-            subtitle = "${pendingCopy.title} · ${RavenFormatters.formatByteSize(pendingCopy.sizeBytes)}",
+            message = "${pendingCopy.title} · ${RavenFormatters.formatByteSize(pendingCopy.sizeBytes)}",
+            confirmLabel = "确认删除",
+            destructive = true,
+            onConfirm = onConfirmDelete,
             modifier = Modifier.testTag("duplicate_delete_confirm_sheet"),
-        ) {
-            Column(
-                modifier = Modifier.fillMaxWidth(),
-                verticalArrangement = Arrangement.spacedBy(12.dp),
-            ) {
+            extraContent = {
                 SettingsNoticeBanner(
                     title = if (uiState.pendingDeleteIsLastCopy) "注意：这是最后一份副本" else "副本详情",
                     message = buildString {
@@ -307,27 +306,8 @@ fun DuplicateScannerScreenContent(
                     },
                     tone = if (uiState.pendingDeleteIsLastCopy) RavenStatusTone.ERROR else RavenStatusTone.WARNING,
                 )
-
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(10.dp),
-                ) {
-                    SettingsSecondaryButton(
-                        text = "取消",
-                        onClick = onDismissDelete,
-                        modifier = Modifier.weight(1f),
-                    )
-                    SettingsPrimaryButton(
-                        text = "确认删除",
-                        destructive = true,
-                        onClick = onConfirmDelete,
-                        modifier = Modifier
-                            .weight(1f)
-                            .testTag("duplicate_delete_confirm_button"),
-                    )
-                }
-            }
-        }
+            },
+        )
     }
 }
 
