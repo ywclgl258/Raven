@@ -1016,13 +1016,13 @@ private fun ravenTabEnterTransition(direction: Int): EnterTransition {
     val base = fadeIn(
         animationSpec = tween(
             durationMillis = RavenMotion.TAB_TRANSITION_DURATION_MS,
-            easing = RavenMotion.AppleDecelerationEasing,
+            easing = RavenMotion.HarmonyDecelerationEasing,
         ),
     ) + scaleIn(
         initialScale = RavenMotion.TAB_ENTER_INITIAL_SCALE,
         animationSpec = tween(
             durationMillis = RavenMotion.TAB_TRANSITION_DURATION_MS,
-            easing = RavenMotion.AppleDecelerationEasing,
+            easing = RavenMotion.HarmonyDecelerationEasing,
         ),
     )
     return if (direction == 0) {
@@ -1031,7 +1031,7 @@ private fun ravenTabEnterTransition(direction: Int): EnterTransition {
         base + slideInHorizontally(
             animationSpec = tween(
                 durationMillis = RavenMotion.TAB_TRANSITION_DURATION_MS,
-                easing = RavenMotion.AppleDecelerationEasing,
+                easing = RavenMotion.HarmonyDecelerationEasing,
             ),
             initialOffsetX = { fullWidth -> RavenMotion.computeTabSlideOffset(fullWidth, direction) },
         )
@@ -1042,7 +1042,7 @@ private fun ravenTabExitTransition(direction: Int): ExitTransition {
     val base = fadeOut(
         animationSpec = tween(
             durationMillis = RavenMotion.TAB_TRANSITION_DURATION_MS - 40,
-            easing = RavenMotion.AppleDecelerationEasing,
+            easing = RavenMotion.HarmonyDecelerationEasing,
         ),
     )
     return if (direction == 0) {
@@ -1051,7 +1051,7 @@ private fun ravenTabExitTransition(direction: Int): ExitTransition {
         base + slideOutHorizontally(
             animationSpec = tween(
                 durationMillis = RavenMotion.TAB_TRANSITION_DURATION_MS - 20,
-                easing = RavenMotion.AppleDecelerationEasing,
+                easing = RavenMotion.HarmonyDecelerationEasing,
             ),
             targetOffsetX = { fullWidth -> -RavenMotion.computeTabSlideOffset(fullWidth, direction) },
         )
@@ -1062,13 +1062,13 @@ private fun ravenPushEnterTransition(): EnterTransition =
     slideInHorizontally(
         animationSpec = tween(
             durationMillis = RavenMotion.PUSH_TRANSITION_DURATION_MS,
-            easing = RavenMotion.AppleDecelerationEasing,
+            easing = RavenMotion.HarmonyDecelerationEasing,
         ),
         initialOffsetX = { fullWidth -> fullWidth },
     ) + fadeIn(
         animationSpec = tween(
             durationMillis = RavenMotion.PUSH_TRANSITION_DURATION_MS / 2,
-            easing = RavenMotion.AppleDecelerationEasing,
+            easing = RavenMotion.HarmonyDecelerationEasing,
         ),
         initialAlpha = 0.85f,
     )
@@ -1077,19 +1077,19 @@ private fun ravenPushParentExitTransition(): ExitTransition =
     slideOutHorizontally(
         animationSpec = tween(
             durationMillis = RavenMotion.PUSH_TRANSITION_DURATION_MS,
-            easing = RavenMotion.AppleDecelerationEasing,
+            easing = RavenMotion.HarmonyDecelerationEasing,
         ),
         targetOffsetX = RavenMotion::computeNavPushParentExitOffset,
     ) + scaleOut(
         targetScale = RavenMotion.PUSH_PARENT_EXIT_SCALE,
         animationSpec = tween(
             durationMillis = RavenMotion.PUSH_TRANSITION_DURATION_MS,
-            easing = RavenMotion.AppleDecelerationEasing,
+            easing = RavenMotion.HarmonyDecelerationEasing,
         ),
     ) + fadeOut(
         animationSpec = tween(
             durationMillis = RavenMotion.PUSH_TRANSITION_DURATION_MS,
-            easing = RavenMotion.AppleDecelerationEasing,
+            easing = RavenMotion.HarmonyDecelerationEasing,
         ),
         targetAlpha = RavenMotion.PUSH_EXIT_ALPHA,
     )
@@ -1098,19 +1098,19 @@ private fun ravenPopParentEnterTransition(): EnterTransition =
     slideInHorizontally(
         animationSpec = tween(
             durationMillis = RavenMotion.POP_TRANSITION_DURATION_MS,
-            easing = RavenMotion.AppleDecelerationEasing,
+            easing = RavenMotion.HarmonyDecelerationEasing,
         ),
         initialOffsetX = RavenMotion::computeNavPopParentEnterOffset,
     ) + scaleIn(
         initialScale = RavenMotion.PUSH_PARENT_EXIT_SCALE,
         animationSpec = tween(
             durationMillis = RavenMotion.POP_TRANSITION_DURATION_MS,
-            easing = RavenMotion.AppleDecelerationEasing,
+            easing = RavenMotion.HarmonyDecelerationEasing,
         ),
     ) + fadeIn(
         animationSpec = tween(
             durationMillis = RavenMotion.POP_TRANSITION_DURATION_MS,
-            easing = RavenMotion.AppleDecelerationEasing,
+            easing = RavenMotion.HarmonyDecelerationEasing,
         ),
         initialAlpha = RavenMotion.PUSH_EXIT_ALPHA,
     )
@@ -1119,13 +1119,13 @@ private fun ravenPopExitTransition(): ExitTransition =
     slideOutHorizontally(
         animationSpec = tween(
             durationMillis = RavenMotion.POP_TRANSITION_DURATION_MS,
-            easing = RavenMotion.AppleDecelerationEasing,
+            easing = RavenMotion.HarmonyDecelerationEasing,
         ),
         targetOffsetX = { fullWidth -> fullWidth },
     ) + fadeOut(
         animationSpec = tween(
             durationMillis = RavenMotion.POP_TRANSITION_DURATION_MS,
-            easing = RavenMotion.AppleDecelerationEasing,
+            easing = RavenMotion.HarmonyDecelerationEasing,
         ),
         targetAlpha = 0.85f,
     )
@@ -1134,19 +1134,19 @@ private fun ravenModalEnterTransition(): EnterTransition =
     slideInVertically(
         animationSpec = tween(
             durationMillis = RavenMotion.MODAL_ENTER_DURATION_MS,
-            easing = RavenMotion.AppleDecelerationEasing,
+            easing = RavenMotion.HarmonyDecelerationEasing,
         ),
         initialOffsetY = { fullHeight -> fullHeight / 14 },
     ) + scaleIn(
         initialScale = RavenMotion.MODAL_INITIAL_SCALE,
         animationSpec = tween(
             durationMillis = RavenMotion.MODAL_ENTER_DURATION_MS,
-            easing = RavenMotion.AppleDecelerationEasing,
+            easing = RavenMotion.HarmonyDecelerationEasing,
         ),
     ) + fadeIn(
         animationSpec = tween(
             durationMillis = RavenMotion.MODAL_ENTER_DURATION_MS - 60,
-            easing = RavenMotion.AppleDecelerationEasing,
+            easing = RavenMotion.HarmonyDecelerationEasing,
         ),
     )
 
@@ -1155,12 +1155,12 @@ private fun ravenModalParentExitTransition(): ExitTransition =
         targetScale = RavenMotion.PUSH_PARENT_EXIT_SCALE,
         animationSpec = tween(
             durationMillis = RavenMotion.MODAL_ENTER_DURATION_MS,
-            easing = RavenMotion.AppleDecelerationEasing,
+            easing = RavenMotion.HarmonyDecelerationEasing,
         ),
     ) + fadeOut(
         animationSpec = tween(
             durationMillis = RavenMotion.MODAL_ENTER_DURATION_MS,
-            easing = RavenMotion.AppleDecelerationEasing,
+            easing = RavenMotion.HarmonyDecelerationEasing,
         ),
         targetAlpha = RavenMotion.PUSH_EXIT_ALPHA,
     )
@@ -1170,12 +1170,12 @@ private fun ravenModalParentEnterTransition(): EnterTransition =
         initialScale = RavenMotion.PUSH_PARENT_EXIT_SCALE,
         animationSpec = tween(
             durationMillis = RavenMotion.MODAL_EXIT_DURATION_MS,
-            easing = RavenMotion.AppleDecelerationEasing,
+            easing = RavenMotion.HarmonyDecelerationEasing,
         ),
     ) + fadeIn(
         animationSpec = tween(
             durationMillis = RavenMotion.MODAL_EXIT_DURATION_MS,
-            easing = RavenMotion.AppleDecelerationEasing,
+            easing = RavenMotion.HarmonyDecelerationEasing,
         ),
         initialAlpha = RavenMotion.PUSH_EXIT_ALPHA,
     )
@@ -1184,18 +1184,18 @@ private fun ravenModalExitTransition(): ExitTransition =
     slideOutVertically(
         animationSpec = tween(
             durationMillis = RavenMotion.MODAL_EXIT_DURATION_MS,
-            easing = RavenMotion.AppleDecelerationEasing,
+            easing = RavenMotion.HarmonyDecelerationEasing,
         ),
         targetOffsetY = { fullHeight -> fullHeight / 14 },
     ) + scaleOut(
         targetScale = RavenMotion.MODAL_INITIAL_SCALE,
         animationSpec = tween(
             durationMillis = RavenMotion.MODAL_EXIT_DURATION_MS,
-            easing = RavenMotion.AppleDecelerationEasing,
+            easing = RavenMotion.HarmonyDecelerationEasing,
         ),
     ) + fadeOut(
         animationSpec = tween(
             durationMillis = RavenMotion.MODAL_EXIT_DURATION_MS - 30,
-            easing = RavenMotion.AppleDecelerationEasing,
+            easing = RavenMotion.HarmonyDecelerationEasing,
         ),
     )

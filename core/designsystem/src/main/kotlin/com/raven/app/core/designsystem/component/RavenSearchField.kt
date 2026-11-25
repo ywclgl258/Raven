@@ -106,25 +106,25 @@ fun RavenSearchField(
     val currentText = textFieldValueState.text
 
     val borderColor by animateColorAsState(
-        targetValue = if (focused) colors.crimson.copy(alpha = 0.78f) else colors.hairline,
+        targetValue = if (focused) colors.crimson.copy(alpha = 0.85f) else colors.lightRimTop.copy(alpha = 0.14f),
         animationSpec = if (motionReduced) {
             snap()
         } else {
             tween(
                 durationMillis = RavenMotion.CHIP_TRANSITION_DURATION_MS,
-                easing = RavenMotion.AppleDecelerationEasing,
+                easing = RavenMotion.HarmonyDecelerationEasing,
             )
         },
         label = "ravenSearchBorderColor",
     )
     val searchIconTint by animateColorAsState(
-        targetValue = if (focused) colors.inkPrimary else colors.inkSecondary,
+        targetValue = if (focused) colors.crimson else colors.inkSecondary,
         animationSpec = if (motionReduced) {
             snap()
         } else {
             tween(
                 durationMillis = RavenMotion.CHIP_TRANSITION_DURATION_MS,
-                easing = RavenMotion.AppleDecelerationEasing,
+                easing = RavenMotion.HarmonyDecelerationEasing,
             )
         },
         label = "ravenSearchIconTint",
@@ -135,9 +135,9 @@ fun RavenSearchField(
             .fillMaxWidth()
             .heightIn(min = 48.dp)
             .clip(RavenShapes.PillShape)
-            .background(colors.surface2)
+            .background(if (focused) colors.surface2 else colors.surface2.copy(alpha = 0.92f))
             .border(
-                width = if (focused) 1.dp else 0.5.dp,
+                width = if (focused) 1.5.dp else 0.5.dp,
                 color = borderColor,
                 shape = RavenShapes.PillShape,
             )
@@ -199,8 +199,26 @@ fun RavenSearchField(
 
         AnimatedVisibility(
             visible = currentText.isNotEmpty() && enabled && !readOnly,
-            enter = fadeIn(),
-            exit = fadeOut(),
+            enter = fadeIn(
+                animationSpec = if (motionReduced) {
+                    snap()
+                } else {
+                    tween(
+                        durationMillis = RavenMotion.CHIP_TRANSITION_DURATION_MS,
+                        easing = RavenMotion.HarmonyDecelerationEasing,
+                    )
+                },
+            ),
+            exit = fadeOut(
+                animationSpec = if (motionReduced) {
+                    snap()
+                } else {
+                    tween(
+                        durationMillis = 120,
+                        easing = RavenMotion.HarmonyDecelerationEasing,
+                    )
+                },
+            ),
         ) {
             IconButton(
                 onClick = {

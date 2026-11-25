@@ -177,7 +177,13 @@ fun RavenEmptyState(
                 .size(56.dp)
                 .clip(CircleShape)
                 .background(colors.surface2)
-                .border(0.5.dp, colors.hairline, CircleShape),
+                .border(
+                    width = 0.75.dp,
+                    brush = Brush.verticalGradient(
+                        colors = listOf(colors.lightRimTop, colors.hairline),
+                    ),
+                    shape = CircleShape,
+                ),
             contentAlignment = Alignment.Center,
         ) {
             Icon(
@@ -259,7 +265,13 @@ fun RavenErrorState(
                 .size(56.dp)
                 .clip(CircleShape)
                 .background(colors.error.copy(alpha = 0.14f))
-                .border(0.5.dp, colors.error.copy(alpha = 0.30f), CircleShape),
+                .border(
+                    width = 0.75.dp,
+                    brush = Brush.verticalGradient(
+                        colors = listOf(colors.error.copy(alpha = 0.42f), colors.error.copy(alpha = 0.20f)),
+                    ),
+                    shape = CircleShape,
+                ),
             contentAlignment = Alignment.Center,
         ) {
             Icon(
@@ -588,11 +600,11 @@ fun RavenAnimatedCounter(
                 val increasing = targetState >= initialState
                 val spec = tween<androidx.compose.ui.unit.IntOffset>(
                     durationMillis = RavenMotion.CHIP_TRANSITION_DURATION_MS,
-                    easing = RavenMotion.AppleDecelerationEasing,
+                    easing = RavenMotion.HarmonyDecelerationEasing,
                 )
                 val fadeSpec = tween<Float>(
                     durationMillis = RavenMotion.CHIP_TRANSITION_DURATION_MS,
-                    easing = RavenMotion.AppleDecelerationEasing,
+                    easing = RavenMotion.HarmonyDecelerationEasing,
                 )
                 val enter = slideInVertically(animationSpec = spec) { fullHeight ->
                     if (increasing) fullHeight / 2 else -fullHeight / 2
@@ -661,19 +673,19 @@ fun <T> RavenContentCrossfade(
                 val enter = fadeIn(
                     animationSpec = tween(
                         durationMillis = RavenMotion.TAB_TRANSITION_DURATION_MS,
-                        easing = RavenMotion.AppleDecelerationEasing,
+                        easing = RavenMotion.HarmonyDecelerationEasing,
                     ),
                 ) + scaleIn(
                     initialScale = 0.988f,
                     animationSpec = tween(
                         durationMillis = RavenMotion.TAB_TRANSITION_DURATION_MS,
-                        easing = RavenMotion.AppleDecelerationEasing,
+                        easing = RavenMotion.HarmonyDecelerationEasing,
                     ),
                 )
                 val exit = fadeOut(
                     animationSpec = tween(
                         durationMillis = 150,
-                        easing = RavenMotion.AppleDecelerationEasing,
+                        easing = RavenMotion.HarmonyDecelerationEasing,
                     ),
                 )
                 enter togetherWith exit

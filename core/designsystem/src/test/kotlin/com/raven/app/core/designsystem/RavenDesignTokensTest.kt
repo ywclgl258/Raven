@@ -92,12 +92,32 @@ class RavenDesignTokensTest {
     }
 
     @Test
-    fun `shapes match Apple HIG geometry tokens`() {
-        assertEquals(14.dp, RavenShapes.CardRadius)
-        assertEquals(18.dp, RavenShapes.SheetRadius)
-        assertEquals(18.dp, RavenShapes.DialogRadius)
-        assertEquals(10.dp, RavenShapes.ControlRadius)
+    fun `shapes match HarmonyOS Design Z-depth corner geometry`() {
+        assertEquals(4.dp, RavenShapes.MicroRadius)
+        assertEquals(6.dp, RavenShapes.BadgeRadius)
+        assertEquals(8.dp, RavenShapes.SmallRadius)
+        assertEquals(12.dp, RavenShapes.ControlRadius)
+        assertEquals(16.dp, RavenShapes.CardRadius)
+        assertEquals(20.dp, RavenShapes.ButtonRadius)
+        assertEquals(28.dp, RavenShapes.DialogRadius)
+        assertEquals(32.dp, RavenShapes.SheetRadius)
         assertEquals(CircleShape, RavenShapes.PillShape)
+    }
+
+    @Test
+    fun `harmony optical light and material tokens stay bounded and consistent`() {
+        assertEquals(Color(0x2EFFFFFF), RavenColors.LightRimTop)
+        assertEquals(Color(0x0AFFFFFF), RavenColors.LightRimBottom)
+        assertEquals(Color(0x26FFFFFF), RavenColors.InteractiveGlow)
+        assertEquals(Color(0x38FF4D58), RavenColors.AccentGlow)
+        assertEquals(Color(0xE0121216), RavenColors.FloatingBarScrim)
+
+        val extended = RavenExtendedColors()
+        assertEquals(RavenColors.LightRimTop, extended.lightRimTop)
+        assertEquals(RavenColors.LightRimBottom, extended.lightRimBottom)
+        assertEquals(RavenColors.InteractiveGlow, extended.interactiveGlow)
+        assertEquals(RavenColors.AccentGlow, extended.accentGlow)
+        assertEquals(RavenColors.FloatingBarScrim, extended.floatingBarScrim)
     }
 
     @Test

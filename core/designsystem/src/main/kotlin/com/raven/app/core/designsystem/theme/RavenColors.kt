@@ -55,6 +55,13 @@ object RavenColors {
     val ShimmerBase: Color = Color(0xFF16161C)
     val ShimmerHighlight: Color = Color(0xFF262630)
 
+    // HarmonyOS Immersive Light & Optical Material tokens
+    val LightRimTop: Color = Color(0x2EFFFFFF) // Top specular refraction edge (#FFFFFF @ 18%)
+    val LightRimBottom: Color = Color(0x0AFFFFFF) // Soft bottom edge (#FFFFFF @ 4%)
+    val InteractiveGlow: Color = Color(0x26FFFFFF) // Pointer-origin radial press light (#FFFFFF @ 15%)
+    val AccentGlow: Color = Color(0x38FF4D58) // Crimson focus / active halo (#FF4D58 @ 22%)
+    val FloatingBarScrim: Color = Color(0xE0121216) // Translucent floating nav/sheet backdrop
+
     /** Hard cap for optional Hero/Detail top ambient artwork glow. */
     const val AMBIENT_GLOW_MAX_ALPHA: Float = 0.18f
 }
@@ -89,6 +96,11 @@ data class RavenExtendedColors(
     val error: Color = RavenColors.Error,
     val shimmerBase: Color = RavenColors.ShimmerBase,
     val shimmerHighlight: Color = RavenColors.ShimmerHighlight,
+    val lightRimTop: Color = RavenColors.LightRimTop,
+    val lightRimBottom: Color = RavenColors.LightRimBottom,
+    val interactiveGlow: Color = RavenColors.InteractiveGlow,
+    val accentGlow: Color = RavenColors.AccentGlow,
+    val floatingBarScrim: Color = RavenColors.FloatingBarScrim,
 )
 
 val LocalRavenColors = staticCompositionLocalOf { RavenExtendedColors() }

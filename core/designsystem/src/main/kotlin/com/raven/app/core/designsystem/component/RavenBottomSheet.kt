@@ -28,6 +28,8 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
@@ -39,8 +41,9 @@ import com.raven.app.core.designsystem.theme.RavenFeedbackEffect
 import com.raven.app.core.designsystem.theme.RavenShapes
 
 /**
- * Unified Raven Obsidian bottom sheet (`Surface2`, `18dp` top radius, custom Apple-style drag
- * handle, optional title bar with hairline divider, and safe navigation-bar + IME insets).
+ * Unified Raven Obsidian bottom sheet (`Surface2`, HarmonyOS `32dp` top radius `BindSheet`,
+ * top optical rim highlight, custom drag handle, optional title bar with hairline divider, and safe
+ * navigation-bar + IME insets).
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -71,7 +74,7 @@ fun RavenBottomSheet(
         containerColor = colors.surface2,
         contentColor = colors.inkPrimary,
         tonalElevation = 0.dp,
-        scrimColor = colors.canvas.copy(alpha = 0.68f),
+        scrimColor = colors.canvas.copy(alpha = 0.62f),
         contentWindowInsets = { WindowInsets(0, 0, 0, 0) },
         dragHandle = {
             Box(
@@ -82,10 +85,10 @@ fun RavenBottomSheet(
             ) {
                 Box(
                     modifier = Modifier
-                        .width(36.dp)
-                        .height(4.dp)
+                        .width(44.dp)
+                        .height(4.5.dp)
                         .clip(CircleShape)
-                        .background(colors.inkTertiary.copy(alpha = 0.65f)),
+                        .background(colors.inkTertiary.copy(alpha = 0.72f)),
                 )
             }
         },
@@ -96,11 +99,21 @@ fun RavenBottomSheet(
                 .navigationBarsPadding()
                 .imePadding(),
         ) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(1.dp)
+                    .background(
+                        Brush.horizontalGradient(
+                            colors = listOf(Color.Transparent, colors.lightRimTop, Color.Transparent),
+                        ),
+                    ),
+            )
             if (!title.isNullOrBlank() || trailingAction != null) {
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(start = 16.dp, end = 12.dp, top = 4.dp, bottom = 12.dp),
+                        .padding(start = 20.dp, end = 14.dp, top = 6.dp, bottom = 12.dp),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically,
                 ) {

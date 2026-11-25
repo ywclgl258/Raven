@@ -73,9 +73,9 @@ fun RavenVideoCard(
     val interactionSource = remember { MutableInteractionSource() }
     val durationLabel = remember(item.durationSeconds) { RavenFormatters.formatDuration(item.durationSeconds) }
     val metadataLine = subtitleOverride ?: remember(item) { buildMediaMetadataLine(item) }
-    val posterGlassRim = remember(colors.rimHighlight, colors.hairline) {
+    val posterGlassRim = remember(colors.lightRimTop, colors.lightRimBottom) {
         Brush.verticalGradient(
-            colors = listOf(colors.rimHighlight, colors.hairline),
+            colors = listOf(colors.lightRimTop, colors.lightRimBottom),
         )
     }
 
@@ -277,9 +277,9 @@ fun RavenGalleryCard(
     )
     val pageLabel = remember(item.pageCount) { RavenFormatters.formatPageCount(item.pageCount) }
     val metadataLine = remember(item) { buildMediaMetadataLine(item) }
-    val posterGlassRim = remember(colors.rimHighlight, colors.hairline) {
+    val posterGlassRim = remember(colors.lightRimTop, colors.lightRimBottom) {
         Brush.verticalGradient(
-            colors = listOf(colors.rimHighlight, colors.hairline),
+            colors = listOf(colors.lightRimTop, colors.lightRimBottom),
         )
     }
 
@@ -431,7 +431,13 @@ fun RavenCompactMediaRow(
                 interactionSource = interactionSource,
                 shape = RavenShapes.CardShape,
             )
-            .border(0.5.dp, colors.hairline, RavenShapes.CardShape)
+            .border(
+                width = 0.5.dp,
+                brush = Brush.verticalGradient(
+                    colors = listOf(colors.lightRimTop, colors.lightRimBottom),
+                ),
+                shape = RavenShapes.CardShape,
+            )
             .combinedClickable(
                 interactionSource = interactionSource,
                 indication = null,
@@ -572,6 +578,7 @@ private fun OverlayMicroBadge(
         modifier = modifier
             .clip(RavenShapes.BadgeShape)
             .background(colors.badgeBackdrop)
+            .border(0.5.dp, colors.hairline, RavenShapes.BadgeShape)
             .padding(horizontal = 6.dp, vertical = 2.dp),
     ) {
         Text(

@@ -4,6 +4,7 @@ import android.os.Build
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.CubicBezierEasing
 import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.SpringSpec
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.snap
 import androidx.compose.animation.core.spring
@@ -22,6 +23,9 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -32,8 +36,11 @@ import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.Shape
+import androidx.compose.ui.graphics.addOutline
 import androidx.compose.ui.graphics.drawOutline
+import androidx.compose.ui.graphics.drawscope.clipPath
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.PointerEvent
 import androidx.compose.ui.input.pointer.PointerEventPass
@@ -74,14 +81,100 @@ data class RavenHeroPageTransform(
     val contentAlpha: Float,
 )
 
+/**
+ * HarmonyOS Design 5-tier optical frosted material levels (`Ultra_Thin` -> `Ultra_Thick`).
+ */
+enum class RavenMaterialTier {
+    ULTRA_THIN,
+    THIN,
+    REGULAR,
+    THICK,
+    ULTRA_THICK,
+}
+
+/**
+ * Optical gradient stops, vertical specular edge rim alphas, and blur radius for a [RavenMaterialTier].
+ */
+@Immutable
+data class RavenMaterialSpec(
+    val topAlpha: Float,
+    val bottomAlpha: Float,
+    val rimTopAlpha: Float,
+    val rimBottomAlpha: Float,
+    val blurRadius: Dp,
+)
+
 object RavenMotion {
-    /** Crisp Apple HIG tactile press scale (zero wobble with [Spring.DampingRatioNoBouncy]). */
+    /** Crisp tactile press scale (`0.968f`) with natural gravity spring recovery. */
     const val SPRING_PRESSED_SCALE: Float = 0.968f
     const val AMBIENT_GLOW_MAX_ALPHA: Float = RavenColors.AMBIENT_GLOW_MAX_ALPHA
     val DefaultFrostBlurRadius: Dp = 18.dp
 
-    /** Apple HIG smooth deceleration curve used across navigation transitions and micro-motion. */
+    /** Legacy deceleration alias preserved for source compatibility. */
     val AppleDecelerationEasing: CubicBezierEasing = CubicBezierEasing(0.22f, 1f, 0.36f, 1f)
+
+    /** HarmonyOS Design deceleration curve for modal, sheet, and route choreography. */
+    val HarmonyDecelerationEasing: CubicBezierEasing = CubicBezierEasing(0.18f, 0.96f, 0.28f, 1f)
+
+    /** HarmonyOS Design standard optical easing curve. */
+    val HarmonyStandardEasing: CubicBezierEasing = CubicBezierEasing(0.20f, 0f, 0f, 1f)
+
+    /** Finger-tracking / instant press-down gravity spring (`damping = 0.92`, `stiffness = 620`). */
+    fun <T> responsiveSpringSpec(): SpringSpec<T> = spring(
+        dampingRatio = 0.92f,
+        stiffness = 620f,
+    )
+
+    /** Control release & state-switch gravity spring (`damping = 0.82`, `stiffness = 380`). */
+    fun <T> interactiveSpringSpec(): SpringSpec<T> = spring(
+        dampingRatio = 0.82f,
+        stiffness = 380f,
+    )
+
+    /** Gentle spatial layout & container gravity spring (`damping = 0.88`, `stiffness = 280`). */
+    fun <T> gentleSpatialSpringSpec(): SpringSpec<T> = spring(
+        dampingRatio = 0.88f,
+        stiffness = 280f,
+    )
+
+    /** Maps each [RavenMaterialTier] to deterministic translucency and optical rim light parameters. */
+    fun materialSpec(tier: RavenMaterialTier): RavenMaterialSpec = when (tier) {
+        RavenMaterialTier.ULTRA_THIN -> RavenMaterialSpec(
+            topAlpha = 0.48f,
+            bottomAlpha = 0.60f,
+            rimTopAlpha = 0.22f,
+            rimBottomAlpha = 0.06f,
+            blurRadius = 14.dp,
+        )
+        RavenMaterialTier.THIN -> RavenMaterialSpec(
+            topAlpha = 0.60f,
+            bottomAlpha = 0.72f,
+            rimTopAlpha = 0.20f,
+            rimBottomAlpha = 0.05f,
+            blurRadius = 16.dp,
+        )
+        RavenMaterialTier.REGULAR -> RavenMaterialSpec(
+            topAlpha = 0.72f,
+            bottomAlpha = 0.84f,
+            rimTopAlpha = 0.18f,
+            rimBottomAlpha = 0.04f,
+            blurRadius = 18.dp,
+        )
+        RavenMaterialTier.THICK -> RavenMaterialSpec(
+            topAlpha = 0.80f,
+            bottomAlpha = 0.90f,
+            rimTopAlpha = 0.15f,
+            rimBottomAlpha = 0.04f,
+            blurRadius = 22.dp,
+        )
+        RavenMaterialTier.ULTRA_THICK -> RavenMaterialSpec(
+            topAlpha = 0.86f,
+            bottomAlpha = 0.94f,
+            rimTopAlpha = 0.12f,
+            rimBottomAlpha = 0.03f,
+            blurRadius = 26.dp,
+        )
+    }
 
     /** Navigation choreography timing & parallax constants. */
     const val TAB_TRANSITION_DURATION_MS: Int = 220
@@ -298,10 +391,11 @@ private class RavenSpringPressNode(
             } else {
                 scaleAnim.animateTo(
                     targetValue = target,
-                    animationSpec = spring(
-                        dampingRatio = Spring.DampingRatioNoBouncy,
-                        stiffness = Spring.StiffnessMedium,
-                    ),
+                    animationSpec = if (isPressed) {
+                        RavenMotion.responsiveSpringSpec()
+                    } else {
+                        RavenMotion.interactiveSpringSpec()
+                    },
                 )
             }
         }
@@ -343,34 +437,103 @@ private class RavenSpringPressNode(
 }
 
 /**
- * Subtle specular rim sheen overlay when pressed, respecting [LocalMotionReduced].
+ * HarmonyOS Design pointer-origin interactive light effect + top specular rim highlight.
+ * Tracks touch coordinates from [interactionSource] via [PressInteraction.Press.pressPosition]
+ * and radiates a soft radial sheen across the surface while pressed.
+ */
+fun Modifier.ravenInteractiveLight(
+    interactionSource: InteractionSource,
+    shape: Shape = RavenShapes.CardShape,
+    enabled: Boolean = true,
+    glowColor: Color = RavenColors.InteractiveGlow,
+    highlightAlpha: Float = 0.08f,
+): Modifier = composed {
+    var pressOrigin by remember(interactionSource) { mutableStateOf(Offset.Unspecified) }
+    var isPressed by remember(interactionSource) { mutableStateOf(false) }
+    LaunchedEffect(interactionSource) {
+        interactionSource.interactions.collect { interaction ->
+            when (interaction) {
+                is PressInteraction.Press -> {
+                    pressOrigin = interaction.pressPosition
+                    isPressed = true
+                }
+                is PressInteraction.Release,
+                is PressInteraction.Cancel,
+                -> isPressed = false
+            }
+        }
+    }
+    val motionReduced = LocalMotionReduced.current
+    val overlayAlpha by animateFloatAsState(
+        targetValue = if (isPressed && enabled) 1f else 0f,
+        animationSpec = if (motionReduced) {
+            snap()
+        } else if (isPressed) {
+            RavenMotion.responsiveSpringSpec()
+        } else {
+            RavenMotion.interactiveSpringSpec()
+        },
+        label = "ravenInteractiveLightAlpha",
+    )
+    if (overlayAlpha <= 0.005f) {
+        this
+    } else {
+        val clampedRimAlpha = highlightAlpha.coerceIn(0f, 0.25f) * overlayAlpha
+        val clampedGlowAlpha = (glowColor.alpha * overlayAlpha).coerceIn(0f, 0.35f)
+        this.drawWithContent {
+            drawContent()
+            val outline = shape.createOutline(size, layoutDirection, this)
+            val clipOutlinePath = Path().apply { addOutline(outline) }
+            val resolvedOrigin = if (pressOrigin == Offset.Unspecified) {
+                Offset(size.width * 0.5f, size.height * 0.5f)
+            } else {
+                Offset(
+                    x = pressOrigin.x.coerceIn(0f, size.width),
+                    y = pressOrigin.y.coerceIn(0f, size.height),
+                )
+            }
+            val radius = maxOf(size.width, size.height).coerceAtLeast(1f) * 0.9f
+            clipPath(clipOutlinePath) {
+                drawCircle(
+                    brush = Brush.radialGradient(
+                        colors = listOf(
+                            glowColor.copy(alpha = clampedGlowAlpha),
+                            glowColor.copy(alpha = clampedGlowAlpha * 0.30f),
+                            Color.Transparent,
+                        ),
+                        center = resolvedOrigin,
+                        radius = radius,
+                    ),
+                    radius = radius,
+                    center = resolvedOrigin,
+                )
+            }
+            if (clampedRimAlpha > 0f) {
+                drawOutline(
+                    outline = outline,
+                    color = Color.White.copy(alpha = clampedRimAlpha),
+                )
+            }
+        }
+    }
+}
+
+/**
+ * Subtle specular rim sheen & pointer-origin interactive light overlay when pressed,
+ * respecting [LocalMotionReduced].
  */
 fun Modifier.ravenPressSurfaceHighlight(
     interactionSource: InteractionSource,
     shape: Shape = RavenShapes.CardShape,
     enabled: Boolean = true,
     highlightAlpha: Float = 0.08f,
-): Modifier = composed {
-    val pressed by interactionSource.collectIsPressedAsState()
-    val motionReduced = LocalMotionReduced.current
-    val overlayAlpha by animateFloatAsState(
-        targetValue = if (pressed && enabled) highlightAlpha.coerceIn(0f, 0.25f) else 0f,
-        animationSpec = if (motionReduced) snap() else tween(durationMillis = 120),
-        label = "ravenPressSurfaceHighlightAlpha",
-    )
-    if (overlayAlpha <= 0f) {
-        this
-    } else {
-        this.drawWithContent {
-            drawContent()
-            val outline = shape.createOutline(size, layoutDirection, this)
-            drawOutline(
-                outline = outline,
-                color = Color.White.copy(alpha = overlayAlpha),
-            )
-        }
-    }
-}
+): Modifier = ravenInteractiveLight(
+    interactionSource = interactionSource,
+    shape = shape,
+    enabled = enabled,
+    glowColor = RavenColors.InteractiveGlow,
+    highlightAlpha = highlightAlpha,
+)
 
 /**
  * Reusable Apple-style tactile haptic modifier that triggers only on confirmed press release
@@ -410,26 +573,27 @@ fun Modifier.ravenPressHaptic(
  * Applies a refined dark frosted surface styling directly onto a container holding foreground content
  * without blurring child text/icons.
  *
- * - On API 31+ when `reduceTransparency == false`: multi-stop translucent obsidian frost with
- *   specular rim sheen and hairline edge.
+ * - On API 31+ when `reduceTransparency == false`: multi-stop translucent optical frost tuned by
+ *   [tier] (`Ultra_Thin` -> `Ultra_Thick`) with top-lit specular refraction rim.
  * - On API 24–30 or when `reduceTransparency == true`: clean `#121216 @ 92%` scrim + [RavenColors.Hairline] border.
  *
- * For surfaces that also render a native API 31+ blurred backdrop layer behind crisp foreground content,
- * use [RavenFrostedBox].
+ * For surfaces that also render a dedicated backdrop layer behind crisp foreground content, use [RavenFrostedBox].
  */
 fun Modifier.ravenFrostedSurface(
     reduceTransparency: Boolean = false,
     shape: Shape = RavenShapes.CardShape,
     borderColor: Color = RavenColors.Hairline,
     borderWidth: Dp = 1.dp,
+    tier: RavenMaterialTier = RavenMaterialTier.REGULAR,
 ): Modifier {
     val frosted = RavenMotion.supportsNativeBlur(reduceTransparency = reduceTransparency)
+    val spec = RavenMotion.materialSpec(tier)
     val backgroundModifier = if (frosted) {
         Modifier.background(
             brush = Brush.verticalGradient(
                 colors = listOf(
-                    RavenColors.Surface2.copy(alpha = 0.78f),
-                    RavenColors.Surface1.copy(alpha = 0.84f),
+                    RavenColors.Surface2.copy(alpha = spec.topAlpha),
+                    RavenColors.Surface1.copy(alpha = spec.bottomAlpha),
                 ),
             ),
             shape = shape,
@@ -440,34 +604,50 @@ fun Modifier.ravenFrostedSurface(
             shape = shape,
         )
     }
+    val rimBorderModifier = if (frosted) {
+        Modifier.border(
+            width = borderWidth,
+            brush = Brush.verticalGradient(
+                colors = listOf(
+                    Color.White.copy(alpha = spec.rimTopAlpha),
+                    Color.White.copy(alpha = spec.rimBottomAlpha),
+                ),
+            ),
+            shape = shape,
+        )
+    } else {
+        Modifier.border(
+            width = borderWidth,
+            color = borderColor,
+            shape = shape,
+        )
+    }
     return this
         .clip(shape)
         .then(backgroundModifier)
-        .border(
-            width = borderWidth,
-            color = if (frosted) RavenColors.RimHighlight else borderColor,
-            shape = shape,
-        )
+        .then(rimBorderModifier)
 }
 
 /**
- * Native API 31+ blurred backdrop layer for dedicated background-only composables (placed behind
- * crisp unblurred foreground content inside [RavenFrostedBox]). Falls back to `#121216 @ 92%` on
+ * Optical frosted backdrop layer for dedicated background-only composables (placed behind crisp
+ * unblurred foreground content inside [RavenFrostedBox]). Falls back to `#121216 @ 92%` on
  * API 24–30 or when [reduceTransparency] is enabled. Zero third-party backdrop dependencies.
  */
 fun Modifier.ravenFrostedBackdropLayer(
     reduceTransparency: Boolean = false,
     shape: Shape = RavenShapes.CardShape,
     @Suppress("UNUSED_PARAMETER") blurRadius: Dp = RavenMotion.DefaultFrostBlurRadius,
+    tier: RavenMaterialTier = RavenMaterialTier.REGULAR,
 ): Modifier {
+    val spec = RavenMotion.materialSpec(tier)
     return if (RavenMotion.supportsNativeBlur(reduceTransparency = reduceTransparency)) {
         this
             .clip(shape)
             .background(
                 brush = Brush.verticalGradient(
                     colors = listOf(
-                        RavenColors.Surface2.copy(alpha = 0.72f),
-                        RavenColors.Surface1.copy(alpha = 0.84f),
+                        RavenColors.Surface2.copy(alpha = spec.topAlpha),
+                        RavenColors.Surface1.copy(alpha = spec.bottomAlpha),
                     ),
                 ),
                 shape = shape,
@@ -480,8 +660,9 @@ fun Modifier.ravenFrostedBackdropLayer(
 }
 
 /**
- * Frosted obsidian container that pairs a native API 31+ blurred background layer (with API 24–30 /
- * `reduceTransparency` fallback) beneath razor-sharp foreground [content] and a subtle hairline rim.
+ * Frosted obsidian container pairing an optical frosted backdrop layer tuned by [tier]
+ * (with API 24–30 / `reduceTransparency` fallback) beneath razor-sharp foreground [content]
+ * and a top-lit vertical specular rim.
  */
 @Composable
 fun RavenFrostedBox(
@@ -491,24 +672,34 @@ fun RavenFrostedBox(
     blurRadius: Dp = RavenMotion.DefaultFrostBlurRadius,
     borderColor: Color = RavenColors.Hairline,
     borderWidth: Dp = 1.dp,
+    tier: RavenMaterialTier = RavenMaterialTier.REGULAR,
     contentAlignment: Alignment = Alignment.TopStart,
     content: @Composable BoxScope.() -> Unit,
 ) {
     val frosted = RavenMotion.supportsNativeBlur(reduceTransparency = reduceTransparency)
+    val spec = RavenMotion.materialSpec(tier)
+    val borderModifier = when {
+        borderWidth <= 0.dp || borderColor == Color.Transparent -> Modifier
+        frosted -> Modifier.border(
+            width = borderWidth,
+            brush = Brush.verticalGradient(
+                colors = listOf(
+                    Color.White.copy(alpha = spec.rimTopAlpha),
+                    Color.White.copy(alpha = spec.rimBottomAlpha),
+                ),
+            ),
+            shape = shape,
+        )
+        else -> Modifier.border(
+            width = borderWidth,
+            color = borderColor,
+            shape = shape,
+        )
+    }
     Box(
         modifier = modifier
             .clip(shape)
-            .then(
-                if (borderWidth > 0.dp && borderColor != Color.Transparent) {
-                    Modifier.border(
-                        width = borderWidth,
-                        color = if (frosted) RavenColors.RimHighlight else borderColor,
-                        shape = shape,
-                    )
-                } else {
-                    Modifier
-                },
-            ),
+            .then(borderModifier),
         contentAlignment = contentAlignment,
     ) {
         Box(
@@ -518,6 +709,7 @@ fun RavenFrostedBox(
                     reduceTransparency = reduceTransparency,
                     shape = shape,
                     blurRadius = blurRadius,
+                    tier = tier,
                 ),
         )
         content()

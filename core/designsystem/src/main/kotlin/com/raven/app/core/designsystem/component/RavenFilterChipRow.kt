@@ -42,11 +42,12 @@ import com.raven.app.core.designsystem.theme.LocalRavenFeedback
 import com.raven.app.core.designsystem.theme.RavenFeedbackEffect
 import com.raven.app.core.designsystem.theme.RavenMotion
 import com.raven.app.core.designsystem.theme.RavenShapes
+import com.raven.app.core.designsystem.theme.ravenInteractiveLight
 import com.raven.app.core.designsystem.theme.ravenSpringPress
 
 /**
- * Obsidian Apple HIG filter pill chip with guaranteed `>= 48dp` interactive touch bounds,
- * tactile spring press & haptic feedback, and fluid animated color/border/elevation transitions.
+ * Obsidian filter pill chip with HarmonyOS gravity spring response, pointer-origin interactive
+ * light, and guaranteed `>= 48dp` interactive touch bounds.
  */
 @Composable
 fun RavenFilterChip(
@@ -67,7 +68,7 @@ fun RavenFilterChip(
     } else {
         tween<Color>(
             durationMillis = RavenMotion.CHIP_TRANSITION_DURATION_MS,
-            easing = RavenMotion.AppleDecelerationEasing,
+            easing = RavenMotion.HarmonyDecelerationEasing,
         )
     }
 
@@ -93,20 +94,17 @@ fun RavenFilterChip(
         targetValue = when {
             selected -> Color.Transparent
             !enabled -> colors.hairline.copy(alpha = 0.5f)
-            else -> colors.hairline
+            else -> colors.lightRimTop.copy(alpha = 0.14f)
         },
         animationSpec = colorSpec,
         label = "ravenChipBorderColor",
     )
     val elevation by animateDpAsState(
-        targetValue = if (selected && enabled) 3.dp else 0.dp,
+        targetValue = if (selected && enabled) 4.dp else 0.dp,
         animationSpec = if (motionReduced) {
             snap()
         } else {
-            tween(
-                durationMillis = RavenMotion.CHIP_TRANSITION_DURATION_MS,
-                easing = RavenMotion.AppleDecelerationEasing,
-            )
+            RavenMotion.interactiveSpringSpec()
         },
         label = "ravenChipElevation",
     )
@@ -141,6 +139,12 @@ fun RavenFilterChip(
                 }
                 .clip(RavenShapes.PillShape)
                 .background(containerColor)
+                .ravenInteractiveLight(
+                    interactionSource = interactionSource,
+                    shape = RavenShapes.PillShape,
+                    enabled = enabled && !selected,
+                    glowColor = colors.interactiveGlow,
+                )
                 .border(0.5.dp, borderColor, RavenShapes.PillShape)
                 .padding(horizontal = 14.dp, vertical = 7.dp),
             verticalAlignment = Alignment.CenterVertically,

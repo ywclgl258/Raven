@@ -83,8 +83,11 @@ import com.raven.app.core.designsystem.theme.LocalReduceTransparency
 import com.raven.app.core.designsystem.theme.RavenColors
 import com.raven.app.core.designsystem.theme.RavenFeedbackEffect
 import com.raven.app.core.designsystem.theme.RavenFrostedBox
+import com.raven.app.core.designsystem.theme.RavenMaterialTier
+import com.raven.app.core.designsystem.theme.RavenMotion
 import com.raven.app.core.designsystem.theme.RavenShapes
 import com.raven.app.core.designsystem.theme.RavenTabularTextStyle
+import com.raven.app.core.designsystem.theme.ravenInteractiveLight
 import com.raven.app.core.designsystem.theme.ravenSpringPress
 import com.raven.app.core.model.MediaKind
 import com.raven.app.core.model.RavenRoute
@@ -178,6 +181,7 @@ fun RavenAdaptiveScaffold(
 ) {
     val colors = LocalRavenColors.current
     val feedback = LocalRavenFeedback.current
+    val reduceTransparency = LocalReduceTransparency.current
     val adaptiveInfo = currentWindowAdaptiveInfo()
     val layoutType = when {
         !showNavigation -> NavigationSuiteType.None
@@ -188,11 +192,12 @@ fun RavenAdaptiveScaffold(
         else -> NavigationSuiteType.NavigationBar
     }
 
+    val navSurfaceColor = if (reduceTransparency) colors.surface1 else colors.floatingBarScrim
     val navItemColors = NavigationSuiteDefaults.itemColors(
         navigationBarItemColors = NavigationBarItemDefaults.colors(
             selectedIconColor = colors.crimson,
             selectedTextColor = colors.crimson,
-            indicatorColor = colors.crimson.copy(alpha = 0.14f),
+            indicatorColor = colors.crimson.copy(alpha = 0.16f),
             unselectedIconColor = colors.inkSecondary,
             unselectedTextColor = colors.inkSecondary,
             disabledIconColor = colors.inkTertiary,
@@ -201,14 +206,14 @@ fun RavenAdaptiveScaffold(
         navigationRailItemColors = NavigationRailItemDefaults.colors(
             selectedIconColor = colors.crimson,
             selectedTextColor = colors.crimson,
-            indicatorColor = colors.crimson.copy(alpha = 0.14f),
+            indicatorColor = colors.crimson.copy(alpha = 0.16f),
             unselectedIconColor = colors.inkSecondary,
             unselectedTextColor = colors.inkSecondary,
             disabledIconColor = colors.inkTertiary,
             disabledTextColor = colors.inkTertiary,
         ),
         navigationDrawerItemColors = NavigationDrawerItemDefaults.colors(
-            selectedContainerColor = colors.crimson.copy(alpha = 0.14f),
+            selectedContainerColor = colors.crimson.copy(alpha = 0.16f),
             unselectedContainerColor = Color.Transparent,
             selectedIconColor = colors.crimson,
             unselectedIconColor = colors.inkSecondary,
@@ -217,14 +222,14 @@ fun RavenAdaptiveScaffold(
         ),
     )
 
-    val horizontalSpecularHairline = remember(colors.hairline, colors.rimHighlight) {
+    val horizontalSpecularHairline = remember(colors.hairline, colors.lightRimTop) {
         Brush.horizontalGradient(
-            colors = listOf(colors.hairline, colors.rimHighlight, colors.hairline),
+            colors = listOf(colors.hairline, colors.lightRimTop, colors.hairline),
         )
     }
-    val verticalSpecularHairline = remember(colors.hairline, colors.rimHighlight) {
+    val verticalSpecularHairline = remember(colors.hairline, colors.lightRimTop) {
         Brush.verticalGradient(
-            colors = listOf(colors.hairline, colors.rimHighlight, colors.hairline),
+            colors = listOf(colors.hairline, colors.lightRimTop, colors.hairline),
         )
     }
 
@@ -234,11 +239,11 @@ fun RavenAdaptiveScaffold(
         containerColor = colors.canvas,
         contentColor = colors.inkPrimary,
         navigationSuiteColors = NavigationSuiteDefaults.colors(
-            navigationBarContainerColor = colors.surface1,
+            navigationBarContainerColor = navSurfaceColor,
             navigationBarContentColor = colors.inkPrimary,
-            navigationRailContainerColor = colors.surface1,
+            navigationRailContainerColor = navSurfaceColor,
             navigationRailContentColor = colors.inkPrimary,
-            navigationDrawerContainerColor = colors.surface1,
+            navigationDrawerContainerColor = navSurfaceColor,
             navigationDrawerContentColor = colors.inkPrimary,
         ),
         navigationSuiteItems = {
@@ -364,10 +369,7 @@ private fun RavenNavDestinationIcon(
         animationSpec = if (motionReduced) {
             snap()
         } else {
-            spring(
-                dampingRatio = Spring.DampingRatioMediumBouncy,
-                stiffness = Spring.StiffnessMedium,
-            )
+            RavenMotion.interactiveSpringSpec()
         },
         label = "ravenNavIconScale",
     )
@@ -466,6 +468,7 @@ fun RavenTopBar(
             reduceTransparency = reduceTransparency,
             borderWidth = 0.dp,
             borderColor = Color.Transparent,
+            tier = RavenMaterialTier.THIN,
         ) {
             barBody()
         }
@@ -590,15 +593,29 @@ fun RavenSiteSwitcherPill(
             RavenFrostedBox(
                 shape = RavenShapes.PillShape,
                 reduceTransparency = reduceTransparency,
-                borderColor = colors.rimHighlight,
+                borderColor = colors.lightRimTop,
+                tier = RavenMaterialTier.ULTRA_THIN,
             ) {
-                pillContent()
+                Box(
+                    modifier = Modifier.ravenInteractiveLight(
+                        interactionSource = interactionSource,
+                        shape = RavenShapes.PillShape,
+                        glowColor = colors.interactiveGlow,
+                    ),
+                ) {
+                    pillContent()
+                }
             }
         } else {
             Box(
                 modifier = Modifier
                     .clip(RavenShapes.PillShape)
                     .background(colors.surface2)
+                    .ravenInteractiveLight(
+                        interactionSource = interactionSource,
+                        shape = RavenShapes.PillShape,
+                        glowColor = colors.interactiveGlow,
+                    )
                     .border(width = 0.5.dp, color = colors.hairline, shape = RavenShapes.PillShape),
             ) {
                 pillContent()

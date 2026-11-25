@@ -1,6 +1,10 @@
 package com.raven.app.core.designsystem
 
+import androidx.compose.ui.unit.dp
+import com.raven.app.core.designsystem.theme.RavenBreakpoint
 import com.raven.app.core.designsystem.theme.RavenFeedbackEffect
+import com.raven.app.core.designsystem.theme.RavenLayout
+import com.raven.app.core.designsystem.theme.RavenMaterialTier
 import com.raven.app.core.designsystem.theme.RavenMotion
 import com.raven.app.core.designsystem.theme.RavenSoundSynthesizer
 import kotlin.math.abs
@@ -9,6 +13,52 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class RavenFeedbackAndMotionTest {
+
+    @Test
+    fun `harmony responsive grid maps xs sm md lg breakpoints to 2 4 8 12 columns`() {
+        val xs = RavenLayout.gridSpecForWidth(280)
+        assertEquals(RavenBreakpoint.XS, xs.breakpoint)
+        assertEquals(2, xs.columns)
+        assertEquals(12.dp, xs.margin)
+        assertEquals(8.dp, xs.gutter)
+
+        val sm = RavenLayout.gridSpecForWidth(390)
+        assertEquals(RavenBreakpoint.SM, sm.breakpoint)
+        assertEquals(4, sm.columns)
+        assertEquals(16.dp, sm.margin)
+        assertEquals(12.dp, sm.gutter)
+
+        val md = RavenLayout.gridSpecForWidth(720)
+        assertEquals(RavenBreakpoint.MD, md.breakpoint)
+        assertEquals(8, md.columns)
+        assertEquals(24.dp, md.margin)
+        assertEquals(16.dp, md.gutter)
+
+        val lg = RavenLayout.gridSpecForWidth(1080)
+        assertEquals(RavenBreakpoint.LG, lg.breakpoint)
+        assertEquals(12, lg.columns)
+        assertEquals(32.dp, lg.margin)
+        assertEquals(20.dp, lg.gutter)
+    }
+
+    @Test
+    fun `five-tier optical materials increase monotonically from Ultra_Thin to Ultra_Thick`() {
+        val specs = RavenMaterialTier.entries.map { RavenMotion.materialSpec(it) }
+        for (i in 0 until specs.lastIndex) {
+            assertTrue(
+                "Expected topAlpha to increase across tiers",
+                specs[i].topAlpha < specs[i + 1].topAlpha,
+            )
+            assertTrue(
+                "Expected bottomAlpha to increase across tiers",
+                specs[i].bottomAlpha < specs[i + 1].bottomAlpha,
+            )
+            assertTrue(
+                "Expected blurRadius to increase across tiers",
+                specs[i].blurRadius < specs[i + 1].blurRadius,
+            )
+        }
+    }
 
     @Test
     fun `procedural sound synthesizer builds valid clickless RIFF WAVE buffers for every effect`() {

@@ -51,11 +51,12 @@ import com.raven.app.core.designsystem.theme.LocalRavenColors
 import com.raven.app.core.designsystem.theme.LocalRavenFeedback
 import com.raven.app.core.designsystem.theme.RavenFeedbackEffect
 import com.raven.app.core.designsystem.theme.RavenShapes
+import com.raven.app.core.designsystem.theme.ravenInteractiveLight
 import com.raven.app.core.designsystem.theme.tabular
 import kotlin.math.roundToInt
 
 /**
- * Apple HIG inset grouped container (`Surface1`, `14dp` corners, `0.5dp` `Hairline` rim).
+ * HarmonyOS Design inset grouped container (`Surface1`, `16dp` corners, vertical specular rim).
  * Use inside settings screens, preferences sheets, and single-screen form sheets instead of
  * chained `AlertDialog` workflows.
  */
@@ -67,9 +68,9 @@ fun RavenGroupedSection(
     content: @Composable ColumnScope.() -> Unit,
 ) {
     val colors = LocalRavenColors.current
-    val sectionRimBrush = remember(colors.rimHighlight, colors.hairline) {
+    val sectionRimBrush = remember(colors.lightRimTop, colors.lightRimBottom) {
         Brush.verticalGradient(
-            colors = listOf(colors.rimHighlight, colors.hairline),
+            colors = listOf(colors.lightRimTop, colors.lightRimBottom),
         )
     }
 
@@ -194,8 +195,15 @@ fun RavenGroupedRow(
     Row(
         modifier = modifier
             .fillMaxWidth()
-            .heightIn(min = 52.dp)
+            .heightIn(min = 56.dp)
             .background(rowBackdropColor)
+            .ravenInteractiveLight(
+                interactionSource = interactionSource,
+                shape = androidx.compose.ui.graphics.RectangleShape,
+                enabled = enabled && onClick != null,
+                glowColor = colors.interactiveGlow,
+                highlightAlpha = 0.04f,
+            )
             .then(clickModifier)
             .padding(horizontal = 16.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -206,7 +214,13 @@ fun RavenGroupedRow(
                     .size(32.dp)
                     .clip(RavenShapes.ControlShape)
                     .background(resolvedIconBg)
-                    .border(0.5.dp, colors.hairline, RavenShapes.ControlShape),
+                    .border(
+                        width = 0.5.dp,
+                        brush = Brush.verticalGradient(
+                            colors = listOf(colors.lightRimTop, colors.hairline),
+                        ),
+                        shape = RavenShapes.ControlShape,
+                    ),
                 contentAlignment = Alignment.Center,
             ) {
                 Icon(
@@ -382,7 +396,14 @@ fun RavenGroupedSliderRow(
                     modifier = Modifier
                         .size(32.dp)
                         .clip(RavenShapes.ControlShape)
-                        .background(iconContainerColor),
+                        .background(iconContainerColor)
+                        .border(
+                            width = 0.5.dp,
+                            brush = Brush.verticalGradient(
+                                colors = listOf(colors.lightRimTop, colors.hairline),
+                            ),
+                            shape = RavenShapes.ControlShape,
+                        ),
                     contentAlignment = Alignment.Center,
                 ) {
                     Icon(

@@ -30,9 +30,12 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.raven.app.core.designsystem.theme.LocalRavenColors
+import com.raven.app.core.designsystem.theme.LocalRavenFeedback
+import com.raven.app.core.designsystem.theme.RavenFeedbackEffect
+import com.raven.app.core.designsystem.theme.ravenSpringPress
 
 /**
- * Tight-tracked Apple HIG section header with optional subtitle and `>= 48dp` "查看全部" action.
+ * Tight-tracked section header with optional subtitle and `>= 48dp` tactile "查看全部" action.
  */
 @Composable
 fun RavenSectionHeader(
@@ -43,6 +46,7 @@ fun RavenSectionHeader(
     onActionClick: (() -> Unit)? = null,
 ) {
     val colors = LocalRavenColors.current
+    val feedback = LocalRavenFeedback.current
 
     Row(
         modifier = modifier
@@ -78,10 +82,15 @@ fun RavenSectionHeader(
 
         if (onActionClick != null) {
             TextButton(
-                onClick = onActionClick,
+                onClick = {
+                    feedback.perform(RavenFeedbackEffect.TAP)
+                    onActionClick()
+                },
                 contentPadding = PaddingValues(horizontal = 8.dp, vertical = 10.dp),
                 colors = ButtonDefaults.textButtonColors(contentColor = colors.inkSecondary),
-                modifier = Modifier.heightIn(min = 48.dp),
+                modifier = Modifier
+                    .heightIn(min = 48.dp)
+                    .ravenSpringPress(),
             ) {
                 Text(
                     text = actionLabel ?: "查看全部",
