@@ -30,6 +30,7 @@ data class SiteFilterOption(
 fun MediaKind.displayLabel(): String = when (this) {
     MediaKind.VIDEO -> "视频"
     MediaKind.COMIC -> "漫画"
+    MediaKind.SERIAL_COMIC -> "连载漫画"
     MediaKind.PHOTO -> "写真"
 }
 

@@ -23,7 +23,7 @@ import org.koin.dsl.module
 
 /**
  * Builds an immutable [SiteRegistry] sorting all multi-bound [SitePlugin]s strictly by
- * [SiteId.ALL_LIVE] order and verifying all 19 live sites are registered without duplicates.
+ * [SiteId.ALL_LIVE] order and verifying all 24 live sites are registered without duplicates.
  */
 fun createOrderedSiteRegistry(plugins: Collection<SitePlugin>): SiteRegistry {
     val order = SiteId.ALL_LIVE.withIndex().associate { (index, id) -> id to index }

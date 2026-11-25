@@ -16,4 +16,10 @@ val comicSitesModule: Module = module {
     single { HitomiSitePlugin(get()) } bind SitePlugin::class
     single { WnacgSitePlugin(get()) } bind SitePlugin::class
     single { JmcomicSitePlugin(get()) } bind SitePlugin::class
+    single { HdoujinSitePlugin(get()) } bind SitePlugin::class
+    single { MangacopySitePlugin(get()) } bind SitePlugin::class
+    single { Mh160SitePlugin(get()) } bind SitePlugin::class
+    single { GuazimanhuaSitePlugin(get()) } bind SitePlugin::class
+    single { MycomicSitePlugin(get()) } bind SitePlugin::class
+    single { HipmhSitePlugin(get()) } bind SitePlugin::class
 }

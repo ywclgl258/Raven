@@ -26,6 +26,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.AutoStories
 import androidx.compose.material.icons.outlined.Lock
 import androidx.compose.material.icons.outlined.MenuBook
 import androidx.compose.material.icons.outlined.Movie
@@ -148,6 +149,7 @@ fun SiteSwitcherDrawerContent(
     }
     val videoSites = remember(sites) { sites.filter { it.primaryKind == MediaKind.VIDEO } }
     val comicSites = remember(sites) { sites.filter { it.primaryKind == MediaKind.COMIC } }
+    val serialComicSites = remember(sites) { sites.filter { it.primaryKind == MediaKind.SERIAL_COMIC } }
     val photoSites = remember(sites) { sites.filter { it.primaryKind == MediaKind.PHOTO } }
 
     BoxWithConstraints(
@@ -251,6 +253,21 @@ fun SiteSwitcherDrawerContent(
                     count = comicSites.size,
                     icon = Icons.Outlined.MenuBook,
                     sites = comicSites,
+                    columns = columns,
+                    activeSiteId = activeSiteId,
+                    pinnedSet = pinnedSet,
+                    editPinsMode = editPinsMode,
+                    onSelectSite = onSelectSite,
+                    onTogglePinSite = onTogglePinSite,
+                )
+            }
+
+            if (serialComicSites.isNotEmpty()) {
+                SiteSwitcherGroupSection(
+                    title = "连载漫画",
+                    count = serialComicSites.size,
+                    icon = Icons.Outlined.AutoStories,
+                    sites = serialComicSites,
                     columns = columns,
                     activeSiteId = activeSiteId,
                     pinnedSet = pinnedSet,

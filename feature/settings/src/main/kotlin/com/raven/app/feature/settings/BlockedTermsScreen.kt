@@ -107,7 +107,7 @@ fun BlockedTermsScreenContent(
     val isGlobalScope = uiState.selectedScope == BlockedTermsScope.GLOBAL
     val siteShortName = uiState.site?.shortName ?: uiState.siteId.value
     val siteDisplayName = uiState.site?.displayName ?: uiState.siteId.value
-    val scopeTargetLabel = if (isGlobalScope) "全部 19 个站点" else siteDisplayName
+    val scopeTargetLabel = if (isGlobalScope) "全部站点" else siteDisplayName
 
     Column(
         modifier = modifier

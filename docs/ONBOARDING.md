@@ -114,7 +114,7 @@ flowchart TB
         FS[":feature:settings"]
     end
 
-    subgraph SITES["Site Plugin 层（19 个在线站点，Koin bind SitePlugin::class）"]
+    subgraph SITES["Site Plugin 层（24 个在线站点，Koin bind SitePlugin::class）"]
         SV[":sites:video (8)"]
         SC[":sites:comic (6)"]
         SG[":sites:gallery (5)"]
@@ -174,7 +174,7 @@ flowchart TB
 ### 2.3 应用启动装配顺序（`RavenApplication.kt`）
 
 `RavenApplication.onCreate()` 严格保证**零主线程阻塞 I/O**：
-1. 初始化 Koin，挂载 `workManagerFactory()` 与 `allRavenKoinModules`（全部 13 个 Koin 模块；`AppModule.kt` 自动将 19 个多绑定 `SitePlugin` 按 `SiteId.ALL_LIVE` 顺序组装为不可变 `SiteRegistry`）。
+1. 初始化 Koin，挂载 `workManagerFactory()` 与 `allRavenKoinModules`（全部 13 个 Koin 模块；`AppModule.kt` 自动将 24 个多绑定 `SitePlugin` 按 `SiteId.ALL_LIVE` 顺序组装为不可变 `SiteRegistry`）。
 2. 通过 `SingletonImageLoader.setSafe(this)` 挂载 Koin 管理的单例分站 Coil 3 `ImageLoader`。
 3. 启动 `NetworkMonitor.start()` 监听网络切换、计费网络状态与代理变化（触发 `routeEpoch` 递增与连接池刷新）。
 4. 在 `ApplicationScope` 的 `dispatchers.io` 协程中，**严格按序**先执行 `StorageRootManager.applyPendingOnColdStart()`（应用冷启动待切换存储根与重装接管），再执行 `DownloadCoordinator.start()`，确保 Media3 缓存与离线侧车在正确存储根上打开。

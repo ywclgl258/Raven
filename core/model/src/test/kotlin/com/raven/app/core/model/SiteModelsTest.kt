@@ -12,13 +12,14 @@ class SiteModelsTest {
     private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }
 
     @Test
-    fun `site id collections contain exact 18 live plus local and 3 retired`() {
+    fun `site id collections contain exact 24 live plus local and 3 retired`() {
         assertEquals(7, SiteId.VIDEO_SITES.size)
-        assertEquals(6, SiteId.COMIC_SITES.size)
+        assertEquals(7, SiteId.COMIC_SITES.size)
+        assertEquals(5, SiteId.SERIAL_COMIC_SITES.size)
         assertEquals(5, SiteId.PHOTO_SITES.size)
-        assertEquals(18, SiteId.ALL_LIVE.size)
-        assertEquals(18, SiteId.ALL_LIVE.toSet().size)
-        assertEquals(19, SiteId.LIBRARY_SOURCES.size)
+        assertEquals(24, SiteId.ALL_LIVE.size)
+        assertEquals(24, SiteId.ALL_LIVE.toSet().size)
+        assertEquals(25, SiteId.LIBRARY_SOURCES.size)
         assertTrue(SiteId.LOCAL.isLocal)
         assertFalse(SiteId.LOCAL.isLive)
         assertTrue(SiteId.GLOBAL.isGlobal)

@@ -1016,7 +1016,7 @@ class GalleryDetailViewModel(
     private fun favoriteKindFor(kind: MediaKind): FavoriteKind = when (kind) {
         MediaKind.PHOTO -> FavoriteKind.PHOTO
         MediaKind.VIDEO -> FavoriteKind.VIDEO
-        MediaKind.COMIC -> FavoriteKind.COMIC
+        MediaKind.COMIC, MediaKind.SERIAL_COMIC -> FavoriteKind.COMIC
     }
 
     private data class PersonalBaseSnapshot(

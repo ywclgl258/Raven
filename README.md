@@ -3,7 +3,7 @@
 > **多源原生媒体浏览、影院级播放与沉浸式阅读 Android 客户端**  
 > Package: `com.raven.app`（Debug: `com.raven.app.debug`） · Kotlin `2.3.21` · Jetpack Compose · Material 3 Adaptive · Media3 `1.11.1` · Room `2.8.5` · Koin `4.2.2`
 
-Raven（**渡鸦**）是一款采用 **17 模块 Clean Architecture** 构建的原生 Android 多源媒体应用，将 **Dark Obsidian（纯黑曜石 OLED）× Apple HIG Precision（苹果级克制与精致）× Netflix Cinema（流媒体影院氛围）** 设计语言贯通至 19 个视频、漫画与写真站点，提供统一的沉浸浏览、离线下载、个人片库、全能播放器与四模式阅读器体验。
+Raven（**渡鸦**）是一款采用 **17 模块 Clean Architecture** 构建的原生 Android 多源媒体应用，将 **Dark Obsidian（纯黑曜石 OLED）× Apple HIG Precision（苹果级克制与精致）× Netflix Cinema（流媒体影院氛围）** 设计语言贯通至 24 个视频、漫画、连载漫画与写真站点，提供统一的沉浸浏览、离线下载、个人片库、全能播放器与四模式阅读器体验。
 
 ---
 
@@ -15,12 +15,12 @@ Raven（**渡鸦**）是一款采用 **17 模块 Clean Architecture** 构建的�
 | **[docs/SIGNING.md](docs/SIGNING.md)** | 正式发布签名与覆盖安装操作指南 | 签名一致性原因、外部 `RAVEN_SIGNING_HOME/signing.properties` 占位模板、密钥备份清单、多机与 GitHub Actions CI 注入、`validateReleaseSigning` + `RavenUpdater` 双重校验与 `apksigner` 验签步骤 |
 | **[docs/ONBOARDING.md](docs/ONBOARDING.md)** | 新开发者接手与日常开发指南 | 5 分钟环境配置、Windows `kotlin.incremental=false` / AGP 9 / API 37 红线、17 模块全景地图、常用命令速查、8 条代码红线（含 ICU `PatternNative` 正则与自动播放不自动全屏）、新增页面/Feature 7 步 SOP、Git 与 Release 签名规范 |
 | **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** | 系统架构与工程蓝图 | 17 模块依赖 DAG、Koin 13 模块装配约定、设计令牌、27 路由契约、Room 20 表与 DataStore 33 键、加密备份线协议与 14 条站点协议不变量 |
-| **[docs/SITE_PLUGIN_GUIDE.md](docs/SITE_PLUGIN_GUIDE.md)** | 站点插件架构、19 站维护与新站接入 | 组合式 `SitePlugin` SPI 与 10 项可选能力、`SiteKit` 9 个协议工具、19 站维护总表与排障手册、从零接入第 20 个新站的实战骨架与契约测试 |
+| **[docs/SITE_PLUGIN_GUIDE.md](docs/SITE_PLUGIN_GUIDE.md)** | 站点插件架构、24 站维护与新站接入 | 组合式 `SitePlugin` SPI 与 10 项可选能力、`SiteKit` 9 个协议工具、24 站维护总表与排障手册、从零接入新站的实战骨架与契约测试 |
 | **[docs/DESIGN_AND_UI_GUIDE.md](docs/DESIGN_AND_UI_GUIDE.md)** | 设计系统与 UI 架构手册 | 品牌与自适应图标（`0.68` 安全区缩放）、色板/排版(`tnum`)/圆角/动效磨砂令牌、`:core:designsystem` 全量组件目录、3-Activity 拓扑与 27 路由、Feature Navigator 解耦、无障碍与 `testTag` 规范 |
 | **[docs/DATA_MEDIA_SECURITY.md](docs/DATA_MEDIA_SECURITY.md)** | 数据、网络、媒体内核与安全备份手册 | Room 20 表/11 仓储与 Schema v3 迁移、5 类 OkHttp 客户端与单例 Coil 3、Media3 播放与 4 级缓存、阅读器预读与反混淆、双引擎下载/双存储根迁移、`SessionVault` / `SiteAuthActivity` / `RVNBK01` 备份与签名更新器 |
 | **[docs/audit-env.md](docs/audit-env.md)** | 历史审计：构建环境与工具链基线 | JDK 17、Android SDK API 36、Gradle 缓存、Windows 增量编译与 API 37 依赖断层实测依据 |
 | **[docs/audit-app-ux.md](docs/audit-app-ux.md)** | 历史审计：应用架构与 UX 重构输入 | 旧版 R34V 功能盘点与 Raven 现代化重构对比基线 |
-| **[docs/audit-sites.md](docs/audit-sites.md)** | 历史审计：19 站网络协议规范基准 | 19 个在线站点的抓包/协议细节与边界条件基线 |
+| **[docs/audit-sites.md](docs/audit-sites.md)** | 历史审计：19 站网络协议规范基准（新增站点未覆盖） | 19 个在线站点的抓包/协议细节与边界条件基线 |
 
 ---
 
@@ -67,12 +67,13 @@ Raven（**渡鸦**）是一款采用 **17 模块 Clean Architecture** 构建的�
 
 ---
 
-## 支持的 19 个在线站点（+ 本地库）
+## 支持的 24 个在线站点（+ 本地库）
 
 | 类别 | 数量 | 站点列表 |
 |---|---|---|
-| **视频（Video）** | 8 | `R34Video` · `Hanime1` · `Iwara`（双媒体：视频 + 图集）· `MissAV` · `Jable` · `Rou.video`（PNG-HLS 协议）· `KBJFree` · `Pornhub` |
-| **漫画（Comic）** | 6 | `E-Hentai` · `ExHentai`（官方 WebView 登录态门禁）· `nhentai` · `Hitomi.la`（Nozomi + B-Tree）· `WNACG` · `JMComic`（镜像租约 + 条带还原） |
+| **视频（Video）** | 7 | `R34Video` · `Hanime1` · `Iwara`（双媒体：视频 + 图集）· `MissAV` · `Jable` · `Rou.video`（PNG-HLS 协议）· `Pornhub` |
+| **漫画（Comic）** | 7 | `E-Hentai` · `ExHentai`（官方 WebView 登录态门禁）· `nhentai` · `Hitomi.la`（Nozomi + B-Tree）· `WNACG` · `JMComic`（镜像租约 + 条带还原）· `HDoujin`（API 聚合流） |
+| **连载漫画（Serial Comic）** | 5 | `拷贝漫画`（镜像 + API 列表）· `漫画160` · `瓜子漫画`（章节图页直读）· `MyComic` · `嬉皮漫畫` |
 | **写真（Photo / Gallery）** | 5 | `4KHD` · `Everia` · `4KUP` · `GalleryEpic` · `CosplayTele`（双媒体：图集 + Cossora AES HLS） |
 | **本地源（Local）** | 1 | 支持通过 SAF 导入本地 CBZ / ZIP 漫画包、图片目录与视频文件离线管理 |
 

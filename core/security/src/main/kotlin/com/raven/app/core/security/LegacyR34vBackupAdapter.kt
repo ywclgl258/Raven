@@ -519,12 +519,21 @@ internal object LegacyR34vBackupAdapter {
     private fun inferMediaKind(siteId: SiteId, legacyMediaKind: String?, registry: SiteRegistry): MediaKind {
         val primary = registry.get(siteId)?.descriptor?.primaryKind
         if (legacyMediaKind.equals("GALLERY", ignoreCase = true)) {
-            return if (primary == MediaKind.PHOTO) MediaKind.PHOTO else MediaKind.COMIC
+            return when (primary) {
+                MediaKind.PHOTO -> MediaKind.PHOTO
+                MediaKind.SERIAL_COMIC -> MediaKind.SERIAL_COMIC
+                else -> MediaKind.COMIC
+            }
         }
         if (legacyMediaKind.equals("VIDEO", ignoreCase = true)) {
             return MediaKind.VIDEO
         }
-        return primary ?: if (siteId in SiteId.PHOTO_SITES) MediaKind.PHOTO else if (siteId in SiteId.COMIC_SITES) MediaKind.COMIC else MediaKind.VIDEO
+        return primary ?: when {
+            siteId in SiteId.PHOTO_SITES -> MediaKind.PHOTO
+            siteId in SiteId.SERIAL_COMIC_SITES -> MediaKind.SERIAL_COMIC
+            siteId in SiteId.COMIC_SITES -> MediaKind.COMIC
+            else -> MediaKind.VIDEO
+        }
     }
 
     private fun mapFavoriteKind(rawKind: String, siteId: SiteId, registry: SiteRegistry): FavoriteKind = when (rawKind) {

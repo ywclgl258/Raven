@@ -82,12 +82,13 @@ import com.raven.app.core.model.SmartShelf
 import com.raven.app.core.model.SmartShelfRule
 
 /**
- * MediaKind filter option supporting `全部 / 视频 / 漫画 / 写真`.
+ * MediaKind filter option supporting `全部 / 视频 / 漫画 / 连载漫画 / 写真`.
  */
 enum class LibraryMediaFilter(val label: String, val mediaKind: MediaKind?) {
     ALL("全部", null),
     VIDEO("视频", MediaKind.VIDEO),
     COMIC("漫画", MediaKind.COMIC),
+    SERIAL_COMIC("连载漫画", MediaKind.SERIAL_COMIC),
     PHOTO("写真", MediaKind.PHOTO);
 
     companion object {
@@ -95,6 +96,7 @@ enum class LibraryMediaFilter(val label: String, val mediaKind: MediaKind?) {
             null -> ALL
             MediaKind.VIDEO -> VIDEO
             MediaKind.COMIC -> COMIC
+            MediaKind.SERIAL_COMIC -> SERIAL_COMIC
             MediaKind.PHOTO -> PHOTO
         }
     }

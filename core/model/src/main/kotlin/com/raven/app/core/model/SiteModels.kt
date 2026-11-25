@@ -32,13 +32,21 @@ value class SiteId(val value: String) {
         val ROUVIDEO = SiteId("rouvideo")
         val PORNHUB = SiteId("pornhub")
 
-        // Comic sites (6)
+        // Comic sites (7)
         val EHENTAI = SiteId("ehentai")
         val EXHENTAI = SiteId("exhentai")
         val NHENTAI = SiteId("nhentai")
         val HITOMI = SiteId("hitomi")
         val WNACG = SiteId("wnacg")
         val JMCOMIC = SiteId("jmcomic")
+        val HDOUJIN = SiteId("hdoujin")
+
+        // Serial manga sites (5)
+        val MANGACOPY = SiteId("mangacopy")
+        val MH160 = SiteId("mh160")
+        val GUAZIMANHUA = SiteId("guazimanhua")
+        val MYCOMIC = SiteId("mycomic")
+        val HIPMH = SiteId("hipmh")
 
         // Photo / Gallery sites (5)
         val FOURKHD = SiteId("4khd")
@@ -63,15 +71,19 @@ value class SiteId(val value: String) {
         )
 
         val COMIC_SITES: List<SiteId> = listOf(
-            EHENTAI, EXHENTAI, NHENTAI, HITOMI, WNACG, JMCOMIC,
+            EHENTAI, EXHENTAI, NHENTAI, HITOMI, WNACG, JMCOMIC, HDOUJIN,
+        )
+
+        val SERIAL_COMIC_SITES: List<SiteId> = listOf(
+            MANGACOPY, MH160, GUAZIMANHUA, MYCOMIC, HIPMH,
         )
 
         val PHOTO_SITES: List<SiteId> = listOf(
             FOURKHD, EVERIA, FOURKUP, GALLERYEPIC, COSPLAYTELE,
         )
 
-        /** All 18 live network sites in switcher display order. */
-        val ALL_LIVE: List<SiteId> = VIDEO_SITES + COMIC_SITES + PHOTO_SITES
+        /** All 24 live network sites in switcher display order. */
+        val ALL_LIVE: List<SiteId> = VIDEO_SITES + COMIC_SITES + SERIAL_COMIC_SITES + PHOTO_SITES
 
         private val LIVE_SET: Set<SiteId> = ALL_LIVE.toSet()
 
@@ -92,10 +104,12 @@ value class SiteId(val value: String) {
 enum class MediaKind {
     VIDEO,
     COMIC,
+    SERIAL_COMIC,
     PHOTO;
 
     val isVideo: Boolean get() = this == VIDEO
-    val isGallery: Boolean get() = this == COMIC || this == PHOTO
+    val isGallery: Boolean get() = this == COMIC || this == SERIAL_COMIC || this == PHOTO
+    val isSerialComic: Boolean get() = this == SERIAL_COMIC
 }
 
 @Serializable

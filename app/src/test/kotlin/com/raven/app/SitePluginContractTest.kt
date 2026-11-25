@@ -54,7 +54,7 @@ class SitePluginContractTest {
     }
 
     @Test
-    fun `all 19 registered site plugins satisfy SPI metadata, capability, auth and host contracts`() {
+    fun `all 24 registered site plugins satisfy SPI metadata, capability, auth and host contracts`() {
         val registry = buildRegistry()
         val plugins = registry.allPlugins()
         assertEquals(SiteId.ALL_LIVE.size, plugins.size)
@@ -71,6 +71,7 @@ class SitePluginContractTest {
             when (desc.primaryKind) {
                 MediaKind.VIDEO -> assertNotNull("Missing videoSource for ${plugin.id}", plugin.videoSource)
                 MediaKind.COMIC,
+                MediaKind.SERIAL_COMIC,
                 MediaKind.PHOTO,
                 -> assertNotNull("Missing gallerySource for ${plugin.id}", plugin.gallerySource)
             }

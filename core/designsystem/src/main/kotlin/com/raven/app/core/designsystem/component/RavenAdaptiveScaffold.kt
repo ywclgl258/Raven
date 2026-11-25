@@ -32,6 +32,7 @@ import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.VideoLibrary
+import androidx.compose.material.icons.outlined.AutoStories
 import androidx.compose.material.icons.outlined.Explore
 import androidx.compose.material.icons.outlined.Home
 import androidx.compose.material.icons.outlined.Movie
@@ -521,11 +522,13 @@ fun RavenSiteSwitcherPill(
     val kindIcon = when (mediaKind) {
         MediaKind.VIDEO -> Icons.Outlined.Movie
         MediaKind.COMIC -> Icons.AutoMirrored.Outlined.MenuBook
+        MediaKind.SERIAL_COMIC -> Icons.Outlined.AutoStories
         MediaKind.PHOTO -> Icons.Outlined.PhotoLibrary
     }
     val kindLabel = when (mediaKind) {
         MediaKind.VIDEO -> "视频站点"
         MediaKind.COMIC -> "漫画站点"
+        MediaKind.SERIAL_COMIC -> "连载漫画站点"
         MediaKind.PHOTO -> "写真站点"
     }
 
@@ -563,6 +566,7 @@ fun RavenSiteSwitcherPill(
                             when (mediaKind) {
                                 MediaKind.VIDEO -> colors.crimson
                                 MediaKind.COMIC -> colors.inkPrimary
+                                MediaKind.SERIAL_COMIC -> colors.inkPrimary
                                 MediaKind.PHOTO -> colors.inkSecondary
                             },
                         ),

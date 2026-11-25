@@ -327,7 +327,7 @@ class WnacgAndJmcomicPluginTest {
     // -------------------------------------------------------------------------
 
     @Test
-    fun `comicSitesModule binds all 6 comic plugins and registers cleanly in SiteRegistry`() {
+    fun `comicSitesModule binds all 12 comic and serial-comic plugins and registers cleanly in SiteRegistry`() {
         val fakeHttp = FakeHttpClientAdapter()
         val fakeStore = InMemorySiteSessionStore()
         val testDepsModule = module {
@@ -340,17 +340,26 @@ class WnacgAndJmcomicPluginTest {
         }
         try {
             val plugins = koinApp.koin.getAll<SitePlugin>()
-            assertEquals(6, plugins.size)
-            assertEquals(SiteId.COMIC_SITES.toSet(), plugins.map { it.id }.toSet())
+            assertEquals(12, plugins.size)
+            assertEquals(
+                (SiteId.COMIC_SITES + SiteId.SERIAL_COMIC_SITES).toSet(),
+                plugins.map { it.id }.toSet(),
+            )
 
             val registry = SiteRegistry(plugins)
-            assertEquals(6, registry.size)
+            assertEquals(12, registry.size)
             assertNotNull(registry.resolveLinkFromText("Look at https://e-hentai.org/g/101/abcd1234/"))
             assertNotNull(registry.resolveLinkFromText("Secret https://exhentai.org/g/202/abcd1234/"))
             assertNotNull(registry.resolveLinkFromText("Read https://nhentai.net/g/303/"))
             assertNotNull(registry.resolveLinkFromText("View https://hitomi.la/galleries/404.html"))
             assertNotNull(registry.resolveLinkFromText("Open https://www.wnacg.com/photos-index-aid-505.html"))
             assertNotNull(registry.resolveLinkFromText("Chapters https://18comic.ink/album/606#chapters"))
+            assertNotNull(registry.resolveLinkFromText("Book https://hdoujin.org/book/12345/abcdef123456"))
+            assertNotNull(registry.resolveLinkFromText("Comic https://www.mangacopy.com/comic/abcdefg"))
+            assertNotNull(registry.resolveLinkFromText("Comic https://www.guazimanhua.com/comic.php?id=18741"))
+            assertNotNull(registry.resolveLinkFromText("Comic https://mh160mh.com/comic/1234"))
+            assertNotNull(registry.resolveLinkFromText("Comic https://mycomic.com/comic/1234"))
+            assertNotNull(registry.resolveLinkFromText("Comic https://m.hipmh.com/works/demo-slug"))
         } finally {
             koinApp.close()
         }
