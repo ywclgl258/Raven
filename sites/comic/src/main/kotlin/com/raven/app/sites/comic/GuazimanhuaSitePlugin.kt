@@ -140,7 +140,11 @@ class GuazimanhuaSitePlugin(
             if (!forceReload) {
                 detail.pages.firstOrNull { it.index == pageIndex && it.imageUrl.isNotBlank() }?.let { return it }
             }
-            val chapterId = detail.item.extra["chapterId"].orEmpty()
+            val chapterId = detail.item.extra["chapterId"].orEmpty().ifBlank {
+                detail.pages.firstOrNull { it.index == pageIndex }?.pageUrl
+                    ?.let { ComicUrl.parse(it)?.queryParameter("id") }
+                    .orEmpty()
+            }
             if (chapterId.isBlank()) {
                 throw SiteException.ParseError("瓜子漫画章节信息缺失", siteId = SiteId.GUAZIMANHUA)
             }

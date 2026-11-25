@@ -163,7 +163,12 @@ class MangacopySitePlugin(
             if (!forceReload) {
                 detail.pages.firstOrNull { it.index == pageIndex && it.imageUrl.isNotBlank() }?.let { return it }
             }
-            val uuid = detail.item.extra["chapterUuid"].orEmpty()
+            val uuid = detail.item.extra["chapterUuid"].orEmpty().ifBlank {
+                // 阅读器可能从数据库/路由重建详情而丢失 extra，此时从 pageUrl 反推章节 uuid。
+                detail.pages.firstOrNull { it.index == pageIndex }?.pageUrl
+                    ?.let { ComicUrl.parse(it)?.pathSegments?.lastOrNull() }
+                    .orEmpty()
+            }
             if (uuid.isBlank()) {
                 throw SiteException.ParseError("拷贝漫画章节信息缺失", siteId = SiteId.MANGACOPY)
             }

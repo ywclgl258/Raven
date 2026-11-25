@@ -143,7 +143,11 @@ class HipmhSitePlugin(
             if (!forceReload) {
                 detail.pages.firstOrNull { it.index == pageIndex && it.imageUrl.isNotBlank() }?.let { return it }
             }
-            val hid = detail.item.extra["chapterHid"].orEmpty()
+            val hid = detail.item.extra["chapterHid"].orEmpty().ifBlank {
+                detail.pages.firstOrNull { it.index == pageIndex }?.pageUrl
+                    ?.let { ComicUrl.parse(it)?.pathSegments?.lastOrNull() }
+                    .orEmpty()
+            }
             if (hid.isBlank()) {
                 throw SiteException.ParseError("嬉皮漫畫章节信息缺失", siteId = SiteId.HIPMH)
             }

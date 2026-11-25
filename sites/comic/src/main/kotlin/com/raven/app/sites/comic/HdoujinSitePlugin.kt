@@ -32,6 +32,7 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import org.jsoup.parser.Parser
 
 /**
  * HDoujin Galleries (`SiteId.HDOUJIN`) 同人志漫画插件。
@@ -112,8 +113,10 @@ class HdoujinSitePlugin(
             val identity = parseBookIdentity(url)
                 ?: throw SiteException.ParseError("无法识别 HDoujin 地址：$url", siteId = SiteId.HDOUJIN)
             val detailJson = fetchBookDetail(identity)
-            val title = detailJson.string("title").ifBlank { detailJson.string("title_short") }
-                .ifBlank { "Book ${identity.id}" }
+            val title = Parser.unescapeEntities(
+                detailJson.string("title").ifBlank { detailJson.string("title_short") },
+                false,
+            ).ifBlank { "Book ${identity.id}" }
             val subtitle = detailJson.string("subtitle")
             val pages = detailJson.int("pages") ?: 0
             val cover = (detailJson["thumbnail"] as? JsonObject)?.string("path").orEmpty()
@@ -196,7 +199,10 @@ class HdoujinSitePlugin(
     private fun parseBookSummary(obj: JsonObject): MediaItem? {
         val id = obj["id"]?.jsonPrimitive?.content?.takeIf { it.isNotBlank() } ?: return null
         val key = obj["key"]?.jsonPrimitive?.content.orEmpty()
-        val title = obj.string("title").ifBlank { obj.string("title_short") }
+        val title = Parser.unescapeEntities(
+            obj.string("title").ifBlank { obj.string("title_short") },
+            false,
+        )
         if (title.isBlank()) return null
         val cover = (obj["thumbnail"] as? JsonObject)?.string("path").orEmpty()
         val pages = obj.int("pages")

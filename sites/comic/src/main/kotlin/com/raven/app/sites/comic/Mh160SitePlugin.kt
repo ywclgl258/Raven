@@ -136,7 +136,11 @@ class Mh160SitePlugin(
             if (!forceReload) {
                 detail.pages.firstOrNull { it.index == pageIndex && it.imageUrl.isNotBlank() }?.let { return it }
             }
-            val chapterUrl = detail.item.extra["chapterUrl"].orEmpty()
+            val chapterUrl = detail.item.extra["chapterUrl"].orEmpty().ifBlank {
+                detail.pages.firstOrNull { it.index == pageIndex }?.pageUrl
+                    ?.let { ComicUrl.parse(it)?.withFragment(null)?.toString() }
+                    .orEmpty()
+            }
             if (chapterUrl.isBlank()) {
                 throw SiteException.ParseError("漫画160 章节信息缺失", siteId = SiteId.MH160)
             }
