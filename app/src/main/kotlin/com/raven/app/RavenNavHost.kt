@@ -83,8 +83,7 @@ import com.raven.app.feature.browse.SiteDirectoryScreen
 import com.raven.app.feature.browse.SiteFeedScreen
 import com.raven.app.feature.browse.SiteFunctionsScreen
 import com.raven.app.feature.browse.toSiteFeedRoute
-import com.raven.app.feature.library.DownloadsScreen
-import com.raven.app.feature.library.FavoritesScreen
+import com.raven.app.feature.library.DownloadsFavoritesScreen
 import com.raven.app.feature.library.GlobalInboxScreen
 import com.raven.app.feature.library.HistoryScreen
 import com.raven.app.feature.library.ImageFavoritesScreen
@@ -302,7 +301,9 @@ fun RavenAppShell(
             }
 
             override fun openFavorites(siteId: SiteId?) {
-                navController.navigate(RavenRoute.Favorites(siteId = siteId?.value)) {
+                navController.navigate(
+                    RavenRoute.Downloads(siteId = siteId?.value, initialTab = "favorites"),
+                ) {
                     launchSingleTop = true
                 }
             }
@@ -406,7 +407,9 @@ fun RavenAppShell(
             }
 
             override fun openFavorites(siteId: SiteId?) {
-                navController.navigate(RavenRoute.Favorites(siteId = siteId?.value)) {
+                navController.navigate(
+                    RavenRoute.Downloads(siteId = siteId?.value, initialTab = "favorites"),
+                ) {
                     launchSingleTop = true
                 }
             }
@@ -759,7 +762,11 @@ fun RavenAppShell(
                 val initialSiteId = route.siteId?.takeIf { it.isNotBlank() }?.let {
                     runCatching { SiteId.of(it) }.getOrNull()
                 }
-                DownloadsScreen(navigator = libraryNavigator, siteId = initialSiteId)
+                DownloadsFavoritesScreen(
+                    navigator = libraryNavigator,
+                    siteId = initialSiteId,
+                    initialTab = route.initialTab,
+                )
             }
             composable<RavenRoute.ShelfDetail> { backStackEntry ->
                 val route = backStackEntry.toRoute<RavenRoute.ShelfDetail>()
@@ -774,7 +781,11 @@ fun RavenAppShell(
                 val initialSiteId = route.siteId?.takeIf { it.isNotBlank() }?.let {
                     runCatching { SiteId.of(it) }.getOrNull()
                 }
-                FavoritesScreen(navigator = libraryNavigator, siteId = initialSiteId)
+                DownloadsFavoritesScreen(
+                    navigator = libraryNavigator,
+                    siteId = initialSiteId,
+                    initialTab = "favorites",
+                )
             }
             composable<RavenRoute.Stats> {
                 StatsScreen(navigator = libraryNavigator)

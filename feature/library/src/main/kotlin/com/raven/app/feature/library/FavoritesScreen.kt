@@ -299,6 +299,7 @@ fun FavoritesScreen(
     navigator: LibraryNavigator,
     modifier: Modifier = Modifier,
     siteId: SiteId? = null,
+    embedded: Boolean = false,
     viewModel: FavoritesViewModel = koinViewModel(
         key = "favorites_${siteId?.value.orEmpty()}",
         parameters = { parametersOf(FavoritesParams(siteId)) },
@@ -316,7 +317,7 @@ fun FavoritesScreen(
             .background(colors.canvas)
             .testTag("favorites_screen"),
     ) {
-        RavenTopBar(
+        if (!embedded) RavenTopBar(
             title = "我的收藏",
             subtitle = "共 ${uiState.items.size} / ${uiState.totalCount} 项",
             navigationIcon = {

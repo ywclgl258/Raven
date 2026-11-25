@@ -242,7 +242,7 @@ internal fun DownloadLayoutSheet(
     RavenBottomSheet(
         onDismissRequest = onDismiss,
         title = "排列与分组",
-        subtitle = "调整下载中心的展示方式，不改变实际下载队列",
+        subtitle = "调整下载与收藏的展示方式，不改变实际下载队列",
         modifier = Modifier.testTag("downloads_layout_sheet"),
     ) {
         Column(

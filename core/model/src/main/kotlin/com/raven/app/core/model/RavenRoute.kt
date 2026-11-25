@@ -72,6 +72,8 @@ sealed interface RavenRoute {
     @Serializable
     data class Downloads(
         val siteId: String? = null,
+        /** `downloads` 或 `favorites`，用于打开「下载与收藏」的对应分栏。 */
+        val initialTab: String = "downloads",
     ) : RavenRoute
 
     @Serializable

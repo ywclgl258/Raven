@@ -172,6 +172,7 @@ fun ProfileScreenContent(
                     unreadInboxCount = uiState.unreadInboxCount,
                     activeDownloadCount = uiState.activeDownloadCount,
                     completedDownloadCount = uiState.completedDownloadCount,
+                    favoriteCount = uiState.totalFavoriteCount,
                     onOpenInbox = navigator::openGlobalInbox,
                     onOpenDownloads = { navigator.openDownloads() },
                     modifier = Modifier.padding(horizontal = 16.dp),
@@ -317,11 +318,11 @@ fun ProfileScreenContent(
                     )
                     RavenGroupedDivider(insetWithIcon = true)
                     RavenGroupedRow(
-                        title = "我的收藏",
-                        value = "${uiState.totalFavoriteCount} 项",
-                        icon = Icons.Outlined.FavoriteBorder,
+                        title = "下载与收藏",
+                        value = "${uiState.completedDownloadCount} 下载 · ${uiState.totalFavoriteCount} 收藏",
+                        icon = Icons.Outlined.Download,
                         showChevron = true,
-                        onClick = { navigator.openFavorites() },
+                        onClick = { navigator.openDownloads() },
                     )
                     RavenGroupedDivider(insetWithIcon = true)
                     RavenGroupedRow(
@@ -493,6 +494,7 @@ private fun ProfileStatusBannerRow(
     unreadInboxCount: Int,
     activeDownloadCount: Int,
     completedDownloadCount: Int,
+    favoriteCount: Int,
     onOpenInbox: () -> Unit,
     onOpenDownloads: () -> Unit,
     modifier: Modifier = Modifier,
@@ -591,16 +593,16 @@ private fun ProfileStatusBannerRow(
                 verticalArrangement = Arrangement.spacedBy(2.dp),
             ) {
                 Text(
-                    text = "离线下载",
+                    text = "下载与收藏",
                     style = MaterialTheme.typography.labelLarge,
                     color = colors.inkPrimary,
                     maxLines = 1,
                 )
                 Text(
                     text = if (activeDownloadCount > 0) {
-                        "$activeDownloadCount 个进行中"
+                        "$activeDownloadCount 个进行中 · $favoriteCount 收藏"
                     } else {
-                        "已完成 $completedDownloadCount 项"
+                        "已完成 $completedDownloadCount 项 · $favoriteCount 收藏"
                     },
                     style = MaterialTheme.typography.bodySmall.tabular(),
                     color = colors.inkSecondary,

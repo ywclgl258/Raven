@@ -102,6 +102,7 @@ fun DownloadsScreen(
     navigator: LibraryNavigator,
     modifier: Modifier = Modifier,
     siteId: SiteId? = null,
+    embedded: Boolean = false,
     viewModel: DownloadsViewModel = koinViewModel(
         key = "downloads_${siteId?.value.orEmpty()}",
         parameters = { parametersOf(DownloadsParams(siteId)) },
@@ -125,8 +126,8 @@ fun DownloadsScreen(
             .background(colors.canvas)
             .testTag("downloads_screen"),
     ) {
-        RavenTopBar(
-            title = "下载中心",
+        if (!embedded) RavenTopBar(
+            title = "下载与收藏",
             subtitle = "已完成 ${uiState.completedCount} 项 · ${RavenFormatters.formatByteSize(uiState.totalCompletedBytes)}",
             navigationIcon = {
                 IconButton(onClick = navigator::navigateBack) {

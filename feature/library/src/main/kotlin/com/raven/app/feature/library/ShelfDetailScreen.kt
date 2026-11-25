@@ -867,7 +867,7 @@ private fun ShelfOfflinePreparationSheet(
                             .weight(1f)
                             .heightIn(min = 48.dp),
                     ) {
-                        Text("查看下载中心")
+                        Text("查看下载与收藏")
                     }
                 }
 

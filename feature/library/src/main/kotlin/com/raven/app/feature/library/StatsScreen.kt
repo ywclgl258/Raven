@@ -215,7 +215,7 @@ fun StatsScreen(
                     modifier = Modifier.padding(horizontal = 16.dp),
                 ) {
                     RavenGroupedRow(
-                        title = "前往下载中心",
+                        title = "前往下载与收藏",
                         subtitle = RavenFormatters.formatByteSize(uiState.downloadTotalBytes),
                         icon = Icons.Outlined.Download,
                         showChevron = true,

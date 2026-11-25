@@ -253,7 +253,19 @@ fun LibraryHubScreenContent(
                 }
             }
 
-            // 4 Quick Metric Tiles (历史 / 收藏 / 下载 / 更新)
+            // 4. 一级入口：下载与收藏（大卡片 + 两个大按钮）
+            item(key = "hub_downloads_favorites") {
+                LibraryDownloadsFavoritesCard(
+                    completedDownloads = uiState.completedDownloadCount,
+                    activeDownloads = uiState.activeDownloadCount,
+                    favorites = uiState.favoriteCount,
+                    onOpenDownloads = { navigator.openDownloads() },
+                    onOpenFavorites = { navigator.openFavorites() },
+                    modifier = Modifier.padding(horizontal = 16.dp),
+                )
+            }
+
+            // 5. 次级指标：历史 / 更新
             item(key = "hub_metric_tiles") {
                 Row(
                     modifier = Modifier
@@ -268,24 +280,6 @@ fun LibraryHubScreenContent(
                         icon = Icons.Outlined.History,
                         onClick = navigator::openHistory,
                         testTag = "metric_tile_history",
-                        modifier = Modifier.weight(1f),
-                    )
-                    LibraryMetricTile(
-                        title = "收藏",
-                        count = uiState.favoriteCount,
-                        icon = Icons.Outlined.FavoriteBorder,
-                        onClick = { navigator.openFavorites() },
-                        testTag = "metric_tile_favorites",
-                        modifier = Modifier.weight(1f),
-                    )
-                    LibraryMetricTile(
-                        title = "下载",
-                        count = uiState.completedDownloadCount,
-                        icon = Icons.Outlined.Download,
-                        highlightBadgeCount = uiState.activeDownloadCount,
-                        subtitle = if (uiState.activeDownloadCount > 0) "下载中" else "下载",
-                        onClick = { navigator.openDownloads() },
-                        testTag = "metric_tile_downloads",
                         modifier = Modifier.weight(1f),
                     )
                     LibraryMetricTile(
@@ -1163,5 +1157,140 @@ internal fun OpenFromLinkBottomSheet(
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun LibraryDownloadsFavoritesCard(
+    completedDownloads: Int,
+    activeDownloads: Int,
+    favorites: Int,
+    onOpenDownloads: () -> Unit,
+    onOpenFavorites: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val colors = LocalRavenColors.current
+    Column(
+        modifier = modifier
+            .fillMaxWidth()
+            .clip(RavenShapes.CardShape)
+            .background(colors.surface1)
+            .border(0.5.dp, colors.hairline, RavenShapes.CardShape)
+            .padding(16.dp)
+            .testTag("hub_downloads_favorites_card"),
+        verticalArrangement = Arrangement.spacedBy(14.dp),
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(48.dp)
+                    .clip(CircleShape)
+                    .background(colors.crimson.copy(alpha = 0.14f)),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    imageVector = Icons.Outlined.Download,
+                    contentDescription = null,
+                    tint = colors.crimson,
+                    modifier = Modifier.size(24.dp),
+                )
+            }
+            Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text(
+                    text = "下载与收藏",
+                    style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.Bold,
+                    color = colors.inkPrimary,
+                )
+                Text(
+                    text = if (activeDownloads > 0) {
+                        "$activeDownloads 项正在下载 · 已完成 $completedDownloads 项"
+                    } else {
+                        "离线内容与收藏作品的统一入口"
+                    },
+                    style = MaterialTheme.typography.labelMedium,
+                    color = colors.inkSecondary,
+                )
+            }
+        }
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            DownloadsFavoritesEntryButton(
+                title = "下载",
+                count = completedDownloads,
+                icon = Icons.Outlined.Download,
+                filled = true,
+                onClick = onOpenDownloads,
+                modifier = Modifier
+                    .weight(1f)
+                    .testTag("hub_open_downloads"),
+            )
+            DownloadsFavoritesEntryButton(
+                title = "收藏",
+                count = favorites,
+                icon = Icons.Outlined.FavoriteBorder,
+                filled = false,
+                onClick = onOpenFavorites,
+                modifier = Modifier
+                    .weight(1f)
+                    .testTag("hub_open_favorites"),
+            )
+        }
+    }
+}
+
+@Composable
+private fun DownloadsFavoritesEntryButton(
+    title: String,
+    count: Int,
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    filled: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val colors = LocalRavenColors.current
+    val container = if (filled) colors.crimson else colors.surface2
+    val content = if (filled) colors.primaryCtaInk else colors.inkPrimary
+    Row(
+        modifier = modifier
+            .heightIn(min = 62.dp)
+            .clip(RavenShapes.ControlShape)
+            .background(container)
+            .then(
+                if (filled) Modifier else Modifier.border(0.5.dp, colors.hairline, RavenShapes.ControlShape),
+            )
+            .ravenSpringPress()
+            .clickable(role = Role.Button, onClick = onClick)
+            .padding(horizontal = 14.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        Icon(
+            imageVector = icon,
+            contentDescription = null,
+            tint = content,
+            modifier = Modifier.size(22.dp),
+        )
+        Column(verticalArrangement = Arrangement.spacedBy(1.dp)) {
+            Text(
+                text = title,
+                style = MaterialTheme.typography.labelLarge,
+                color = content,
+            )
+            Text(
+                text = "$count 项",
+                style = MaterialTheme.typography.titleMedium.tabular(),
+                fontWeight = FontWeight.Bold,
+                color = content,
+            )
+        }
+        Spacer(modifier = Modifier.weight(1f))
     }
 }
