@@ -83,11 +83,11 @@ class AppDiGraphTest {
     }
 
     @Test
-    fun koinGraphResolvesAll19LiveSitesInExactAllLiveOrderWithZeroDuplicates() {
+    fun koinGraphResolvesAll18LiveSitesInExactAllLiveOrderWithZeroDuplicates() {
         val registry = buildSiteKoinRegistry()
         val orderedIds = registry.allPlugins().map { it.id }
 
-        assertEquals(19, registry.size)
+        assertEquals(18, registry.size)
         assertEquals(SiteId.ALL_LIVE, orderedIds)
         assertEquals(orderedIds.size, orderedIds.toSet().size)
 

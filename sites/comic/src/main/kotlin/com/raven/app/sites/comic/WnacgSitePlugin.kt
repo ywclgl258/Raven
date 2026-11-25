@@ -289,6 +289,8 @@ class WnacgSitePlugin(
                 headers = mapOf(
                     "User-Agent" to SiteNetworkProfile.DESKTOP_WINDOWS_UA,
                     "Referer" to "${descriptor.baseUrl}/",
+                    "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                    "Accept-Language" to "zh-CN,zh;q=0.9,en;q=0.8",
                 ),
                 allowCache = allowCache,
             )
@@ -685,7 +687,7 @@ class WnacgSitePlugin(
         private val IMGLIST_DECLARATION_REGEX = Regex("""\b(?:var|let|const)\s+imglist\s*=\s*\[""")
         private val WRITTEN_IMGLIST_REGEX =
             Regex("""(?m)^[ \t]*document\.writeln\((".*\bvar imglist\s*=.*")\);[ \t]*$""")
-        private val IMAGE_ENTRY_REGEX = Regex("""\{((?:$QUOTED|[^{}"'])*+)\}""")
+        private val IMAGE_ENTRY_REGEX = Regex("""\{((?:$QUOTED|[^\{\}"'])*+)\}""")
         private val IMAGE_FIELD_REGEX =
             Regex("""(?:^|,)\s*(?:url|'url'|"url")\s*:\s*(?:fast_img_host\s*\+\s*)?($QUOTED)|$QUOTED""")
 
@@ -696,6 +698,7 @@ class WnacgSitePlugin(
             primaryKind = MediaKind.COMIC,
             supportedKinds = setOf(MediaKind.COMIC),
             defaultHost = "www.wnacg.com",
+            mirrorHosts = listOf("wnacg.com"),
             capabilities = setOf(
                 SiteCapability.FEED,
                 SiteCapability.EXPLORE,

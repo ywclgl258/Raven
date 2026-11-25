@@ -21,7 +21,7 @@ import org.koin.dsl.module
 class VideoSitesModuleTest {
 
     @Test
-    fun `videoSitesModule registers all 8 video SitePlugins cleanly in Koin and SiteRegistry`() {
+    fun `videoSitesModule registers all 7 video SitePlugins cleanly in Koin and SiteRegistry`() {
         val fakeHttp = FakeHttpClientAdapter()
         val sessionStore = InMemorySiteSessionStore()
         val app = koinApplication {
@@ -35,11 +35,11 @@ class VideoSitesModuleTest {
         }
         try {
             val plugins = app.koin.getAll<SitePlugin>()
-            assertEquals(8, plugins.size)
+            assertEquals(7, plugins.size)
             assertEquals(SiteId.VIDEO_SITES.toSet(), plugins.map { it.id }.toSet())
 
             val registry = SiteRegistry(plugins)
-            assertEquals(8, registry.size)
+            assertEquals(7, registry.size)
 
             // Verify special plugin contracts
             val iwara = registry.require(SiteId.IWARA)
@@ -53,9 +53,6 @@ class VideoSitesModuleTest {
             val rou = registry.require(SiteId.ROUVIDEO)
             assertTrue(rou.mediaTransportHook === RouPngProtocol.transportHook)
 
-            val kbj = registry.require(SiteId.KBJFREE)
-            assertTrue(kbj.descriptor.hasCapability(SiteCapability.PREVIEW_ONLY))
-
             // Verify cross-site link resolution via SiteRegistry
             val samples = listOf(
                 "https://rule34video.com/video/123456/demo/" to SiteId.R34V,
@@ -65,7 +62,6 @@ class VideoSitesModuleTest {
                 "https://missav.media/cn/dldss-584" to SiteId.MISSAV,
                 "https://jable.tv/vodplay/777-1-1/" to SiteId.JABLE,
                 "https://rou.video/v/abcdefghijklmnop1234" to SiteId.ROUVIDEO,
-                "https://kbjfree.com/watch/123e4567-e89b-12d3-a456-426614174000" to SiteId.KBJFREE,
                 "https://pornhub.com/view_video.php?viewkey=ph1234567890" to SiteId.PORNHUB,
             )
             for ((url, expectedSite) in samples) {

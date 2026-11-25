@@ -6,7 +6,7 @@ import org.koin.dsl.bind
 import org.koin.dsl.module
 
 /**
- * Koin module registering all 8 video [SitePlugin] implementations via multi-binding.
+ * Koin module registering all 7 video [SitePlugin] implementations via multi-binding.
  * Depends solely on injected `HttpClientAdapter` and `SiteSessionStore` from `:core:site-spi`.
  */
 val videoSitesModule: Module = module {
@@ -16,6 +16,5 @@ val videoSitesModule: Module = module {
     single { MissavSitePlugin(http = get()) } bind SitePlugin::class
     single { JableSitePlugin(http = get()) } bind SitePlugin::class
     single { RouvideoSitePlugin(http = get()) } bind SitePlugin::class
-    single { KbjfreeSitePlugin(http = get()) } bind SitePlugin::class
     single { PornhubSitePlugin(http = get()) } bind SitePlugin::class
 }

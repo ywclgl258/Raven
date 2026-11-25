@@ -340,10 +340,11 @@ fun SettingsScreenContent(
                     )
                     RavenGroupedDivider(insetWithIcon = true)
                     val dictStats = uiState.tagDictionaryStats
+                    val totalDictCount = dictStats.builtInCount + dictStats.communityCount + dictStats.customCount
                     RavenGroupedRow(
                         title = "标签中文词典",
-                        subtitle = "同步 40,000+ 社区中文词库并管理自定义标签译名",
-                        value = "内置 ${dictStats.builtInCount} · 社区 ${dictStats.communityCount} · 自定义 ${dictStats.customCount}",
+                        subtitle = "内置 ${dictStats.builtInCount} · 社区 ${dictStats.communityCount} · 自定义 ${dictStats.customCount}\n同步 40,000+ 社区中文词库并管理自定义标签译名",
+                        value = "$totalDictCount 条",
                         icon = Icons.Outlined.AutoStories,
                         showChevron = true,
                         onClick = navigator::openTagDictionary,

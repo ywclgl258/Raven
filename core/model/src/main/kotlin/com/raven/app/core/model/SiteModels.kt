@@ -23,14 +23,13 @@ value class SiteId(val value: String) {
     override fun toString(): String = value
 
     companion object {
-        // Video sites (8)
+        // Video sites (7)
         val R34V = SiteId("r34v")
         val HANIME1 = SiteId("hanime1")
         val IWARA = SiteId("iwara")
         val MISSAV = SiteId("missav")
         val JABLE = SiteId("jable")
         val ROUVIDEO = SiteId("rouvideo")
-        val KBJFREE = SiteId("kbjfree")
         val PORNHUB = SiteId("pornhub")
 
         // Comic sites (6)
@@ -56,10 +55,11 @@ value class SiteId(val value: String) {
 
         // Retired video site identities retained only for historical records & backups
         val RETIRED_KBJ = SiteId("kbj")
+        val RETIRED_KBJFREE = SiteId("kbjfree")
         val RETIRED_NETFLAV = SiteId("netflav")
 
         val VIDEO_SITES: List<SiteId> = listOf(
-            R34V, HANIME1, IWARA, MISSAV, JABLE, ROUVIDEO, KBJFREE, PORNHUB,
+            R34V, HANIME1, IWARA, MISSAV, JABLE, ROUVIDEO, PORNHUB,
         )
 
         val COMIC_SITES: List<SiteId> = listOf(
@@ -70,16 +70,17 @@ value class SiteId(val value: String) {
             FOURKHD, EVERIA, FOURKUP, GALLERYEPIC, COSPLAYTELE,
         )
 
-        /** All 19 live network sites in switcher display order. */
+        /** All 18 live network sites in switcher display order. */
         val ALL_LIVE: List<SiteId> = VIDEO_SITES + COMIC_SITES + PHOTO_SITES
 
         private val LIVE_SET: Set<SiteId> = ALL_LIVE.toSet()
 
-        /** All sources that may appear in personal library records (19 live + local). */
+        /** All sources that may appear in personal library records (18 live + local). */
         val LIBRARY_SOURCES: List<SiteId> = ALL_LIVE + LOCAL
 
         val RETIRED_HOSTS: Map<SiteId, String> = mapOf(
             RETIRED_KBJ to "kbj.im",
+            RETIRED_KBJFREE to "kbjfree.com",
             RETIRED_NETFLAV to "netflav.com",
         )
 

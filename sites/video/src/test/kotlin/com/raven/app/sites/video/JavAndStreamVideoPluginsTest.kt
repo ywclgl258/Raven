@@ -230,62 +230,6 @@ class JavAndStreamVideoPluginsTest {
         assertEquals(videoId, link.id)
     }
 
-    // ==================== KBJFREE ====================
-
-    @Test
-    fun `kbjfree parses Next RSC flight payload and marks streams preview-only`() = runTest {
-        val fakeHttp = FakeHttpClientAdapter()
-        val uuid = "123e4567-e89b-12d3-a456-426614174000"
-        val rscInner = """5:["${'$'}","${'$'}L1",null,{"videos":[{"id":"$uuid","name":"BJ Live Clip","categoryId":"cat1","mainThumbUrl":"https://cdn.marshlecdn.com/t1.jpg","previewMediaUrl":"https://cdn.marshlecdn.com/p1.mp4","duration":"01:31:00","extra":${'$'}undefined}]}]"""
-        val escapedRsc = rscInner.replace("\\", "\\\\").replace("\"", "\\\"")
-        val feedHtml = """
-            <html><body>
-            <script>self.__next_f.push([1,"$escapedRsc"])</script>
-            <a href="/videos?sort=recent&page=3">3</a>
-            </body></html>
-        """.trimIndent()
-
-        val detailHtml = """
-            <html>
-            <head>
-                <script type="application/ld+json">
-                {
-                  "@type": "VideoObject",
-                  "name": "BJ Live Clip",
-                  "contentUrl": "https://cdn.marshlecdn.com/preview/$uuid.mp4",
-                  "thumbnailUrl": ["https://cdn.marshlecdn.com/t1.jpg"],
-                  "duration": "PT1H31M0S",
-                  "actor": [{"name": "StreamerA", "url": "https://kbjfree.com/model/StreamerA"}]
-                }
-                </script>
-            </head>
-            <body><h1>BJ Live Clip</h1></body></html>
-        """.trimIndent()
-
-        fakeHttp.onGet("https://kbjfree.com/videos?sort=recent", body = feedHtml)
-        fakeHttp.onGet("https://kbjfree.com/watch/$uuid", body = detailHtml)
-
-        val plugin = KbjfreeSitePlugin(fakeHttp, rateLimitBackoffMs = 0L)
-        assertTrue(plugin.descriptor.hasCapability(SiteCapability.PREVIEW_ONLY))
-
-        val feed = plugin.feedSource.loadFeed(FeedRequest(SiteId.KBJFREE, section = "recent"))
-        assertEquals(1, feed.items.size)
-        assertEquals(uuid, feed.items[0].id)
-        assertEquals(5460, feed.items[0].durationSeconds)
-        assertEquals(3, feed.totalPages)
-
-        val detail = plugin.videoSource.loadVideoDetail("https://kbjfree.com/watch/$uuid")
-        assertTrue(detail.isPreviewOnly)
-        assertTrue(detail.streams.single().isPreviewOnly)
-        assertFalse(detail.streams.single().isHls)
-        assertEquals("预览", detail.streams.single().label)
-        assertEquals(5460, detail.item.durationSeconds)
-        assertEquals("StreamerA", detail.authors.single().name)
-
-        val link = plugin.linkResolver.resolve("https://kbjfree.com/watch/$uuid") as ResolvedLink.Video
-        assertEquals(uuid, link.id)
-    }
-
     // ==================== PORNHUB ====================
 
     @Test
@@ -459,15 +403,13 @@ class JavAndStreamVideoPluginsTest {
         val phSortedLink = pornhub.linkResolver.resolve("https://www.pornhub.com/video/search?search=anime&o=lg") as ResolvedLink.Feed
         assertEquals(FeedSort.DURATION, phSortedLink.request.sort)
 
-        // KBJFree & rou.video
-        val kbj = KbjfreeSitePlugin(http, rateLimitBackoffMs = 0L)
-        assertEquals(listOf(FeedSort.NEWEST), kbj.searchSource.supportedSearchSorts(SearchScope.ALL))
+        // rou.video
         val rou = RouvideoSitePlugin(http, rateLimitBackoffMs = 0L)
         assertEquals(listOf(FeedSort.NEWEST), rou.searchSource.supportedSearchSorts(SearchScope.ALL))
     }
 
     @Test
-    fun `pornhub missav kbjfree enforce strict viewkey paths, mp4 quality labels, and bounded RSC windows`() = runTest {
+    fun `pornhub and missav enforce strict viewkey paths and mp4 quality labels`() = runTest {
         assertNull(PornhubSitePlugin.extractViewKey("https://www.pornhub.com/categories/japanese-censored"))
         assertNull(PornhubSitePlugin.extractViewKey("https://www.pornhub.com/pornstar/superlongname"))
         assertEquals("ph1234567890", PornhubSitePlugin.extractViewKey("https://www.pornhub.com/embed/ph1234567890"))
@@ -498,21 +440,6 @@ class JavAndStreamVideoPluginsTest {
         val ph = PornhubSitePlugin(fakeHttp, rateLimitBackoffMs = 0L)
         val phDetail = ph.videoSource.loadVideoDetail("https://www.pornhub.com/view_video.php?viewkey=phmp4multi11")
         assertEquals(listOf("1080p MP4", "720p MP4"), phDetail.streams.map { it.label })
-
-        val firstUuid = "11111111-1111-1111-1111-111111111111"
-        val secondUuid = "22222222-2222-2222-2222-222222222222"
-        val kbjHtml = """
-            <script>self.__next_f.push([1,"{\"id\":\"$firstUuid\",\"name\":\"First Clip\",\"categoryId\":\"1\"}{\"id\":\"$secondUuid\",\"name\":\"Second Clip\",\"categoryId\":\"1\",\"mainThumbUrl\":\"https://cdn.kbjfree.com/2.jpg\"}"])</script>
-        """.trimIndent()
-        val cards = KbjfreeSitePlugin.parseCards(kbjHtml)
-        assertEquals(2, cards.size)
-        assertEquals("", cards[0].coverUrl)
-        assertEquals("https://cdn.kbjfree.com/2.jpg", cards[1].coverUrl)
-
-        val hlsDoc = org.jsoup.Jsoup.parse("""<html><body><video src="https://cdn.kbjfree.com/p/stream.m3u8?tok=1"></video></body></html>""")
-        val hlsStreams = KbjfreeSitePlugin.extractPreviewStreams(hlsDoc)
-        assertTrue(hlsStreams.single().isHls)
-        assertEquals("application/vnd.apple.mpegurl", hlsStreams.single().mimeTypeHint)
     }
 
     @Test

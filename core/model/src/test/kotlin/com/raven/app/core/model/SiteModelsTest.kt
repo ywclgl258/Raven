@@ -12,13 +12,13 @@ class SiteModelsTest {
     private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }
 
     @Test
-    fun `site id collections contain exact 19 live plus local and 2 retired`() {
-        assertEquals(8, SiteId.VIDEO_SITES.size)
+    fun `site id collections contain exact 18 live plus local and 3 retired`() {
+        assertEquals(7, SiteId.VIDEO_SITES.size)
         assertEquals(6, SiteId.COMIC_SITES.size)
         assertEquals(5, SiteId.PHOTO_SITES.size)
-        assertEquals(19, SiteId.ALL_LIVE.size)
-        assertEquals(19, SiteId.ALL_LIVE.toSet().size)
-        assertEquals(20, SiteId.LIBRARY_SOURCES.size)
+        assertEquals(18, SiteId.ALL_LIVE.size)
+        assertEquals(18, SiteId.ALL_LIVE.toSet().size)
+        assertEquals(19, SiteId.LIBRARY_SOURCES.size)
         assertTrue(SiteId.LOCAL.isLocal)
         assertFalse(SiteId.LOCAL.isLive)
         assertTrue(SiteId.GLOBAL.isGlobal)
@@ -28,8 +28,10 @@ class SiteModelsTest {
         assertTrue(SiteId.GLOBAL.isKnown)
         assertTrue(SiteId.R34V.isLive)
         assertTrue(SiteId.RETIRED_KBJ.isRetired)
+        assertTrue(SiteId.RETIRED_KBJFREE.isRetired)
         assertTrue(SiteId.RETIRED_NETFLAV.isRetired)
         assertTrue(SiteId.RETIRED_KBJ.isKnown)
+        assertTrue(SiteId.RETIRED_KBJFREE.isKnown)
         assertFalse(SiteId("unknown").isKnown)
     }
 
