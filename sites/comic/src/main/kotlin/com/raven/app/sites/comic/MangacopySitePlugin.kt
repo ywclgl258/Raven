@@ -282,8 +282,7 @@ class MangacopySitePlugin(
 
     private suspend fun loadChapterImages(pathWord: String, uuid: String): List<String> {
         if (uuid.isBlank()) return emptyList()
-        val url = "${descriptor.baseUrl}/comic/$pathWord/chapter/$uuid"
-        val html = fetchDesktopHtml(url)
+        val html = fetchDesktopHtml("/comic/$pathWord/chapter/$uuid")
         val key = KEY_REGEX.find(html)?.groupValues?.get(1)
             ?: throw SiteException.ParseError("拷贝漫画章节密钥缺失", siteId = SiteId.MANGACOPY)
         val contentKey = CONTENT_KEY_REGEX.find(html)?.groupValues?.get(1)
@@ -344,31 +343,42 @@ class MangacopySitePlugin(
         return root["results"] as? JsonObject ?: JsonObject(emptyMap())
     }
 
-    private suspend fun fetchDesktopHtml(url: String): String {
-        val response = try {
-            httpClient.getText(
-                url = url,
-                siteId = SiteId.MANGACOPY,
-                kind = SiteRequestKind.PAGE,
-                headers = mapOf(
-                    "User-Agent" to SiteNetworkProfile.DESKTOP_WINDOWS_UA,
-                    "Referer" to "${descriptor.baseUrl}/",
-                    "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-                ),
-            )
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: SiteException) {
-            throw e
-        } catch (e: Exception) {
-            throw SiteException.Network(
-                message = "拷贝漫画网络请求失败：${e.message ?: "未知错误"}",
-                siteId = SiteId.MANGACOPY,
-                cause = e,
-            )
+    /**
+     * 桌面章节页在部分网络下会被主域重置（Connection reset），按镜像顺序逐个尝试。
+     */
+    private suspend fun fetchDesktopHtml(path: String): String {
+        var lastError: SiteException? = null
+        for (host in WEB_HOSTS) {
+            val url = "https://$host$path"
+            try {
+                val response = httpClient.getText(
+                    url = url,
+                    siteId = SiteId.MANGACOPY,
+                    kind = SiteRequestKind.PAGE,
+                    headers = mapOf(
+                        "User-Agent" to SiteNetworkProfile.DESKTOP_WINDOWS_UA,
+                        "Referer" to "https://$host/",
+                        "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                    ),
+                )
+                if (response.isSuccessful) return response.bodyText()
+                lastError = SiteException.Network(
+                    message = "拷贝漫画章节页请求失败：HTTP ${response.code}",
+                    siteId = SiteId.MANGACOPY,
+                )
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: SiteException) {
+                lastError = e
+            } catch (e: Exception) {
+                lastError = SiteException.Network(
+                    message = "拷贝漫画网络请求失败：${e.message ?: "未知错误"}",
+                    siteId = SiteId.MANGACOPY,
+                    cause = e,
+                )
+            }
         }
-        response.throwIfNotSuccessful(SiteId.MANGACOPY, descriptor.displayName)
-        return response.bodyText()
+        throw lastError ?: SiteException.Network("拷贝漫画章节页不可用", siteId = SiteId.MANGACOPY)
     }
 
     private fun stripCoverSize(cover: String): String =
@@ -405,6 +415,13 @@ class MangacopySitePlugin(
         const val BASE_URL: String = "https://www.mangacopy.com"
         const val API_BASE: String = "https://api.copy4000.com/api/v3"
         private const val WEB_VERSION = "2026.10.16"
+        private val WEB_HOSTS = listOf(
+            "www.mangacopy.com",
+            "www.copy4000.com",
+            "www.copy5000.com",
+            "www.copy20.com",
+            "copymanga.fun",
+        )
         private const val PAGE_SIZE = 30
 
         private val COVER_SIZE_REGEX = Regex("""\.\d+x\d+\.\w+$""")
