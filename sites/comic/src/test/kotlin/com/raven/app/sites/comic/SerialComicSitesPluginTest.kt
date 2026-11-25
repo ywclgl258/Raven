@@ -122,6 +122,12 @@ class SerialComicSitesPluginTest {
         assertEquals("0 预告", chapterFeed.items.first().title)
         assertEquals("https://www.guazimanhua.com/chapter.php?id=954976", chapterFeed.items.first().url)
 
+        val chapterDetail = plugin.gallerySource.loadGalleryDetail(
+            "https://www.guazimanhua.com/chapter.php?id=954976",
+        )
+        assertEquals(3, chapterDetail.pageCount)
+        assertEquals("https://img.guazicdn.com/th/comics/chapters/16118/260421/1_1.webp", chapterDetail.pages.first().imageUrl)
+
         val page = plugin.gallerySource.resolvePageImage(
             "https://www.guazimanhua.com/chapter.php?id=954976#2",
             preferOriginal = false,
@@ -331,6 +337,15 @@ class SerialComicSitesPluginTest {
         assertEquals(1, detail.pageCount)
         assertEquals("https://sz.mangafunb.fun/page/001.jpg", detail.pages.single().imageUrl)
 
+        val chapterFeed = plugin.feedSource.loadFeed(
+            FeedRequest(siteId = SiteId.MANGACOPY, section = "chapters", category = "zhanhuoxiaoyanxiadehailaer"),
+        )
+        assertEquals(1, chapterFeed.items.size)
+        assertEquals("上篇", chapterFeed.items.single().title)
+        val chapterDetail = plugin.gallerySource.loadGalleryDetail(chapterFeed.items.single().url)
+        assertEquals(1, chapterDetail.pageCount)
+        assertEquals("https://sz.mangafunb.fun/page/001.jpg", chapterDetail.pages.single().imageUrl)
+
         val resolved = plugin.linkResolver.resolve("https://www.mangacopy.com/comic/haizeiwang?from=share")
         assertTrue(resolved is ResolvedLink.Gallery)
         assertNull(plugin.linkResolver.resolve("https://unrelated-domain.invalid/comic/x"))
@@ -404,6 +419,14 @@ class SerialComicSitesPluginTest {
         // 章节 id > 542724 时按 id % 5 选择 kingwar 镜像主机
         assertTrue(detail.pages.first().imageUrl.contains(".kingwar.cn/mh160tuku/"))
         assertTrue(detail.pages.first().imageUrl.endsWith("/0001.jpg"))
+
+        val chapterFeed = plugin.feedSource.loadFeed(
+            FeedRequest(siteId = SiteId.MH160, section = "chapters", category = "26001"),
+        )
+        assertEquals(2, chapterFeed.items.size)
+        assertEquals("第65话", chapterFeed.items.first().title)
+        val chapterDetail = plugin.gallerySource.loadGalleryDetail(chapterFeed.items.last().url)
+        assertEquals(2, chapterDetail.pageCount)
 
         val page = plugin.gallerySource.resolvePageImage(
             "https://www.mh160ba.com/kanmanhua/26001/583501.html#2",
@@ -483,6 +506,14 @@ class SerialComicSitesPluginTest {
             detail.pages.map { it.imageUrl },
         )
         assertTrue(detail.chaptersUrl.orEmpty().endsWith("#chapters"))
+
+        val chapterFeed = plugin.feedSource.loadFeed(
+            FeedRequest(siteId = SiteId.MYCOMIC, section = "chapters", category = "1128"),
+        )
+        assertEquals(2, chapterFeed.items.size)
+        val chapterDetail = plugin.gallerySource.loadGalleryDetail(chapterFeed.items.first().url)
+        assertEquals(2, chapterDetail.pageCount)
+        assertEquals("https://cdn.mycomic.com/manga/1128/1.jpg", chapterDetail.pages.first().imageUrl)
 
         val page = plugin.gallerySource.resolvePageImage(
             "https://mycomic.com/chapters/817597#2",
@@ -608,6 +639,17 @@ class SerialComicSitesPluginTest {
             ),
             detail.pages.map { it.imageUrl },
         )
+        val chapterFeed = plugin.feedSource.loadFeed(
+            FeedRequest(siteId = SiteId.HIPMH, section = "chapters", category = "bTo3MjQ0-deng-lu-wu-lin-xi-tong-7236"),
+        )
+        assertEquals(2, chapterFeed.items.size)
+        assertEquals("第1话 祝您武运昌隆", chapterFeed.items.first().title)
+        val chapterDetail = plugin.gallerySource.loadGalleryDetail(
+            "https://reader.hipmh.top/chapter/bTo3MjQ0LWM6MTM3MjE-NzI0NDoxLjAw",
+        )
+        assertEquals(2, chapterDetail.pageCount)
+        assertEquals("https://hip-tx-1.s3imgs.top/kk/13721/001.jpg", chapterDetail.pages.first().imageUrl)
+
         val readerPage = plugin.gallerySource.resolvePageImage(
             "https://reader.hipmh.top/chapter/bTo3MjQ0LWM6MTM3MjE-NzI0NDoxLjAw#2",
             preferOriginal = false,

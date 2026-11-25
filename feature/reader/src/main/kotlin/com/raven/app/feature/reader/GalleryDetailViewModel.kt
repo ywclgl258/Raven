@@ -27,6 +27,7 @@ import com.raven.app.core.media.storage.LocalLibraryImporter
 import com.raven.app.core.model.DownloadItem
 import com.raven.app.core.model.DownloadStatus
 import com.raven.app.core.model.FavoriteItem
+import com.raven.app.core.model.FeedRequest
 import com.raven.app.core.model.FavoriteKind
 import com.raven.app.core.model.GalleryDetail
 import com.raven.app.core.model.MediaItem
@@ -110,6 +111,9 @@ data class GalleryDetailUiState(
     val blockTagsGlobally: Boolean = true,
     val tagDictionaryRevision: Long = 0L,
     val filteredRelated: List<MediaItem> = emptyList(),
+    val chapters: List<MediaItem> = emptyList(),
+    val chaptersLoading: Boolean = false,
+    val chaptersError: String? = null,
     val favoritedTagSlugs: Set<String> = emptySet(),
     val subscribedTagSlugs: Set<String> = emptySet(),
     val blockedTerms: Set<String> = emptySet(),
@@ -256,6 +260,8 @@ class GalleryDetailViewModel(
 
     private var loadJob: Job? = null
     private var exportJob: Job? = null
+    private var chaptersJob: Job? = null
+    private var resumeApplied: Boolean = false
     @Volatile
     private var latestCachedTagsByKey: Map<String, List<TagRef>> = emptyMap()
 
@@ -446,6 +452,10 @@ class GalleryDetailViewModel(
                         errorMessage = null,
                     )
                 }
+                if (!resumeApplied) {
+                    resumeApplied = true
+                    loadChaptersAndMaybeResume(snapshot.detail)
+                }
             } catch (ce: CancellationException) {
                 throw ce
             } catch (auth: SiteException.AuthRequired) {
@@ -466,6 +476,89 @@ class GalleryDetailViewModel(
                         errorMessage = error.message?.takeIf(String::isNotBlank) ?: "图集详情加载失败",
                     )
                 }
+            }
+        }
+    }
+
+    /** 手动刷新章节列表（详情页「选集」面板打开时调用）。 */
+    fun refreshChapters() {
+        val detail = _uiState.value.detail ?: return
+        if (_uiState.value.chaptersLoading) return
+        chaptersJob?.cancel()
+        chaptersJob = viewModelScope.launch(dispatchers.io) {
+            _uiState.update { it.copy(chaptersLoading = true, chaptersError = null) }
+            try {
+                val chapters = fetchChapters(detail)
+                _uiState.update {
+                    it.copy(
+                        chaptersLoading = false,
+                        chapters = chapters,
+                        chaptersError = if (chapters.isEmpty()) "没有可用章节" else null,
+                    )
+                }
+            } catch (ce: CancellationException) {
+                throw ce
+            } catch (error: Throwable) {
+                _uiState.update {
+                    it.copy(
+                        chaptersLoading = false,
+                        chaptersError = error.message?.takeIf(String::isNotBlank) ?: "章节列表加载失败",
+                    )
+                }
+            }
+        }
+    }
+
+    private suspend fun fetchChapters(detail: GalleryDetail): List<MediaItem> {
+        if (detail.chaptersUrl.isNullOrBlank()) return emptyList()
+        val feed = siteRegistry.get(siteId)?.feedSource ?: return emptyList()
+        val comicId = detail.item.extra["comicId"]?.takeIf { it.isNotBlank() }
+            ?: detail.item.id.substringBefore(':')
+        if (comicId.isBlank()) return emptyList()
+        return feed.loadFeed(
+            FeedRequest(siteId = siteId, section = "chapters", category = comicId, page = 1),
+        ).items
+    }
+
+    /**
+     * 连载漫画：自动载入章节列表，并在存在历史记录时切换到最近阅读的章节；
+     * 没有历史则停留在插件默认的第一章。
+     */
+    private fun loadChaptersAndMaybeResume(detail: GalleryDetail) {
+        if (detail.chaptersUrl.isNullOrBlank()) return
+        viewModelScope.launch(dispatchers.io) {
+            val chapters = runCatching { fetchChapters(detail) }.getOrElse { emptyList() }
+            if (chapters.isEmpty()) return@launch
+            _uiState.update { it.copy(chapters = chapters) }
+            if (chapters.size <= 1) return@launch
+            val chapterIds = chapters.mapTo(HashSet()) { it.id }
+            val history = runCatching {
+                historyRepository.observeReadingProgressBySite(siteId).first()
+            }.getOrElse { emptyList() }
+            val resume = history.firstOrNull {
+                it.mediaId in chapterIds && it.currentPage > 0 && !it.completed
+            } ?: return@launch
+            val chapter = chapters.firstOrNull { it.id == resume.mediaId } ?: return@launch
+            if (chapter.id == detail.item.id) return@launch
+            val snapshot = runCatching {
+                pageLoader.loadDetail(siteId, chapter.id, chapter.url, offlineOnly = false)
+            }.getOrNull() ?: return@launch
+            _uiState.update {
+                it.copy(
+                    detail = snapshot.detail,
+                    downloadedPages = snapshot.downloadedPages,
+                    isOfflineComplete = snapshot.isComplete,
+                    sourceRoot = snapshot.sourceRoot,
+                    readingProgress = runCatching {
+                        historyRepository.getReadingProgress(siteId, chapter.id)
+                    }.getOrNull(),
+                    localSizeLabel = snapshot.detail.fileSizeLabel,
+                    filteredRelated = filterRelatedItems(
+                        raw = snapshot.detail.related,
+                        blockedTerms = it.blockedTerms,
+                        cachedTagsByKey = latestCachedTagsByKey,
+                    ),
+                )
             }
         }
     }

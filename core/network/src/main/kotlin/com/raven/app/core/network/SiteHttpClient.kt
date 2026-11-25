@@ -1,5 +1,8 @@
 package com.raven.app.core.network
 
+import android.os.SystemClock
+import android.util.Log
+
 import com.raven.app.core.common.AppDispatchers
 import com.raven.app.core.common.DefaultAppDispatchers
 import com.raven.app.core.model.SiteException
@@ -184,6 +187,8 @@ object SiteHttpErrorMapper {
  *   while returning [SiteHttpResponse] for HTTP status inspection by site plugins, and provides
  *   [executeChecked] for full HTTP-status -> [SiteException] throwing semantics.
  */
+private const val NET_LOG_TAG: String = "RavenNet"
+
 class SiteHttpClient(
     private val okHttpPool: RavenOkHttpPool,
     private val hostPacer: HostPacer,
@@ -215,6 +220,11 @@ class SiteHttpClient(
     override fun currentRouteKey(urls: List<String>): String = networkMonitor.currentRouteKey(urls)
 
     override suspend fun execute(request: SiteHttpRequest): SiteHttpResponse {
+        val logging = Log.isLoggable(NET_LOG_TAG, Log.DEBUG)
+        val startedAt = SystemClock.elapsedRealtime()
+        if (logging) {
+            Log.d(NET_LOG_TAG, "→ ${request.kind} ${request.method} ${request.url}")
+        }
         val httpUrl = request.url.toHttpUrlOrNull()
             ?: throw SiteException.Network("无效的请求地址：${request.url}", siteId = request.siteId)
 
@@ -247,8 +257,14 @@ class SiteHttpClient(
             } catch (se: SiteException) {
                 throw se
             } catch (e: Throwable) {
+                if (logging) {
+                    Log.w(NET_LOG_TAG, "✗ ${SystemClock.elapsedRealtime() - startedAt}ms ${request.url} :: ${e.javaClass.simpleName}: ${e.message}")
+                }
                 throw SiteHttpErrorMapper.fromThrowable(e, effectiveSiteId)
             }
+        }
+        if (logging) {
+            Log.d(NET_LOG_TAG, "← ${response.code} ${SystemClock.elapsedRealtime() - startedAt}ms ${request.url}")
         }
 
         // Reject stale authenticated response if session epoch mutated in flight.

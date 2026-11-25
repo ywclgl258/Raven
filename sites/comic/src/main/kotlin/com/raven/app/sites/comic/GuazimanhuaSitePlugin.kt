@@ -94,6 +94,9 @@ class GuazimanhuaSitePlugin(
 
     override val gallerySource: GallerySource = object : GallerySource {
         override suspend fun loadGalleryDetail(url: String): GalleryDetail {
+            if (isChapterUrl(url)) {
+                return loadChapterDetail(url)
+            }
             val comicId = extractComicId(url)
                 ?: throw SiteException.ParseError("无法识别瓜子漫画地址：$url", siteId = SiteId.GUAZIMANHUA)
             val canonical = "${descriptor.baseUrl}/comic.php?id=$comicId"
@@ -303,6 +306,41 @@ class GuazimanhuaSitePlugin(
             else -> Unit
         }
         return out
+    }
+
+    private fun isChapterUrl(url: String): Boolean =
+        ComicUrl.parse(url)?.encodedPath?.endsWith("/chapter.php") == true
+
+    private suspend fun loadChapterDetail(url: String): GalleryDetail {
+        val chapterId = ComicUrl.parse(url)?.queryParameter("id")?.takeIf { it.all(Char::isDigit) }
+            ?: throw SiteException.ParseError("无法识别瓜子漫画章节地址：$url", siteId = SiteId.GUAZIMANHUA)
+        val html = fetchHtml(url)
+        val doc = Jsoup.parse(html, url)
+        val comicId = doc.selectFirst("a[href*='comic.php?id=']")?.attr("href")
+            ?.substringAfter("id=", "")?.substringBefore("&")
+            ?.takeIf { it.all(Char::isDigit) }
+            .orEmpty()
+        val title = HtmlUrlCleaner.cleanText(doc.title().substringBefore("漫画在线阅读"))
+            .ifBlank { "章节 $chapterId" }
+        val pages = loadChapterPages(chapterId)
+        return GalleryDetail(
+            item = MediaItem(
+                siteId = SiteId.GUAZIMANHUA,
+                id = if (comicId.isNotBlank()) "$comicId:$chapterId" else chapterId,
+                url = url,
+                kind = MediaKind.SERIAL_COMIC,
+                title = title,
+                pageCount = pages.size,
+                extra = buildMap {
+                    put("chapterId", chapterId)
+                    if (comicId.isNotBlank()) put("comicId", comicId)
+                },
+            ),
+            pageCount = pages.size.coerceAtLeast(1),
+            pages = pages,
+            chaptersUrl = comicId.takeIf { it.isNotBlank() }
+                ?.let { "${descriptor.baseUrl}/comic.php?id=$it#chapters" },
+        )
     }
 
     private suspend fun loadChapterPages(chapterId: String): List<GalleryPage> {

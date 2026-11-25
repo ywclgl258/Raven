@@ -65,6 +65,11 @@ class HipmhSitePlugin(
         override suspend fun loadFeed(request: FeedRequest): FeedPage {
             val page = request.page.coerceAtLeast(1)
             val query = request.query?.trim().orEmpty()
+            if (request.section.equals("chapters", ignoreCase = true)) {
+                val mid = request.category?.trim()?.takeIf { it.isNotBlank() }
+                    ?: throw SiteException.ParseError("章节请求缺少作品编号", siteId = SiteId.HIPMH)
+                return loadChapterFeed(mid)
+            }
             val url = buildListUrl(request.section, page, query)
             val body = fetchApi(url)
             val root = runCatching { json.parseToJsonElement(body).jsonObject }.getOrNull()
@@ -99,6 +104,7 @@ class HipmhSitePlugin(
 
     override val gallerySource: GallerySource = object : GallerySource {
         override suspend fun loadGalleryDetail(url: String): GalleryDetail {
+            parseChapterHid(url)?.let { hid -> return loadChapterDetail(hid) }
             val mid = extractWorkSlug(url)
                 ?: throw SiteException.ParseError("无法识别嬉皮漫畫地址：$url", siteId = SiteId.HIPMH)
             val canonical = "${descriptor.baseUrl}/works/$mid"
@@ -111,7 +117,7 @@ class HipmhSitePlugin(
             val rawCover = doc.selectFirst("meta[property=og:image]")?.attr("content").orEmpty()
             val cover = if (rawCover.startsWith("http")) rawCover else "$COVER_BASE$rawCover"
             val chapters = loadChapters(mid)
-            val firstHid = chapters.firstOrNull()
+            val firstHid = chapters.firstOrNull()?.hid
             val pages = if (firstHid != null) loadChapterPages(firstHid) else emptyList()
             return GalleryDetail(
                 item = MediaItem(
@@ -239,7 +245,7 @@ class HipmhSitePlugin(
         )
     }
 
-    private suspend fun loadChapters(mid: String): List<String> {
+    private suspend fun loadChapters(mid: String): List<ChapterEntry> {
         // 章节 API 只接受 mid 的短前缀（`bTo3MjQ0-...` → `bTo3MjQ0`）。
         val shortMid = mid.substringBefore('-')
         val body = runCatching { fetchApi("$API_BASE/v1/manga/chapters?mid=${encode(shortMid)}&per_page=200") }
@@ -249,7 +255,58 @@ class HipmhSitePlugin(
         val root = runCatching { json.parseToJsonElement(body).jsonObject }.getOrNull() ?: return emptyList()
         val data = root["data"] as? JsonObject ?: return emptyList()
         return (data["items"] as? JsonArray).orEmpty().mapNotNull { element ->
-            (element as? JsonObject)?.string("hid")?.takeIf { it.isNotBlank() }
+            val obj = element as? JsonObject ?: return@mapNotNull null
+            val hid = obj.string("hid").takeIf { it.isNotBlank() } ?: return@mapNotNull null
+            ChapterEntry(hid, obj.string("title").ifBlank { "章节" })
+        }
+    }
+
+    private suspend fun loadChapterFeed(mid: String): FeedPage {
+        val chapters = loadChapters(mid)
+        val items = chapters.map { chapter ->
+            MediaItem(
+                siteId = SiteId.HIPMH,
+                id = chapter.hid,
+                url = "https://reader.hipmh.top/chapter/${chapter.hid}",
+                kind = MediaKind.SERIAL_COMIC,
+                title = chapter.title,
+                extra = mapOf("mid" to mid, "chapterHid" to chapter.hid),
+            )
+        }
+        return FeedPage(items = items, title = "全部章节")
+    }
+
+    private suspend fun loadChapterDetail(hid: String): GalleryDetail {
+        val data = loadChapterData(hid)
+        val title = listOf(data.mangaTitle, data.chapterTitle)
+            .filter { it.isNotBlank() }
+            .joinToString(" · ")
+            .ifBlank { "章节 $hid" }
+        return GalleryDetail(
+            item = MediaItem(
+                siteId = SiteId.HIPMH,
+                id = hid,
+                url = "https://reader.hipmh.top/chapter/$hid",
+                kind = MediaKind.SERIAL_COMIC,
+                title = title,
+                pageCount = data.pages.size,
+                extra = mapOf("chapterHid" to hid),
+            ),
+            pageCount = data.pages.size.coerceAtLeast(1),
+            pages = data.pages,
+        )
+    }
+
+    private fun parseChapterHid(url: String): String? {
+        val parsed = ComicUrl.parse(url) ?: return null
+        val segments = parsed.pathSegments
+        val idx = segments.indexOf("chapter")
+        if (idx < 0) return null
+        val candidate = segments.getOrNull(idx + 1) ?: return null
+        return if (candidate == "go") {
+            parsed.queryParameter("hid")?.takeIf { it.isNotBlank() }
+        } else {
+            candidate.takeIf { it.isNotBlank() }
         }
     }
 
@@ -257,8 +314,11 @@ class HipmhSitePlugin(
     // Reader decoding (mirrors /assets/runtime/chapter-decoder.js on reader.hipmh.top)
     // -------------------------------------------------------------------------
 
-    private suspend fun loadChapterPages(frontendHid: String): List<GalleryPage> {
-        if (frontendHid.isBlank()) return emptyList()
+    private suspend fun loadChapterPages(frontendHid: String): List<GalleryPage> =
+        loadChapterData(frontendHid).pages
+
+    private suspend fun loadChapterData(frontendHid: String): ChapterData {
+        if (frontendHid.isBlank()) return ChapterData("", "", emptyList())
         val apiHid = buildApiHid(frontendHid)
             ?: throw SiteException.ParseError("嬉皮漫畫章节编号无法解析", siteId = SiteId.HIPMH)
         val body = fetchApi("$API_BASE/v2/chapter?hid=${encode(apiHid)}")
@@ -266,13 +326,15 @@ class HipmhSitePlugin(
             ?: throw SiteException.ParseError("嬉皮漫畫章节数据格式异常", siteId = SiteId.HIPMH)
         val data = root["data"] as? JsonObject
             ?: throw SiteException.ParseError("嬉皮漫畫章节数据为空", siteId = SiteId.HIPMH)
+        val mangaTitle = data.string("manga_title")
+        val chapterTitle = data.string("chapter_title")
         val images = when (val raw = data["images"]) {
             is JsonArray -> raw.mapNotNull { it.jsonPrimitive.content }.toMutableList()
             is kotlinx.serialization.json.JsonPrimitive -> {
-                if (raw.content.isBlank()) return emptyList()
+                if (raw.content.isBlank()) return ChapterData(mangaTitle, chapterTitle, emptyList())
                 decodeImages(raw.content).toMutableList()
             }
-            else -> return emptyList()
+            else -> return ChapterData(mangaTitle, chapterTitle, emptyList())
         }
         val orderId = data["order_id"]?.jsonPrimitive?.content?.toLongOrNull() ?: -1L
         val sid = data["sid"]?.jsonPrimitive?.content?.toLongOrNull() ?: -1L
@@ -285,7 +347,7 @@ class HipmhSitePlugin(
             9 -> "https://hip-tx-s1.s3imgs.top"
             else -> "https://hip-tx-1.s3imgs.top"
         }
-        return images.mapIndexed { index, path ->
+        val pages = images.mapIndexed { index, path ->
             val imageUrl = when {
                 path.startsWith("http") -> path
                 path.startsWith("/") -> base + path
@@ -297,6 +359,7 @@ class HipmhSitePlugin(
                 imageUrl = imageUrl,
             )
         }
+        return ChapterData(mangaTitle, chapterTitle, pages)
     }
 
     private fun buildApiHid(frontendHid: String): String? {
@@ -410,6 +473,9 @@ class HipmhSitePlugin(
         }
         return null
     }
+
+    private data class ChapterEntry(val hid: String, val title: String)
+    private data class ChapterData(val mangaTitle: String, val chapterTitle: String, val pages: List<GalleryPage>)
 
     private fun sectionTitle(section: String?): String =
         SECTIONS.firstOrNull { it.id.equals(section, ignoreCase = true) }?.title ?: "最近更新"

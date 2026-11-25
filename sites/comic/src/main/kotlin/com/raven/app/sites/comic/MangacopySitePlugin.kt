@@ -68,18 +68,25 @@ class MangacopySitePlugin(
             if (query.isNotEmpty()) {
                 return searchComics(query, page)
             }
-            val ordering = when (request.section?.trim()?.lowercase()) {
-                "popular" -> "-popular"
-                else -> "-datetime_updated"
+            val section = request.section?.trim()?.lowercase().orEmpty()
+            if (section == "chapters") {
+                val pathWord = request.category?.trim()?.takeIf { it.isNotBlank() }
+                    ?: throw SiteException.ParseError("章节请求缺少作品编号", siteId = SiteId.MANGACOPY)
+                return loadChapterFeed(pathWord)
             }
-            val results = api(
-                path = "comics",
-                query = listOf(
-                    "ordering" to ordering,
-                    "limit" to PAGE_SIZE.toString(),
-                    "offset" to ((page - 1) * PAGE_SIZE).toString(),
-                ),
+            val ordering = if (section == "popular" || request.sort == FeedSort.POPULAR) {
+                "-popular"
+            } else {
+                "-datetime_updated"
+            }
+            val theme = section.removePrefix("theme_").takeIf { section.startsWith("theme_") }
+            val params = mutableListOf(
+                "ordering" to ordering,
+                "limit" to PAGE_SIZE.toString(),
+                "offset" to ((page - 1) * PAGE_SIZE).toString(),
             )
+            theme?.let { params += "theme" to it }
+            val results = api(path = "comics", query = params)
             val list = (results["list"] as? JsonArray).orEmpty()
             val items = list.mapNotNull { (it as? JsonObject)?.let(::parseComicSummary) }
             if (items.isEmpty()) {
@@ -87,12 +94,17 @@ class MangacopySitePlugin(
             }
             val total = results.int("total") ?: 0
             val offset = results.int("offset") ?: ((page - 1) * PAGE_SIZE)
+            val title = when {
+                theme != null -> THEMES.firstOrNull { it.first == theme }?.second ?: theme
+                ordering == "-popular" -> "人气"
+                else -> "最近更新"
+            }
             return FeedPage(
                 items = items,
                 hasMore = offset + items.size < total,
                 nextPage = if (offset + items.size < total) page + 1 else null,
                 totalCount = total,
-                title = if (ordering == "-popular") "人气" else "最近更新",
+                title = title,
             )
         }
 
@@ -122,27 +134,36 @@ class MangacopySitePlugin(
             val name = comic.string("name").ifBlank { "Comic $pathWord" }
             val cover = stripCoverSize(comic.string("cover"))
             val chapters = loadChapters(pathWord, results["groups"] as? JsonObject)
-            val first = chapters.firstOrNull()
-            val pages = if (first != null) {
-                val chapterUrl = "${descriptor.baseUrl}/comic/$pathWord/chapter/${first.uuid}"
-                loadChapterImages(pathWord, first.uuid).mapIndexed { index, imageUrl ->
-                    GalleryPage(index = index + 1, pageUrl = "$chapterUrl#${index + 1}", imageUrl = imageUrl)
+            val directChapterUuid = parseChapterUuid(url)
+            val target = if (directChapterUuid != null) {
+                chapters.firstOrNull { it.uuid == directChapterUuid }
+                    ?: ChapterEntry(directChapterUuid, "章节 $directChapterUuid")
+            } else {
+                chapters.firstOrNull()
+            }
+            val chapterWebUrl = target?.let { "${descriptor.baseUrl}/comic/$pathWord/chapter/${it.uuid}" }
+            val pages = if (target != null) {
+                loadChapterImages(pathWord, target.uuid).mapIndexed { index, imageUrl ->
+                    GalleryPage(index = index + 1, pageUrl = "$chapterWebUrl#${index + 1}", imageUrl = imageUrl)
                 }
             } else {
                 emptyList()
             }
+            val itemId = if (directChapterUuid != null) "$pathWord:$directChapterUuid" else pathWord
+            val itemUrl = chapterWebUrl ?: "${descriptor.baseUrl}/comic/$pathWord"
             return GalleryDetail(
                 item = MediaItem(
                     siteId = SiteId.MANGACOPY,
-                    id = pathWord,
-                    url = "${descriptor.baseUrl}/comic/$pathWord",
+                    id = itemId,
+                    url = itemUrl,
                     kind = MediaKind.SERIAL_COMIC,
-                    title = name,
+                    title = if (directChapterUuid != null) "$name · ${target?.name.orEmpty()}" else name,
                     coverUrl = cover,
                     pageCount = pages.size,
                     extra = buildMap {
-                        put("chapterUuid", first?.uuid.orEmpty())
-                        put("chapterName", first?.name.orEmpty())
+                        put("comicId", pathWord)
+                        put("chapterUuid", target?.uuid.orEmpty())
+                        put("chapterName", target?.name.orEmpty())
                     },
                 ),
                 description = comic.string("brief"),
@@ -280,6 +301,22 @@ class MangacopySitePlugin(
         return collected
     }
 
+    private suspend fun loadChapterFeed(pathWord: String): FeedPage {
+        val results = api("comic2/$pathWord", listOf("platform" to "1"))
+        val chapters = loadChapters(pathWord, results["groups"] as? JsonObject)
+        val items = chapters.map { chapter ->
+            MediaItem(
+                siteId = SiteId.MANGACOPY,
+                id = "$pathWord:${chapter.uuid}",
+                url = "${descriptor.baseUrl}/comic/$pathWord/chapter/${chapter.uuid}",
+                kind = MediaKind.SERIAL_COMIC,
+                title = chapter.name,
+                extra = mapOf("comicId" to pathWord, "chapterUuid" to chapter.uuid),
+            )
+        }
+        return FeedPage(items = items, title = "全部章节")
+    }
+
     private suspend fun loadChapterImages(pathWord: String, uuid: String): List<String> {
         if (uuid.isBlank()) return emptyList()
         val html = fetchDesktopHtml("/comic/$pathWord/chapter/$uuid")
@@ -402,6 +439,13 @@ class MangacopySitePlugin(
         return null
     }
 
+    private fun parseChapterUuid(url: String): String? {
+        val parsed = ComicUrl.parse(url) ?: return null
+        val segments = parsed.pathSegments
+        val idx = segments.indexOf("chapter")
+        return segments.getOrNull(idx + 1)?.takeIf { idx >= 0 && it.isNotBlank() }
+    }
+
     private fun JsonObject.string(name: String): String =
         this[name]?.jsonPrimitive?.content?.trim().orEmpty()
 
@@ -428,6 +472,29 @@ class MangacopySitePlugin(
         private val KEY_REGEX = Regex("""var cct = '([^']*)'""")
         private val CONTENT_KEY_REGEX = Regex("""var contentKey = '([^']*)'""")
 
+        private val THEMES: List<Pair<String, String>> = listOf(
+            "aiqing" to "爱情",
+            "huanlexiang" to "欢乐向",
+            "maoxian" to "冒险",
+            "qihuan" to "奇幻",
+            "baihe" to "百合",
+            "xiaoyuan" to "校园",
+            "kehuan" to "科幻",
+            "dongfang" to "东方",
+            "danmei" to "耽美",
+            "gedou" to "格斗",
+            "teenslove" to "TL",
+            "shenghuo" to "生活",
+            "qingxiaoshuo" to "轻小说",
+            "qita" to "其他",
+            "xuanyi" to "悬疑",
+            "mengxi" to "萌系",
+            "shengui" to "神鬼",
+            "zhichang" to "职场",
+            "zhiyu" to "治愈",
+            "jiecao" to "节操",
+        )
+
         private val MOBILE_HEADERS = mapOf(
             "platform" to "1",
             "version" to WEB_VERSION,
@@ -452,10 +519,13 @@ class MangacopySitePlugin(
                 SiteCapability.MIRRORS,
             ),
             feedSorts = listOf(FeedSort.NEWEST, FeedSort.POPULAR),
-            sections = listOf(
-                SiteSectionSpec("latest", "最近更新", defaultSort = FeedSort.NEWEST),
-                SiteSectionSpec("popular", "人气", defaultSort = FeedSort.POPULAR),
-            ),
+            sections = buildList {
+                add(SiteSectionSpec("latest", "最近更新", defaultSort = FeedSort.NEWEST))
+                add(SiteSectionSpec("popular", "人气", defaultSort = FeedSort.POPULAR))
+                THEMES.forEach { (slug, title) ->
+                    add(SiteSectionSpec("theme_$slug", title, category = "theme_$slug"))
+                }
+            },
             searchScopes = listOf(SearchScope.ALL),
             networkProfile = SiteNetworkProfile(
                 userAgent = SiteNetworkProfile.DEFAULT_MOBILE_UA,

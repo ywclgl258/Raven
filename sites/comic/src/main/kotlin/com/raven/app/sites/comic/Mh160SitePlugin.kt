@@ -62,6 +62,11 @@ class Mh160SitePlugin(
                 return searchComics(query, page)
             }
             val section = request.section?.trim()?.lowercase().orEmpty()
+            if (section == "chapters") {
+                val comicId = request.category?.trim()?.takeIf { it.isNotBlank() }
+                    ?: throw SiteException.ParseError("章节请求缺少作品编号", siteId = SiteId.MH160)
+                return loadChapterFeed(comicId)
+            }
             val path = SECTION_PATHS[section] ?: "zaixian_recent.html"
             val url = "${MOBILE_BASE}/kanmanhua/$path"
             val doc = Jsoup.parse(fetchHtml(url), url)
@@ -94,6 +99,10 @@ class Mh160SitePlugin(
 
     override val gallerySource: GallerySource = object : GallerySource {
         override suspend fun loadGalleryDetail(url: String): GalleryDetail {
+            val chapterRef = parseChapterRef(url)
+            if (chapterRef != null) {
+                return loadChapterDetail(chapterRef)
+            }
             val comicId = extractComicId(url)
                 ?: throw SiteException.ParseError("无法识别漫画160地址：$url", siteId = SiteId.MH160)
             val canonical = "${descriptor.baseUrl}/kanmanhua/$comicId/"
@@ -195,6 +204,59 @@ class Mh160SitePlugin(
             return FeedPage(items = emptyList(), title = query, hasMore = false)
         }
         return FeedPage(items = items, title = query, hasMore = false)
+    }
+
+    private suspend fun loadChapterFeed(comicId: String): FeedPage {
+        val canonical = "${descriptor.baseUrl}/kanmanhua/$comicId/"
+        val doc = Jsoup.parse(fetchHtml(canonical), canonical)
+        val chapters = parseChapters(doc)
+        val items = chapters.map { chapter ->
+            val chapterId = chapter.url.substringAfterLast("/").substringBefore(".")
+            MediaItem(
+                siteId = SiteId.MH160,
+                id = "$comicId:$chapterId",
+                url = chapter.url,
+                kind = MediaKind.SERIAL_COMIC,
+                title = chapter.title.ifBlank { "章节 $chapterId" },
+                extra = mapOf("comicId" to comicId, "chapterUrl" to chapter.url),
+            )
+        }
+        return FeedPage(items = items, title = "全部章节")
+    }
+
+    private suspend fun loadChapterDetail(ref: ChapterRef): GalleryDetail {
+        val html = fetchHtml(ref.url)
+        val doc = Jsoup.parse(html, ref.url)
+        val title = parseTitle(doc).ifBlank { "章节 ${ref.chapterId}" }
+        val pages = loadChapterPages(ref.url)
+        return GalleryDetail(
+            item = MediaItem(
+                siteId = SiteId.MH160,
+                id = "${ref.comicId}:${ref.chapterId}",
+                url = ref.url,
+                kind = MediaKind.SERIAL_COMIC,
+                title = title,
+                pageCount = pages.size,
+                extra = mapOf("comicId" to ref.comicId, "chapterUrl" to ref.url),
+            ),
+            pageCount = pages.size.coerceAtLeast(1),
+            pages = pages,
+            chaptersUrl = "${descriptor.baseUrl}/kanmanhua/${ref.comicId}/#chapters",
+        )
+    }
+
+    private fun parseChapterRef(url: String): ChapterRef? {
+        val parsed = ComicUrl.parse(url) ?: return null
+        val segments = parsed.pathSegments
+        val idx = segments.indexOf("kanmanhua")
+        if (idx < 0 || idx + 2 > segments.lastIndex) return null
+        val chapterFile = segments[idx + 2]
+        if (!chapterFile.contains('.')) return null
+        return ChapterRef(
+            comicId = segments[idx + 1],
+            chapterId = chapterFile.substringBefore('.'),
+            url = "${descriptor.baseUrl}/kanmanhua/${segments[idx + 1]}/$chapterFile",
+        )
     }
 
     private fun parseMobileList(doc: Document): List<MediaItem> {
@@ -337,6 +399,7 @@ class Mh160SitePlugin(
     }
 
     private data class ChapterEntry(val url: String, val title: String)
+    private data class ChapterRef(val comicId: String, val chapterId: String, val url: String)
 
     companion object {
         val SITE_ID: SiteId = SiteId.MH160

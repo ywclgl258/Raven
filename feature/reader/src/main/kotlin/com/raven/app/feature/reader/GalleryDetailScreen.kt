@@ -56,6 +56,7 @@ import androidx.compose.material.icons.outlined.Person
 import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material.icons.outlined.Translate
 import androidx.compose.material.icons.outlined.WatchLater
+import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.RadioButtonUnchecked
@@ -134,6 +135,7 @@ import com.raven.app.core.designsystem.theme.tabular
 import com.raven.app.core.model.AuthorRef
 import com.raven.app.core.model.DownloadStatus
 import com.raven.app.core.model.GalleryDetail
+import com.raven.app.core.model.MediaItem
 import com.raven.app.core.model.GalleryPage
 import com.raven.app.core.model.PageBookmark
 import com.raven.app.core.model.TagRef
@@ -160,6 +162,9 @@ fun GalleryDetailScreen(
     val context = LocalContext.current
     val snackbarHostState = remember { SnackbarHostState() }
     var showAllPreviewPages by rememberSaveable(uiState.siteId.value, uiState.mediaId) {
+        mutableStateOf(false)
+    }
+    var showChapterSheet by rememberSaveable(uiState.siteId.value, uiState.mediaId) {
         mutableStateOf(false)
     }
 
@@ -256,6 +261,10 @@ fun GalleryDetailScreen(
                     GalleryDetailContent(
                         uiState = uiState,
                         detail = detail,
+                        onOpenChapters = {
+                            showChapterSheet = true
+                            viewModel.refreshChapters()
+                        },
                         showAllPreviewPages = showAllPreviewPages,
                         onExpandAllPages = { showAllPreviewPages = true },
                         formatTagLabel = viewModel::formatTagLabel,
@@ -399,6 +408,30 @@ fun GalleryDetailScreen(
             onDismiss = viewModel::dismissShelfPicker,
         )
     }
+
+    if (showChapterSheet && uiState.detail != null) {
+        val activeDetail = uiState.detail ?: return
+        GalleryChapterPickerSheet(
+            chapters = uiState.chapters,
+            loading = uiState.chaptersLoading,
+            error = uiState.chaptersError,
+            currentChapterId = activeDetail.item.id,
+            currentChapterHints = listOfNotNull(
+                activeDetail.item.extra["chapterId"],
+                activeDetail.item.extra["chapterUuid"],
+                activeDetail.item.extra["chapterHid"],
+            ),
+            onSelect = { chapter ->
+                showChapterSheet = false
+                navigator.openGallery(
+                    siteId = uiState.siteId,
+                    mediaId = chapter.id,
+                    url = chapter.url,
+                )
+            },
+            onDismiss = { showChapterSheet = false },
+        )
+    }
 }
 
 @OptIn(ExperimentalLayoutApi::class)
@@ -406,6 +439,7 @@ fun GalleryDetailScreen(
 private fun GalleryDetailContent(
     uiState: GalleryDetailUiState,
     detail: GalleryDetail,
+    onOpenChapters: () -> Unit,
     showAllPreviewPages: Boolean,
     onExpandAllPages: () -> Unit,
     formatTagLabel: (TagRef) -> String,
@@ -453,6 +487,7 @@ private fun GalleryDetailContent(
                 GalleryHeroHeader(
                     uiState = uiState,
                     detail = detail,
+                    onOpenChapters = onOpenChapters,
                     onOpenReader = onOpenReader,
                     onOpenAuthor = onOpenAuthor,
                     onToggleWatchLater = onToggleWatchLater,
@@ -707,6 +742,7 @@ private fun GalleryDetailContent(
 private fun GalleryHeroHeader(
     uiState: GalleryDetailUiState,
     detail: GalleryDetail,
+    onOpenChapters: () -> Unit,
     onOpenReader: (startPage: Int, offlineOnly: Boolean) -> Unit,
     onOpenAuthor: (AuthorRef) -> Unit,
     onToggleWatchLater: () -> Unit,
@@ -954,6 +990,26 @@ private fun GalleryHeroHeader(
                         )
                     }
                 }
+            }
+        }
+
+        if (!detail.chaptersUrl.isNullOrBlank()) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                RavenFilterChip(
+                    label = when {
+                        uiState.chaptersLoading -> "选集 · 载入中…"
+                        uiState.chapters.size > 1 -> "选集 · ${uiState.chapters.size} 章"
+                        else -> "选集"
+                    },
+                    selected = false,
+                    leadingIcon = Icons.AutoMirrored.Rounded.MenuBook,
+                    onClick = onOpenChapters,
+                    modifier = Modifier.testTag("gallery_detail_chapters_chip"),
+                )
             }
         }
 
@@ -1693,6 +1749,87 @@ private fun TagActionBottomSheet(
                 destructive = !state.isBlocked,
                 onClick = onToggleBlocked,
             )
+        }
+    }
+}
+
+@OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
+@Composable
+private fun GalleryChapterPickerSheet(
+    chapters: List<MediaItem>,
+    loading: Boolean,
+    error: String?,
+    currentChapterId: String,
+    currentChapterHints: List<String>,
+    onSelect: (MediaItem) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val colors = LocalRavenColors.current
+    RavenBottomSheet(
+        onDismissRequest = onDismiss,
+        title = "选集",
+        subtitle = if (chapters.isEmpty()) "章节列表" else "共 ${chapters.size} 章",
+    ) {
+        when {
+            loading -> Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(160.dp),
+                contentAlignment = Alignment.Center,
+            ) {
+                CircularProgressIndicator(color = colors.crimson)
+            }
+            !error.isNullOrBlank() -> Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(160.dp),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    text = error,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = colors.inkSecondary,
+                )
+            }
+            chapters.isEmpty() -> Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(160.dp),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    text = "暂无章节",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = colors.inkSecondary,
+                )
+            }
+            else -> LazyColumn(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = 540.dp),
+            ) {
+                items(chapters, key = { it.id }) { chapter ->
+                    val selected = chapter.id == currentChapterId ||
+                        currentChapterHints.any { hint -> hint.isNotBlank() && chapter.id.endsWith(hint) }
+                    RavenGroupedRow(
+                        title = chapter.title,
+                        subtitle = if (selected) "阅读中" else null,
+                        showChevron = true,
+                        trailingContent = if (selected) {
+                            {
+                                Icon(
+                                    imageVector = Icons.Rounded.Check,
+                                    contentDescription = "当前章节",
+                                    tint = colors.crimson,
+                                )
+                            }
+                        } else {
+                            null
+                        },
+                        onClick = { onSelect(chapter) },
+                    )
+                }
+            }
         }
     }
 }

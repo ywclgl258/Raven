@@ -62,6 +62,11 @@ class MycomicSitePlugin(
         override suspend fun loadFeed(request: FeedRequest): FeedPage {
             val page = request.page.coerceAtLeast(1)
             val query = request.query?.trim().orEmpty()
+            if (request.section.equals("chapters", ignoreCase = true)) {
+                val comicId = request.category?.trim()?.takeIf { it.isNotBlank() }
+                    ?: throw SiteException.ParseError("章节请求缺少作品编号", siteId = SiteId.MYCOMIC)
+                return loadChapterFeed(comicId)
+            }
             val url = resolveFeedUrl(request.section, page, query)
             val html = fetchHtml(url)
             val doc = Jsoup.parse(html, url)
@@ -89,6 +94,7 @@ class MycomicSitePlugin(
 
     override val gallerySource: GallerySource = object : GallerySource {
         override suspend fun loadGalleryDetail(url: String): GalleryDetail {
+            extractChapterId(url)?.let { chapterId -> return loadChapterDetail(chapterId) }
             val comicId = extractComicId(url)
                 ?: throw SiteException.ParseError("无法识别 MyComic 地址：$url", siteId = SiteId.MYCOMIC)
             val canonical = "${descriptor.baseUrl}/comics/$comicId"
@@ -106,8 +112,9 @@ class MycomicSitePlugin(
                 ?: doc.selectFirst("img[src*=cover], img[data-src*=cover]")
                     ?.let { it.attr("data-src").ifBlank { it.attr("src") } }
                     .orEmpty()
-            val chapters = parseChapterIds(doc)
-            val firstChapterId = chapters.firstOrNull()
+            val chapters = parseChapterEntries(doc)
+            val firstChapter = chapters.firstOrNull()
+            val firstChapterId = firstChapter?.id
             val pages = if (firstChapterId != null) {
                 loadChapterPages(firstChapterId)
             } else {
@@ -270,29 +277,82 @@ class MycomicSitePlugin(
         return byId.values.toList()
     }
 
-    private fun parseChapterIds(doc: org.jsoup.nodes.Document): List<String> {
-        val seen = LinkedHashSet<String>()
+    private fun parseChapterEntries(doc: org.jsoup.nodes.Document): List<ChapterEntry> {
+        val seen = LinkedHashMap<String, String>()
         // 章节列表内嵌在 x-data 属性：chapters: [{id, title, ...}]
         doc.select("div[data-flux-card] + div div[x-data]").forEach { element ->
             val raw = element.attr("x-data")
             CHAPTER_JSON_REGEX.find(raw)?.value?.let { jsonText ->
                 runCatching { json.parseToJsonElement(jsonText).jsonArray }.getOrNull()
-                    ?.mapNotNull { item ->
-                        (item as? JsonObject)?.get("id")?.jsonPrimitive?.content
-                            ?.takeIf { it.all(Char::isDigit) }
+                    ?.forEach { item ->
+                        val obj = item as? JsonObject ?: return@forEach
+                        val id = obj["id"]?.jsonPrimitive?.content?.takeIf { it.all(Char::isDigit) }
+                            ?: return@forEach
+                        val title = obj["title"]?.jsonPrimitive?.content?.trim().orEmpty()
+                        seen.putIfAbsent(id, title.ifBlank { "章节 $id" })
                     }
-                    ?.forEach(seen::add)
             }
         }
         if (seen.isEmpty()) {
             doc.select("a[href*='/chapters/']").forEach { anchor ->
                 val href = anchor.attr("href")
                 val id = href.substringAfterLast("/").substringBefore("#").substringBefore("?")
-                if (id.isNotBlank() && id.all(Char::isDigit)) seen.add(id)
+                if (id.isNotBlank() && id.all(Char::isDigit)) {
+                    seen.putIfAbsent(id, HtmlUrlCleaner.cleanText(anchor.text()).ifBlank { "章节 $id" })
+                }
             }
         }
-        return seen.toList()
+        return seen.map { (id, title) -> ChapterEntry(id, title) }
     }
+
+    private suspend fun loadChapterFeed(comicId: String): FeedPage {
+        val canonical = "${descriptor.baseUrl}/comics/$comicId"
+        val doc = Jsoup.parse(fetchHtml(canonical), canonical)
+        val items = parseChapterEntries(doc).map { chapter ->
+            MediaItem(
+                siteId = SiteId.MYCOMIC,
+                id = chapter.id,
+                url = "${descriptor.baseUrl}/chapters/${chapter.id}",
+                kind = MediaKind.SERIAL_COMIC,
+                title = chapter.title,
+                extra = mapOf("comicId" to comicId, "chapterId" to chapter.id),
+            )
+        }
+        return FeedPage(items = items, title = "全部章节")
+    }
+
+    private suspend fun loadChapterDetail(chapterId: String): GalleryDetail {
+        val url = "${descriptor.baseUrl}/chapters/$chapterId"
+        val html = fetchHtml(url)
+        val title = HtmlUrlCleaner.cleanText(Jsoup.parse(html, url).title().substringBefore(" - "))
+            .ifBlank { "章节 $chapterId" }
+        val images = extractChapterImages(html)
+        val pages = images.mapIndexed { index, imageUrl ->
+            GalleryPage(index = index + 1, pageUrl = "$url#${index + 1}", imageUrl = imageUrl)
+        }
+        return GalleryDetail(
+            item = MediaItem(
+                siteId = SiteId.MYCOMIC,
+                id = chapterId,
+                url = url,
+                kind = MediaKind.SERIAL_COMIC,
+                title = title,
+                pageCount = pages.size,
+                extra = mapOf("chapterId" to chapterId),
+            ),
+            pageCount = pages.size.coerceAtLeast(1),
+            pages = pages,
+        )
+    }
+
+    private fun extractChapterId(url: String): String? {
+        val parsed = ComicUrl.parse(url) ?: return null
+        val idx = parsed.pathSegments.indexOf("chapters")
+        if (idx < 0) return null
+        return parsed.pathSegments.getOrNull(idx + 1)?.takeIf { it.all(Char::isDigit) }
+    }
+
+    private data class ChapterEntry(val id: String, val title: String)
 
     private suspend fun loadChapterPages(chapterId: String): List<GalleryPage> {
         val url = "${descriptor.baseUrl}/chapters/$chapterId"
