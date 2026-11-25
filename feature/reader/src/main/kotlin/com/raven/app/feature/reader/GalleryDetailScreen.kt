@@ -169,9 +169,6 @@ fun GalleryDetailScreen(
     var showAllPreviewPages by rememberSaveable(uiState.siteId.value, uiState.mediaId) {
         mutableStateOf(false)
     }
-    var showChapterSheet by rememberSaveable(uiState.siteId.value, uiState.mediaId) {
-        mutableStateOf(false)
-    }
 
     LaunchedEffect(uiState.snackbarMessage) {
         val msg = uiState.snackbarMessage
@@ -266,9 +263,13 @@ fun GalleryDetailScreen(
                     GalleryDetailContent(
                         uiState = uiState,
                         detail = detail,
-                        onOpenChapters = {
-                            showChapterSheet = true
-                            viewModel.refreshChapters()
+                        onRefreshChapters = viewModel::refreshChapters,
+                        onOpenChapter = { chapter ->
+                            navigator.openGallery(
+                                siteId = uiState.siteId,
+                                mediaId = chapter.id,
+                                url = chapter.url,
+                            )
                         },
                         showAllPreviewPages = showAllPreviewPages,
                         onExpandAllPages = { showAllPreviewPages = true },
@@ -413,30 +414,6 @@ fun GalleryDetailScreen(
             onDismiss = viewModel::dismissShelfPicker,
         )
     }
-
-    if (showChapterSheet && uiState.detail != null) {
-        val activeDetail = uiState.detail ?: return
-        GalleryChapterPickerSheet(
-            chapters = uiState.chapters,
-            loading = uiState.chaptersLoading,
-            error = uiState.chaptersError,
-            currentChapterId = activeDetail.item.id,
-            currentChapterHints = listOfNotNull(
-                activeDetail.item.extra["chapterId"],
-                activeDetail.item.extra["chapterUuid"],
-                activeDetail.item.extra["chapterHid"],
-            ),
-            onSelect = { chapter ->
-                showChapterSheet = false
-                navigator.openGallery(
-                    siteId = uiState.siteId,
-                    mediaId = chapter.id,
-                    url = chapter.url,
-                )
-            },
-            onDismiss = { showChapterSheet = false },
-        )
-    }
 }
 
 @OptIn(ExperimentalLayoutApi::class)
@@ -444,7 +421,8 @@ fun GalleryDetailScreen(
 private fun GalleryDetailContent(
     uiState: GalleryDetailUiState,
     detail: GalleryDetail,
-    onOpenChapters: () -> Unit,
+    onRefreshChapters: () -> Unit,
+    onOpenChapter: (MediaItem) -> Unit,
     showAllPreviewPages: Boolean,
     onExpandAllPages: () -> Unit,
     formatTagLabel: (TagRef) -> String,
@@ -468,6 +446,7 @@ private fun GalleryDetailContent(
         uiState.pageBookmarks.mapTo(hashSetOf()) { it.page }
     }
     val totalPages = detail.pageCount.coerceAtLeast(detail.pages.size)
+    val isSerialComic = !detail.chaptersUrl.isNullOrBlank()
     val previewCount = if (showAllPreviewPages) totalPages else minOf(totalPages, INITIAL_PREVIEW_PAGE_LIMIT)
     val previewNumbers = remember(previewCount) { (1..previewCount).toList() }
 
@@ -492,7 +471,6 @@ private fun GalleryDetailContent(
                 GalleryHeroHeader(
                     uiState = uiState,
                     detail = detail,
-                    onOpenChapters = onOpenChapters,
                     onOpenReader = onOpenReader,
                     onOpenAuthor = onOpenAuthor,
                     onToggleWatchLater = onToggleWatchLater,
@@ -601,8 +579,27 @@ private fun GalleryDetailContent(
                 }
             }
 
-            // 6. Preview Thumbnails Grid Header
-            if (totalPages > 0) {
+            // 6. 连载漫画：章节选择（替代图页预览）
+            if (isSerialComic) {
+                item(key = "chapter_picker") {
+                    GalleryChapterPickerSection(
+                        chapters = uiState.chapters,
+                        loading = uiState.chaptersLoading,
+                        error = uiState.chaptersError,
+                        currentChapterId = detail.item.id,
+                        currentChapterHints = listOfNotNull(
+                            detail.item.extra["chapterId"],
+                            detail.item.extra["chapterUuid"],
+                            detail.item.extra["chapterHid"],
+                        ),
+                        onSelect = onOpenChapter,
+                        onRefresh = onRefreshChapters,
+                    )
+                }
+            }
+
+            // 7. Preview Thumbnails Grid Header（非连载漫画）
+            if (!isSerialComic && totalPages > 0) {
                 item(key = "thumbs_header") {
                     RavenSectionHeader(
                         title = "图页预览",
@@ -747,7 +744,6 @@ private fun GalleryDetailContent(
 private fun GalleryHeroHeader(
     uiState: GalleryDetailUiState,
     detail: GalleryDetail,
-    onOpenChapters: () -> Unit,
     onOpenReader: (startPage: Int, offlineOnly: Boolean) -> Unit,
     onOpenAuthor: (AuthorRef) -> Unit,
     onToggleWatchLater: () -> Unit,
@@ -995,26 +991,6 @@ private fun GalleryHeroHeader(
                         )
                     }
                 }
-            }
-        }
-
-        if (!detail.chaptersUrl.isNullOrBlank()) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                RavenFilterChip(
-                    label = when {
-                        uiState.chaptersLoading -> "选集 · 载入中…"
-                        uiState.chapters.size > 1 -> "选集 · ${uiState.chapters.size} 章"
-                        else -> "选集"
-                    },
-                    selected = false,
-                    leadingIcon = Icons.AutoMirrored.Rounded.MenuBook,
-                    onClick = onOpenChapters,
-                    modifier = Modifier.testTag("gallery_detail_chapters_chip"),
-                )
             }
         }
 
@@ -1758,48 +1734,101 @@ private fun TagActionBottomSheet(
     }
 }
 
-@OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
 @Composable
-private fun GalleryChapterPickerSheet(
+private fun GalleryChapterPickerSection(
     chapters: List<MediaItem>,
     loading: Boolean,
     error: String?,
     currentChapterId: String,
     currentChapterHints: List<String>,
     onSelect: (MediaItem) -> Unit,
-    onDismiss: () -> Unit,
+    onRefresh: () -> Unit,
 ) {
     val colors = LocalRavenColors.current
-    RavenBottomSheet(
-        onDismissRequest = onDismiss,
-        title = "选集",
-        subtitle = if (chapters.isEmpty()) "章节列表" else "共 ${chapters.size} 章",
+    var ascending by rememberSaveable { mutableStateOf(true) }
+    val ordered = remember(chapters, ascending) {
+        if (ascending) chapters else chapters.asReversed()
+    }
+    val currentIndex = remember(ordered, currentChapterId, currentChapterHints) {
+        ordered.indexOfFirst { chapter ->
+            chapter.id == currentChapterId ||
+                currentChapterHints.any { hint -> hint.isNotBlank() && chapter.id.endsWith(hint) }
+        }.coerceAtLeast(0)
+    }
+    val gridState = rememberLazyGridState(initialFirstVisibleItemIndex = currentIndex)
+    LaunchedEffect(currentIndex, ordered.size) {
+        if (currentIndex > 0) gridState.scrollToItem(currentIndex)
+    }
+
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text(
+                    text = "选集",
+                    style = MaterialTheme.typography.titleMedium,
+                    color = colors.inkPrimary,
+                )
+                Text(
+                    text = when {
+                        loading -> "章节载入中…"
+                        chapters.isEmpty() -> "暂无章节"
+                        else -> "共 ${chapters.size} 章 · 点击切换"
+                    },
+                    style = MaterialTheme.typography.labelMedium.tabular(),
+                    color = colors.inkSecondary,
+                )
+            }
+            RavenFilterChip(
+                label = if (ascending) "正序" else "倒序",
+                selected = false,
+                leadingIcon = Icons.AutoMirrored.Rounded.Sort,
+                onClick = { ascending = !ascending },
+                modifier = Modifier.testTag("chapter_sort_chip"),
+            )
+        }
+
         when {
-            loading -> Box(
+            loading && chapters.isEmpty() -> Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(160.dp),
+                    .height(180.dp),
                 contentAlignment = Alignment.Center,
             ) {
                 CircularProgressIndicator(color = colors.crimson)
             }
-            !error.isNullOrBlank() -> Box(
+            !error.isNullOrBlank() && chapters.isEmpty() -> Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(160.dp),
+                    .height(180.dp),
                 contentAlignment = Alignment.Center,
             ) {
-                Text(
-                    text = error,
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = colors.inkSecondary,
-                )
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Text(
+                        text = error,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = colors.inkSecondary,
+                    )
+                    TextButton(onClick = onRefresh) {
+                        Text("重试", color = colors.crimson)
+                    }
+                }
             }
             chapters.isEmpty() -> Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(160.dp),
+                    .height(120.dp),
                 contentAlignment = Alignment.Center,
             ) {
                 Text(
@@ -1808,58 +1837,24 @@ private fun GalleryChapterPickerSheet(
                     color = colors.inkSecondary,
                 )
             }
-            else -> {
-                var ascending by rememberSaveable { mutableStateOf(true) }
-                val ordered = remember(chapters, ascending) {
-                    if (ascending) chapters else chapters.asReversed()
-                }
-                val currentIndex = remember(ordered, currentChapterId, currentChapterHints) {
-                    ordered.indexOfFirst { chapter ->
-                        chapter.id == currentChapterId ||
-                            currentChapterHints.any { hint -> hint.isNotBlank() && chapter.id.endsWith(hint) }
-                    }.coerceAtLeast(0)
-                }
-                val gridState = rememberLazyGridState(initialFirstVisibleItemIndex = currentIndex)
-
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(bottom = 10.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Text(
-                        text = "${chapters.size} 章",
-                        style = MaterialTheme.typography.labelMedium.tabular(),
-                        color = colors.inkSecondary,
+            else -> LazyVerticalGrid(
+                columns = GridCells.Adaptive(minSize = 96.dp),
+                state = gridState,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp)
+                    .heightIn(max = 520.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                gridItems(ordered, key = { it.id }) { chapter ->
+                    val selected = chapter.id == currentChapterId ||
+                        currentChapterHints.any { hint -> hint.isNotBlank() && chapter.id.endsWith(hint) }
+                    GalleryChapterTile(
+                        title = chapter.title,
+                        selected = selected,
+                        onClick = { onSelect(chapter) },
                     )
-                    RavenFilterChip(
-                        label = if (ascending) "正序" else "倒序",
-                        selected = false,
-                        leadingIcon = Icons.AutoMirrored.Rounded.Sort,
-                        onClick = { ascending = !ascending },
-                        modifier = Modifier.testTag("chapter_sort_chip"),
-                    )
-                }
-
-                LazyVerticalGrid(
-                    columns = GridCells.Adaptive(minSize = 96.dp),
-                    state = gridState,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .heightIn(max = 520.dp),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    gridItems(ordered, key = { it.id }) { chapter ->
-                        val selected = chapter.id == currentChapterId ||
-                            currentChapterHints.any { hint -> hint.isNotBlank() && chapter.id.endsWith(hint) }
-                        GalleryChapterTile(
-                            title = chapter.title,
-                            selected = selected,
-                            onClick = { onSelect(chapter) },
-                        )
-                    }
                 }
             }
         }

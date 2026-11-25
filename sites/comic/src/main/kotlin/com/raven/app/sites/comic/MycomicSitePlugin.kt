@@ -325,8 +325,12 @@ class MycomicSitePlugin(
     private suspend fun loadChapterDetail(chapterId: String): GalleryDetail {
         val url = "${descriptor.baseUrl}/chapters/$chapterId"
         val html = fetchHtml(url)
-        val title = HtmlUrlCleaner.cleanText(Jsoup.parse(html, url).title().substringBefore(" - "))
+        val doc = Jsoup.parse(html, url)
+        val title = HtmlUrlCleaner.cleanText(doc.title().substringBefore(" - "))
             .ifBlank { "章节 $chapterId" }
+        val comicId = doc.selectFirst("a[href*='/comics/']")
+            ?.let { extractComicId(it.absUrl("href").ifBlank { it.attr("href") }) }
+            .orEmpty()
         val images = extractChapterImages(html)
         val pages = images.mapIndexed { index, imageUrl ->
             GalleryPage(index = index + 1, pageUrl = "$url#${index + 1}", imageUrl = imageUrl)
@@ -339,10 +343,15 @@ class MycomicSitePlugin(
                 kind = MediaKind.SERIAL_COMIC,
                 title = title,
                 pageCount = pages.size,
-                extra = mapOf("chapterId" to chapterId),
+                extra = buildMap {
+                    put("chapterId", chapterId)
+                    if (comicId.isNotBlank()) put("comicId", comicId)
+                },
             ),
             pageCount = pages.size.coerceAtLeast(1),
             pages = pages,
+            chaptersUrl = comicId.takeIf { it.isNotBlank() }
+                ?.let { "${descriptor.baseUrl}/comics/$it#chapters" },
         )
     }
 

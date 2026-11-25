@@ -282,6 +282,11 @@ class HipmhSitePlugin(
             .filter { it.isNotBlank() }
             .joinToString(" · ")
             .ifBlank { "章节 $hid" }
+        val mid = if (data.mangaId.isNotBlank() && data.mangaSlug.isNotBlank()) {
+            encodeBase64Url("m:${data.mangaId}") + "-" + data.mangaSlug
+        } else {
+            ""
+        }
         return GalleryDetail(
             item = MediaItem(
                 siteId = SiteId.HIPMH,
@@ -290,10 +295,15 @@ class HipmhSitePlugin(
                 kind = MediaKind.SERIAL_COMIC,
                 title = title,
                 pageCount = data.pages.size,
-                extra = mapOf("chapterHid" to hid),
+                extra = buildMap {
+                    put("chapterHid", hid)
+                    if (mid.isNotBlank()) put("comicId", mid)
+                },
             ),
             pageCount = data.pages.size.coerceAtLeast(1),
             pages = data.pages,
+            chaptersUrl = mid.takeIf { it.isNotBlank() }
+                ?.let { "${descriptor.baseUrl}/works/$it#chapters" },
         )
     }
 
@@ -328,6 +338,8 @@ class HipmhSitePlugin(
             ?: throw SiteException.ParseError("嬉皮漫畫章节数据为空", siteId = SiteId.HIPMH)
         val mangaTitle = data.string("manga_title")
         val chapterTitle = data.string("chapter_title")
+        val mangaId = data.string("manga_id")
+        val mangaSlug = data.string("manga_slug")
         val images = when (val raw = data["images"]) {
             is JsonArray -> raw.mapNotNull { it.jsonPrimitive.content }.toMutableList()
             is kotlinx.serialization.json.JsonPrimitive -> {
@@ -359,7 +371,7 @@ class HipmhSitePlugin(
                 imageUrl = imageUrl,
             )
         }
-        return ChapterData(mangaTitle, chapterTitle, pages)
+        return ChapterData(mangaTitle, chapterTitle, pages, mangaId, mangaSlug)
     }
 
     private fun buildApiHid(frontendHid: String): String? {
@@ -475,7 +487,13 @@ class HipmhSitePlugin(
     }
 
     private data class ChapterEntry(val hid: String, val title: String)
-    private data class ChapterData(val mangaTitle: String, val chapterTitle: String, val pages: List<GalleryPage>)
+    private data class ChapterData(
+        val mangaTitle: String,
+        val chapterTitle: String,
+        val pages: List<GalleryPage>,
+        val mangaId: String = "",
+        val mangaSlug: String = "",
+    )
 
     private fun sectionTitle(section: String?): String =
         SECTIONS.firstOrNull { it.id.equals(section, ignoreCase = true) }?.title ?: "最近更新"
