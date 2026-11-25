@@ -20,6 +20,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ChromeReaderMode
+import androidx.compose.material.icons.automirrored.outlined.VolumeUp
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.outlined.AutoStories
 import androidx.compose.material.icons.outlined.Backup
@@ -127,6 +128,7 @@ fun SettingsScreen(
         uiState = uiState,
         navigator = navigator,
         onToggleReduceTransparency = viewModel::setReduceTransparency,
+        onToggleUiSoundEffects = viewModel::setUiSoundEffectsEnabled,
         onToggleTranslateTags = viewModel::setTranslateTags,
         onToggleAutoFullscreen = viewModel::setAutoFullscreen,
         onSelectQuality = viewModel::setPreferredQuality,
@@ -148,6 +150,7 @@ fun SettingsScreen(
         onToggleReaderAutoSplit = viewModel::setReaderAutoSplitWidePages,
         onChangeReaderPrefetch = viewModel::setReaderPrefetchPages,
         onChangeReaderMemoryBudget = viewModel::setReaderMemoryBudgetMb,
+        onChangeImageLoadConcurrency = viewModel::setImageLoadConcurrency,
         onToggleIncognitoMode = viewModel::setIncognitoMode,
         onTogglePrivacyScreenSecure = viewModel::setPrivacyScreenSecure,
         onToggleAppLock = viewModel::setAppLockEnabled,
@@ -209,6 +212,8 @@ fun SettingsScreenContent(
     onConfigureAppPin: (String) -> Boolean = { false },
     onClearAppPin: () -> Unit = {},
     onResetMirrorLease: (SiteId) -> Unit = {},
+    onToggleUiSoundEffects: (Boolean) -> Unit = {},
+    onChangeImageLoadConcurrency: (Int) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val colors = LocalRavenColors.current
@@ -223,6 +228,9 @@ fun SettingsScreenContent(
     }
     var sliderMemoryMb by remember(uiState.settings.readerMemoryBudgetMb) {
         mutableIntStateOf(uiState.settings.readerMemoryBudgetMb)
+    }
+    var sliderConcurrency by remember(uiState.settings.imageLoadConcurrency) {
+        mutableIntStateOf(uiState.settings.imageLoadConcurrency)
     }
 
     val activeSite = uiState.activeSite
@@ -311,6 +319,15 @@ fun SettingsScreenContent(
                         checked = uiState.settings.reduceTransparency,
                         onCheckedChange = onToggleReduceTransparency,
                         modifier = Modifier.testTag("settings_reduce_transparency"),
+                    )
+                    RavenGroupedDivider(insetWithIcon = true)
+                    RavenGroupedSwitchRow(
+                        title = "交互短音效",
+                        subtitle = "点击按钮、切换标签与收藏时播放轻柔短音效（静音/震动模式自动关闭）",
+                        icon = Icons.AutoMirrored.Outlined.VolumeUp,
+                        checked = uiState.settings.uiSoundEffectsEnabled,
+                        onCheckedChange = onToggleUiSoundEffects,
+                        modifier = Modifier.testTag("settings_ui_sound_effects"),
                     )
                     RavenGroupedDivider(insetWithIcon = true)
                     RavenGroupedSwitchRow(
@@ -411,6 +428,19 @@ fun SettingsScreenContent(
                         onValueChange = { sliderMemoryMb = it.roundToInt().coerceIn(16, 96) },
                         onValueChangeFinished = { onChangeReaderMemoryBudget(sliderMemoryMb) },
                         modifier = Modifier.testTag("settings_reader_memory_slider"),
+                    )
+                    RavenGroupedDivider(insetWithIcon = true)
+                    RavenGroupedSliderRow(
+                        title = "图集并发加载与下载线程",
+                        subtitle = "建议 2–3 线程，自动按站点限流策略与浏览器节拍错峰请求",
+                        icon = Icons.Outlined.CloudDownload,
+                        value = sliderConcurrency.toFloat(),
+                        valueRange = 2f..3f,
+                        steps = 0,
+                        valueLabel = "$sliderConcurrency 线程",
+                        onValueChange = { sliderConcurrency = it.roundToInt().coerceIn(2, 3) },
+                        onValueChangeFinished = { onChangeImageLoadConcurrency(sliderConcurrency) },
+                        modifier = Modifier.testTag("settings_image_concurrency_slider"),
                     )
                 }
             }

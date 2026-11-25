@@ -3,6 +3,7 @@ package com.raven.app.core.designsystem.component
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.snap
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
@@ -55,10 +56,8 @@ import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalConfiguration
-import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
@@ -70,8 +69,10 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.raven.app.core.designsystem.theme.LocalMotionReduced
 import com.raven.app.core.designsystem.theme.LocalRavenColors
+import com.raven.app.core.designsystem.theme.LocalRavenFeedback
 import com.raven.app.core.designsystem.theme.LocalReduceTransparency
 import com.raven.app.core.designsystem.theme.RavenColors
+import com.raven.app.core.designsystem.theme.RavenFeedbackEffect
 import com.raven.app.core.designsystem.theme.RavenFrostedBox
 import com.raven.app.core.designsystem.theme.RavenMotion
 import com.raven.app.core.designsystem.theme.RavenShapes
@@ -109,7 +110,7 @@ fun RavenHeroBanner(
     val colors = LocalRavenColors.current
     val motionReduced = LocalMotionReduced.current
     val reduceTransparency = LocalReduceTransparency.current
-    val haptic = LocalHapticFeedback.current
+    val feedback = LocalRavenFeedback.current
     val screenHeightDp = LocalConfiguration.current.screenHeightDp
     val effectiveBannerHeight = if (screenHeightDp in 1..600) {
         minOf(bannerHeight, (screenHeightDp * 0.60f).dp).coerceAtLeast(240.dp)
@@ -160,6 +161,18 @@ fun RavenHeroBanner(
                     tween(durationMillis = RavenMotion.CHIP_TRANSITION_DURATION_MS)
                 },
                 label = "heroWatchLaterIconTint",
+            )
+            val watchLaterIconScale by animateFloatAsState(
+                targetValue = if (saved) 1.12f else 1.0f,
+                animationSpec = if (motionReduced) {
+                    snap()
+                } else {
+                    spring(
+                        dampingRatio = Spring.DampingRatioMediumBouncy,
+                        stiffness = Spring.StiffnessMedium,
+                    )
+                },
+                label = "heroWatchLaterIconScale",
             )
 
             Box(
@@ -262,7 +275,7 @@ fun RavenHeroBanner(
                         val playInteraction = remember { MutableInteractionSource() }
                         Button(
                             onClick = {
-                                haptic.performHapticFeedback(HapticFeedbackType.Confirm)
+                                feedback.perform(RavenFeedbackEffect.TAP)
                                 onPlayClick(item)
                             },
                             interactionSource = playInteraction,
@@ -307,8 +320,8 @@ fun RavenHeroBanner(
                                     indication = null,
                                     role = Role.Button,
                                     onClick = {
-                                        haptic.performHapticFeedback(
-                                            if (saved) HapticFeedbackType.ToggleOff else HapticFeedbackType.ToggleOn,
+                                        feedback.perform(
+                                            if (saved) RavenFeedbackEffect.TOGGLE_OFF else RavenFeedbackEffect.FAVORITE,
                                         )
                                         onWatchLaterClick(item)
                                     },
@@ -333,7 +346,12 @@ fun RavenHeroBanner(
                                     imageVector = if (saved) Icons.Rounded.Check else Icons.Rounded.Add,
                                     contentDescription = null,
                                     tint = watchLaterIconTint,
-                                    modifier = Modifier.size(18.dp),
+                                    modifier = Modifier
+                                        .size(18.dp)
+                                        .graphicsLayer {
+                                            scaleX = watchLaterIconScale
+                                            scaleY = watchLaterIconScale
+                                        },
                                 )
                                 Spacer(modifier = Modifier.width(6.dp))
                                 Text(
@@ -401,7 +419,7 @@ fun RavenHeroBanner(
                                 .clickable(
                                     onClick = {
                                         if (!active) {
-                                            haptic.performHapticFeedback(HapticFeedbackType.SegmentTick)
+                                            feedback.perform(RavenFeedbackEffect.TAB_SWITCH)
                                             scope.launch { pagerState.animateScrollToPage(index) }
                                         }
                                     },
@@ -425,11 +443,12 @@ fun RavenHeroBanner(
 
                 IconButton(
                     onClick = {
-                        haptic.performHapticFeedback(HapticFeedbackType.ContextClick)
+                        feedback.perform(RavenFeedbackEffect.TAP)
                         paused = !paused
                     },
                     modifier = Modifier
                         .defaultMinSize(minWidth = 48.dp, minHeight = 48.dp)
+                        .ravenSpringPress()
                         .semantics {
                             contentDescription = if (paused) "恢复轮播" else "暂停轮播"
                         }

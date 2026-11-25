@@ -75,6 +75,10 @@ class PornhubSitePlugin(
         }
 
         override suspend fun loadFeed(request: FeedRequest): FeedPage {
+            val current = request.page.coerceAtLeast(1)
+            if (request.scope == SearchScope.AUTHOR && !request.query.isNullOrBlank()) {
+                return loadAuthorFeed(request, current)
+            }
             val url = resolveFeedUrl(request)
             val (response, html) = VideoSiteSupport.fetchHtml(
                 http = http,
@@ -87,7 +91,6 @@ class PornhubSitePlugin(
             if (items.isEmpty() && !looksEmpty(doc)) {
                 throw SiteException.ParseError("Pornhub 未返回可识别的列表，站点可能已改版或要求登录", siteId = SiteId.PORNHUB)
             }
-            val current = request.page.coerceAtLeast(1)
             val total = totalPages(doc, current)
             val hasMore = current < total
             return FeedPage(
@@ -98,6 +101,54 @@ class PornhubSitePlugin(
                 title = feedTitle(request),
                 fromCache = response.fromCache,
             )
+        }
+
+        private suspend fun loadAuthorFeed(request: FeedRequest, current: Int): FeedPage {
+            val candidates = resolveAuthorCandidateUrls(request, BASE_URL)
+            var fallbackEmptyPage: FeedPage? = null
+            for (candidateUrl in candidates) {
+                val (response, html) = try {
+                    VideoSiteSupport.fetchHtml(
+                        http = http,
+                        siteId = SiteId.PORNHUB,
+                        url = candidateUrl,
+                        rateLimitBackoffMs = rateLimitBackoffMs,
+                    )
+                } catch (_: SiteException.NotFound) {
+                    continue
+                } catch (net: SiteException.Network) {
+                    if (net.message.contains("HTTP 410")) {
+                        continue
+                    }
+                    throw net
+                }
+                val doc = Jsoup.parse(html, candidateUrl)
+                val items = parseCards(doc, BASE_URL)
+                val total = totalPages(doc, current)
+                val hasMore = current < total
+                if (items.isNotEmpty()) {
+                    return FeedPage(
+                        items = items,
+                        nextPage = if (hasMore) current + 1 else null,
+                        hasMore = hasMore,
+                        totalPages = total,
+                        title = feedTitle(request),
+                        fromCache = response.fromCache,
+                    )
+                }
+                if (looksEmpty(doc) && fallbackEmptyPage == null) {
+                    fallbackEmptyPage = FeedPage(
+                        items = emptyList(),
+                        nextPage = null,
+                        hasMore = false,
+                        totalPages = total,
+                        title = feedTitle(request),
+                        fromCache = response.fromCache,
+                    )
+                }
+            }
+            return fallbackEmptyPage
+                ?: throw SiteException.ParseError("Pornhub 未返回可识别的列表，站点可能已改版或要求登录", siteId = SiteId.PORNHUB)
         }
 
         override fun supportedSorts(request: FeedRequest): List<FeedSort> = when {
@@ -230,12 +281,13 @@ class PornhubSitePlugin(
             }
 
             val parts = VideoSiteSupport.pathSegments(uri)
-            return when (parts.firstOrNull()?.lowercase()) {
-                "pornstar", "model" -> parts.getOrNull(1)?.takeIf { it.isNotBlank() }?.let { slug ->
+            return when (val first = parts.firstOrNull()?.lowercase(Locale.ROOT)) {
+                "pornstar", "model", "channels", "users" -> parts.getOrNull(1)?.takeIf { it.isNotBlank() }?.let { slug ->
                     ResolvedLink.Feed(
                         FeedRequest(
                             siteId = SiteId.PORNHUB,
-                            query = slug.replace('-', ' '),
+                            section = first,
+                            query = slug,
                             scope = SearchScope.AUTHOR,
                             page = page,
                         ),
@@ -279,7 +331,8 @@ class PornhubSitePlugin(
         )
         private val fallbackM3u8Regex = Regex(""""videoUrl"\s*:\s*"(https?:[^"]+\.m3u8[^"]*)"""")
         private val pageParamRegex = Regex("[?&]page=(\\d+)")
-        private val slugCleanupRegex = Regex("[^a-z0-9]+")
+        private val slugCleanupRegex = Regex("[^a-z0-9_-]+")
+        private val AUTHOR_PATH_TYPES: Set<String> = setOf("pornstar", "model", "channels", "users")
         private val json = Json { ignoreUnknownKeys = true; isLenient = true }
 
         val SEARCH_SORTS: List<FeedSort> = listOf(
@@ -345,7 +398,7 @@ class PornhubSitePlugin(
                 }
                 return when (request.scope) {
                     SearchScope.TAG -> "$base/video/search?search=${HtmlUrlCleaner.encodePathSegment(query)}&t=tag$searchOrder$ampPage"
-                    SearchScope.AUTHOR -> "$base/pornstar/${slugify(query)}$qPage"
+                    SearchScope.AUTHOR -> resolveAuthorCandidateUrls(request, base).first()
                     SearchScope.ALL, SearchScope.CHARACTER -> "$base/video/search?search=${HtmlUrlCleaner.encodePathSegment(query)}$searchOrder$ampPage"
                 }
             }
@@ -367,8 +420,45 @@ class PornhubSitePlugin(
             return "$base/video?o=$order$ampPage"
         }
 
+        fun resolveAuthorCandidateUrls(
+            request: FeedRequest,
+            baseUrl: String = BASE_URL,
+        ): List<String> {
+            val base = baseUrl.trimEnd('/')
+            val query = request.query?.trim().orEmpty()
+            val page = request.page.coerceAtLeast(1)
+            val qPage = if (page > 1) "?page=$page" else ""
+            val primarySlug = slugify(query)
+            if (primarySlug.isEmpty()) return listOf("$base/pornstars$qPage")
+            val slugVariants = buildList {
+                add(primarySlug)
+                if ('_' in primarySlug) {
+                    val dashed = primarySlug.replace('_', '-')
+                    if (dashed.isNotEmpty() && dashed !in this) add(dashed)
+                }
+            }
+            val section = request.section?.trim()?.lowercase(Locale.ROOT).orEmpty()
+            val typeOrder = when (section) {
+                "model" -> listOf("model", "pornstar")
+                "pornstar" -> listOf("pornstar", "model")
+                "channels" -> listOf("channels")
+                "users" -> listOf("users")
+                else -> listOf("model", "pornstar", "channels", "users")
+            }
+            return buildList {
+                for (slug in slugVariants) {
+                    for (type in typeOrder) {
+                        add("$base/$type/$slug/videos$qPage")
+                    }
+                    for (type in typeOrder) {
+                        add("$base/$type/$slug$qPage")
+                    }
+                }
+            }.distinct()
+        }
+
         private fun slugify(raw: String): String =
-            raw.trim().lowercase().replace(slugCleanupRegex, "-").trim('-')
+            raw.trim().lowercase(Locale.ROOT).replace(slugCleanupRegex, "-").trim('-')
 
         fun feedTitle(request: FeedRequest): String {
             val query = request.query?.trim().orEmpty()
@@ -411,13 +501,43 @@ class PornhubSitePlugin(
          * `li[data-video-vkey]` layout seamlessly.
          */
         fun parseCards(doc: Document, baseUrl: String = BASE_URL): List<MediaItem> {
-            val desktop = doc.select("li.pcVideoListItem")
+            val desktop = doc.select("li.pcVideoListItem, div.pcVideoListItem")
                 .mapNotNull { parseDesktopCard(it, baseUrl) }
                 .distinctBy { it.id }
             if (desktop.isNotEmpty()) return desktop
-            return doc.select("li[data-video-vkey]")
+            return doc.select("li[data-video-vkey], div[data-video-vkey], li.videoblock")
                 .mapNotNull { parseMobileCard(it, baseUrl) }
                 .distinctBy { it.id }
+        }
+
+        private fun extractCardTitle(item: Element): String {
+            val prioritized = item.selectFirst("span.title a[href*=viewkey], div.title a[href*=viewkey]")
+            if (prioritized != null) {
+                val clean = HtmlUrlCleaner.cleanText(
+                    prioritized.attr("title").ifBlank { prioritized.text() },
+                )
+                if (clean.isNotBlank()) return clean
+            }
+            for (anchor in item.select("a[href*=viewkey]")) {
+                val clean = HtmlUrlCleaner.cleanText(
+                    anchor.attr("title").ifBlank { anchor.text() },
+                )
+                if (clean.isNotBlank()) return clean
+            }
+            return ""
+        }
+
+        private fun extractCardThumb(item: Element): String? {
+            val img = item.selectFirst("img[data-image], img[data-src], img[data-thumb_url], img[data-mediumthumb], img[data-poster], img[src]")
+                ?: return null
+            return listOf(
+                img.attr("data-image"),
+                img.attr("data-src"),
+                img.attr("data-thumb_url"),
+                img.attr("data-mediumthumb"),
+                img.attr("data-poster"),
+                img.attr("src"),
+            ).firstOrNull { it.isNotBlank() && !it.startsWith("data:", ignoreCase = true) }
         }
 
         private fun parseDesktopCard(item: Element, baseUrl: String): MediaItem? {
@@ -426,14 +546,9 @@ class PornhubSitePlugin(
                     ?.groupValues?.get(1).orEmpty()
             }
             if (key.isBlank()) return null
-            val anchor = item.selectFirst("a[href*=viewkey]")
-            val title = HtmlUrlCleaner.cleanText(
-                anchor?.attr("title").orEmpty().ifBlank { anchor?.text().orEmpty() },
-            )
+            val title = extractCardTitle(item)
             if (title.isBlank()) return null
-            val img = item.selectFirst("img[data-image], img[src]")
-            val thumbRaw = listOf(img?.attr("data-image"), img?.attr("src"))
-                .firstOrNull { !it.isNullOrBlank() && !it.startsWith("data:", ignoreCase = true) }
+            val thumbRaw = extractCardThumb(item)
             val durationLabel = HtmlUrlCleaner.cleanText(item.selectFirst("var.duration")?.text().orEmpty())
             val viewsLabel = HtmlUrlCleaner.cleanText(item.selectFirst("span.views var")?.text().orEmpty())
             val preview = item.selectFirst("img[data-mediabook]")?.attr("data-mediabook").orEmpty()
@@ -451,20 +566,18 @@ class PornhubSitePlugin(
         }
 
         private fun parseMobileCard(item: Element, baseUrl: String): MediaItem? {
-            val key = item.attr("data-video-vkey").trim()
+            val key = item.attr("data-video-vkey").trim().ifBlank {
+                hrefViewKeyRegex.find(item.selectFirst("a[href*=viewkey]")?.attr("href").orEmpty())
+                    ?.groupValues?.get(1).orEmpty()
+            }
             if (!viewKeyRegex.matches(key)) return null
-            val anchor = item.selectFirst("div.title a[href*=viewkey]") ?: item.selectFirst("a[href*=viewkey]")
-            val title = HtmlUrlCleaner.cleanText(
-                anchor?.text().orEmpty().ifBlank { anchor?.attr("title").orEmpty() },
-            )
+            val title = extractCardTitle(item)
             if (title.isBlank()) return null
-            val img = item.selectFirst("img[data-image], img[data-poster], img[src]")
-            val thumbRaw = listOf(img?.attr("data-image"), img?.attr("data-poster"), img?.attr("src"))
-                .firstOrNull { !it.isNullOrBlank() && !it.startsWith("data:", ignoreCase = true) }
+            val thumbRaw = extractCardThumb(item)
             val durationLabel = HtmlUrlCleaner.cleanText(
-                item.selectFirst("div.duration span.time, span.time")?.text().orEmpty(),
+                item.selectFirst("div.duration span.time, span.time, var.duration")?.text().orEmpty(),
             )
-            val viewsLabel = HtmlUrlCleaner.cleanText(item.selectFirst("div.views")?.text().orEmpty())
+            val viewsLabel = HtmlUrlCleaner.cleanText(item.selectFirst("div.views, span.views var")?.text().orEmpty())
                 .substringBefore(' ')
             val preview = item.selectFirst("[data-webm]")?.attr("data-webm").orEmpty()
             return MediaItem(
@@ -600,16 +713,23 @@ class PornhubSitePlugin(
             val durationRaw = doc.selectFirst("meta[property=video:duration], meta[property=og:video:duration]")
                 ?.attr("content").orEmpty()
 
-            val authors = doc.select("a[href^='/pornstar/'], a[href^='/model/']").mapNotNull { a ->
-                val href = a.attr("href")
-                val slug = href.substringAfter("/pornstar/", href.substringAfter("/model/", "")).trimEnd('/').substringBefore('?')
+            val authors = doc.select(
+                "a[href*='/pornstar/'], a[href*='/model/'], a[href*='/channels/'], a[href*='/users/']",
+            ).mapNotNull { a ->
+                val rawHref = a.attr("href")
+                val absUrl = VideoSiteSupport.resolveAbsolute(baseUrl, rawHref)
+                val uri = UrlSanitizer.parseUriOrNull(absUrl) ?: return@mapNotNull null
+                val segments = VideoSiteSupport.pathSegments(uri)
+                val typeSegment = segments.getOrNull(0)?.lowercase(Locale.ROOT) ?: return@mapNotNull null
+                if (typeSegment !in AUTHOR_PATH_TYPES) return@mapNotNull null
+                val slug = segments.getOrNull(1)?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
                 val label = HtmlUrlCleaner.cleanText(a.text())
-                if (slug.isBlank() || label.isBlank()) return@mapNotNull null
+                if (label.isBlank()) return@mapNotNull null
                 AuthorRef(
                     id = slug,
                     name = label,
                     role = "performer",
-                    url = VideoSiteSupport.resolveAbsolute(baseUrl, href),
+                    url = "${baseUrl.trimEnd('/')}/$typeSegment/$slug",
                 )
             }.distinctBy { it.id }.take(12)
 
@@ -674,12 +794,15 @@ class PornhubSitePlugin(
         }
 
         fun looksEmpty(doc: Document): Boolean {
-            if (doc.select("li.pcVideoListItem").isNotEmpty() || doc.select("li[data-video-vkey]").isNotEmpty()) {
+            if (doc.select("li.pcVideoListItem, div.pcVideoListItem, li[data-video-vkey], div[data-video-vkey], li.videoblock").isNotEmpty()) {
                 return false
             }
             val text = doc.text()
             return text.contains("No results", ignoreCase = true) ||
-                text.contains("没有找到", ignoreCase = true)
+                text.contains("没有找到", ignoreCase = true) ||
+                text.contains("No videos found", ignoreCase = true) ||
+                text.contains("has not uploaded any videos", ignoreCase = true) ||
+                text.contains("This user has no videos", ignoreCase = true)
         }
     }
 }

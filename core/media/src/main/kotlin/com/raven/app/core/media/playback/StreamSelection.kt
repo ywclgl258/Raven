@@ -13,13 +13,25 @@ data class BufferPlan(
     val maxMs: Int,
     val forPlaybackMs: Int,
     val afterRebufferMs: Int,
+    val backBufferMs: Int = DEFAULT_BACK_BUFFER_MS,
 ) {
     /** Stable signature used to decide whether an active ExoPlayer instance needs rebuild. */
-    val signature: String get() = "$minMs/$maxMs/$forPlaybackMs/$afterRebufferMs"
+    val signature: String
+        get() = if (backBufferMs == DEFAULT_BACK_BUFFER_MS) {
+            "$minMs/$maxMs/$forPlaybackMs/$afterRebufferMs"
+        } else {
+            "$minMs/$maxMs/$forPlaybackMs/$afterRebufferMs/$backBufferMs"
+        }
+
+    companion object {
+        const val DEFAULT_BACK_BUFFER_MS: Int = 25_000
+    }
 }
 
 /**
- * Dynamic [DefaultLoadControl] planner for high-bitrate, 720p, and strained/low-bitrate streams.
+ * Dynamic [DefaultLoadControl] planner for high-bitrate, 720p, and strained/low-bitrate streams,
+ * including a 25s keyframe back-buffer and memory-class-aware target buffer byte cap inspired by
+ * Han1meViewer for smoother back/forward scrubbing.
  */
 object BufferPlanner {
     val HIGH_BITRATE_PLAN: BufferPlan = BufferPlan(
@@ -46,6 +58,12 @@ object BufferPlanner {
     private const val HIGH_BITRATE_THRESHOLD_KBPS = 4_200
     private const val STANDARD_BITRATE_THRESHOLD_KBPS = 2_000
 
+    fun targetBufferBytesForMemoryClass(memoryClassMb: Int): Int = when {
+        memoryClassMb <= 192 -> 32 * 1024 * 1024
+        memoryClassMb <= 384 -> 48 * 1024 * 1024
+        else -> 64 * 1024 * 1024
+    }
+
     fun plan(streamKbps: Int, linkKbps: Int = 0): BufferPlan {
         val strained = linkKbps > 0 && StreamSelector.bandwidthBudget(linkKbps) < streamKbps
         return when {
@@ -58,7 +76,10 @@ object BufferPlanner {
     fun planFor(stream: VideoStream, linkKbps: Int = 0): BufferPlan =
         plan(StreamSelector.requiredKbps(stream), linkKbps)
 
-    fun createLoadControl(plan: BufferPlan): DefaultLoadControl =
+    fun createLoadControl(
+        plan: BufferPlan,
+        memoryClassMb: Int = 256,
+    ): DefaultLoadControl =
         DefaultLoadControl.Builder()
             .setBufferDurationsMs(
                 plan.minMs,
@@ -66,6 +87,9 @@ object BufferPlanner {
                 plan.forPlaybackMs,
                 plan.afterRebufferMs,
             )
+            .setBackBuffer(plan.backBufferMs, true)
+            .setTargetBufferBytes(targetBufferBytesForMemoryClass(memoryClassMb))
+            .setPrioritizeTimeOverSizeThresholds(true)
             .build()
 }
 

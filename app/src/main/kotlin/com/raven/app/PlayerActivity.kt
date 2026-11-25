@@ -168,6 +168,13 @@ class PlayerActivity : ComponentActivity() {
             navigationBarStyle = SystemBarStyle.dark(AndroidColor.TRANSPARENT),
         )
         super.onCreate(savedInstanceState)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            overrideActivityTransition(
+                OVERRIDE_TRANSITION_CLOSE,
+                R.anim.raven_host_resume,
+                R.anim.raven_player_exit,
+            )
+        }
 
         val launchArgs = PlayerLaunchArgs.fromIntent(intent)
         if (launchArgs == null) {
@@ -212,7 +219,10 @@ class PlayerActivity : ComponentActivity() {
                 updatePipParams()
             }
 
-            RavenTheme(reduceTransparency = appSettings.reduceTransparency) {
+            RavenTheme(
+                reduceTransparency = appSettings.reduceTransparency,
+                uiSoundEffectsEnabled = appSettings.uiSoundEffectsEnabled,
+            ) {
                 CompositionLocalProvider(
                     LocalRavenImageRequestDecorator provides ::ravenImageRequestDecorator,
                 ) {
@@ -236,6 +246,14 @@ class PlayerActivity : ComponentActivity() {
         setIntent(intent)
         val nextArgs = PlayerLaunchArgs.fromIntent(intent) ?: return
         playerViewModel.open(nextArgs)
+    }
+
+    override fun finish() {
+        super.finish()
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            @Suppress("DEPRECATION")
+            overridePendingTransition(R.anim.raven_host_resume, R.anim.raven_player_exit)
+        }
     }
 
     override fun onResume() {

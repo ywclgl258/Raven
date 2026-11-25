@@ -4,6 +4,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.raven.app.core.common.AppDispatchers
 import com.raven.app.core.common.ContentFilter
+import com.raven.app.core.common.MediaDateParser
 import com.raven.app.core.common.TagDictionary
 import com.raven.app.core.common.TagSuggestion
 import com.raven.app.core.database.model.ShelfWithSummary
@@ -47,6 +48,7 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
@@ -57,6 +59,7 @@ import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
+import java.util.concurrent.ConcurrentHashMap
 
 enum class SearchMode {
     SINGLE_SITE,
@@ -71,6 +74,13 @@ enum class CrossSiteStatus {
     ERROR,
     AUTH_REQUIRED,
 }
+
+data class SearchTrendingTag(
+    val slug: String,
+    val localizedName: String,
+    val count: Int,
+    val rank: Int,
+)
 
 data class CrossSiteBucketState(
     val site: SiteDescriptor,
@@ -106,6 +116,10 @@ data class SearchUiState(
     val comicLanguage: ComicLanguage = ComicLanguage.ALL,
     val advancedFilters: AdvancedSearchFilters = AdvancedSearchFilters(),
     val tagSuggestions: List<TagSuggestion> = emptyList(),
+    val trendingTags: List<SearchTrendingTag> = emptyList(),
+    val hotTagRanking: List<SearchTrendingTag> = emptyList(),
+    val hotWorksRanking: List<MediaItem> = emptyList(),
+    val isLoadingDiscovery: Boolean = false,
     val searchHistory: List<SearchHistoryEntry> = emptyList(),
     val savedSearches: List<SavedSearch> = emptyList(),
     // Single-site results
@@ -208,6 +222,12 @@ private data class SearchDbContext(
     val dictRevision: Long = 0L,
 )
 
+private data class SiteDiscoverySnapshot(
+    val works: List<MediaItem> = emptyList(),
+    val isLoading: Boolean = false,
+    val fetchedAtMs: Long = 0L,
+)
+
 @OptIn(ExperimentalCoroutinesApi::class)
 class SearchViewModel(
     initialRoute: RavenRoute.Search = RavenRoute.Search(),
@@ -245,6 +265,7 @@ class SearchViewModel(
     private var singlePaginateJob: Job? = null
     private var crossSearchJob: Job? = null
     private val crossPerSiteJobs = mutableMapOf<SiteId, Job>()
+    private val discoveryCache = ConcurrentHashMap<SiteId, SiteDiscoverySnapshot>()
     private val shelfController = BrowseShelfController(
         shelfRepository = shelfRepository,
         scope = viewModelScope,
@@ -260,6 +281,34 @@ class SearchViewModel(
 
     private val cachedTagsFlow = mediaTagCacheRepository?.observeAllTags() ?: flowOf(emptyMap())
     private val dictRevisionFlow = tagDictionaryRepository?.observeRevision() ?: flowOf(0L)
+
+    private val discoveryFlow = activeSiteIdFlow.flatMapLatest { siteId ->
+        flow {
+            val now = System.currentTimeMillis()
+            val cached = discoveryCache[siteId]
+            if (cached != null && (now - cached.fetchedAtMs) < DISCOVERY_CACHE_TTL_MS) {
+                emit(cached)
+                return@flow
+            }
+            val plugin = siteRegistry.get(siteId)
+            val canFetch = plugin?.feedSource != null
+            if (!canFetch) {
+                emit(SiteDiscoverySnapshot(works = emptyList(), isLoading = false, fetchedAtMs = now))
+                return@flow
+            }
+            emit(SiteDiscoverySnapshot(works = cached?.works.orEmpty(), isLoading = true, fetchedAtMs = 0L))
+            val fetched = withContext(dispatchers.io) {
+                fetchDiscoveryWorks(plugin)
+            }
+            val snapshot = SiteDiscoverySnapshot(
+                works = fetched,
+                isLoading = false,
+                fetchedAtMs = System.currentTimeMillis(),
+            )
+            discoveryCache[siteId] = snapshot
+            emit(snapshot)
+        }
+    }
 
     private val dbContextFlow = activeSiteIdFlow.flatMapLatest { siteId ->
         val topFour = combine(
@@ -309,11 +358,12 @@ class SearchViewModel(
 
     val uiState: StateFlow<SearchUiState> = combine(
         preferencesRepository.settings,
-        inputState,
+        combine(inputState, discoveryFlow) { input, discovery -> input to discovery },
         singleSiteState,
         crossSiteState,
         dbContextFlow,
-    ) { settings, input, single, cross, db ->
+    ) { settings, inputAndDiscovery, single, cross, db ->
+        val (input, discovery) = inputAndDiscovery
         val activeSiteId = resolveActiveSiteId(settings.activeSiteId)
         val activePlugin = siteRegistry.get(activeSiteId)
         val activeDescriptor = activePlugin?.descriptor
@@ -370,6 +420,8 @@ class SearchViewModel(
         val globalBlocked = blockedBySite[SiteId.GLOBAL].orEmpty()
         val activeSiteBlocked = db.activeSiteEffectiveBlocked
         val cachedTags = db.cachedTagsByKey
+        val activeFromDate = input.advancedFilters.publishedFrom
+        val activeToDate = input.advancedFilters.publishedTo
 
         val singleAligned = single.siteId == activeSiteId
         val baseSingleItems = if (singleAligned) {
@@ -380,6 +432,10 @@ class SearchViewModel(
                         blockedTerms = activeSiteBlocked,
                         tagDictionary = tagDictionary,
                         extraTags = cachedTags[item.compositeKey].orEmpty(),
+                    ) && MediaDateParser.matchesDateRange(
+                        dateLabel = item.dateLabel,
+                        publishedFrom = activeFromDate,
+                        publishedTo = activeToDate,
                     )
                 }
                 .withLocalizedTags(tagDictionary, translateTags)
@@ -407,11 +463,36 @@ class SearchViewModel(
                         blockedTerms = siteBlocked,
                         tagDictionary = tagDictionary,
                         extraTags = cachedTags[item.compositeKey].orEmpty(),
+                    ) && MediaDateParser.matchesDateRange(
+                        dateLabel = item.dateLabel,
+                        publishedFrom = activeFromDate,
+                        publishedTo = activeToDate,
                     )
                 }
                 .withLocalizedTags(tagDictionary, translateTags)
             rawBucket.copy(items = allowed)
         }
+
+        val hotWorks = discovery.works
+            .filter { item ->
+                ContentFilter.isAllowed(
+                    item = item,
+                    blockedTerms = activeSiteBlocked,
+                    tagDictionary = tagDictionary,
+                    extraTags = cachedTags[item.compositeKey].orEmpty(),
+                )
+            }
+            .distinctBy { it.compositeKey }
+            .take(MAX_HOT_WORKS_RANKING)
+            .withLocalizedTags(tagDictionary, translateTags)
+
+        val rankedTags = buildDiscoveryTagRankings(
+            siteId = activeSiteId,
+            works = hotWorks,
+            cachedTagsByKey = cachedTags,
+            blockedTerms = activeSiteBlocked,
+            translateTags = translateTags,
+        )
 
         val directoryBuckets = orderedCrossBuckets.filter { it.isDirectorySearch }
         val mediaBuckets = orderedCrossBuckets.filterNot { it.isDirectorySearch }
@@ -455,6 +536,10 @@ class SearchViewModel(
             comicLanguage = effectiveLanguage,
             advancedFilters = input.advancedFilters,
             tagSuggestions = suggestions,
+            trendingTags = rankedTags.take(MAX_TRENDING_TAGS),
+            hotTagRanking = rankedTags.take(MAX_HOT_TAG_RANKING),
+            hotWorksRanking = hotWorks,
+            isLoadingDiscovery = discovery.isLoading,
             searchHistory = db.history,
             savedSearches = db.savedSearches,
             singleSiteItems = filteredSingleItems,
@@ -621,6 +706,19 @@ class SearchViewModel(
         }
         if (autoSubmit && inputState.value.query.isNotBlank()) {
             submitSearch()
+        }
+    }
+
+    fun setDateRange(publishedFrom: String?, publishedTo: String?) {
+        val cleanFrom = publishedFrom?.trim()?.takeIf { it.isNotEmpty() }
+        val cleanTo = publishedTo?.trim()?.takeIf { it.isNotEmpty() }
+        inputState.update { current ->
+            current.copy(
+                advancedFilters = current.advancedFilters.copy(
+                    publishedFrom = cleanFrom,
+                    publishedTo = cleanTo,
+                ),
+            )
         }
     }
 
@@ -1304,6 +1402,112 @@ class SearchViewModel(
         return result
     }
 
+    private suspend fun fetchDiscoveryWorks(plugin: SitePlugin): List<MediaItem> {
+        val siteId = plugin.id
+        runCatching {
+            val home = plugin.feedSource?.loadHome()
+            if (home != null) {
+                val combined = buildList {
+                    home.sections.firstOrNull { it.isRanked }?.items?.let(::addAll)
+                    home.sections.forEach { addAll(it.items) }
+                    addAll(home.heroItems)
+                    home.primaryFeedPage?.items?.let(::addAll)
+                }
+                if (combined.isNotEmpty()) {
+                    return combined.distinctBy { it.compositeKey }.take(20)
+                }
+            }
+        }
+        return runCatching {
+            val page = plugin.feedSource?.loadFeed(
+                FeedRequest(
+                    siteId = siteId,
+                    sort = FeedSort.POPULAR,
+                    page = 1,
+                ),
+            )
+            page?.items.orEmpty().distinctBy { it.compositeKey }.take(20)
+        }.getOrDefault(emptyList())
+    }
+
+    private fun buildDiscoveryTagRankings(
+        siteId: SiteId,
+        works: List<MediaItem>,
+        cachedTagsByKey: Map<String, List<TagRef>>,
+        blockedTerms: List<String>,
+        translateTags: Boolean,
+    ): List<SearchTrendingTag> {
+        val counts = LinkedHashMap<String, Int>()
+        val labels = LinkedHashMap<String, String>()
+        val namespaces = LinkedHashMap<String, String>()
+
+        fun recordTag(slugRaw: String, labelRaw: String, nsRaw: String, weight: Int) {
+            val slug = slugRaw.trim()
+            if (slug.isEmpty()) return
+            val key = slug.lowercase()
+            if (blockedTerms.any { it.equals(key, ignoreCase = true) }) return
+            counts[key] = (counts[key] ?: 0) + weight
+            labels.putIfAbsent(key, labelRaw.ifBlank { slug })
+            if (nsRaw.isNotBlank()) namespaces.putIfAbsent(key, nsRaw)
+        }
+
+        works.forEachIndexed { idx, item ->
+            val rankWeight = (works.size - idx).coerceAtLeast(1)
+            item.tags.forEach { tag ->
+                recordTag(tag.slug, tag.label, tag.namespace, weight = rankWeight)
+            }
+            cachedTagsByKey[item.compositeKey]?.forEach { tag ->
+                recordTag(tag.slug, tag.label, tag.namespace, weight = rankWeight)
+            }
+        }
+
+        val sitePrefix = "${siteId.value}:"
+        cachedTagsByKey.forEach { (key, tags) ->
+            if (key.startsWith(sitePrefix)) {
+                tags.forEach { tag ->
+                    recordTag(tag.slug, tag.label, tag.namespace, weight = 2)
+                }
+            }
+        }
+
+        val observedKeys = counts.keys.toSet()
+        if (counts.size < MAX_TRENDING_TAGS) {
+            val fallback = tagDictionary.builtInTagEntries(limit = MAX_TRENDING_TAGS)
+            fallback.forEachIndexed { idx, sug ->
+                val weight = (MAX_TRENDING_TAGS - idx).coerceAtLeast(1)
+                if (sug.slug.lowercase() !in counts) {
+                    recordTag(sug.slug, sug.localizedName, sug.namespace, weight = weight)
+                }
+            }
+        }
+
+        return counts.entries
+            .sortedWith(
+                compareByDescending<Map.Entry<String, Int>> { it.key in observedKeys }
+                    .thenByDescending { it.value }
+                    .thenBy { it.key },
+            )
+            .take(MAX_TRENDING_TAGS)
+            .mapIndexed { idx, entry ->
+                val key = entry.key
+                val ns = namespaces[key].orEmpty()
+                val rawLabel = labels[key] ?: key
+                val localized = if (translateTags) {
+                    tagDictionary.translate(key, ns)
+                        ?: tagDictionary.translate(rawLabel, ns)
+                        ?: rawLabel
+                } else {
+                    key
+                }
+                SearchTrendingTag(
+                    slug = key,
+                    localizedName = localized,
+                    count = entry.value,
+                    rank = idx + 1,
+                )
+            }
+    }
+
     private fun resolveActiveSiteId(preferred: SiteId): SiteId =
         if (siteRegistry.get(preferred) != null) {
             preferred
@@ -1315,6 +1519,10 @@ class SearchViewModel(
         const val MAX_CONCURRENT_CROSS_SITE_SEARCHES: Int = 3
         const val MAX_HISTORY_CHIPS: Int = 30
         const val MAX_SERVER_EXCLUDE_BLOCKED_TERMS: Int = 12
+        const val DISCOVERY_CACHE_TTL_MS: Long = 10L * 60_000L
+        const val MAX_TRENDING_TAGS: Int = 12
+        const val MAX_HOT_TAG_RANKING: Int = 10
+        const val MAX_HOT_WORKS_RANKING: Int = 10
 
         internal fun mergeBlockedExcludeTags(
             existingExcludeTags: List<String>,

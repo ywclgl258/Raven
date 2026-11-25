@@ -7,6 +7,8 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import java.util.Locale
 import java.util.concurrent.ConcurrentHashMap
+import kotlin.math.roundToLong
+import kotlin.random.Random
 
 /**
  * Non-blocking suspend coroutine per-host start-time rate pacer (`Mutex + delay`, ZERO `Thread.sleep`).
@@ -49,6 +51,59 @@ class HostPacer(
     }
 
     /**
+     * Reserves the next start slot for [host] separated by [baseGapMs] with browser-like
+     * `±jitterFraction` timing variance so parallel fetches never fire lockstep bursts.
+     */
+    suspend fun paceWithJitter(
+        host: String,
+        baseGapMs: Long,
+        jitterFraction: Double = DEFAULT_JITTER_FRACTION,
+    ): Long {
+        if (baseGapMs <= 0L) return 0L
+        val clampedJitter = jitterFraction.coerceIn(0.0, 0.5)
+        val factor = if (clampedJitter <= 0.0) {
+            1.0
+        } else {
+            Random.nextDouble(1.0 - clampedJitter, 1.0 + clampedJitter)
+        }
+        val effectiveGap = (baseGapMs * factor).roundToLong().coerceAtLeast(1L)
+        return pace(host, effectiveGap)
+    }
+
+    /**
+     * Browser-native staggered pacing for multi-thread gallery image requests.
+     * Registered site hosts obey `imageIntervalMs` (floored at [MIN_BROWSER_IMAGE_GAP_MS]);
+     * external image CDNs use a light [DEFAULT_CDN_IMAGE_GAP_MS] micro-stagger with jitter.
+     */
+    suspend fun paceForImageWithJitter(
+        host: String,
+        descriptor: SiteDescriptor?,
+    ): Long {
+        val baseGap = if (descriptor != null && descriptor.matchesRequestHost(host)) {
+            descriptor.networkProfile.imageIntervalMs.coerceAtLeast(MIN_BROWSER_IMAGE_GAP_MS)
+        } else {
+            DEFAULT_CDN_IMAGE_GAP_MS
+        }
+        return paceWithJitter(host, baseGap)
+    }
+
+    /**
+     * Advances the next dispatch slot for [host] by [cooldownMs] when upstream signals HTTP
+     * 429/503/509 throttling so all concurrent workers immediately back off together.
+     */
+    suspend fun penalize(host: String, cooldownMs: Long) {
+        val normalizedHost = host.trim().lowercase(Locale.ROOT)
+        if (normalizedHost.isEmpty() || cooldownMs <= 0L) return
+        val slot = slots.computeIfAbsent(normalizedHost) { HostSlot() }
+        slot.mutex.withLock {
+            val targetMs = clockMs() + cooldownMs
+            if (targetMs > slot.nextSlotMs) {
+                slot.nextSlotMs = targetMs
+            }
+        }
+    }
+
+    /**
      * Computes whether a request to [host] / [encodedPath] for [descriptor] should be paced and
      * suspends accordingly. Unregistered/CDN hosts and [SiteRequestKind.PROBE] are never paced.
      */
@@ -75,5 +130,8 @@ class HostPacer(
     companion object {
         const val DEFAULT_PAGE_GAP_MS: Long = 400L
         const val DEFAULT_IMAGE_GAP_MS: Long = 150L
+        const val MIN_BROWSER_IMAGE_GAP_MS: Long = 60L
+        const val DEFAULT_CDN_IMAGE_GAP_MS: Long = 45L
+        const val DEFAULT_JITTER_FRACTION: Double = 0.25
     }
 }

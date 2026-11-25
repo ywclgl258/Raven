@@ -4,8 +4,10 @@ import android.os.Build
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.CubicBezierEasing
 import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.snap
 import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.awaitEachGesture
@@ -13,21 +15,25 @@ import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.waitForUpOrCancellation
 import androidx.compose.foundation.interaction.InteractionSource
 import androidx.compose.foundation.interaction.PressInteraction
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.composed
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shape
+import androidx.compose.ui.graphics.drawOutline
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.PointerEvent
 import androidx.compose.ui.input.pointer.PointerEventPass
@@ -85,9 +91,14 @@ object RavenMotion {
     const val IMAGE_CROSSFADE_MILLIS: Int = 220
 
     const val TAB_ENTER_INITIAL_SCALE: Float = 0.985f
+    const val TAB_SLIDE_OFFSET_FRACTION: Float = 0.055f
     const val PUSH_EXIT_PARALLAX_FRACTION: Float = 0.18f
     const val PUSH_EXIT_ALPHA: Float = 0.72f
+    const val PUSH_PARENT_EXIT_SCALE: Float = 0.965f
     const val POP_ENTER_PARALLAX_DIVISOR: Int = 5
+    const val MODAL_ENTER_DURATION_MS: Int = 300
+    const val MODAL_EXIT_DURATION_MS: Int = 240
+    const val MODAL_INITIAL_SCALE: Float = 0.965f
 
     /** Hero pager parallax tuning constants. */
     const val HERO_PARALLAX_FACTOR: Float = 0.22f
@@ -119,6 +130,22 @@ object RavenMotion {
     fun computeNavPopParentEnterOffset(fullWidth: Int): Int {
         if (fullWidth <= 0) return 0
         return -(fullWidth / POP_ENTER_PARALLAX_DIVISOR)
+    }
+
+    /**
+     * Computes signed direction (`1` forward, `-1` backward, `0` neutral) between two top-level tabs.
+     */
+    fun computeTabSlideDirection(fromIndex: Int?, toIndex: Int?): Int {
+        if (fromIndex == null || toIndex == null || fromIndex == toIndex) return 0
+        return if (toIndex > fromIndex) 1 else -1
+    }
+
+    /**
+     * Computes subtle pixel slide distance for directional top-level tab switching.
+     */
+    fun computeTabSlideOffset(fullWidth: Int, direction: Int): Int {
+        if (fullWidth <= 0 || direction == 0) return 0
+        return (fullWidth * TAB_SLIDE_OFFSET_FRACTION * direction).roundToInt()
     }
 
     /**
@@ -311,6 +338,36 @@ private class RavenSpringPressNode(
                 scaleX = s
                 scaleY = s
             }
+        }
+    }
+}
+
+/**
+ * Subtle specular rim sheen overlay when pressed, respecting [LocalMotionReduced].
+ */
+fun Modifier.ravenPressSurfaceHighlight(
+    interactionSource: InteractionSource,
+    shape: Shape = RavenShapes.CardShape,
+    enabled: Boolean = true,
+    highlightAlpha: Float = 0.08f,
+): Modifier = composed {
+    val pressed by interactionSource.collectIsPressedAsState()
+    val motionReduced = LocalMotionReduced.current
+    val overlayAlpha by animateFloatAsState(
+        targetValue = if (pressed && enabled) highlightAlpha.coerceIn(0f, 0.25f) else 0f,
+        animationSpec = if (motionReduced) snap() else tween(durationMillis = 120),
+        label = "ravenPressSurfaceHighlightAlpha",
+    )
+    if (overlayAlpha <= 0f) {
+        this
+    } else {
+        this.drawWithContent {
+            drawContent()
+            val outline = shape.createOutline(size, layoutDirection, this)
+            drawOutline(
+                outline = outline,
+                color = Color.White.copy(alpha = overlayAlpha),
+            )
         }
     }
 }

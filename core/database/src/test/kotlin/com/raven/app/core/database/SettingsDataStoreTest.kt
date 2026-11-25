@@ -41,6 +41,7 @@ class SettingsDataStoreTest {
             assertEquals(StorageLocation.PRIVATE, initial.storageLocation)
             assertNull(initial.pendingStorageLocation)
             assertFalse(initial.reduceTransparency)
+            assertTrue(initial.uiSoundEffectsEnabled)
             assertTrue(initial.autoUpdateCheck)
             assertFalse(initial.siteSwitchTutorialSeen)
             assertTrue(initial.tagDictAutoSync)
@@ -98,6 +99,9 @@ class SettingsDataStoreTest {
             settingsStore.setReduceTransparency(true)
             assertTrue(awaitItem().reduceTransparency)
 
+            settingsStore.setUiSoundEffectsEnabled(false)
+            assertFalse(awaitItem().uiSoundEffectsEnabled)
+
             settingsStore.setAutoUpdateCheck(false)
             assertFalse(awaitItem().autoUpdateCheck)
 
@@ -137,11 +141,13 @@ class SettingsDataStoreTest {
 
         // Export excludes device-local storage, sync metadata & tutorial keys, includes portable tag/block flags
         settingsStore.setPreferredQuality("720p")
+        settingsStore.setUiSoundEffectsEnabled(false)
         settingsStore.setTagDictAutoSync(false)
         settingsStore.setBlockTagsGlobally(false)
         settingsStore.setTagDictSyncState(etag = "etag-1", releaseTag = "r1", updatedAt = 1234L)
         val exported = settingsStore.exportPortableSettings()
         assertEquals("720p", exported[SettingsDataStore.KEY_PREFERRED_QUALITY])
+        assertEquals("false", exported[SettingsDataStore.KEY_UI_SOUND_EFFECTS_ENABLED])
         assertEquals("false", exported[SettingsDataStore.KEY_TAG_DICT_AUTO_SYNC])
         assertEquals("false", exported[SettingsDataStore.KEY_BLOCK_TAGS_GLOBALLY])
         assertFalse(SettingsDataStore.KEY_TAG_DICT_ETAG in exported)
@@ -155,6 +161,7 @@ class SettingsDataStoreTest {
         settingsStore.applyBackupSettings(
             settingsMap = mapOf(
                 SettingsDataStore.KEY_PREFERRED_QUALITY to "4k",
+                SettingsDataStore.KEY_UI_SOUND_EFFECTS_ENABLED to "true",
                 SettingsDataStore.KEY_STORAGE_LOCATION to "PRIVATE",
                 SettingsDataStore.KEY_SITE_SWITCH_TUTORIAL_SEEN to "false",
             ),
@@ -162,6 +169,7 @@ class SettingsDataStoreTest {
         )
         val afterRestore = settingsStore.currentSettings()
         assertEquals("4k", afterRestore.preferredQuality)
+        assertTrue(afterRestore.uiSoundEffectsEnabled)
         assertEquals(StorageLocation.SHARED, afterRestore.storageLocation)
         assertTrue(afterRestore.siteSwitchTutorialSeen)
         assertEquals(ComicLanguage.CHINESE, afterRestore.languageFor(SiteId.WNACG))

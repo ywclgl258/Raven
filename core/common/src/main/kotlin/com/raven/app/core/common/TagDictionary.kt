@@ -313,6 +313,17 @@ class TagDictionary(
         return matches.toList()
     }
 
+    /** Returns curated built-in tag entries for search discovery fallback. */
+    fun builtInTagEntries(limit: Int = 12): List<TagSuggestion> =
+        builtInSuggestions.take(limit.coerceAtLeast(0)).map { entry ->
+            TagSuggestion(
+                slug = entry.displaySlug,
+                localizedName = entry.localizedName,
+                namespace = entry.namespace,
+                source = entry.source,
+            )
+        }
+
     /**
      * Alias for [suggest] with default limit 12 for tag dictionary & search autocomplete sheets.
      */

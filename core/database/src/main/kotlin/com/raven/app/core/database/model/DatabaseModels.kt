@@ -49,6 +49,7 @@ data class AppSettings(
     val storageLocation: StorageLocation = StorageLocation.PRIVATE,
     val pendingStorageLocation: StorageLocation? = null,
     val reduceTransparency: Boolean = false,
+    val uiSoundEffectsEnabled: Boolean = true,
     val autoUpdateCheck: Boolean = true,
     val siteSwitchTutorialSeen: Boolean = false,
     val tagDictAutoSync: Boolean = true,
@@ -64,6 +65,7 @@ data class AppSettings(
     val readerPrefetchPages: Int = DEFAULT_READER_PREFETCH_PAGES,
     val readerMemoryBudgetMb: Int = DEFAULT_READER_MEMORY_BUDGET_MB,
     val readerAutoSplitWidePages: Boolean = false,
+    val imageLoadConcurrency: Int = DEFAULT_IMAGE_CONCURRENCY,
     val backgroundSubscriptionSync: Boolean = true,
     // Phase D privacy, app lock, incognito & WebDAV sync metadata
     val privacyScreenSecure: Boolean = false,
@@ -88,6 +90,9 @@ data class AppSettings(
         const val DEFAULT_READER_MEMORY_BUDGET_MB: Int = 24
         const val MIN_READER_MEMORY_BUDGET_MB: Int = 16
         const val MAX_READER_MEMORY_BUDGET_MB: Int = 96
+        const val DEFAULT_IMAGE_CONCURRENCY: Int = 3
+        const val MIN_IMAGE_CONCURRENCY: Int = 2
+        const val MAX_IMAGE_CONCURRENCY: Int = 3
     }
 }
 

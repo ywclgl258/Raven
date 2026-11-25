@@ -514,4 +514,70 @@ class JavAndStreamVideoPluginsTest {
         assertTrue(hlsStreams.single().isHls)
         assertEquals("application/vnd.apple.mpegurl", hlsStreams.single().mimeTypeHint)
     }
+
+    @Test
+    fun `pornhub resolves model, channels, and users author feeds with 404 fallback and resilient card parsing`() = runTest {
+        val fakeHttp = FakeHttpClientAdapter()
+        val detailDoc = org.jsoup.Jsoup.parse(
+            """
+            <html><body>
+            <h1 class="title"><span>Alice Showcase</span></h1>
+            <a href="/model/aliceholic13/videos">AliceHolic13</a>
+            <a href="https://www.pornhub.com/channels/studio_channel">Studio Channel</a>
+            </body></html>
+            """.trimIndent(),
+            "https://www.pornhub.com/view_video.php?viewkey=ph99887766",
+        )
+        val detail = PornhubSitePlugin.parseDetail(
+            doc = detailDoc,
+            canonicalUrl = "https://www.pornhub.com/view_video.php?viewkey=ph99887766",
+            baseUrl = PornhubSitePlugin.BASE_URL,
+            streams = emptyList(),
+        )
+        assertEquals(listOf("aliceholic13", "studio_channel"), detail.authors.map { it.id })
+        assertEquals("https://www.pornhub.com/model/aliceholic13", detail.authors[0].url)
+        assertEquals("https://www.pornhub.com/channels/studio_channel", detail.authors[1].url)
+
+        val plugin = PornhubSitePlugin(fakeHttp, rateLimitBackoffMs = 0L)
+        val resolvedModel = plugin.linkResolver.resolve(detail.authors[0].url) as ResolvedLink.Feed
+        assertEquals(SearchScope.AUTHOR, resolvedModel.request.scope)
+        assertEquals("model", resolvedModel.request.section)
+        assertEquals("aliceholic13", resolvedModel.request.query)
+
+        val modelVideosHtml = """
+            <html><body><ul>
+            <li class="pcVideoListItem videoblock" data-video-vkey="phmodelvid01">
+                <a href="/view_video.php?viewkey=phmodelvid01">
+                    <img data-thumb_url="https://di.phncdn.com/m1.jpg" src="data:image/gif;base64,R0lGOD" />
+                </a>
+                <var class="duration">08:20</var>
+                <span class="title"><a href="/view_video.php?viewkey=phmodelvid01" title="Alice Clip One">Alice Clip One</a></span>
+            </li>
+            </ul></body></html>
+        """.trimIndent()
+        val pornstarFallbackHtml = """
+            <html><body>
+            <div class="videoblock" data-video-vkey="phstarvid02">
+                <div class="title"><a href="/view_video.php?viewkey=phstarvid02">Star Clip Two</a></div>
+                <img data-src="https://di.phncdn.com/s2.jpg" />
+            </div>
+            </body></html>
+        """.trimIndent()
+
+        fakeHttp.onGet("https://www.pornhub.com/model/aliceholic13/videos", body = modelVideosHtml)
+        fakeHttp.onGet("https://www.pornhub.com/model/star-only/videos", code = 404, body = "Not found")
+        fakeHttp.onGet("https://www.pornhub.com/pornstar/star-only/videos", body = pornstarFallbackHtml)
+
+        val modelPage = plugin.feedSource.loadFeed(resolvedModel.request)
+        assertEquals(listOf("phmodelvid01"), modelPage.items.map { it.id })
+        assertEquals("Alice Clip One", modelPage.items.single().title)
+        assertEquals("https://di.phncdn.com/m1.jpg", modelPage.items.single().coverUrl)
+
+        val fallbackPage = plugin.feedSource.loadFeed(
+            FeedRequest(SiteId.PORNHUB, query = "star-only", scope = SearchScope.AUTHOR),
+        )
+        assertEquals(listOf("phstarvid02"), fallbackPage.items.map { it.id })
+        assertEquals("Star Clip Two", fallbackPage.items.single().title)
+        assertEquals("https://di.phncdn.com/s2.jpg", fallbackPage.items.single().coverUrl)
+    }
 }

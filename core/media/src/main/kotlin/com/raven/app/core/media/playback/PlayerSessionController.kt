@@ -2,6 +2,7 @@
 
 package com.raven.app.core.media.playback
 
+import android.app.ActivityManager
 import android.content.Context
 import android.net.Uri
 import android.util.Rational
@@ -16,7 +17,9 @@ import androidx.media3.common.TrackSelectionOverride
 import androidx.media3.common.Tracks
 import androidx.media3.common.VideoSize
 import androidx.media3.datasource.DefaultDataSource
+import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.SeekParameters
 import androidx.media3.exoplayer.hls.HlsMediaSource
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.exoplayer.source.MediaSource
@@ -816,9 +819,17 @@ class PlayerSessionController(
             .setContentType(C.AUDIO_CONTENT_TYPE_MOVIE)
             .build()
 
-        val created = ExoPlayer.Builder(appContext)
-            .setLoadControl(BufferPlanner.createLoadControl(plan))
+        val memoryClassMb = (appContext.getSystemService(Context.ACTIVITY_SERVICE) as? ActivityManager)
+            ?.memoryClass
+            ?.coerceAtLeast(64)
+            ?: 256
+        val renderersFactory = DefaultRenderersFactory(appContext)
+            .setEnableDecoderFallback(true)
+
+        val created = ExoPlayer.Builder(appContext, renderersFactory)
+            .setLoadControl(BufferPlanner.createLoadControl(plan, memoryClassMb))
             .setBandwidthMeter(linkSpeedEstimator.meter)
+            .setSeekParameters(SeekParameters.CLOSEST_SYNC)
             .setAudioAttributes(audioAttributes, true)
             .setHandleAudioBecomingNoisy(true)
             .build()
@@ -876,6 +887,7 @@ class PlayerSessionController(
                 extraHeaders = stream.headers,
             )
             HlsMediaSource.Factory(hlsDataSourceFactory).apply {
+                setAllowChunklessPreparation(true)
                 if (hlsSeek != null) {
                     setPlaylistParserFactory(hlsSeek.playlistParserFactory)
                 }

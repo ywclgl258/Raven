@@ -778,4 +778,108 @@ class SearchViewModelTest {
             val history = harness.searchHistoryRepository.observeBySite(SiteId.R34V, limit = 20).first()
             assertEquals(1, history.size)
         }
+
+    @Test
+    fun `setDateRange filters single-site and cross-site results by publishedAt`() =
+        runTest(mainDispatcherRule.dispatcher) {
+            val harness = BrowseTestHarness(mainDispatcherRule.dispatcher)
+            val r34Plugin = FakeSitePlugin(
+                descriptor = SiteDescriptor(SiteId.R34V, "Rule34Video", primaryKind = MediaKind.VIDEO, defaultHost = "r34.example"),
+                searchHandler = {
+                    FeedPage(
+                        items = listOf(
+                            sampleMediaItem(SiteId.R34V, "in-range", MediaKind.VIDEO).copy(dateLabel = "2026-05-10"),
+                            sampleMediaItem(SiteId.R34V, "too-old", MediaKind.VIDEO).copy(dateLabel = "2024-01-01"),
+                            sampleMediaItem(SiteId.R34V, "no-date", MediaKind.VIDEO).copy(dateLabel = null),
+                        ),
+                    )
+                },
+            )
+            val nhPlugin = FakeSitePlugin(
+                descriptor = SiteDescriptor(SiteId.NHENTAI, "nHentai", primaryKind = MediaKind.COMIC, defaultHost = "nhentai.net"),
+                searchHandler = {
+                    FeedPage(
+                        items = listOf(
+                            sampleMediaItem(SiteId.NHENTAI, "nh-in-range", MediaKind.COMIC).copy(dateLabel = "2026-05-12"),
+                            sampleMediaItem(SiteId.NHENTAI, "nh-out-of-range", MediaKind.COMIC).copy(dateLabel = "2023-06-01"),
+                        ),
+                    )
+                },
+            )
+            val vm = SearchViewModel(
+                siteRegistry = SiteRegistry(listOf(r34Plugin, nhPlugin)),
+                preferencesRepository = harness.preferencesRepository,
+                searchHistoryRepository = harness.searchHistoryRepository,
+                subscriptionRepository = harness.subscriptionRepository,
+                blockedTermsRepository = harness.blockedTermsRepository,
+                historyRepository = harness.historyRepository,
+                shelfRepository = harness.shelfRepository,
+                dispatchers = harness.dispatchers,
+            )
+
+            vm.uiState.test {
+                advanceUntilIdle()
+                vm.updateQuery("swimsuit")
+                vm.submitSearch()
+                advanceUntilIdle()
+                assertEquals(3, expectMostRecentItem().singleSiteItems.size)
+
+                vm.setDateRange("2026-05-01", "2026-05-31")
+                advanceUntilIdle()
+                val singleFiltered = expectMostRecentItem()
+                assertEquals("2026-05-01", singleFiltered.advancedFilters.publishedFrom)
+                assertEquals("2026-05-31", singleFiltered.advancedFilters.publishedTo)
+                assertEquals(listOf("in-range"), singleFiltered.singleSiteItems.map { it.id })
+
+                vm.setMode(SearchMode.CROSS_SITE)
+                advanceUntilIdle()
+                val crossFiltered = expectMostRecentItem()
+                assertEquals(setOf("in-range", "nh-in-range"), crossFiltered.crossSiteMediaItems.map { it.id }.toSet())
+                cancelAndIgnoreRemainingEvents()
+            }
+        }
+
+    @Test
+    fun `discovery hub populates trending tags, hot tag ranking, and hot works ranking from popular feed`() =
+        runTest(mainDispatcherRule.dispatcher) {
+            val harness = BrowseTestHarness(mainDispatcherRule.dispatcher)
+            val r34Plugin = FakeSitePlugin(
+                descriptor = SiteDescriptor(SiteId.R34V, "Rule34Video", primaryKind = MediaKind.VIDEO, defaultHost = "r34.example"),
+                feedHandler = {
+                    FeedPage(
+                        items = listOf(
+                            sampleMediaItem(SiteId.R34V, "hot-1", MediaKind.VIDEO).copy(
+                                tags = listOf(TagRef(slug = "cosplay"), TagRef(slug = "maid")),
+                            ),
+                            sampleMediaItem(SiteId.R34V, "hot-2", MediaKind.VIDEO).copy(
+                                tags = listOf(TagRef(slug = "cosplay"), TagRef(slug = "stockings")),
+                            ),
+                            sampleMediaItem(SiteId.R34V, "hot-3", MediaKind.VIDEO).copy(
+                                tags = listOf(TagRef(slug = "maid")),
+                            ),
+                        ),
+                    )
+                },
+            )
+            val vm = SearchViewModel(
+                siteRegistry = SiteRegistry(listOf(r34Plugin)),
+                preferencesRepository = harness.preferencesRepository,
+                searchHistoryRepository = harness.searchHistoryRepository,
+                subscriptionRepository = harness.subscriptionRepository,
+                blockedTermsRepository = harness.blockedTermsRepository,
+                historyRepository = harness.historyRepository,
+                shelfRepository = harness.shelfRepository,
+                dispatchers = harness.dispatchers,
+            )
+
+            vm.uiState.test {
+                advanceUntilIdle()
+                val state = expectMostRecentItem()
+                assertTrue(state.trendingTags.isNotEmpty())
+                assertTrue(state.hotTagRanking.isNotEmpty())
+                assertEquals("cosplay", state.hotTagRanking.first().slug)
+                assertEquals(listOf("hot-1", "hot-2", "hot-3"), state.hotWorksRanking.map { it.id })
+                cancelAndIgnoreRemainingEvents()
+            }
+        }
 }

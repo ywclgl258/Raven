@@ -194,6 +194,7 @@ class SettingsViewModelTest {
             assertEquals(3072L, initial.readingCache.totalBytes)
 
             vm.setReduceTransparency(true)
+            vm.setUiSoundEffectsEnabled(false)
             vm.setTranslateTags(false)
             vm.setAutoFullscreen(true)
             vm.setPreferredQuality("1080p")
@@ -206,6 +207,7 @@ class SettingsViewModelTest {
 
             val updated = expectMostRecentItem()
             assertTrue(updated.settings.reduceTransparency)
+            assertFalse(updated.settings.uiSoundEffectsEnabled)
             assertFalse(updated.settings.translateTags)
             assertTrue(updated.settings.autoFullscreen)
             assertEquals("1080p", updated.settings.preferredQuality)

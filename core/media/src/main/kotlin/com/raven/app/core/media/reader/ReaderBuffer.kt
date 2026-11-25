@@ -31,7 +31,7 @@ data class ReaderBufferState<T : Any>(
  *
  * Invariants:
  * - Maintains `[current - 1 .. current + 3]` prefetch window plus any explicitly visible pages.
- * - Limits concurrent decode/network loads via `Semaphore(2)`.
+ * - Limits concurrent decode/network loads via bounded semaphore (default up to 3).
  * - Enforces a strict **24 MiB** offscreen byte budget, evicting farthest offscreen pages first.
  * - **NEVER** calls `Bitmap.recycle()` on evicted pages so Android RenderThread never crashes.
  */
@@ -258,7 +258,7 @@ class ReaderBuffer<T : Any>(
         const val PREFETCH_BEHIND: Int = 1
         const val PREFETCH_AHEAD: Int = 3
         const val MAX_PREFETCH_AHEAD: Int = 8
-        const val MAX_CONCURRENT_LOADS: Int = 2
+        const val MAX_CONCURRENT_LOADS: Int = 3
 
         fun forRenderedPages(
             pageNumbers: List<Int>,
@@ -266,6 +266,7 @@ class ReaderBuffer<T : Any>(
             sharedRatios: MutableMap<Int, Float> = LinkedHashMap(),
             offscreenBudgetBytes: Long = DEFAULT_OFFSCREEN_BUDGET_BYTES,
             prefetchAhead: Int = PREFETCH_AHEAD,
+            maxConcurrency: Int = MAX_CONCURRENT_LOADS,
             loader: suspend (pageNumber: Int, forceReload: Boolean) -> RenderedGalleryPage,
         ): ReaderBuffer<RenderedGalleryPage> = ReaderBuffer(
             pageNumbers = pageNumbers,
@@ -279,6 +280,7 @@ class ReaderBuffer<T : Any>(
                 if (bmp.width > 0 && bmp.height > 0) bmp.width.toFloat() / bmp.height.toFloat() else null
             },
             offscreenBudgetBytes = offscreenBudgetBytes,
+            maxConcurrency = maxConcurrency,
             sharedRatios = sharedRatios,
             prefetchAhead = prefetchAhead,
             loader = loader,

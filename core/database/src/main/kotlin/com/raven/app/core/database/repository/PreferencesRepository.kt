@@ -80,6 +80,9 @@ class PreferencesRepository(
     suspend fun setReduceTransparency(enabled: Boolean) =
         settingsDataStore.setReduceTransparency(enabled)
 
+    suspend fun setUiSoundEffectsEnabled(enabled: Boolean) =
+        settingsDataStore.setUiSoundEffectsEnabled(enabled)
+
     suspend fun setAutoUpdateCheck(enabled: Boolean) = settingsDataStore.setAutoUpdateCheck(enabled)
 
     suspend fun consumeSiteSwitchTutorial(): Boolean = settingsDataStore.consumeSiteSwitchTutorial()
@@ -116,6 +119,9 @@ class PreferencesRepository(
 
     suspend fun setReaderAutoSplitWidePages(enabled: Boolean) =
         settingsDataStore.setReaderAutoSplitWidePages(enabled)
+
+    suspend fun setImageLoadConcurrency(threads: Int) =
+        settingsDataStore.setImageLoadConcurrency(threads)
 
     suspend fun setBackgroundSubscriptionSync(enabled: Boolean) =
         settingsDataStore.setBackgroundSubscriptionSync(enabled)

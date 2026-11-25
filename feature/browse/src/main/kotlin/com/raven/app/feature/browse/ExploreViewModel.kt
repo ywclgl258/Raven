@@ -4,6 +4,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.raven.app.core.common.AppDispatchers
 import com.raven.app.core.common.ContentFilter
+import com.raven.app.core.common.MediaDateParser
 import com.raven.app.core.common.TagDictionary
 import com.raven.app.core.database.model.BrowsePosition
 import com.raven.app.core.database.model.ExploreFilterState
@@ -228,6 +229,7 @@ class ExploreViewModel(
         val effectiveKind = selectedSpec?.mediaKind ?: descriptor?.primaryKind ?: MediaKind.VIDEO
         val aligned = network.loadedKey == key
         val filteredItems = if (aligned) {
+            val adv = key.filter.advancedFilters
             network.rawItems
                 .filter { item ->
                     ContentFilter.isAllowed(
@@ -235,6 +237,10 @@ class ExploreViewModel(
                         blockedTerms = local.blockedTerms,
                         tagDictionary = tagDictionary,
                         extraTags = local.cachedTagsByKey[item.compositeKey].orEmpty(),
+                    ) && MediaDateParser.matchesDateRange(
+                        dateLabel = item.dateLabel,
+                        publishedFrom = adv.publishedFrom,
+                        publishedTo = adv.publishedTo,
                     )
                 }
                 .withLocalizedTags(tagDictionary, settings.translateTags)

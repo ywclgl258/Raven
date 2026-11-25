@@ -288,4 +288,24 @@ class PlaybackCoreTest {
         assertEquals("application/vnd.apple.mpegurl", unwrapped!!.contentType)
         assertTrue(manifest.contentEquals(unwrapped.bytes))
     }
+
+    @Test
+    fun `buffer planner configures 25s keyframe back-buffer and memory-class byte ceiling`() {
+        assertEquals(25_000, BufferPlan.DEFAULT_BACK_BUFFER_MS)
+        val defaultPlan = BufferPlan(
+            minMs = 8_000,
+            maxMs = 40_000,
+            forPlaybackMs = 500,
+            afterRebufferMs = 800,
+        )
+        assertEquals(BufferPlan.DEFAULT_BACK_BUFFER_MS, defaultPlan.backBufferMs)
+        assertEquals("8000/40000/500/800", defaultPlan.signature)
+
+        val lowMemBytes = BufferPlanner.targetBufferBytesForMemoryClass(64)
+        val midMemBytes = BufferPlanner.targetBufferBytesForMemoryClass(256)
+        val highMemBytes = BufferPlanner.targetBufferBytesForMemoryClass(512)
+        assertEquals(32 * 1024 * 1024, lowMemBytes)
+        assertEquals(64 * 1024 * 1024, highMemBytes)
+        assertTrue(lowMemBytes <= midMemBytes && midMemBytes <= highMemBytes)
+    }
 }

@@ -19,6 +19,7 @@ import com.raven.app.core.media.reader.JmcomicBitmapUnscrambler
 import com.raven.app.core.media.storage.DuplicateScanner
 import com.raven.app.core.media.storage.LocalLibraryImporter
 import com.raven.app.core.media.storage.StorageRootManager
+import com.raven.app.core.network.HostPacer
 import com.raven.app.core.network.NetworkQualifiers
 import com.raven.app.core.sitespi.SiteRegistry
 import kotlinx.coroutines.flow.first
@@ -105,6 +106,7 @@ val coreMediaModule: Module = module {
             siteRegistryProvider = { get<SiteRegistry>() },
             unscrambler = get(),
             dispatchers = get(),
+            hostPacer = get<HostPacer>(),
         )
     }
 
@@ -153,6 +155,10 @@ val coreMediaModule: Module = module {
                     .observeEffectiveReaderPreferences(item.siteId, item.id)
                     .first()
                     .preferOriginalImages
+            },
+            concurrencyProvider = { siteId ->
+                val requested = get<PreferencesRepository>().currentSettings().imageLoadConcurrency
+                get<GalleryPageRepository>().recommendedImageConcurrency(siteId, requested)
             },
         )
     }

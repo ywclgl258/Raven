@@ -210,6 +210,9 @@ class ReaderViewModel(
     private val persistenceScope: CoroutineScope? = null,
     private val random: Random = Random.Default,
     private val clock: () -> Long = System::currentTimeMillis,
+    private val resolveConcurrency: (Int) -> Int = { requested ->
+        requested.coerceIn(1, ReaderBuffer.MAX_CONCURRENT_LOADS)
+    },
 ) : ViewModel() {
 
     constructor(
@@ -236,6 +239,14 @@ class ReaderViewModel(
         playbackQueueStore = playbackQueueStore,
         dispatchers = dispatchers,
         persistenceScope = applicationScope,
+        resolveConcurrency = { requested ->
+            val targetSiteId = try {
+                SiteId.of(route.siteId)
+            } catch (_: Throwable) {
+                SiteId.GLOBAL
+            }
+            galleryPageRepository.recommendedImageConcurrency(targetSiteId, requested)
+        },
     )
 
     private val parsedSiteId: SiteId? = runCatching { SiteId.of(route.siteId) }.getOrNull()
@@ -291,6 +302,7 @@ class ReaderViewModel(
     private var activePreferOriginal: Boolean = false
     private var activePrefetchPages: Int = ReaderBuffer.PREFETCH_AHEAD
     private var activeMemoryBudgetBytes: Long = ReaderBuffer.DEFAULT_OFFSCREEN_BUDGET_BYTES
+    private var activeImageConcurrency: Int = ReaderBuffer.MAX_CONCURRENT_LOADS
     private var latestIncognitoMode: Boolean = false
     private var autoPagePausedByLifecycle: Boolean = false
     private var isUserZoomedOrDragging: Boolean = false
@@ -307,6 +319,7 @@ class ReaderViewModel(
             preferencesRepository.settings.collectLatest { appSettings ->
                 val targetPrefetch = appSettings.readerPrefetchPages.coerceIn(1, 12)
                 val targetBudgetBytes = appSettings.readerMemoryBudgetMb.coerceIn(16, 512).toLong() * 1024L * 1024L
+                val targetConcurrency = resolveConcurrency(appSettings.imageLoadConcurrency)
                 latestIncognitoMode = appSettings.incognitoMode
                 _uiState.update { state ->
                     state.copy(
@@ -318,7 +331,9 @@ class ReaderViewModel(
                 val detail = _uiState.value.detail
                 if (detail != null &&
                     readerBuffer != null &&
-                    (activePrefetchPages != targetPrefetch || activeMemoryBudgetBytes != targetBudgetBytes)
+                    (activePrefetchPages != targetPrefetch ||
+                        activeMemoryBudgetBytes != targetBudgetBytes ||
+                        activeImageConcurrency != targetConcurrency)
                 ) {
                     rebuildBuffer(
                         detail = detail,
@@ -327,10 +342,12 @@ class ReaderViewModel(
                         preferOriginal = activePreferOriginal,
                         prefetchAhead = targetPrefetch,
                         offscreenBudgetBytes = targetBudgetBytes,
+                        maxConcurrency = targetConcurrency,
                     )
                 } else {
                     activePrefetchPages = targetPrefetch
                     activeMemoryBudgetBytes = targetBudgetBytes
+                    activeImageConcurrency = targetConcurrency
                 }
             }
         }
@@ -563,12 +580,14 @@ class ReaderViewModel(
         preferOriginal: Boolean,
         prefetchAhead: Int = activePrefetchPages,
         offscreenBudgetBytes: Long = activeMemoryBudgetBytes,
+        maxConcurrency: Int = activeImageConcurrency,
     ) {
         bufferCollectJob?.cancel()
         readerBuffer?.close()
         activePreferOriginal = preferOriginal
         activePrefetchPages = prefetchAhead
         activeMemoryBudgetBytes = offscreenBudgetBytes
+        activeImageConcurrency = maxConcurrency.coerceIn(1, ReaderBuffer.MAX_CONCURRENT_LOADS)
 
         val buffer = ReaderBuffer<LoadedReaderPage>(
             pageNumbers = pageNumbers,
@@ -576,7 +595,7 @@ class ReaderViewModel(
             byteSizeOf = { it.byteSize },
             aspectRatioOf = { it.aspectRatio },
             offscreenBudgetBytes = offscreenBudgetBytes,
-            maxConcurrency = ReaderBuffer.MAX_CONCURRENT_LOADS,
+            maxConcurrency = activeImageConcurrency,
             sharedRatios = sharedAspectRatios,
             prefetchAhead = prefetchAhead,
             loader = { pageNumber, forceReload ->

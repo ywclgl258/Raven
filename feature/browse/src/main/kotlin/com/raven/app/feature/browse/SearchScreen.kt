@@ -1,5 +1,13 @@
 package com.raven.app.feature.browse
 
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.EnterTransition
+import androidx.compose.animation.ExitTransition
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -38,6 +46,7 @@ import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowRight
 import androidx.compose.material.icons.automirrored.rounded.Sort
 import androidx.compose.material.icons.outlined.BookmarkAdded
 import androidx.compose.material.icons.outlined.BookmarkBorder
+import androidx.compose.material.icons.outlined.DateRange
 import androidx.compose.material.icons.outlined.DeleteOutline
 import androidx.compose.material.icons.outlined.FolderOpen
 import androidx.compose.material.icons.outlined.History
@@ -46,6 +55,7 @@ import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material.icons.outlined.Tune
 import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.Close
+import androidx.compose.material.icons.rounded.LocalFireDepartment
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Tag
 import androidx.compose.material3.CircularProgressIndicator
@@ -57,15 +67,22 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
+import androidx.compose.ui.input.nestedscroll.NestedScrollSource
+import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
@@ -84,12 +101,18 @@ import com.raven.app.core.designsystem.component.RavenGroupedDivider
 import com.raven.app.core.designsystem.component.RavenGroupedRow
 import com.raven.app.core.designsystem.component.RavenGroupedSection
 import com.raven.app.core.designsystem.component.RavenLoadingSkeleton
+import com.raven.app.core.designsystem.component.RavenRankedVideoCard
 import com.raven.app.core.designsystem.component.RavenSearchField
+import com.raven.app.core.designsystem.component.RavenSectionHeader
 import com.raven.app.core.designsystem.component.RavenSiteSwitcherPill
 import com.raven.app.core.designsystem.component.RavenStatusPill
 import com.raven.app.core.designsystem.component.RavenStatusTone
 import com.raven.app.core.designsystem.component.RavenVideoCard
+import com.raven.app.core.designsystem.theme.LocalMotionReduced
 import com.raven.app.core.designsystem.theme.LocalRavenColors
+import com.raven.app.core.designsystem.theme.LocalRavenFeedback
+import com.raven.app.core.designsystem.theme.RavenFeedbackEffect
+import com.raven.app.core.designsystem.theme.RavenMotion
 import com.raven.app.core.designsystem.theme.RavenShapes
 import com.raven.app.core.designsystem.theme.ravenSpringPress
 import com.raven.app.core.designsystem.theme.tabular
@@ -144,6 +167,7 @@ fun SearchScreen(
             viewModel.applyAdvancedFilters(filters, lang, autoSubmit = true)
         },
         onResetAdvancedFilters = { viewModel.clearAdvancedFilters(autoSubmit = false) },
+        onApplyDateRange = viewModel::setDateRange,
         onSelectHistory = viewModel::selectHistoryEntry,
         onRemoveHistory = viewModel::removeHistoryEntry,
         onClearHistory = viewModel::clearSiteHistory,
@@ -205,16 +229,102 @@ fun SearchScreenContent(
     onInspectShelfTarget: (MediaItem?) -> Unit = {},
     onToggleShelfMembership: (shelfId: String, item: MediaItem, add: Boolean) -> Unit = { _, _, _ -> },
     onCreateShelfAndAdd: (name: String, item: MediaItem) -> Unit = { _, _ -> },
+    onApplyDateRange: (String?, String?) -> Unit = { _, _ -> },
 ) {
     val colors = LocalRavenColors.current
+    val motionReduced = LocalMotionReduced.current
+    val feedback = LocalRavenFeedback.current
+    val density = LocalDensity.current
     var showSiteSwitcher by rememberSaveable { mutableStateOf(false) }
     var showSortSheet by rememberSaveable { mutableStateOf(false) }
     var showAdvancedSheet by rememberSaveable { mutableStateOf(false) }
+    var showDateRangeSheet by rememberSaveable { mutableStateOf(false) }
     var showSaveSearchSheet by rememberSaveable { mutableStateOf(false) }
+    var controlsVisible by rememberSaveable { mutableStateOf(true) }
     var actionTargetItem by remember { mutableStateOf<MediaItem?>(null) }
 
     val activeSite = uiState.activeSite
     val isCustomSort = uiState.sort != uiState.nativeSorts.firstOrNull()
+    val hasDateFilter = !uiState.advancedFilters.publishedFrom.isNullOrBlank() ||
+        !uiState.advancedFilters.publishedTo.isNullOrBlank()
+    val dateChipLabel = if (hasDateFilter) {
+        val fromLabel = uiState.advancedFilters.publishedFrom.orEmpty().ifBlank { "更早" }
+        val toLabel = uiState.advancedFilters.publishedTo.orEmpty().ifBlank { "今天" }
+        "$fromLabel ~ $toLabel"
+    } else {
+        "日期"
+    }
+
+    val hasActiveResults = when (uiState.mode) {
+        SearchMode.SINGLE_SITE -> uiState.hasSearchedSingleSite
+        SearchMode.CROSS_SITE -> uiState.hasSearchedCrossSite
+    }
+    LaunchedEffect(
+        uiState.mode,
+        uiState.hasSearchedSingleSite,
+        uiState.hasSearchedCrossSite,
+        uiState.submittedQuery,
+    ) {
+        controlsVisible = true
+    }
+
+    val currentHasResults by rememberUpdatedState(hasActiveResults)
+    val hideThresholdPx = with(density) { 24.dp.toPx() }
+    val showThresholdPx = with(density) { 16.dp.toPx() }
+    val autoHideScrollConnection = remember(hideThresholdPx, showThresholdPx) {
+        object : NestedScrollConnection {
+            private var accumulatedDy = 0f
+
+            override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
+                if (!currentHasResults) return Offset.Zero
+                val dy = available.y
+                if (dy == 0f) return Offset.Zero
+                if ((accumulatedDy > 0f && dy < 0f) || (accumulatedDy < 0f && dy > 0f)) {
+                    accumulatedDy = 0f
+                }
+                accumulatedDy += dy
+                if (accumulatedDy <= -hideThresholdPx && controlsVisible) {
+                    controlsVisible = false
+                    accumulatedDy = 0f
+                } else if (accumulatedDy >= showThresholdPx && !controlsVisible) {
+                    controlsVisible = true
+                    accumulatedDy = 0f
+                }
+                return Offset.Zero
+            }
+        }
+    }
+
+    val headerEnter = if (motionReduced) {
+        EnterTransition.None
+    } else {
+        expandVertically(
+            animationSpec = tween(
+                durationMillis = RavenMotion.TAB_TRANSITION_DURATION_MS,
+                easing = RavenMotion.AppleDecelerationEasing,
+            ),
+        ) + fadeIn(
+            animationSpec = tween(
+                durationMillis = RavenMotion.CHIP_TRANSITION_DURATION_MS,
+                easing = RavenMotion.AppleDecelerationEasing,
+            ),
+        )
+    }
+    val headerExit = if (motionReduced) {
+        ExitTransition.None
+    } else {
+        shrinkVertically(
+            animationSpec = tween(
+                durationMillis = RavenMotion.CHIP_TRANSITION_DURATION_MS,
+                easing = RavenMotion.AppleDecelerationEasing,
+            ),
+        ) + fadeOut(
+            animationSpec = tween(
+                durationMillis = RavenMotion.CHIP_TRANSITION_DURATION_MS - 30,
+                easing = RavenMotion.AppleDecelerationEasing,
+            ),
+        )
+    }
 
     Column(
         modifier = modifier
@@ -247,227 +357,275 @@ fun SearchScreenContent(
             }
         }
 
-        // Unified RavenSearchField + Advanced Filter & Save actions
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 16.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        // Auto-collapsible search controls (search field, suggestions, sort/date/source filters)
+        AnimatedVisibility(
+            visible = controlsVisible,
+            enter = headerEnter,
+            exit = headerExit,
+            modifier = Modifier.testTag("search_collapsible_controls"),
         ) {
-            RavenSearchField(
-                query = uiState.query,
-                onQueryChange = onQueryChange,
-                onSearch = { onSubmitSearch() },
-                onClear = onClearQuery,
-                placeholder = if (uiState.mode == SearchMode.CROSS_SITE) {
-                    "跨站搜索 ${uiState.selectedCrossSiteIds.size} 个站点…"
-                } else {
-                    "在 ${activeSite?.shortName ?: "当前站点"} 中搜索作品、标签、作者…"
-                },
-                trailingContent = {
-                    if (uiState.canSaveCurrentSearch) {
-                        IconButton(
-                            onClick = { showSaveSearchSheet = true },
-                            modifier = Modifier
-                                .defaultMinSize(minWidth = 48.dp, minHeight = 48.dp)
-                                .testTag("search_save_button"),
-                        ) {
-                            Icon(
-                                imageVector = Icons.Outlined.BookmarkBorder,
-                                contentDescription = "保存当前搜索",
-                                tint = colors.inkPrimary,
-                                modifier = Modifier.size(20.dp),
-                            )
-                        }
-                    }
-                },
-                modifier = Modifier.weight(1f),
-            )
-
-            if (uiState.mode == SearchMode.SINGLE_SITE && uiState.hasAdvancedFilterSupport) {
-                val filterCount = uiState.activeAdvancedFilterCount
-                Box(
-                    modifier = Modifier
-                        .size(48.dp)
-                        .clip(CircleShape)
-                        .background(if (filterCount > 0) colors.primaryCtaContainer else colors.surface2)
-                        .border(0.5.dp, colors.hairline, CircleShape)
-                        .ravenSpringPress()
-                        .clickable(role = Role.Button) { showAdvancedSheet = true }
-                        .testTag("search_advanced_filter_button"),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Icon(
-                        imageVector = Icons.Outlined.Tune,
-                        contentDescription = "高级筛选",
-                        tint = if (filterCount > 0) colors.primaryCtaInk else colors.inkPrimary,
-                        modifier = Modifier.size(20.dp),
-                    )
-                    if (filterCount > 0) {
-                        Box(
-                            modifier = Modifier
-                                .align(Alignment.TopEnd)
-                                .padding(6.dp)
-                                .size(8.dp)
-                                .clip(CircleShape)
-                                .background(colors.crimson),
-                        )
-                    }
-                }
-            }
-        }
-
-        // Saved search confirmation toast banner
-        val notice = uiState.lastSavedSearchNotice
-        if (!notice.isNullOrBlank()) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 6.dp)
-                    .clip(RavenShapes.ControlShape)
-                    .background(colors.surface2)
-                    .border(0.5.dp, colors.hairline, RavenShapes.ControlShape)
-                    .padding(horizontal = 12.dp, vertical = 6.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                Icon(
-                    imageVector = Icons.Outlined.BookmarkAdded,
-                    contentDescription = null,
-                    tint = colors.success,
-                    modifier = Modifier.size(16.dp),
-                )
-                Text(
-                    text = notice,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = colors.inkPrimary,
-                    modifier = Modifier.weight(1f),
-                )
-                IconButton(
-                    onClick = onDismissSavedNotice,
-                    modifier = Modifier.size(48.dp),
-                ) {
-                    Icon(
-                        imageVector = Icons.Rounded.Close,
-                        contentDescription = "关闭提示",
-                        tint = colors.inkTertiary,
-                        modifier = Modifier.size(16.dp),
-                    )
-                }
-            }
-        }
-
-        // Live 165-entry TagDictionary suggestions bar
-        if (uiState.tagSuggestions.isNotEmpty()) {
-            LazyRow(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(top = 6.dp)
-                    .testTag("search_tag_suggestions_row"),
-                contentPadding = PaddingValues(horizontal = 16.dp),
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
-            ) {
-                items(uiState.tagSuggestions, key = { it.slug }) { sug ->
-                    Row(
-                        modifier = Modifier
-                            .heightIn(min = 48.dp)
-                            .clip(RavenShapes.PillShape)
-                            .background(colors.surface2)
-                            .border(0.5.dp, colors.hairline, RavenShapes.PillShape)
-                            .clickable(role = Role.Button) { onApplySuggestion(sug) }
-                            .padding(horizontal = 10.dp, vertical = 6.dp)
-                            .testTag("tag_suggestion_${sug.slug}"),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(4.dp),
-                    ) {
-                        Icon(
-                            imageVector = Icons.Rounded.Tag,
-                            contentDescription = null,
-                            tint = colors.crimson,
-                            modifier = Modifier.size(14.dp),
-                        )
-                        Text(
-                            text = "${sug.localizedName} · ${sug.slug}",
-                            style = MaterialTheme.typography.labelMedium,
-                            color = colors.inkPrimary,
-                            maxLines = 1,
-                        )
-                    }
-                }
-            }
-        }
-
-        // Mode-specific controls row (prominent Sort chip ALWAYS pinned at position 0)
-        when (uiState.mode) {
-            SearchMode.SINGLE_SITE -> {
-                LazyRow(
+            Column(modifier = Modifier.fillMaxWidth()) {
+                // Unified RavenSearchField + Advanced Filter & Save actions
+                Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(top = 4.dp)
-                        .testTag("search_single_controls_row"),
-                    contentPadding = PaddingValues(horizontal = 16.dp),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        .padding(horizontal = 16.dp),
                     verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
-                    item(key = "search_sort_chip") {
-                        RavenFilterChip(
-                            label = "排序：${uiState.sort.displayLabel()}",
-                            selected = isCustomSort,
-                            leadingIcon = Icons.AutoMirrored.Rounded.Sort,
-                            onClick = { showSortSheet = true },
-                            modifier = Modifier.testTag("search_sort_chip"),
-                        )
+                    RavenSearchField(
+                        query = uiState.query,
+                        onQueryChange = {
+                            controlsVisible = true
+                            onQueryChange(it)
+                        },
+                        onSearch = { onSubmitSearch() },
+                        onClear = {
+                            controlsVisible = true
+                            onClearQuery()
+                        },
+                        placeholder = if (uiState.mode == SearchMode.CROSS_SITE) {
+                            "跨站搜索 ${uiState.selectedCrossSiteIds.size} 个站点…"
+                        } else {
+                            "在 ${activeSite?.shortName ?: "当前站点"} 中搜索作品、标签、作者…"
+                        },
+                        trailingContent = {
+                            if (uiState.canSaveCurrentSearch) {
+                                IconButton(
+                                    onClick = { showSaveSearchSheet = true },
+                                    modifier = Modifier
+                                        .defaultMinSize(minWidth = 48.dp, minHeight = 48.dp)
+                                        .testTag("search_save_button"),
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Outlined.BookmarkBorder,
+                                        contentDescription = "保存当前搜索",
+                                        tint = colors.inkPrimary,
+                                        modifier = Modifier.size(20.dp),
+                                    )
+                                }
+                            }
+                        },
+                        modifier = Modifier.weight(1f),
+                    )
+
+                    if (uiState.mode == SearchMode.SINGLE_SITE && uiState.hasAdvancedFilterSupport) {
+                        val filterCount = uiState.activeAdvancedFilterCount
+                        Box(
+                            modifier = Modifier
+                                .size(48.dp)
+                                .clip(CircleShape)
+                                .background(if (filterCount > 0) colors.primaryCtaContainer else colors.surface2)
+                                .border(0.5.dp, colors.hairline, CircleShape)
+                                .ravenSpringPress()
+                                .clickable(role = Role.Button) {
+                                    feedback.perform(RavenFeedbackEffect.TAP)
+                                    showAdvancedSheet = true
+                                }
+                                .testTag("search_advanced_filter_button"),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Icon(
+                                imageVector = Icons.Outlined.Tune,
+                                contentDescription = "高级筛选",
+                                tint = if (filterCount > 0) colors.primaryCtaInk else colors.inkPrimary,
+                                modifier = Modifier.size(20.dp),
+                            )
+                            if (filterCount > 0) {
+                                Box(
+                                    modifier = Modifier
+                                        .align(Alignment.TopEnd)
+                                        .padding(6.dp)
+                                        .size(8.dp)
+                                        .clip(CircleShape)
+                                        .background(colors.crimson),
+                                )
+                            }
+                        }
                     }
-                    if (uiState.supportedScopes.size > 1) {
-                        items(uiState.supportedScopes, key = { "scope_${it.name}" }) { scope ->
-                            RavenFilterChip(
-                                label = scope.displayLabel(),
-                                selected = uiState.scope == scope,
-                                onClick = { onSelectScope(scope) },
-                                modifier = Modifier.testTag("search_scope_${scope.name.lowercase()}"),
+                }
+
+                // Saved search confirmation toast banner
+                val notice = uiState.lastSavedSearchNotice
+                if (!notice.isNullOrBlank()) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 6.dp)
+                            .clip(RavenShapes.ControlShape)
+                            .background(colors.surface2)
+                            .border(0.5.dp, colors.hairline, RavenShapes.ControlShape)
+                            .padding(horizontal = 12.dp, vertical = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        Icon(
+                            imageVector = Icons.Outlined.BookmarkAdded,
+                            contentDescription = null,
+                            tint = colors.success,
+                            modifier = Modifier.size(16.dp),
+                        )
+                        Text(
+                            text = notice,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = colors.inkPrimary,
+                            modifier = Modifier.weight(1f),
+                        )
+                        IconButton(
+                            onClick = onDismissSavedNotice,
+                            modifier = Modifier.size(48.dp),
+                        ) {
+                            Icon(
+                                imageVector = Icons.Rounded.Close,
+                                contentDescription = "关闭提示",
+                                tint = colors.inkTertiary,
+                                modifier = Modifier.size(16.dp),
                             )
                         }
                     }
                 }
-            }
-            SearchMode.CROSS_SITE -> {
-                CrossSiteSourceSelectorBar(
-                    sort = uiState.sort,
-                    isCustomSort = isCustomSort,
-                    onOpenSortSheet = { showSortSheet = true },
-                    searchableSites = uiState.searchableSites,
-                    selectedSiteIds = uiState.selectedCrossSiteIds,
-                    onToggleSite = onToggleCrossSite,
-                    onSelectAll = onSelectAllCrossSites,
-                    onSelectByKind = onSelectCrossSitesByKind,
+
+                // Live TagDictionary suggestions bar
+                if (uiState.tagSuggestions.isNotEmpty()) {
+                    LazyRow(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(top = 6.dp)
+                            .testTag("search_tag_suggestions_row"),
+                        contentPadding = PaddingValues(horizontal = 16.dp),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
+                        items(uiState.tagSuggestions, key = { it.slug }) { sug ->
+                            Row(
+                                modifier = Modifier
+                                    .heightIn(min = 48.dp)
+                                    .clip(RavenShapes.PillShape)
+                                    .background(colors.surface2)
+                                    .border(0.5.dp, colors.hairline, RavenShapes.PillShape)
+                                    .ravenSpringPress()
+                                    .clickable(role = Role.Button) {
+                                        feedback.perform(RavenFeedbackEffect.TAP)
+                                        onApplySuggestion(sug)
+                                    }
+                                    .padding(horizontal = 10.dp, vertical = 6.dp)
+                                    .testTag("tag_suggestion_${sug.slug}"),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Rounded.Tag,
+                                    contentDescription = null,
+                                    tint = colors.crimson,
+                                    modifier = Modifier.size(14.dp),
+                                )
+                                Text(
+                                    text = "${sug.localizedName} · ${sug.slug}",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = colors.inkPrimary,
+                                    maxLines = 1,
+                                )
+                            }
+                        }
+                    }
+                }
+
+                // Mode-specific controls row (Sort + Date Range + Scope / Cross-Site sources)
+                when (uiState.mode) {
+                    SearchMode.SINGLE_SITE -> {
+                        LazyRow(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(top = 4.dp)
+                                .testTag("search_single_controls_row"),
+                            contentPadding = PaddingValues(horizontal = 16.dp),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            item(key = "search_sort_chip") {
+                                RavenFilterChip(
+                                    label = "排序：${uiState.sort.displayLabel()}",
+                                    selected = isCustomSort,
+                                    leadingIcon = Icons.AutoMirrored.Rounded.Sort,
+                                    onClick = { showSortSheet = true },
+                                    modifier = Modifier.testTag("search_sort_chip"),
+                                )
+                            }
+                            item(key = "search_date_chip") {
+                                RavenFilterChip(
+                                    label = dateChipLabel,
+                                    selected = hasDateFilter,
+                                    leadingIcon = Icons.Outlined.DateRange,
+                                    onClick = { showDateRangeSheet = true },
+                                    modifier = Modifier.testTag("search_date_chip"),
+                                )
+                            }
+                            if (uiState.supportedScopes.size > 1) {
+                                items(uiState.supportedScopes, key = { "scope_${it.name}" }) { scope ->
+                                    RavenFilterChip(
+                                        label = scope.displayLabel(),
+                                        selected = uiState.scope == scope,
+                                        onClick = { onSelectScope(scope) },
+                                        modifier = Modifier.testTag("search_scope_${scope.name.lowercase()}"),
+                                    )
+                                }
+                            }
+                        }
+                    }
+                    SearchMode.CROSS_SITE -> {
+                        CrossSiteSourceSelectorBar(
+                            sort = uiState.sort,
+                            isCustomSort = isCustomSort,
+                            dateChipLabel = dateChipLabel,
+                            hasDateFilter = hasDateFilter,
+                            onOpenSortSheet = { showSortSheet = true },
+                            onOpenDateRangeSheet = { showDateRangeSheet = true },
+                            searchableSites = uiState.searchableSites,
+                            selectedSiteIds = uiState.selectedCrossSiteIds,
+                            onToggleSite = onToggleCrossSite,
+                            onSelectAll = onSelectAllCrossSites,
+                            onSelectByKind = onSelectCrossSitesByKind,
+                        )
+                    }
+                }
+
+                HorizontalDivider(
+                    modifier = Modifier.padding(top = 4.dp),
+                    thickness = 0.5.dp,
+                    color = colors.hairline,
                 )
             }
         }
-
-        HorizontalDivider(
-            modifier = Modifier.padding(top = 4.dp),
-            thickness = 0.5.dp,
-            color = colors.hairline,
-        )
 
         // Body: Discovery panel (before search) or Live Search Results
         Box(
             modifier = Modifier
                 .weight(1f)
-                .fillMaxWidth(),
+                .fillMaxWidth()
+                .nestedScroll(autoHideScrollConnection),
         ) {
             when (uiState.mode) {
                 SearchMode.SINGLE_SITE -> {
                     if (!uiState.hasSearchedSingleSite) {
                         SearchDiscoveryPanel(
+                            activeSite = activeSite,
                             searchHistory = uiState.searchHistory,
                             savedSearches = uiState.savedSearches,
+                            trendingTags = uiState.trendingTags,
+                            hotTagRanking = uiState.hotTagRanking,
+                            hotWorksRanking = uiState.hotWorksRanking,
+                            watchProgressMap = uiState.watchProgressMap,
+                            readingProgressMap = uiState.readingProgressMap,
                             onSelectHistory = onSelectHistory,
                             onRemoveHistory = onRemoveHistory,
                             onClearHistory = onClearHistory,
                             onApplySavedSearch = onApplySavedSearch,
                             onDeleteSavedSearch = onDeleteSavedSearch,
+                            onSelectTagSlug = { slug ->
+                                onQueryChange(slug)
+                                onSubmitSearch()
+                            },
+                            onOpenMedia = { navigator.openSearchResultItem(pluginResolver(it.siteId), it) },
+                            onLongClickMedia = { actionTargetItem = it },
                         )
                     } else {
                         SingleSiteResultsBody(
@@ -483,19 +641,34 @@ fun SearchScreenContent(
                 SearchMode.CROSS_SITE -> {
                     if (!uiState.hasSearchedCrossSite) {
                         SearchDiscoveryPanel(
+                            activeSite = activeSite,
                             searchHistory = uiState.searchHistory,
                             savedSearches = uiState.savedSearches,
+                            trendingTags = uiState.trendingTags,
+                            hotTagRanking = uiState.hotTagRanking,
+                            hotWorksRanking = uiState.hotWorksRanking,
+                            watchProgressMap = uiState.watchProgressMap,
+                            readingProgressMap = uiState.readingProgressMap,
                             onSelectHistory = onSelectHistory,
                             onRemoveHistory = onRemoveHistory,
                             onClearHistory = onClearHistory,
                             onApplySavedSearch = onApplySavedSearch,
                             onDeleteSavedSearch = onDeleteSavedSearch,
+                            onSelectTagSlug = { slug ->
+                                onQueryChange(slug)
+                                onSubmitSearch()
+                            },
+                            onOpenMedia = { navigator.openSearchResultItem(pluginResolver(it.siteId), it) },
+                            onLongClickMedia = { actionTargetItem = it },
                         )
                     } else {
                         CrossSiteResultsBody(
                             uiState = uiState,
                             pluginResolver = pluginResolver,
                             navigator = navigator,
+                            statusBarVisible = controlsVisible,
+                            statusBarEnter = headerEnter,
+                            statusBarExit = headerExit,
                             onToggleFilterSite = onToggleCrossSiteFilter,
                             onRetrySite = onRetryCrossSite,
                             onLoadMoreSite = onLoadMoreCrossSite,
@@ -530,6 +703,15 @@ fun SearchScreenContent(
             onApply = onApplyAdvancedFilters,
             onReset = onResetAdvancedFilters,
             onDismiss = { showAdvancedSheet = false },
+        )
+    }
+
+    if (showDateRangeSheet) {
+        SearchDateRangeSheet(
+            initialFrom = uiState.advancedFilters.publishedFrom,
+            initialTo = uiState.advancedFilters.publishedTo,
+            onApply = onApplyDateRange,
+            onDismiss = { showDateRangeSheet = false },
         )
     }
 
@@ -739,7 +921,10 @@ private fun ModeSegment(
 private fun CrossSiteSourceSelectorBar(
     sort: FeedSort,
     isCustomSort: Boolean,
+    dateChipLabel: String,
+    hasDateFilter: Boolean,
     onOpenSortSheet: () -> Unit,
+    onOpenDateRangeSheet: () -> Unit,
     searchableSites: List<SiteDescriptor>,
     selectedSiteIds: List<SiteId>,
     onToggleSite: (SiteId) -> Unit,
@@ -765,6 +950,15 @@ private fun CrossSiteSourceSelectorBar(
                 leadingIcon = Icons.AutoMirrored.Rounded.Sort,
                 onClick = onOpenSortSheet,
                 modifier = Modifier.testTag("search_sort_chip"),
+            )
+        }
+        item(key = "search_date_chip") {
+            RavenFilterChip(
+                label = dateChipLabel,
+                selected = hasDateFilter,
+                leadingIcon = Icons.Outlined.DateRange,
+                onClick = onOpenDateRangeSheet,
+                modifier = Modifier.testTag("search_date_chip"),
             )
         }
         item(key = "cross_select_all") {
@@ -796,17 +990,31 @@ private fun CrossSiteSourceSelectorBar(
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun SearchDiscoveryPanel(
+    activeSite: SiteDescriptor?,
     searchHistory: List<SearchHistoryEntry>,
     savedSearches: List<SavedSearch>,
+    trendingTags: List<SearchTrendingTag>,
+    hotTagRanking: List<SearchTrendingTag>,
+    hotWorksRanking: List<MediaItem>,
+    watchProgressMap: Map<String, Float>,
+    readingProgressMap: Map<String, Float>,
     onSelectHistory: (SearchHistoryEntry) -> Unit,
     onRemoveHistory: (SearchHistoryEntry) -> Unit,
     onClearHistory: () -> Unit,
     onApplySavedSearch: (SavedSearch) -> Unit,
     onDeleteSavedSearch: (String) -> Unit,
+    onSelectTagSlug: (String) -> Unit,
+    onOpenMedia: (MediaItem) -> Unit,
+    onLongClickMedia: (MediaItem) -> Unit,
 ) {
     val colors = LocalRavenColors.current
+    val feedback = LocalRavenFeedback.current
 
-    if (searchHistory.isEmpty() && savedSearches.isEmpty()) {
+    if (searchHistory.isEmpty() &&
+        savedSearches.isEmpty() &&
+        trendingTags.isEmpty() &&
+        hotWorksRanking.isEmpty()
+    ) {
         RavenEmptyState(
             title = "开始探索与检索",
             message = "输入关键词、英文或中文标签开始搜索；可随时切换单站高级筛选或跨站并发搜索。",
@@ -816,7 +1024,7 @@ private fun SearchDiscoveryPanel(
     }
 
     LazyColumn(
-        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 14.dp),
+        contentPadding = PaddingValues(vertical = 14.dp),
         verticalArrangement = Arrangement.spacedBy(20.dp),
         modifier = Modifier
             .fillMaxSize()
@@ -824,7 +1032,10 @@ private fun SearchDiscoveryPanel(
     ) {
         if (savedSearches.isNotEmpty()) {
             item(key = "saved_searches_block") {
-                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Column(
+                    modifier = Modifier.padding(horizontal = 16.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(6.dp),
@@ -892,7 +1103,10 @@ private fun SearchDiscoveryPanel(
 
         if (searchHistory.isNotEmpty()) {
             item(key = "search_history_block") {
-                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Column(
+                    modifier = Modifier.padding(horizontal = 16.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween,
@@ -971,6 +1185,153 @@ private fun SearchDiscoveryPanel(
                                 )
                             }
                         }
+                    }
+                }
+            }
+        }
+
+        if (trendingTags.isNotEmpty()) {
+            item(key = "search_trending_tags_block") {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp)
+                        .testTag("search_trending_tags_section"),
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
+                        Icon(
+                            imageVector = Icons.Rounded.LocalFireDepartment,
+                            contentDescription = null,
+                            tint = colors.crimson,
+                            modifier = Modifier.size(16.dp),
+                        )
+                        Text(
+                            text = "当前热门标签",
+                            style = MaterialTheme.typography.titleSmall,
+                            color = colors.inkPrimary,
+                        )
+                        activeSite?.shortName?.let { siteName ->
+                            Text(
+                                text = "· $siteName",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = colors.inkTertiary,
+                            )
+                        }
+                    }
+                    FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        trendingTags.forEach { tag ->
+                            Row(
+                                modifier = Modifier
+                                    .heightIn(min = 36.dp)
+                                    .clip(RavenShapes.PillShape)
+                                    .background(colors.crimson.copy(alpha = 0.12f))
+                                    .border(0.5.dp, colors.crimson.copy(alpha = 0.30f), RavenShapes.PillShape)
+                                    .ravenSpringPress()
+                                    .clickable(role = Role.Button) {
+                                        feedback.perform(RavenFeedbackEffect.TAP)
+                                        onSelectTagSlug(tag.slug)
+                                    }
+                                    .padding(horizontal = 12.dp, vertical = 6.dp)
+                                    .testTag("trending_tag_${tag.slug}"),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(5.dp),
+                            ) {
+                                Text(
+                                    text = "#",
+                                    style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
+                                    color = colors.crimson,
+                                )
+                                Text(
+                                    text = tag.localizedName,
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = colors.inkPrimary,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        if (hotWorksRanking.isNotEmpty()) {
+            item(key = "search_hot_works_ranking_block") {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("search_hot_works_section"),
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    RavenSectionHeader(
+                        title = "热门作品排行",
+                        subtitle = "${activeSite?.shortName ?: "当前站点"} · Top ${hotWorksRanking.size}",
+                    )
+                    LazyRow(
+                        contentPadding = PaddingValues(horizontal = 16.dp),
+                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    ) {
+                        items(
+                            items = hotWorksRanking.mapIndexed { idx, media -> idx + 1 to media },
+                            key = { (rank, media) -> "hot_work_${rank}_${media.compositeKey}" },
+                        ) { (rank, media) ->
+                            if (media.kind.isVideo) {
+                                RavenRankedVideoCard(
+                                    rank = rank,
+                                    item = media,
+                                    onClick = { onOpenMedia(media) },
+                                    onLongClick = { onLongClickMedia(media) },
+                                    progressFraction = watchProgressMap[media.compositeKey],
+                                    badgeText = media.extra["badge"],
+                                )
+                            } else {
+                                RavenGalleryCard(
+                                    item = media,
+                                    onClick = { onOpenMedia(media) },
+                                    onLongClick = { onLongClickMedia(media) },
+                                    progressFraction = readingProgressMap[media.compositeKey],
+                                    badgeText = "#$rank",
+                                    modifier = Modifier.width(142.dp),
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        if (hotTagRanking.isNotEmpty()) {
+            item(key = "search_hot_tag_ranking_block") {
+                RavenGroupedSection(
+                    title = "热门标签排行 Top ${hotTagRanking.size}",
+                    footer = "轻点任一标签立即搜索对应作品",
+                    modifier = Modifier
+                        .padding(horizontal = 16.dp)
+                        .testTag("search_hot_tag_ranking_section"),
+                ) {
+                    hotTagRanking.forEachIndexed { idx, tag ->
+                        if (idx > 0) RavenGroupedDivider()
+                        RavenGroupedRow(
+                            title = tag.localizedName,
+                            subtitle = if (tag.localizedName != tag.slug) tag.slug else null,
+                            value = "热度 ${tag.count}",
+                            showChevron = true,
+                            onClick = { onSelectTagSlug(tag.slug) },
+                            trailingContent = {
+                                RavenStatusPill(
+                                    text = "#${tag.rank}",
+                                    tone = if (tag.rank <= 3) RavenStatusTone.ACCENT else RavenStatusTone.NEUTRAL,
+                                )
+                            },
+                            modifier = Modifier.testTag("hot_tag_rank_${tag.rank}"),
+                        )
                     }
                 }
             }
@@ -1086,6 +1447,9 @@ private fun CrossSiteResultsBody(
     uiState: SearchUiState,
     pluginResolver: (SiteId) -> SitePlugin?,
     navigator: BrowseNavigator,
+    statusBarVisible: Boolean = true,
+    statusBarEnter: EnterTransition = EnterTransition.None,
+    statusBarExit: ExitTransition = ExitTransition.None,
     onToggleFilterSite: (SiteId) -> Unit,
     onRetrySite: (SiteId) -> Unit,
     onLoadMoreSite: (SiteId) -> Unit,
@@ -1100,29 +1464,37 @@ private fun CrossSiteResultsBody(
     }
 
     Column(modifier = Modifier.fillMaxSize()) {
-        // Per-site live status / retry / load-more pills
+        // Per-site live status / retry / load-more pills (collapses with search header on scroll down)
         if (uiState.crossSiteBuckets.isNotEmpty()) {
-            LazyRow(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(vertical = 8.dp)
-                    .testTag("cross_site_status_bar"),
-                contentPadding = PaddingValues(horizontal = 16.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalAlignment = Alignment.CenterVertically,
+            AnimatedVisibility(
+                visible = statusBarVisible,
+                enter = statusBarEnter,
+                exit = statusBarExit,
             ) {
-                items(uiState.crossSiteBuckets, key = { "status_${it.site.id.value}" }) { bucket ->
-                    CrossSiteStatusChip(
-                        bucket = bucket,
-                        selected = uiState.crossSiteFilterSiteId == bucket.site.id,
-                        onFilterClick = { onToggleFilterSite(bucket.site.id) },
-                        onRetryClick = { onRetrySite(bucket.site.id) },
-                        onLoadMoreClick = { onLoadMoreSite(bucket.site.id) },
-                        onAuthClick = { navigator.openSiteAccount(bucket.site.id) },
-                    )
+                Column(modifier = Modifier.fillMaxWidth()) {
+                    LazyRow(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 8.dp)
+                            .testTag("cross_site_status_bar"),
+                        contentPadding = PaddingValues(horizontal = 16.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        items(uiState.crossSiteBuckets, key = { "status_${it.site.id.value}" }) { bucket ->
+                            CrossSiteStatusChip(
+                                bucket = bucket,
+                                selected = uiState.crossSiteFilterSiteId == bucket.site.id,
+                                onFilterClick = { onToggleFilterSite(bucket.site.id) },
+                                onRetryClick = { onRetrySite(bucket.site.id) },
+                                onLoadMoreClick = { onLoadMoreSite(bucket.site.id) },
+                                onAuthClick = { navigator.openSiteAccount(bucket.site.id) },
+                            )
+                        }
+                    }
+                    HorizontalDivider(thickness = 0.5.dp, color = colors.hairline)
                 }
             }
-            HorizontalDivider(thickness = 0.5.dp, color = colors.hairline)
         }
 
         val allLoading = uiState.crossSiteBuckets.isNotEmpty() &&

@@ -41,8 +41,11 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.raven.app.core.designsystem.theme.LocalRavenColors
+import com.raven.app.core.designsystem.theme.LocalRavenFeedback
+import com.raven.app.core.designsystem.theme.RavenFeedbackEffect
 import com.raven.app.core.designsystem.theme.RavenShapes
 import com.raven.app.core.designsystem.theme.RavenTabularTextStyle
+import com.raven.app.core.designsystem.theme.ravenPressSurfaceHighlight
 import com.raven.app.core.designsystem.theme.ravenSpringPress
 import com.raven.app.core.designsystem.theme.tabular
 import com.raven.app.core.model.MediaItem
@@ -66,6 +69,7 @@ fun RavenVideoCard(
 ) {
     val colors = LocalRavenColors.current
     val haptic = LocalHapticFeedback.current
+    val feedback = LocalRavenFeedback.current
     val interactionSource = remember { MutableInteractionSource() }
     val durationLabel = remember(item.durationSeconds) { RavenFormatters.formatDuration(item.durationSeconds) }
     val metadataLine = subtitleOverride ?: remember(item) { buildMediaMetadataLine(item) }
@@ -81,7 +85,10 @@ fun RavenVideoCard(
             .combinedClickable(
                 interactionSource = interactionSource,
                 indication = null,
-                onClick = onClick,
+                onClick = {
+                    feedback.perform(RavenFeedbackEffect.TAP)
+                    onClick()
+                },
                 onLongClick = onLongClick?.let { callback ->
                     {
                         haptic.performHapticFeedback(HapticFeedbackType.LongPress)
@@ -97,7 +104,11 @@ fun RavenVideoCard(
                 .fillMaxWidth()
                 .aspectRatio(RavenFormatters.VIDEO_ASPECT_RATIO)
                 .clip(RavenShapes.CardShape)
-                .background(colors.surface1),
+                .background(colors.surface1)
+                .ravenPressSurfaceHighlight(
+                    interactionSource = interactionSource,
+                    shape = RavenShapes.CardShape,
+                ),
         ) {
             RavenImage(
                 url = item.coverUrl,
@@ -258,6 +269,7 @@ fun RavenGalleryCard(
 ) {
     val colors = LocalRavenColors.current
     val haptic = LocalHapticFeedback.current
+    val feedback = LocalRavenFeedback.current
     val interactionSource = remember { MutableInteractionSource() }
     var resolvedRatio by remember(item.compositeKey) { mutableStateOf<Float?>(null) }
     val effectiveRatio = RavenFormatters.clampAspectRatio(
@@ -277,7 +289,10 @@ fun RavenGalleryCard(
             .combinedClickable(
                 interactionSource = interactionSource,
                 indication = null,
-                onClick = onClick,
+                onClick = {
+                    feedback.perform(RavenFeedbackEffect.TAP)
+                    onClick()
+                },
                 onLongClick = onLongClick?.let { callback ->
                     {
                         haptic.performHapticFeedback(HapticFeedbackType.LongPress)
@@ -293,7 +308,11 @@ fun RavenGalleryCard(
                 .fillMaxWidth()
                 .aspectRatio(effectiveRatio)
                 .clip(RavenShapes.CardShape)
-                .background(colors.surface1),
+                .background(colors.surface1)
+                .ravenPressSurfaceHighlight(
+                    interactionSource = interactionSource,
+                    shape = RavenShapes.CardShape,
+                ),
         ) {
             RavenImage(
                 url = item.coverUrl,
@@ -387,6 +406,7 @@ fun RavenCompactMediaRow(
 ) {
     val colors = LocalRavenColors.current
     val haptic = LocalHapticFeedback.current
+    val feedback = LocalRavenFeedback.current
     val interactionSource = remember { MutableInteractionSource() }
     val isVideo = item.kind == MediaKind.VIDEO
     val thumbWidth = if (isVideo) 118.dp else 68.dp
@@ -407,11 +427,18 @@ fun RavenCompactMediaRow(
             .ravenSpringPress(interactionSource = interactionSource)
             .clip(RavenShapes.CardShape)
             .background(colors.surface1)
+            .ravenPressSurfaceHighlight(
+                interactionSource = interactionSource,
+                shape = RavenShapes.CardShape,
+            )
             .border(0.5.dp, colors.hairline, RavenShapes.CardShape)
             .combinedClickable(
                 interactionSource = interactionSource,
                 indication = null,
-                onClick = onClick,
+                onClick = {
+                    feedback.perform(RavenFeedbackEffect.TAP)
+                    onClick()
+                },
                 onLongClick = onLongClick?.let { callback ->
                     {
                         haptic.performHapticFeedback(HapticFeedbackType.LongPress)

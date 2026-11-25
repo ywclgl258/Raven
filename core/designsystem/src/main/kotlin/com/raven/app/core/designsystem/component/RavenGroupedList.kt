@@ -32,15 +32,15 @@ import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.hapticfeedback.HapticFeedbackType
-import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
@@ -48,8 +48,11 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.raven.app.core.designsystem.theme.LocalMotionReduced
 import com.raven.app.core.designsystem.theme.LocalRavenColors
+import com.raven.app.core.designsystem.theme.LocalRavenFeedback
+import com.raven.app.core.designsystem.theme.RavenFeedbackEffect
 import com.raven.app.core.designsystem.theme.RavenShapes
 import com.raven.app.core.designsystem.theme.tabular
+import kotlin.math.roundToInt
 
 /**
  * Apple HIG inset grouped container (`Surface1`, `14dp` corners, `0.5dp` `Hairline` rim).
@@ -145,7 +148,7 @@ fun RavenGroupedRow(
 ) {
     val colors = LocalRavenColors.current
     val motionReduced = LocalMotionReduced.current
-    val haptic = LocalHapticFeedback.current
+    val feedback = LocalRavenFeedback.current
     val interactionSource = remember { MutableInteractionSource() }
     val pressed by interactionSource.collectIsPressedAsState()
     val rowBackdropColor by animateColorAsState(
@@ -180,7 +183,7 @@ fun RavenGroupedRow(
             enabled = enabled,
             role = Role.Button,
             onClick = {
-                haptic.performHapticFeedback(HapticFeedbackType.ContextClick)
+                feedback.perform(RavenFeedbackEffect.TAP)
                 onClick()
             },
         )
@@ -283,7 +286,7 @@ fun RavenGroupedSwitchRow(
 ) {
     val colors = LocalRavenColors.current
     val motionReduced = LocalMotionReduced.current
-    val haptic = LocalHapticFeedback.current
+    val feedback = LocalRavenFeedback.current
     val interactionSource = remember { MutableInteractionSource() }
     val pressed by interactionSource.collectIsPressedAsState()
     val switchBackdropColor by animateColorAsState(
@@ -308,8 +311,8 @@ fun RavenGroupedSwitchRow(
                 indication = null,
                 role = Role.Switch,
                 onValueChange = { nextChecked ->
-                    haptic.performHapticFeedback(
-                        if (nextChecked) HapticFeedbackType.ToggleOn else HapticFeedbackType.ToggleOff,
+                    feedback.perform(
+                        if (nextChecked) RavenFeedbackEffect.TOGGLE_ON else RavenFeedbackEffect.TOGGLE_OFF,
                     )
                     onCheckedChange(nextChecked)
                 },
@@ -355,6 +358,14 @@ fun RavenGroupedSliderRow(
     onValueChangeFinished: (() -> Unit)? = null,
 ) {
     val colors = LocalRavenColors.current
+    val feedback = LocalRavenFeedback.current
+    val span = (valueRange.endInclusive - valueRange.start).coerceAtLeast(0.0001f)
+    fun stepIndexFor(v: Float): Int {
+        if (steps <= 0) return -1
+        val norm = ((v.coerceIn(valueRange.start, valueRange.endInclusive) - valueRange.start) / span)
+        return (norm * (steps + 1)).roundToInt()
+    }
+    var lastStepIndex by remember(steps, valueRange) { mutableIntStateOf(stepIndexFor(value)) }
 
     Column(
         modifier = modifier
@@ -417,11 +428,21 @@ fun RavenGroupedSliderRow(
 
         Slider(
             value = value.coerceIn(valueRange.start, valueRange.endInclusive),
-            onValueChange = onValueChange,
+            onValueChange = { next ->
+                val nextStep = stepIndexFor(next)
+                if (steps > 0 && nextStep != lastStepIndex) {
+                    lastStepIndex = nextStep
+                    feedback.perform(RavenFeedbackEffect.TAB_SWITCH, hapticOnly = true)
+                }
+                onValueChange(next)
+            },
             valueRange = valueRange,
             steps = steps,
             enabled = enabled,
-            onValueChangeFinished = onValueChangeFinished,
+            onValueChangeFinished = {
+                feedback.perform(RavenFeedbackEffect.TAP)
+                onValueChangeFinished?.invoke()
+            },
             colors = SliderDefaults.colors(
                 thumbColor = colors.inkPrimary,
                 activeTrackColor = colors.crimson,

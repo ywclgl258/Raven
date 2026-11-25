@@ -12,6 +12,7 @@ import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.togetherWith
@@ -70,6 +71,8 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.raven.app.core.designsystem.theme.LocalMotionReduced
 import com.raven.app.core.designsystem.theme.LocalRavenColors
+import com.raven.app.core.designsystem.theme.LocalRavenFeedback
+import com.raven.app.core.designsystem.theme.RavenFeedbackEffect
 import com.raven.app.core.designsystem.theme.RavenMotion
 import com.raven.app.core.designsystem.theme.RavenShapes
 import com.raven.app.core.designsystem.theme.RavenTabularTextStyle
@@ -159,6 +162,7 @@ fun RavenEmptyState(
     onActionClick: (() -> Unit)? = null,
 ) {
     val colors = LocalRavenColors.current
+    val feedback = LocalRavenFeedback.current
 
     Column(
         modifier = modifier
@@ -201,7 +205,10 @@ fun RavenEmptyState(
         if (!actionLabel.isNullOrBlank() && onActionClick != null) {
             Spacer(modifier = Modifier.height(4.dp))
             Button(
-                onClick = onActionClick,
+                onClick = {
+                    feedback.perform(RavenFeedbackEffect.TAP)
+                    onActionClick()
+                },
                 shape = RavenShapes.PillShape,
                 contentPadding = PaddingValues(horizontal = 22.dp, vertical = 12.dp),
                 colors = ButtonDefaults.buttonColors(
@@ -237,6 +244,7 @@ fun RavenErrorState(
     onSecondaryActionClick: (() -> Unit)? = null,
 ) {
     val colors = LocalRavenColors.current
+    val feedback = LocalRavenFeedback.current
 
     Column(
         modifier = modifier
@@ -283,7 +291,10 @@ fun RavenErrorState(
             verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
             Button(
-                onClick = onRetry,
+                onClick = {
+                    feedback.perform(RavenFeedbackEffect.TAP)
+                    onRetry()
+                },
                 shape = RavenShapes.PillShape,
                 contentPadding = PaddingValues(horizontal = 22.dp, vertical = 12.dp),
                 colors = ButtonDefaults.buttonColors(
@@ -311,7 +322,10 @@ fun RavenErrorState(
 
             if (!secondaryActionLabel.isNullOrBlank() && onSecondaryActionClick != null) {
                 OutlinedButton(
-                    onClick = onSecondaryActionClick,
+                    onClick = {
+                        feedback.perform(RavenFeedbackEffect.TAP)
+                        onSecondaryActionClick()
+                    },
                     shape = RavenShapes.PillShape,
                     border = BorderStroke(0.5.dp, colors.outlineSubtle),
                     colors = ButtonDefaults.outlinedButtonColors(
@@ -622,5 +636,52 @@ fun RavenLoadingSkeleton(
         repeat(rowCount.coerceAtLeast(1)) {
             RavenCompactRowSkeleton(progress = progress)
         }
+    }
+}
+
+/**
+ * Smooth Apple-style content crossfade with subtle lift scale (`0.988f -> 1f`), automatically
+ * snapping cleanly when [LocalMotionReduced] is active. Key only on coarse view stages so inner
+ * lazy lists retain scroll state during pagination or item updates.
+ */
+@Composable
+fun <T> RavenContentCrossfade(
+    targetState: T,
+    modifier: Modifier = Modifier,
+    label: String = "ravenContentCrossfade",
+    content: @Composable (T) -> Unit,
+) {
+    val motionReduced = LocalMotionReduced.current
+    AnimatedContent(
+        targetState = targetState,
+        transitionSpec = {
+            if (motionReduced) {
+                EnterTransition.None togetherWith ExitTransition.None
+            } else {
+                val enter = fadeIn(
+                    animationSpec = tween(
+                        durationMillis = RavenMotion.TAB_TRANSITION_DURATION_MS,
+                        easing = RavenMotion.AppleDecelerationEasing,
+                    ),
+                ) + scaleIn(
+                    initialScale = 0.988f,
+                    animationSpec = tween(
+                        durationMillis = RavenMotion.TAB_TRANSITION_DURATION_MS,
+                        easing = RavenMotion.AppleDecelerationEasing,
+                    ),
+                )
+                val exit = fadeOut(
+                    animationSpec = tween(
+                        durationMillis = 150,
+                        easing = RavenMotion.AppleDecelerationEasing,
+                    ),
+                )
+                enter togetherWith exit
+            }
+        },
+        modifier = modifier,
+        label = label,
+    ) { state ->
+        content(state)
     }
 }

@@ -32,14 +32,14 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.hapticfeedback.HapticFeedbackType
-import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.raven.app.core.designsystem.theme.LocalMotionReduced
 import com.raven.app.core.designsystem.theme.LocalRavenColors
+import com.raven.app.core.designsystem.theme.LocalRavenFeedback
+import com.raven.app.core.designsystem.theme.RavenFeedbackEffect
 import com.raven.app.core.designsystem.theme.RavenMotion
 import com.raven.app.core.designsystem.theme.RavenShapes
 import com.raven.app.core.designsystem.theme.ravenSpringPress
@@ -59,7 +59,7 @@ fun RavenFilterChip(
 ) {
     val colors = LocalRavenColors.current
     val motionReduced = LocalMotionReduced.current
-    val haptic = LocalHapticFeedback.current
+    val feedback = LocalRavenFeedback.current
     val interactionSource = remember { MutableInteractionSource() }
 
     val colorSpec = if (motionReduced) {
@@ -123,9 +123,9 @@ fun RavenFilterChip(
                 indication = null,
                 role = Role.Tab,
                 onClick = {
-                    if (!selected) {
-                        haptic.performHapticFeedback(HapticFeedbackType.SegmentTick)
-                    }
+                    feedback.perform(
+                        if (!selected) RavenFeedbackEffect.TAB_SWITCH else RavenFeedbackEffect.TAP,
+                    )
                     onClick()
                 },
             ),

@@ -1,5 +1,9 @@
 package com.raven.app.feature.player
 
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.snap
+import androidx.compose.animation.core.spring
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -61,6 +65,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.testTag
@@ -86,8 +91,11 @@ import com.raven.app.core.designsystem.component.RavenSectionHeader
 import com.raven.app.core.designsystem.component.RavenStatusPill
 import com.raven.app.core.designsystem.component.RavenStatusTone
 import com.raven.app.core.designsystem.component.RavenVideoCard
+import com.raven.app.core.designsystem.theme.LocalMotionReduced
 import com.raven.app.core.designsystem.theme.LocalRavenColors
+import com.raven.app.core.designsystem.theme.LocalRavenFeedback
 import com.raven.app.core.designsystem.theme.RAVEN_TABULAR_FONT_FEATURE
+import com.raven.app.core.designsystem.theme.RavenFeedbackEffect
 import com.raven.app.core.designsystem.theme.RavenShapes
 import com.raven.app.core.designsystem.theme.RavenTabularTextStyle
 import com.raven.app.core.designsystem.theme.ravenSpringPress
@@ -752,6 +760,7 @@ private fun PlayerActionStrip(
             icon = if (uiState.inWatchLater) Icons.Rounded.WatchLater else Icons.Outlined.WatchLater,
             label = "稍后看",
             active = uiState.inWatchLater,
+            feedbackEffect = if (uiState.inWatchLater) RavenFeedbackEffect.TOGGLE_OFF else RavenFeedbackEffect.TOGGLE_ON,
             onClick = onToggleWatchLater,
             modifier = Modifier
                 .weight(1f)
@@ -761,6 +770,7 @@ private fun PlayerActionStrip(
             icon = if (uiState.isFavorite) Icons.Rounded.Favorite else Icons.Rounded.FavoriteBorder,
             label = if (uiState.isFavorite) "已收藏" else "收藏",
             active = uiState.isFavorite,
+            feedbackEffect = if (uiState.isFavorite) RavenFeedbackEffect.TOGGLE_OFF else RavenFeedbackEffect.FAVORITE,
             onClick = onToggleFavorite,
             modifier = Modifier
                 .weight(1f)
@@ -828,8 +838,23 @@ private fun DetailActionButton(
     modifier: Modifier = Modifier,
     active: Boolean = false,
     enabled: Boolean = true,
+    feedbackEffect: RavenFeedbackEffect = RavenFeedbackEffect.TAP,
 ) {
     val colors = LocalRavenColors.current
+    val motionReduced = LocalMotionReduced.current
+    val feedback = LocalRavenFeedback.current
+    val iconScale by animateFloatAsState(
+        targetValue = if (active) 1.12f else 1.0f,
+        animationSpec = if (motionReduced) {
+            snap()
+        } else {
+            spring(
+                dampingRatio = Spring.DampingRatioMediumBouncy,
+                stiffness = Spring.StiffnessMedium,
+            )
+        },
+        label = "playerActionIconScale",
+    )
     val tint = when {
         !enabled -> colors.inkTertiary
         active -> colors.crimson
@@ -844,7 +869,10 @@ private fun DetailActionButton(
                 if (enabled) {
                     Modifier
                         .ravenSpringPress()
-                        .clickable(role = Role.Button, onClick = onClick)
+                        .clickable(role = Role.Button) {
+                            feedback.perform(feedbackEffect)
+                            onClick()
+                        }
                 } else {
                     Modifier
                 },
@@ -857,7 +885,12 @@ private fun DetailActionButton(
             imageVector = icon,
             contentDescription = label,
             tint = tint,
-            modifier = Modifier.size(20.dp),
+            modifier = Modifier
+                .size(20.dp)
+                .graphicsLayer {
+                    scaleX = iconScale
+                    scaleY = iconScale
+                },
         )
         Text(
             text = label,

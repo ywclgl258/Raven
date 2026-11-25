@@ -24,6 +24,7 @@ import androidx.compose.material3.SheetState
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -33,6 +34,8 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.raven.app.core.designsystem.theme.LocalRavenColors
+import com.raven.app.core.designsystem.theme.LocalRavenFeedback
+import com.raven.app.core.designsystem.theme.RavenFeedbackEffect
 import com.raven.app.core.designsystem.theme.RavenShapes
 
 /**
@@ -52,6 +55,11 @@ fun RavenBottomSheet(
     content: @Composable ColumnScope.() -> Unit,
 ) {
     val colors = LocalRavenColors.current
+    val feedback = LocalRavenFeedback.current
+
+    LaunchedEffect(Unit) {
+        feedback.perform(RavenFeedbackEffect.SHEET_OPEN)
+    }
 
     ModalBottomSheet(
         onDismissRequest = onDismissRequest,

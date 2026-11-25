@@ -1,5 +1,9 @@
 package com.raven.app.feature.reader
 
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.snap
+import androidx.compose.animation.core.spring
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -84,6 +88,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -115,8 +120,11 @@ import com.raven.app.core.designsystem.component.RavenStatusPill
 import com.raven.app.core.designsystem.component.RavenStatusTone
 import com.raven.app.core.designsystem.component.RavenTopBar
 import com.raven.app.core.designsystem.component.RavenVideoCard
+import com.raven.app.core.designsystem.theme.LocalMotionReduced
 import com.raven.app.core.designsystem.theme.LocalRavenColors
+import com.raven.app.core.designsystem.theme.LocalRavenFeedback
 import com.raven.app.core.designsystem.theme.LocalReduceTransparency
+import com.raven.app.core.designsystem.theme.RavenFeedbackEffect
 import com.raven.app.core.designsystem.theme.RavenShapes
 import com.raven.app.core.designsystem.theme.RavenTabularTextStyle
 import com.raven.app.core.designsystem.theme.ambientHeroGlow
@@ -709,6 +717,7 @@ private fun GalleryHeroHeader(
 ) {
     val colors = LocalRavenColors.current
     val reduceTransparency = LocalReduceTransparency.current
+    val feedback = LocalRavenFeedback.current
     val item = detail.item
     val primaryAuthor = detail.authors.firstOrNull() ?: item.author
     val coverAspect = RavenFormatters.clampAspectRatio(item.coverAspectRatio, defaultRatio = 0.72f)
@@ -882,7 +891,10 @@ private fun GalleryHeroHeader(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Button(
-                onClick = { onOpenReader(uiState.resumeStartPage, uiState.isLocal) },
+                onClick = {
+                    feedback.perform(RavenFeedbackEffect.TAP)
+                    onOpenReader(uiState.resumeStartPage, uiState.isLocal)
+                },
                 shape = RavenShapes.PillShape,
                 contentPadding = PaddingValues(horizontal = 20.dp, vertical = 13.dp),
                 colors = ButtonDefaults.buttonColors(
@@ -919,6 +931,7 @@ private fun GalleryHeroHeader(
                             shape = RavenShapes.PillShape,
                         )
                         .clickable(role = Role.Button) {
+                            feedback.perform(RavenFeedbackEffect.TAP)
                             onOpenReader(uiState.resumeStartPage, true)
                         }
                         .padding(horizontal = 16.dp),
@@ -954,6 +967,7 @@ private fun GalleryHeroHeader(
                 icon = if (uiState.isInWatchLater) Icons.Filled.WatchLater else Icons.Outlined.WatchLater,
                 label = if (uiState.isInWatchLater) "已稍后看" else "稍后看",
                 active = uiState.isInWatchLater,
+                feedbackEffect = if (uiState.isInWatchLater) RavenFeedbackEffect.TOGGLE_OFF else RavenFeedbackEffect.TOGGLE_ON,
                 onClick = onToggleWatchLater,
                 modifier = Modifier.weight(1f),
             )
@@ -961,6 +975,7 @@ private fun GalleryHeroHeader(
                 icon = if (uiState.isFavorite) Icons.Filled.Favorite else Icons.Outlined.FavoriteBorder,
                 label = if (uiState.isFavorite) "已收藏" else "收藏",
                 active = uiState.isFavorite,
+                feedbackEffect = if (uiState.isFavorite) RavenFeedbackEffect.TOGGLE_OFF else RavenFeedbackEffect.FAVORITE,
                 onClick = onToggleFavorite,
                 modifier = Modifier.weight(1f),
             )
@@ -1002,10 +1017,25 @@ private fun FrostedHeroActionButton(
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
     enabled: Boolean = true,
+    feedbackEffect: RavenFeedbackEffect = RavenFeedbackEffect.TAP,
 ) {
     val colors = LocalRavenColors.current
     val reduceTransparency = LocalReduceTransparency.current
+    val motionReduced = LocalMotionReduced.current
+    val feedback = LocalRavenFeedback.current
     val interactionSource = remember { MutableInteractionSource() }
+    val iconScale by animateFloatAsState(
+        targetValue = if (active) 1.12f else 1.0f,
+        animationSpec = if (motionReduced) {
+            snap()
+        } else {
+            spring(
+                dampingRatio = Spring.DampingRatioMediumBouncy,
+                stiffness = Spring.StiffnessMedium,
+            )
+        },
+        label = "galleryHeroActionIconScale",
+    )
     val tint = when {
         !enabled -> colors.inkTertiary
         active -> colors.crimson
@@ -1026,7 +1056,10 @@ private fun FrostedHeroActionButton(
                 indication = null,
                 enabled = enabled,
                 role = Role.Button,
-                onClick = onClick,
+                onClick = {
+                    feedback.perform(feedbackEffect)
+                    onClick()
+                },
             )
             .padding(horizontal = 6.dp, vertical = 10.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
@@ -1036,7 +1069,12 @@ private fun FrostedHeroActionButton(
             imageVector = icon,
             contentDescription = label,
             tint = tint,
-            modifier = Modifier.size(20.dp),
+            modifier = Modifier
+                .size(20.dp)
+                .graphicsLayer {
+                    scaleX = iconScale
+                    scaleY = iconScale
+                },
         )
         Text(
             text = label,

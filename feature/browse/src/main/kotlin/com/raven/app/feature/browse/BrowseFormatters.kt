@@ -160,6 +160,7 @@ fun AdvancedSearchFilters.activeFilterCount(language: ComicLanguage = ComicLangu
     if (minPages != null || maxPages != null) count++
     val rating = minRating
     if (rating != null && rating > 0) count++
+    if (!publishedFrom.isNullOrBlank() || !publishedTo.isNullOrBlank()) count++
     if (language != ComicLanguage.ALL) count++
     return count
 }

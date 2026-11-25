@@ -259,6 +259,12 @@ class SettingsViewModel(
         }
     }
 
+    fun setUiSoundEffectsEnabled(enabled: Boolean) {
+        viewModelScope.launch {
+            preferencesRepository.setUiSoundEffectsEnabled(enabled)
+        }
+    }
+
     fun setTranslateTags(enabled: Boolean) {
         viewModelScope.launch {
             preferencesRepository.setTranslateTags(enabled)
@@ -343,6 +349,12 @@ class SettingsViewModel(
     fun setReaderAutoSplitWidePages(enabled: Boolean) {
         viewModelScope.launch {
             preferencesRepository.setReaderAutoSplitWidePages(enabled)
+        }
+    }
+
+    fun setImageLoadConcurrency(threads: Int) {
+        viewModelScope.launch {
+            preferencesRepository.setImageLoadConcurrency(threads)
         }
     }
 

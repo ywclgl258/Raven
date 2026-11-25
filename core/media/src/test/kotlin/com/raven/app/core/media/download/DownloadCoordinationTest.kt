@@ -118,6 +118,108 @@ class DownloadCoordinationTest {
         assertFalse(tlsHard.retryable)
     }
 
+    @Test
+    fun `gallery download engine downloads multi-page book with 3 concurrent workers and caps strict sites`() =
+        runBlocking {
+            val appDispatchers = DefaultAppDispatchers()
+            val engineScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+            val server = MockWebServer()
+            val validPng = TestMediaFixtures.validPng("concurrent")
+            server.start()
+            try {
+                repeat(4) {
+                    server.enqueue(MockResponse().setBody(Buffer().write(validPng)))
+                }
+                val item = MediaItem(
+                    siteId = SiteId.NHENTAI,
+                    id = "1004",
+                    url = "https://nhentai.net/g/1004/",
+                    kind = MediaKind.COMIC,
+                    title = "Concurrent 4-Page Book",
+                    pageCount = 4,
+                )
+                val pages = (1..4).map { idx ->
+                    GalleryPage(
+                        index = idx,
+                        pageUrl = "https://nhentai.net/g/1004/$idx/",
+                        imageUrl = server.url("/img/$idx.png").toString(),
+                    )
+                }
+                val plugin = object : SitePlugin {
+                    override val descriptor = SiteDescriptor(
+                        id = SiteId.NHENTAI,
+                        displayName = "nHentai",
+                        primaryKind = MediaKind.COMIC,
+                        defaultHost = "nhentai.net",
+                    )
+                    override val gallerySource = object : GallerySource {
+                        override suspend fun loadGalleryDetail(url: String) = GalleryDetail(
+                            item = item,
+                            pageCount = 4,
+                            pages = pages,
+                        )
+                        override suspend fun loadGalleryPage(detail: GalleryDetail, pageIndex: Int, forceReload: Boolean) =
+                            pages[pageIndex - 1]
+                        override suspend fun resolvePageImage(pageUrl: String, preferOriginal: Boolean, forceReload: Boolean) =
+                            pages.first { it.pageUrl == pageUrl }
+                    }
+                }
+                val strictPlugin = object : SitePlugin {
+                    override val descriptor = SiteDescriptor(
+                        id = SiteId.EHENTAI,
+                        displayName = "E-Hentai",
+                        primaryKind = MediaKind.COMIC,
+                        defaultHost = "e-hentai.org",
+                        networkProfile = com.raven.app.core.model.SiteNetworkProfile(
+                            pageIntervalMs = 800L,
+                            imageIntervalMs = 400L,
+                        ),
+                    )
+                }
+                val storage = StorageRootManager(
+                    context = null,
+                    settingsDataStore = null,
+                    privateRootOverride = tempFolder.newFolder("conc-dl-private"),
+                    sharedRootOverride = null,
+                    dispatchers = appDispatchers,
+                )
+                val pageRepo = GalleryPageRepository(
+                    context = null,
+                    imageClient = OkHttpClient(),
+                    storageRootManager = storage,
+                    localLibraryImporter = LocalLibraryImporter(null, tempFolder.newFolder("conc-dl-lib"), appDispatchers),
+                    siteRegistryProvider = { SiteRegistry(listOf(plugin, strictPlugin)) },
+                    dispatchers = appDispatchers,
+                    cacheRootOverride = tempFolder.newFolder("conc-dl-cache"),
+                    requireAndroidImageDecoder = false,
+                )
+                assertEquals(2, pageRepo.recommendedImageConcurrency(SiteId.EHENTAI, 3))
+                assertEquals(3, pageRepo.recommendedImageConcurrency(SiteId.NHENTAI, 3))
+
+                val engine = GalleryDownloadEngine(
+                    context = null,
+                    galleryPageRepository = pageRepo,
+                    storageRootManager = storage,
+                    downloadStateRepository = DownloadStateRepository(FakeDownloadItemDao()),
+                    applicationScope = engineScope,
+                    dispatchers = appDispatchers,
+                    serviceStarter = {},
+                    concurrencyProvider = { siteId -> pageRepo.recommendedImageConcurrency(siteId, 3) },
+                )
+                val queued = engine.enqueue(item)
+                engine.launchNext(engineScope)!!.join()
+
+                val completed = engine.getTask(queued.id)!!
+                assertEquals(DownloadStatus.COMPLETED, completed.status)
+                assertEquals(4, completed.completedUnits)
+                assertEquals(4, server.requestCount)
+                assertTrue(pageRepo.isDownloaded(SiteId.NHENTAI, "1004"))
+            } finally {
+                engineScope.cancel()
+                server.shutdown()
+            }
+        }
+
     // ---- Deletion Generation Guard ----
 
     @Test

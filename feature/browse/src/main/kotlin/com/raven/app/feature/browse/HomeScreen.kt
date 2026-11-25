@@ -55,6 +55,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.raven.app.core.database.model.ShelfWithSummary
 import kotlinx.coroutines.launch
+import com.raven.app.core.designsystem.component.RavenContentCrossfade
 import com.raven.app.core.designsystem.component.RavenEmptyState
 import com.raven.app.core.designsystem.component.RavenErrorState
 import com.raven.app.core.designsystem.component.RavenFormatters
@@ -72,6 +73,8 @@ import com.raven.app.core.designsystem.component.RavenVideoCard
 import com.raven.app.core.designsystem.component.RavenVideoCardSkeleton
 import com.raven.app.core.designsystem.component.rememberRavenShimmerBrush
 import com.raven.app.core.designsystem.theme.LocalRavenColors
+import com.raven.app.core.designsystem.theme.LocalRavenFeedback
+import com.raven.app.core.designsystem.theme.RavenFeedbackEffect
 import com.raven.app.core.designsystem.theme.RavenShapes
 import com.raven.app.core.model.ComicLanguage
 import com.raven.app.core.model.MediaItem
@@ -240,6 +243,7 @@ private fun CinemaVideoHome(
     onItemLongClick: (MediaItem) -> Unit,
 ) {
     val colors = LocalRavenColors.current
+    val feedback = LocalRavenFeedback.current
     val listState = key(activeSite.id) { rememberLazyListState() }
     val coroutineScope = rememberCoroutineScope()
     val pullState = rememberPullToRefreshState()
@@ -297,61 +301,73 @@ private fun CinemaVideoHome(
             },
             modifier = Modifier.fillMaxSize(),
         ) {
-            when {
-                uiState.authGateRequired -> {
-                    Column(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .statusBarsPadding()
-                            .padding(top = 64.dp),
-                    ) {
-                        BrowseAuthGateCard(
-                            site = activeSite,
-                            detailMessage = uiState.errorMessage,
-                            onOpenAccount = { navigator.openSiteAccount(activeSite.id) },
-                            onRefreshStatus = onRefresh,
-                        )
+            val streamStage = when {
+                uiState.authGateRequired -> HomeStreamStage.AUTH_GATE
+                uiState.isLoading && uiState.isEmpty -> HomeStreamStage.LOADING
+                uiState.errorMessage != null && uiState.isEmpty -> HomeStreamStage.ERROR
+                uiState.isEmpty -> HomeStreamStage.EMPTY
+                else -> HomeStreamStage.CONTENT
+            }
+            RavenContentCrossfade(
+                targetState = streamStage,
+                modifier = Modifier.fillMaxSize(),
+                label = "cinemaHomeStageCrossfade",
+            ) { stage ->
+                when (stage) {
+                    HomeStreamStage.AUTH_GATE -> {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .statusBarsPadding()
+                                .padding(top = 64.dp),
+                        ) {
+                            BrowseAuthGateCard(
+                                site = activeSite,
+                                detailMessage = uiState.errorMessage,
+                                onOpenAccount = { navigator.openSiteAccount(activeSite.id) },
+                                onRefreshStatus = onRefresh,
+                            )
+                        }
                     }
-                }
-                uiState.isLoading && uiState.isEmpty -> {
-                    CinemaHomeSkeleton()
-                }
-                uiState.errorMessage != null && uiState.isEmpty -> {
-                    Column(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .statusBarsPadding()
-                            .padding(top = 64.dp),
-                    ) {
-                        RavenErrorState(
-                            message = uiState.errorMessage,
-                            onRetry = onRefresh,
-                            secondaryActionLabel = if (activeSite.networkProfile.requiresAuthGate) "前往登录" else null,
-                            onSecondaryActionClick = if (activeSite.networkProfile.requiresAuthGate) {
-                                { navigator.openSiteAccount(activeSite.id) }
-                            } else {
-                                null
-                            },
-                        )
+                    HomeStreamStage.LOADING -> {
+                        CinemaHomeSkeleton()
                     }
-                }
-                uiState.isEmpty -> {
-                    Column(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .statusBarsPadding()
-                            .padding(top = 64.dp),
-                    ) {
-                        RavenEmptyState(
-                            title = "暂无推荐视频",
-                            message = "当前筛选或屏蔽词过滤后暂无可展示内容，下拉可重新刷新。",
-                            actionLabel = "重新加载",
-                            onActionClick = onRefresh,
-                        )
+                    HomeStreamStage.ERROR -> {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .statusBarsPadding()
+                                .padding(top = 64.dp),
+                        ) {
+                            RavenErrorState(
+                                message = uiState.errorMessage.orEmpty(),
+                                onRetry = onRefresh,
+                                secondaryActionLabel = if (activeSite.networkProfile.requiresAuthGate) "前往登录" else null,
+                                onSecondaryActionClick = if (activeSite.networkProfile.requiresAuthGate) {
+                                    { navigator.openSiteAccount(activeSite.id) }
+                                } else {
+                                    null
+                                },
+                            )
+                        }
                     }
-                }
-                else -> {
-                    BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
+                    HomeStreamStage.EMPTY -> {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .statusBarsPadding()
+                                .padding(top = 64.dp),
+                        ) {
+                            RavenEmptyState(
+                                title = "暂无推荐视频",
+                                message = "当前筛选或屏蔽词过滤后暂无可展示内容，下拉可重新刷新。",
+                                actionLabel = "重新加载",
+                                onActionClick = onRefresh,
+                            )
+                        }
+                    }
+                    HomeStreamStage.CONTENT -> {
+                        BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
                         val gridColumns = computeVideoGridColumns(maxWidth.value.toInt())
                         val primaryRows = remember(uiState.primaryItems, gridColumns) {
                             uiState.primaryItems.chunked(gridColumns)
@@ -570,6 +586,7 @@ private fun CinemaVideoHome(
                         }
                     }
                 }
+                }
             }
         }
 
@@ -588,7 +605,10 @@ private fun CinemaVideoHome(
             },
             actions = {
                 IconButton(
-                    onClick = { navigator.openSiteFunctions(activeSite.id) },
+                    onClick = {
+                        feedback.perform(RavenFeedbackEffect.TAP)
+                        navigator.openSiteFunctions(activeSite.id)
+                    },
                     modifier = Modifier.testTag("home_site_functions_button"),
                 ) {
                     Icon(
@@ -599,7 +619,10 @@ private fun CinemaVideoHome(
                     )
                 }
                 IconButton(
-                    onClick = { navigator.openSearch() },
+                    onClick = {
+                        feedback.perform(RavenFeedbackEffect.TAP)
+                        navigator.openSearch()
+                    },
                     modifier = Modifier.testTag("home_search_button"),
                 ) {
                     Icon(
@@ -631,6 +654,7 @@ private fun GalleryMasonryHome(
     onItemLongClick: (MediaItem) -> Unit,
 ) {
     val colors = LocalRavenColors.current
+    val feedback = LocalRavenFeedback.current
     val gridState = key(activeSite.id) { rememberLazyStaggeredGridState() }
     val coroutineScope = rememberCoroutineScope()
     val pullState = rememberPullToRefreshState()
@@ -708,7 +732,10 @@ private fun GalleryMasonryHome(
             },
             actions = {
                 IconButton(
-                    onClick = { navigator.openSiteFunctions(activeSite.id) },
+                    onClick = {
+                        feedback.perform(RavenFeedbackEffect.TAP)
+                        navigator.openSiteFunctions(activeSite.id)
+                    },
                     modifier = Modifier.testTag("home_site_functions_button"),
                 ) {
                     Icon(
@@ -719,7 +746,10 @@ private fun GalleryMasonryHome(
                     )
                 }
                 IconButton(
-                    onClick = { navigator.openSearch() },
+                    onClick = {
+                        feedback.perform(RavenFeedbackEffect.TAP)
+                        navigator.openSearch()
+                    },
                     modifier = Modifier.testTag("home_search_button"),
                 ) {
                     Icon(
@@ -767,40 +797,52 @@ private fun GalleryMasonryHome(
                 .weight(1f)
                 .fillMaxWidth(),
         ) {
-            when {
-                uiState.authGateRequired -> {
-                    BrowseAuthGateCard(
-                        site = activeSite,
-                        detailMessage = uiState.errorMessage,
-                        onOpenAccount = { navigator.openSiteAccount(activeSite.id) },
-                        onRefreshStatus = onRefresh,
-                    )
-                }
-                uiState.isLoading && uiState.primaryItems.isEmpty() -> {
-                    GalleryMasonrySkeleton()
-                }
-                uiState.errorMessage != null && uiState.primaryItems.isEmpty() -> {
-                    RavenErrorState(
-                        message = uiState.errorMessage,
-                        onRetry = onRefresh,
-                        secondaryActionLabel = if (activeSite.networkProfile.requiresAuthGate) "前往登录" else null,
-                        onSecondaryActionClick = if (activeSite.networkProfile.requiresAuthGate) {
-                            { navigator.openSiteAccount(activeSite.id) }
-                        } else {
-                            null
-                        },
-                    )
-                }
-                uiState.primaryItems.isEmpty() -> {
-                    RavenEmptyState(
-                        title = "暂无作品",
-                        message = "当前语言或屏蔽词条件下暂无内容，可切换语言或下拉刷新。",
-                        actionLabel = "重新加载",
-                        onActionClick = onRefresh,
-                    )
-                }
-                else -> {
-                    BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
+            val galleryStage = when {
+                uiState.authGateRequired -> HomeStreamStage.AUTH_GATE
+                uiState.isLoading && uiState.primaryItems.isEmpty() -> HomeStreamStage.LOADING
+                uiState.errorMessage != null && uiState.primaryItems.isEmpty() -> HomeStreamStage.ERROR
+                uiState.primaryItems.isEmpty() -> HomeStreamStage.EMPTY
+                else -> HomeStreamStage.CONTENT
+            }
+            RavenContentCrossfade(
+                targetState = galleryStage,
+                modifier = Modifier.fillMaxSize(),
+                label = "galleryHomeStageCrossfade",
+            ) { stage ->
+                when (stage) {
+                    HomeStreamStage.AUTH_GATE -> {
+                        BrowseAuthGateCard(
+                            site = activeSite,
+                            detailMessage = uiState.errorMessage,
+                            onOpenAccount = { navigator.openSiteAccount(activeSite.id) },
+                            onRefreshStatus = onRefresh,
+                        )
+                    }
+                    HomeStreamStage.LOADING -> {
+                        GalleryMasonrySkeleton()
+                    }
+                    HomeStreamStage.ERROR -> {
+                        RavenErrorState(
+                            message = uiState.errorMessage.orEmpty(),
+                            onRetry = onRefresh,
+                            secondaryActionLabel = if (activeSite.networkProfile.requiresAuthGate) "前往登录" else null,
+                            onSecondaryActionClick = if (activeSite.networkProfile.requiresAuthGate) {
+                                { navigator.openSiteAccount(activeSite.id) }
+                            } else {
+                                null
+                            },
+                        )
+                    }
+                    HomeStreamStage.EMPTY -> {
+                        RavenEmptyState(
+                            title = "暂无作品",
+                            message = "当前语言或屏蔽词条件下暂无内容，可切换语言或下拉刷新。",
+                            actionLabel = "重新加载",
+                            onActionClick = onRefresh,
+                        )
+                    }
+                    HomeStreamStage.CONTENT -> {
+                        BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
                         val columns = computeGalleryGridColumns(maxWidth.value.toInt())
 
                         LazyVerticalStaggeredGrid(
@@ -890,10 +932,19 @@ private fun GalleryMasonryHome(
                             }
                         }
                     }
+                    }
                 }
             }
         }
     }
+}
+
+private enum class HomeStreamStage {
+    AUTH_GATE,
+    LOADING,
+    ERROR,
+    EMPTY,
+    CONTENT,
 }
 
 @Composable

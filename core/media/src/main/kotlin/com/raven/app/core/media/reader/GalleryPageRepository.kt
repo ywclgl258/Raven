@@ -20,6 +20,7 @@ import com.raven.app.core.model.MediaItem
 import com.raven.app.core.model.MediaKind
 import com.raven.app.core.model.SiteException
 import com.raven.app.core.model.SiteId
+import com.raven.app.core.network.HostPacer
 import com.raven.app.core.network.SiteHttpErrorMapper
 import com.raven.app.core.network.SiteRequestTag
 import com.raven.app.core.sitespi.GallerySource
@@ -110,6 +111,7 @@ class GalleryPageRepository(
     private val dispatchers: AppDispatchers = DefaultAppDispatchers(),
     private val cacheRootOverride: File? = null,
     private val requireAndroidImageDecoder: Boolean = true,
+    private val hostPacer: HostPacer? = null,
 ) {
     @Serializable
     private data class KnownPageLinks(
@@ -209,6 +211,20 @@ class GalleryPageRepository(
         File(readingCacheBaseDir, siteId.value).apply { mkdirs() }
 
     val downloadsAllowed: Boolean get() = storageRootManager.canWriteDownloads
+
+    /**
+     * Resolves a safe image-fetch concurrency (`2..3`, capped at `2` for strict-rate-limit sites).
+     */
+    fun recommendedImageConcurrency(
+        siteId: SiteId,
+        requested: Int = DEFAULT_IMAGE_CONCURRENCY,
+    ): Int {
+        val clamped = requested.coerceIn(1, MAX_IMAGE_CONCURRENCY)
+        val descriptor = siteRegistryProvider().get(siteId)?.descriptor ?: return clamped
+        val strictSite = descriptor.networkProfile.imageIntervalMs >= STRICT_IMAGE_INTERVAL_THRESHOLD_MS ||
+            descriptor.networkProfile.pageIntervalMs >= STRICT_PAGE_INTERVAL_THRESHOLD_MS
+        return if (strictSite) minOf(clamped, 2) else clamped
+    }
 
     fun checkDownloadsAllowed() = storageRootManager.checkDownloadsAllowed()
 
@@ -1109,10 +1125,12 @@ class GalleryPageRepository(
                     ),
                 ),
             )
-            .header("Cache-Control", "no-store")
         if (!referer.isNullOrBlank()) {
             reqBuilder.header("Referer", referer)
         }
+
+        val descriptor = siteRegistryProvider().get(siteId)?.descriptor
+        hostPacer?.paceForImageWithJitter(parsedTarget.host, descriptor)
 
         val response = try {
             executeCancellable(imageClient.newCall(reqBuilder.build()))
@@ -1136,6 +1154,13 @@ class GalleryPageRepository(
                 val retryAfter = com.raven.app.core.media.download.DownloadErrorClassifier
                     .parseRetryAfterMs(res.header("Retry-After"))
                     ?.let { it / 1_000L }
+                when (res.code) {
+                    429, 503 -> {
+                        val cooldownMs = ((retryAfter ?: 4L) * 1_000L).coerceIn(1_500L, 60_000L)
+                        hostPacer?.penalize(parsedTarget.host, cooldownMs)
+                    }
+                    509 -> hostPacer?.penalize(parsedTarget.host, 8_000L)
+                }
                 throw when (res.code) {
                     401 -> SiteException.AuthRequired("图片需要登录访问 (HTTP 401)", siteId = siteId)
                     403 -> SiteException.Forbidden(isChallenge = false, message = "图片访问被拒绝 (HTTP 403)", siteId = siteId)
@@ -1339,6 +1364,10 @@ class GalleryPageRepository(
     companion object {
         const val READING_CACHE_MAX_BYTES: Long = 256L * 1024L * 1024L
         const val MAX_GALLERY_IMAGE_BYTES: Long = ImageStructureValidator.DEFAULT_MAX_GALLERY_IMAGE_BYTES
+        const val DEFAULT_IMAGE_CONCURRENCY: Int = 3
+        const val MAX_IMAGE_CONCURRENCY: Int = 3
+        private const val STRICT_IMAGE_INTERVAL_THRESHOLD_MS: Long = 300L
+        private const val STRICT_PAGE_INTERVAL_THRESHOLD_MS: Long = 1_000L
         private const val MAX_PAGE_NUMBER: Int = 100_000
         private const val MAX_BOOK_JSON_BYTES: Long = 16L * 1024L * 1024L
         private const val MAX_PAGE_JSON_BYTES: Long = 128L * 1024L

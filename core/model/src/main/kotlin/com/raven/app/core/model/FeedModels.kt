@@ -15,6 +15,8 @@ data class AdvancedSearchFilters(
     val minPages: Int? = null,
     val maxPages: Int? = null,
     val minRating: Int? = null,
+    val publishedFrom: String? = null,
+    val publishedTo: String? = null,
 ) {
     val isEmpty: Boolean
         get() = includeTags.isEmpty() &&
@@ -27,7 +29,9 @@ data class AdvancedSearchFilters(
             maxDurationMinutes == null &&
             minPages == null &&
             maxPages == null &&
-            minRating == null
+            minRating == null &&
+            publishedFrom.isNullOrBlank() &&
+            publishedTo.isNullOrBlank()
 }
 
 @Serializable

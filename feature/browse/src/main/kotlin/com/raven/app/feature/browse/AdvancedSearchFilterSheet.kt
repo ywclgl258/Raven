@@ -49,6 +49,7 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.raven.app.core.common.MediaDateParser
 import com.raven.app.core.common.TagDictionary
 import com.raven.app.core.designsystem.component.RavenBottomSheet
 import com.raven.app.core.designsystem.component.RavenFilterChip
@@ -98,6 +99,8 @@ internal fun AdvancedSearchFilterSheet(
     var minPagesInput by remember(initialFilters) { mutableStateOf(initialFilters.minPages?.toString().orEmpty()) }
     var maxPagesInput by remember(initialFilters) { mutableStateOf(initialFilters.maxPages?.toString().orEmpty()) }
     var minRating by remember(initialFilters) { mutableStateOf(initialFilters.minRating) }
+    var publishedFromInput by remember(initialFilters) { mutableStateOf(initialFilters.publishedFrom.orEmpty()) }
+    var publishedToInput by remember(initialFilters) { mutableStateOf(initialFilters.publishedTo.orEmpty()) }
     var selectedLanguage by remember(initialLanguage) { mutableStateOf(initialLanguage) }
 
     val categoryOptions = remember(site) {
@@ -124,6 +127,8 @@ internal fun AdvancedSearchFilterSheet(
                     minPagesInput = ""
                     maxPagesInput = ""
                     minRating = null
+                    publishedFromInput = ""
+                    publishedToInput = ""
                     selectedLanguage = ComicLanguage.ALL
                     onReset()
                 },
@@ -381,6 +386,19 @@ internal fun AdvancedSearchFilterSheet(
                 }
             }
 
+            RavenGroupedSection(title = "发布日期范围") {
+                DateRangeFilterEditorBlock(
+                    fromInput = publishedFromInput,
+                    toInput = publishedToInput,
+                    onFromChange = { publishedFromInput = it },
+                    onToChange = { publishedToInput = it },
+                    onPreset = { from, to ->
+                        publishedFromInput = from
+                        publishedToInput = to
+                    },
+                )
+            }
+
             RavenGroupedDivider()
 
             Row(
@@ -416,6 +434,12 @@ internal fun AdvancedSearchFilterSheet(
                         } else {
                             excludeTags
                         }
+                        val cleanFrom = publishedFromInput.trim().takeIf {
+                            MediaDateParser.parseIsoDateToEpochDay(it) != null
+                        }
+                        val cleanTo = publishedToInput.trim().takeIf {
+                            MediaDateParser.parseIsoDateToEpochDay(it) != null
+                        }
                         val filters = AdvancedSearchFilters(
                             includeTags = finalInclude,
                             excludeTags = finalExclude,
@@ -428,6 +452,8 @@ internal fun AdvancedSearchFilterSheet(
                             minPages = minPagesInput.toIntOrNull()?.takeIf { it > 0 },
                             maxPages = maxPagesInput.toIntOrNull()?.takeIf { it > 0 },
                             minRating = minRating?.takeIf { it in 1..5 },
+                            publishedFrom = cleanFrom,
+                            publishedTo = cleanTo,
                         )
                         onApply(filters, selectedLanguage)
                         onDismiss()
@@ -687,6 +713,199 @@ internal fun SaveSearchSheet(
                 ) {
                     Text(
                         text = "保存",
+                        style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Bold),
+                    )
+                }
+            }
+        }
+    }
+}
+
+/**
+ * Shared published date-range editor (`不限 / 近7天 / 近30天 / 近半年 / 近一年` + `YYYY-MM-DD` bounds).
+ */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+internal fun DateRangeFilterEditorBlock(
+    fromInput: String,
+    toInput: String,
+    onFromChange: (String) -> Unit,
+    onToChange: (String) -> Unit,
+    onPreset: (from: String, to: String) -> Unit,
+) {
+    val colors = LocalRavenColors.current
+    val todayDay = remember { MediaDateParser.currentUtcEpochDay() }
+    val todayIso = remember(todayDay) { MediaDateParser.formatEpochDayToIso(todayDay) }
+    val presets = remember(todayDay, todayIso) {
+        listOf(
+            Triple("不限", "", ""),
+            Triple("近 7 天", MediaDateParser.formatEpochDayToIso(todayDay - 6L), todayIso),
+            Triple("近 30 天", MediaDateParser.formatEpochDayToIso(todayDay - 29L), todayIso),
+            Triple("近半年", MediaDateParser.formatEpochDayToIso(todayDay - 182L), todayIso),
+            Triple("近一年", MediaDateParser.formatEpochDayToIso(todayDay - 364L), todayIso),
+        )
+    }
+
+    val fromValid = fromInput.isBlank() || MediaDateParser.parseIsoDateToEpochDay(fromInput) != null
+    val toValid = toInput.isBlank() || MediaDateParser.parseIsoDateToEpochDay(toInput) != null
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(12.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        FlowRow(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            presets.forEach { (label, presetFrom, presetTo) ->
+                val selected = fromInput.trim() == presetFrom && toInput.trim() == presetTo
+                RavenFilterChip(
+                    label = label,
+                    selected = selected,
+                    onClick = { onPreset(presetFrom, presetTo) },
+                )
+            }
+        }
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            CompactSheetTextField(
+                value = fromInput,
+                onValueChange = { raw -> onFromChange(raw.filter { it.isDigit() || it == '-' }.take(10)) },
+                placeholder = "开始 YYYY-MM-DD",
+                keyboardType = KeyboardType.Number,
+                modifier = Modifier
+                    .weight(1f)
+                    .testTag("date_range_from_input"),
+            )
+            CompactSheetTextField(
+                value = toInput,
+                onValueChange = { raw -> onToChange(raw.filter { it.isDigit() || it == '-' }.take(10)) },
+                placeholder = "结束 YYYY-MM-DD",
+                keyboardType = KeyboardType.Number,
+                modifier = Modifier
+                    .weight(1f)
+                    .testTag("date_range_to_input"),
+            )
+        }
+
+        val hintText = when {
+            !fromValid || !toValid -> "请按 YYYY-MM-DD 格式填写有效日期（例如 $todayIso）"
+            fromInput.isBlank() && toInput.isBlank() -> "设置后仅展示发布日期在选定范围内的作品"
+            else -> "仅展示 ${fromInput.ifBlank { "最早" }} 至 ${toInput.ifBlank { "今天" }} 之间的作品"
+        }
+        Text(
+            text = hintText,
+            style = MaterialTheme.typography.bodySmall,
+            color = if (!fromValid || !toValid) colors.error else colors.inkTertiary,
+        )
+    }
+}
+
+/**
+ * Lightweight standalone [RavenBottomSheet] to filter search results by published date range.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+internal fun SearchDateRangeSheet(
+    initialFrom: String?,
+    initialTo: String?,
+    onApply: (String?, String?) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val colors = LocalRavenColors.current
+    var fromInput by remember(initialFrom) { mutableStateOf(initialFrom.orEmpty()) }
+    var toInput by remember(initialTo) { mutableStateOf(initialTo.orEmpty()) }
+
+    RavenBottomSheet(
+        onDismissRequest = onDismiss,
+        title = "按发布日期筛选",
+        subtitle = "仅展示发布日期落在选定区间内的作品",
+        trailingAction = {
+            TextButton(
+                onClick = {
+                    fromInput = ""
+                    toInput = ""
+                    onApply(null, null)
+                    onDismiss()
+                },
+                modifier = Modifier.testTag("date_range_reset_button"),
+            ) {
+                Text(
+                    text = "清空",
+                    style = MaterialTheme.typography.labelLarge,
+                    color = colors.crimson,
+                )
+            }
+        },
+        modifier = Modifier.testTag("search_date_range_sheet"),
+    ) {
+        Column(
+            modifier = Modifier.fillMaxWidth(),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            RavenGroupedSection(title = "选择发布时间段") {
+                DateRangeFilterEditorBlock(
+                    fromInput = fromInput,
+                    toInput = toInput,
+                    onFromChange = { fromInput = it },
+                    onToChange = { toInput = it },
+                    onPreset = { presetFrom, presetTo ->
+                        fromInput = presetFrom
+                        toInput = presetTo
+                    },
+                )
+            }
+
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(bottom = 8.dp),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                OutlinedButton(
+                    onClick = onDismiss,
+                    shape = RavenShapes.PillShape,
+                    border = BorderStroke(0.5.dp, colors.outlineSubtle),
+                    colors = ButtonDefaults.outlinedButtonColors(
+                        containerColor = colors.surface1,
+                        contentColor = colors.inkPrimary,
+                    ),
+                    modifier = Modifier
+                        .weight(1f)
+                        .heightIn(min = 48.dp),
+                ) {
+                    Text(text = "取消", style = MaterialTheme.typography.labelLarge)
+                }
+
+                Button(
+                    onClick = {
+                        val cleanFrom = fromInput.trim().takeIf {
+                            MediaDateParser.parseIsoDateToEpochDay(it) != null
+                        }
+                        val cleanTo = toInput.trim().takeIf {
+                            MediaDateParser.parseIsoDateToEpochDay(it) != null
+                        }
+                        onApply(cleanFrom, cleanTo)
+                        onDismiss()
+                    },
+                    shape = RavenShapes.PillShape,
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = colors.primaryCtaContainer,
+                        contentColor = colors.primaryCtaInk,
+                    ),
+                    modifier = Modifier
+                        .weight(1.4f)
+                        .heightIn(min = 48.dp)
+                        .ravenSpringPress()
+                        .testTag("date_range_apply_button"),
+                ) {
+                    Text(
+                        text = "仅看该日期内作品",
                         style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Bold),
                     )
                 }

@@ -133,4 +133,20 @@ class HostPacerTest {
         assertEquals(0L, pacer.pace("hanime1.me", 400L))
         assertEquals(0L, currentTime)
     }
+
+    @Test
+    fun `penalize enforces host cooldown and paceForImageWithJitter staggers bursts`() = runTest {
+        val pacer = HostPacer(
+            clockMs = { currentTime },
+            delayFn = { ms -> delay(ms) },
+        )
+
+        pacer.penalize("rule34video.com", 4_000L)
+        val cooldownWait = pacer.paceForImageWithJitter("rule34video.com", r34Descriptor)
+        assertTrue("Expected cooldown wait >= 4000ms, was $cooldownWait", cooldownWait >= 4_000L)
+
+        // Immediately following image request gets jittered interval (150ms ± 25%, floored >= 60ms)
+        val secondWait = pacer.paceForImageWithJitter("rule34video.com", r34Descriptor)
+        assertTrue("Expected jittered wait >= 60ms, was $secondWait", secondWait >= 60L)
+    }
 }

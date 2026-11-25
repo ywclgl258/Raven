@@ -63,8 +63,6 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.hapticfeedback.HapticFeedbackType
-import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
@@ -80,8 +78,10 @@ import androidx.compose.ui.unit.sp
 import androidx.window.core.layout.WindowSizeClass
 import com.raven.app.core.designsystem.theme.LocalMotionReduced
 import com.raven.app.core.designsystem.theme.LocalRavenColors
+import com.raven.app.core.designsystem.theme.LocalRavenFeedback
 import com.raven.app.core.designsystem.theme.LocalReduceTransparency
 import com.raven.app.core.designsystem.theme.RavenColors
+import com.raven.app.core.designsystem.theme.RavenFeedbackEffect
 import com.raven.app.core.designsystem.theme.RavenFrostedBox
 import com.raven.app.core.designsystem.theme.RavenShapes
 import com.raven.app.core.designsystem.theme.RavenTabularTextStyle
@@ -177,7 +177,7 @@ fun RavenAdaptiveScaffold(
     content: @Composable () -> Unit,
 ) {
     val colors = LocalRavenColors.current
-    val haptic = LocalHapticFeedback.current
+    val feedback = LocalRavenFeedback.current
     val adaptiveInfo = currentWindowAdaptiveInfo()
     val layoutType = when {
         !showNavigation -> NavigationSuiteType.None
@@ -249,7 +249,7 @@ fun RavenAdaptiveScaffold(
                     selected = selected,
                     onClick = {
                         if (!selected) {
-                            haptic.performHapticFeedback(HapticFeedbackType.SegmentTick)
+                            feedback.perform(RavenFeedbackEffect.TAB_SWITCH)
                         }
                         onDestinationSelected(destination)
                     },
@@ -513,7 +513,7 @@ fun RavenSiteSwitcherPill(
 ) {
     val colors = LocalRavenColors.current
     val reduceTransparency = LocalReduceTransparency.current
-    val haptic = LocalHapticFeedback.current
+    val feedback = LocalRavenFeedback.current
     val interactionSource = remember { MutableInteractionSource() }
     val kindIcon = when (mediaKind) {
         MediaKind.VIDEO -> Icons.Outlined.Movie
@@ -537,7 +537,7 @@ fun RavenSiteSwitcherPill(
                 indication = null,
                 role = Role.Button,
                 onClick = {
-                    haptic.performHapticFeedback(HapticFeedbackType.ContextClick)
+                    feedback.perform(RavenFeedbackEffect.TAP)
                     onClick()
                 },
             )

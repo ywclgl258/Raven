@@ -1,6 +1,7 @@
 package com.raven.app
 
 import android.app.Activity
+import android.app.ActivityOptions
 import android.content.ClipData
 import android.content.Intent
 import android.graphics.Color as AndroidColor
@@ -182,7 +183,10 @@ class MainActivity : ComponentActivity(), MainActivityHostActions {
                 }
             }
 
-            RavenTheme(reduceTransparency = appSettings.reduceTransparency) {
+            RavenTheme(
+                reduceTransparency = appSettings.reduceTransparency,
+                uiSoundEffectsEnabled = appSettings.uiSoundEffectsEnabled,
+            ) {
                 CompositionLocalProvider(
                     LocalRavenImageRequestDecorator provides ::ravenImageRequestDecorator,
                 ) {
@@ -331,7 +335,12 @@ class MainActivity : ComponentActivity(), MainActivityHostActions {
         val playerIntent = args.toIntent(this, PlayerActivity::class.java).apply {
             addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP)
         }
-        startActivity(playerIntent)
+        val options = ActivityOptions.makeCustomAnimation(
+            this,
+            R.anim.raven_player_enter,
+            R.anim.raven_host_hold,
+        )
+        startActivity(playerIntent, options.toBundle())
     }
 
     override fun launchWebViewAuth(siteId: SiteId) {

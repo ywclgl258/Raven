@@ -505,6 +505,7 @@ class BackupValidator(
             "download_unmetered_only",
             "download_unmetered",
             "reduce_transparency",
+            "ui_sound_effects_enabled",
             "stream_cache_enabled",
             "stream_cache",
             "seek_cache_enabled",

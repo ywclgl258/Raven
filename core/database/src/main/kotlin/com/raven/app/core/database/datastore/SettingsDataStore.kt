@@ -161,6 +161,10 @@ class SettingsDataStore(
         dataStore.edit { prefs -> prefs[Keys.REDUCE_TRANSPARENCY] = enabled }
     }
 
+    suspend fun setUiSoundEffectsEnabled(enabled: Boolean) {
+        dataStore.edit { prefs -> prefs[Keys.UI_SOUND_EFFECTS_ENABLED] = enabled }
+    }
+
     suspend fun setAutoUpdateCheck(enabled: Boolean) {
         dataStore.edit { prefs -> prefs[Keys.AUTO_UPDATE_CHECK] = enabled }
     }
@@ -227,6 +231,11 @@ class SettingsDataStore(
         dataStore.edit { prefs -> prefs[Keys.READER_AUTO_SPLIT_WIDE_PAGES] = enabled }
     }
 
+    suspend fun setImageLoadConcurrency(threads: Int) {
+        val clamped = threads.coerceIn(AppSettings.MIN_IMAGE_CONCURRENCY, AppSettings.MAX_IMAGE_CONCURRENCY)
+        dataStore.edit { prefs -> prefs[Keys.IMAGE_LOAD_CONCURRENCY] = clamped }
+    }
+
     suspend fun setBackgroundSubscriptionSync(enabled: Boolean) {
         dataStore.edit { prefs -> prefs[Keys.BACKGROUND_SUBSCRIPTION_SYNC] = enabled }
     }
@@ -285,6 +294,7 @@ class SettingsDataStore(
             put(KEY_SEEK_CACHE_ENABLED, current.seekCacheEnabled.toString())
             put(KEY_DOWNLOAD_UNMETERED_ONLY, current.downloadUnmeteredOnly.toString())
             put(KEY_REDUCE_TRANSPARENCY, current.reduceTransparency.toString())
+            put(KEY_UI_SOUND_EFFECTS_ENABLED, current.uiSoundEffectsEnabled.toString())
             put(KEY_AUTO_UPDATE_CHECK, current.autoUpdateCheck.toString())
             put(KEY_TAG_DICT_AUTO_SYNC, current.tagDictAutoSync.toString())
             put(KEY_BLOCK_TAGS_GLOBALLY, current.blockTagsGlobally.toString())
@@ -348,6 +358,9 @@ class SettingsDataStore(
         }
         settingsMap[KEY_REDUCE_TRANSPARENCY]?.toBooleanStrictOrNull()?.let {
             prefs[Keys.REDUCE_TRANSPARENCY] = it
+        }
+        settingsMap[KEY_UI_SOUND_EFFECTS_ENABLED]?.toBooleanStrictOrNull()?.let {
+            prefs[Keys.UI_SOUND_EFFECTS_ENABLED] = it
         }
         settingsMap[KEY_AUTO_UPDATE_CHECK]?.toBooleanStrictOrNull()?.let {
             prefs[Keys.AUTO_UPDATE_CHECK] = it
@@ -423,6 +436,7 @@ class SettingsDataStore(
             storageLocation = storage,
             pendingStorageLocation = pendingStorage,
             reduceTransparency = prefs[Keys.REDUCE_TRANSPARENCY] ?: false,
+            uiSoundEffectsEnabled = prefs[Keys.UI_SOUND_EFFECTS_ENABLED] ?: true,
             autoUpdateCheck = prefs[Keys.AUTO_UPDATE_CHECK] ?: true,
             siteSwitchTutorialSeen = prefs[Keys.SITE_SWITCH_TUTORIAL_SEEN] ?: false,
             tagDictAutoSync = prefs[Keys.TAG_DICT_AUTO_SYNC] ?: true,
@@ -439,6 +453,8 @@ class SettingsDataStore(
             readerMemoryBudgetMb = (prefs[Keys.READER_MEMORY_BUDGET_MB] ?: AppSettings.DEFAULT_READER_MEMORY_BUDGET_MB)
                 .coerceIn(AppSettings.MIN_READER_MEMORY_BUDGET_MB, AppSettings.MAX_READER_MEMORY_BUDGET_MB),
             readerAutoSplitWidePages = prefs[Keys.READER_AUTO_SPLIT_WIDE_PAGES] ?: false,
+            imageLoadConcurrency = (prefs[Keys.IMAGE_LOAD_CONCURRENCY] ?: AppSettings.DEFAULT_IMAGE_CONCURRENCY)
+                .coerceIn(AppSettings.MIN_IMAGE_CONCURRENCY, AppSettings.MAX_IMAGE_CONCURRENCY),
             backgroundSubscriptionSync = prefs[Keys.BACKGROUND_SUBSCRIPTION_SYNC] ?: true,
             privacyScreenSecure = prefs[Keys.PRIVACY_SCREEN_SECURE] ?: false,
             appLockEnabled = prefs[Keys.APP_LOCK_ENABLED] ?: false,
@@ -462,6 +478,7 @@ class SettingsDataStore(
         val STORAGE_LOCATION = stringPreferencesKey(KEY_STORAGE_LOCATION)
         val PENDING_STORAGE_LOCATION = stringPreferencesKey(KEY_PENDING_STORAGE_LOCATION)
         val REDUCE_TRANSPARENCY = booleanPreferencesKey(KEY_REDUCE_TRANSPARENCY)
+        val UI_SOUND_EFFECTS_ENABLED = booleanPreferencesKey(KEY_UI_SOUND_EFFECTS_ENABLED)
         val AUTO_UPDATE_CHECK = booleanPreferencesKey(KEY_AUTO_UPDATE_CHECK)
         val SITE_SWITCH_TUTORIAL_SEEN = booleanPreferencesKey(KEY_SITE_SWITCH_TUTORIAL_SEEN)
         val TAG_DICT_AUTO_SYNC = booleanPreferencesKey(KEY_TAG_DICT_AUTO_SYNC)
@@ -476,6 +493,7 @@ class SettingsDataStore(
         val READER_PREFETCH_PAGES = intPreferencesKey(KEY_READER_PREFETCH_PAGES)
         val READER_MEMORY_BUDGET_MB = intPreferencesKey(KEY_READER_MEMORY_BUDGET_MB)
         val READER_AUTO_SPLIT_WIDE_PAGES = booleanPreferencesKey(KEY_READER_AUTO_SPLIT_WIDE_PAGES)
+        val IMAGE_LOAD_CONCURRENCY = intPreferencesKey(KEY_IMAGE_LOAD_CONCURRENCY)
         val BACKGROUND_SUBSCRIPTION_SYNC = booleanPreferencesKey(KEY_BACKGROUND_SUBSCRIPTION_SYNC)
         val PRIVACY_SCREEN_SECURE = booleanPreferencesKey(KEY_PRIVACY_SCREEN_SECURE)
         val APP_LOCK_ENABLED = booleanPreferencesKey(KEY_APP_LOCK_ENABLED)
@@ -509,6 +527,7 @@ class SettingsDataStore(
         const val KEY_STORAGE_LOCATION: String = "storage_location"
         const val KEY_PENDING_STORAGE_LOCATION: String = "pending_storage_location"
         const val KEY_REDUCE_TRANSPARENCY: String = "reduce_transparency"
+        const val KEY_UI_SOUND_EFFECTS_ENABLED: String = "ui_sound_effects_enabled"
         const val KEY_AUTO_UPDATE_CHECK: String = "auto_update_check"
         const val KEY_SITE_SWITCH_TUTORIAL_SEEN: String = "site_switch_tutorial_seen"
         const val KEY_TAG_DICT_AUTO_SYNC: String = "tag_dict_auto_sync"
@@ -523,6 +542,7 @@ class SettingsDataStore(
         const val KEY_READER_PREFETCH_PAGES: String = "reader_prefetch_pages"
         const val KEY_READER_MEMORY_BUDGET_MB: String = "reader_memory_budget_mb"
         const val KEY_READER_AUTO_SPLIT_WIDE_PAGES: String = "reader_auto_split_wide_pages"
+        const val KEY_IMAGE_LOAD_CONCURRENCY: String = "image_load_concurrency"
         const val KEY_BACKGROUND_SUBSCRIPTION_SYNC: String = "background_subscription_sync"
         const val KEY_PRIVACY_SCREEN_SECURE: String = "privacy_screen_secure"
         const val KEY_APP_LOCK_ENABLED: String = "app_lock_enabled"
@@ -543,6 +563,7 @@ class SettingsDataStore(
             KEY_SEEK_CACHE_ENABLED,
             KEY_DOWNLOAD_UNMETERED_ONLY,
             KEY_REDUCE_TRANSPARENCY,
+            KEY_UI_SOUND_EFFECTS_ENABLED,
             KEY_AUTO_UPDATE_CHECK,
             KEY_TAG_DICT_AUTO_SYNC,
             KEY_BLOCK_TAGS_GLOBALLY,

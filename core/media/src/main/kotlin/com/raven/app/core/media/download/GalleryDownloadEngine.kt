@@ -29,7 +29,9 @@ import com.raven.app.core.model.DownloadKind
 import com.raven.app.core.model.DownloadStatus
 import com.raven.app.core.model.MediaItem
 import com.raven.app.core.model.MediaKind
+import com.raven.app.core.model.SiteId
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
@@ -38,6 +40,7 @@ import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
@@ -72,6 +75,9 @@ class GalleryDownloadEngine(
     private val preferOriginalProvider: suspend (MediaItem) -> Boolean = { false },
     private val serviceStarter: (() -> Unit)? = null,
     private val clockMs: () -> Long = System::currentTimeMillis,
+    private val concurrencyProvider: suspend (SiteId) -> Int = { siteId ->
+        galleryPageRepository.recommendedImageConcurrency(siteId)
+    },
 ) {
     private val activeJobs = ConcurrentHashMap<String, Job>()
     private val retryTimerJobs = ConcurrentHashMap<String, Job>()
@@ -419,30 +425,50 @@ class GalleryDownloadEngine(
                 )
             }
 
-            for (pageIndex in requestedPages) {
-                currentCoroutineContext().ensureActive()
-                stage = DownloadStage.DOWNLOADING_PAGE
-                val (_, pageBytes) = retryTransient(task.id, stage) {
-                    galleryPageRepository.downloadPage(
-                        detail = detail,
-                        pageIndex = pageIndex,
-                        layout = layout,
-                        preferOriginal = preferOriginal,
-                    )
-                }
-                completedCount += 1
-                totalBytes += pageBytes
-                val fraction = (completedCount.toFloat() / totalRequested.toFloat()).coerceIn(0f, 1f)
-                updateIf(task.id, predicate = { it.status == DownloadStatus.DOWNLOADING }) { current ->
-                    current.copy(
-                        completedUnits = maxOf(current.completedUnits, completedCount),
-                        totalUnits = detail.pageCount,
-                        progressFraction = maxOf(current.progressFraction, fraction),
-                        downloadedBytes = maxOf(current.downloadedBytes, totalBytes),
-                        errorCategory = null,
-                        errorMessage = null,
-                        updatedAt = clockMs(),
-                    )
+            val workerCount = concurrencyProvider(task.siteId)
+                .coerceIn(1, MAX_PAGE_WORKERS)
+                .coerceAtMost(requestedPages.size)
+            val nextIdx = AtomicInteger(0)
+            val progressLock = Mutex()
+            stage = DownloadStage.DOWNLOADING_PAGE
+
+            coroutineScope {
+                repeat(workerCount) { workerIndex ->
+                    launch {
+                        if (workerIndex > 0) {
+                            delay(workerIndex * WORKER_STAGGER_DELAY_MS)
+                        }
+                        while (true) {
+                            currentCoroutineContext().ensureActive()
+                            val idx = nextIdx.getAndIncrement()
+                            if (idx >= requestedPages.size) break
+                            val pageIndex = requestedPages[idx]
+                            val (_, pageBytes) = retryTransient(task.id, stage) {
+                                galleryPageRepository.downloadPage(
+                                    detail = detail,
+                                    pageIndex = pageIndex,
+                                    layout = layout,
+                                    preferOriginal = preferOriginal,
+                                )
+                            }
+                            progressLock.withLock {
+                                completedCount += 1
+                                totalBytes += pageBytes
+                                val fraction = (completedCount.toFloat() / totalRequested.toFloat()).coerceIn(0f, 1f)
+                                updateIf(task.id, predicate = { it.status == DownloadStatus.DOWNLOADING }) { current ->
+                                    current.copy(
+                                        completedUnits = maxOf(current.completedUnits, completedCount),
+                                        totalUnits = detail.pageCount,
+                                        progressFraction = maxOf(current.progressFraction, fraction),
+                                        downloadedBytes = maxOf(current.downloadedBytes, totalBytes),
+                                        errorCategory = null,
+                                        errorMessage = null,
+                                        updatedAt = clockMs(),
+                                    )
+                                }
+                            }
+                        }
+                    }
                 }
             }
 
@@ -661,6 +687,8 @@ class GalleryDownloadEngine(
             DownloadStatus.FAILED,
             DownloadStatus.RETRY_WAIT,
         )
+        const val MAX_PAGE_WORKERS: Int = 3
+        private const val WORKER_STAGGER_DELAY_MS: Long = 80L
     }
 }
 

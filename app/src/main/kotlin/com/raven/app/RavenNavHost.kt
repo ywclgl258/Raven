@@ -7,8 +7,11 @@ import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
 import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
@@ -640,45 +643,53 @@ fun RavenAppShell(
             navController = navController,
             startDestination = RavenRoute.Home,
             enterTransition = {
-                if (motionReduced) {
-                    EnterTransition.None
-                } else if (targetState.destination.isTopLevelTabDestination()) {
-                    ravenTabEnterTransition()
-                } else {
-                    ravenPushEnterTransition()
+                val fromIdx = initialState.destination.topLevelTabIndex()
+                val toIdx = targetState.destination.topLevelTabIndex()
+                when {
+                    motionReduced -> EnterTransition.None
+                    fromIdx != null && toIdx != null -> {
+                        ravenTabEnterTransition(RavenMotion.computeTabSlideDirection(fromIdx, toIdx))
+                    }
+                    targetState.destination.isTopLevelTabDestination() -> ravenTabEnterTransition(direction = 0)
+                    targetState.destination.isImmersiveModalDestination() -> ravenModalEnterTransition()
+                    else -> ravenPushEnterTransition()
                 }
             },
             exitTransition = {
-                if (motionReduced) {
-                    ExitTransition.None
-                } else if (targetState.destination.isTopLevelTabDestination()) {
-                    ravenTabExitTransition()
-                } else {
-                    ravenPushParentExitTransition()
+                val fromIdx = initialState.destination.topLevelTabIndex()
+                val toIdx = targetState.destination.topLevelTabIndex()
+                when {
+                    motionReduced -> ExitTransition.None
+                    fromIdx != null && toIdx != null -> {
+                        ravenTabExitTransition(RavenMotion.computeTabSlideDirection(fromIdx, toIdx))
+                    }
+                    targetState.destination.isTopLevelTabDestination() -> ravenTabExitTransition(direction = 0)
+                    targetState.destination.isImmersiveModalDestination() -> ravenModalParentExitTransition()
+                    else -> ravenPushParentExitTransition()
                 }
             },
             popEnterTransition = {
-                if (motionReduced) {
-                    EnterTransition.None
-                } else if (
-                    initialState.destination.isTopLevelTabDestination() &&
-                    targetState.destination.isTopLevelTabDestination()
-                ) {
-                    ravenTabEnterTransition()
-                } else {
-                    ravenPopParentEnterTransition()
+                val fromIdx = initialState.destination.topLevelTabIndex()
+                val toIdx = targetState.destination.topLevelTabIndex()
+                when {
+                    motionReduced -> EnterTransition.None
+                    fromIdx != null && toIdx != null -> {
+                        ravenTabEnterTransition(RavenMotion.computeTabSlideDirection(fromIdx, toIdx))
+                    }
+                    initialState.destination.isImmersiveModalDestination() -> ravenModalParentEnterTransition()
+                    else -> ravenPopParentEnterTransition()
                 }
             },
             popExitTransition = {
-                if (motionReduced) {
-                    ExitTransition.None
-                } else if (
-                    initialState.destination.isTopLevelTabDestination() &&
-                    targetState.destination.isTopLevelTabDestination()
-                ) {
-                    ravenTabExitTransition()
-                } else {
-                    ravenPopExitTransition()
+                val fromIdx = initialState.destination.topLevelTabIndex()
+                val toIdx = targetState.destination.topLevelTabIndex()
+                when {
+                    motionReduced -> ExitTransition.None
+                    fromIdx != null && toIdx != null -> {
+                        ravenTabExitTransition(RavenMotion.computeTabSlideDirection(fromIdx, toIdx))
+                    }
+                    initialState.destination.isImmersiveModalDestination() -> ravenModalExitTransition()
+                    else -> ravenPopExitTransition()
                 }
             },
             modifier = Modifier
@@ -987,15 +998,22 @@ private fun SharedLinkConfirmationSheet(
     }
 }
 
-private fun NavDestination.isTopLevelTabDestination(): Boolean =
-    hasRoute<RavenRoute.Home>() ||
-        hasRoute<RavenRoute.Explore>() ||
-        hasRoute<RavenRoute.Search>() ||
-        hasRoute<RavenRoute.Library>() ||
-        hasRoute<RavenRoute.Profile>()
+private fun NavDestination.topLevelTabIndex(): Int? = when {
+    hasRoute<RavenRoute.Home>() -> 0
+    hasRoute<RavenRoute.Explore>() -> 1
+    hasRoute<RavenRoute.Search>() -> 2
+    hasRoute<RavenRoute.Library>() -> 3
+    hasRoute<RavenRoute.Profile>() -> 4
+    else -> null
+}
 
-private fun ravenTabEnterTransition(): EnterTransition =
-    fadeIn(
+private fun NavDestination.isTopLevelTabDestination(): Boolean = topLevelTabIndex() != null
+
+private fun NavDestination.isImmersiveModalDestination(): Boolean =
+    hasRoute<RavenRoute.Reader>() || hasRoute<RavenRoute.GalleryDetail>()
+
+private fun ravenTabEnterTransition(direction: Int): EnterTransition {
+    val base = fadeIn(
         animationSpec = tween(
             durationMillis = RavenMotion.TAB_TRANSITION_DURATION_MS,
             easing = RavenMotion.AppleDecelerationEasing,
@@ -1007,14 +1025,38 @@ private fun ravenTabEnterTransition(): EnterTransition =
             easing = RavenMotion.AppleDecelerationEasing,
         ),
     )
+    return if (direction == 0) {
+        base
+    } else {
+        base + slideInHorizontally(
+            animationSpec = tween(
+                durationMillis = RavenMotion.TAB_TRANSITION_DURATION_MS,
+                easing = RavenMotion.AppleDecelerationEasing,
+            ),
+            initialOffsetX = { fullWidth -> RavenMotion.computeTabSlideOffset(fullWidth, direction) },
+        )
+    }
+}
 
-private fun ravenTabExitTransition(): ExitTransition =
-    fadeOut(
+private fun ravenTabExitTransition(direction: Int): ExitTransition {
+    val base = fadeOut(
         animationSpec = tween(
             durationMillis = RavenMotion.TAB_TRANSITION_DURATION_MS - 40,
             easing = RavenMotion.AppleDecelerationEasing,
         ),
     )
+    return if (direction == 0) {
+        base
+    } else {
+        base + slideOutHorizontally(
+            animationSpec = tween(
+                durationMillis = RavenMotion.TAB_TRANSITION_DURATION_MS - 20,
+                easing = RavenMotion.AppleDecelerationEasing,
+            ),
+            targetOffsetX = { fullWidth -> -RavenMotion.computeTabSlideOffset(fullWidth, direction) },
+        )
+    }
+}
 
 private fun ravenPushEnterTransition(): EnterTransition =
     slideInHorizontally(
@@ -1023,6 +1065,12 @@ private fun ravenPushEnterTransition(): EnterTransition =
             easing = RavenMotion.AppleDecelerationEasing,
         ),
         initialOffsetX = { fullWidth -> fullWidth },
+    ) + fadeIn(
+        animationSpec = tween(
+            durationMillis = RavenMotion.PUSH_TRANSITION_DURATION_MS / 2,
+            easing = RavenMotion.AppleDecelerationEasing,
+        ),
+        initialAlpha = 0.85f,
     )
 
 private fun ravenPushParentExitTransition(): ExitTransition =
@@ -1032,6 +1080,12 @@ private fun ravenPushParentExitTransition(): ExitTransition =
             easing = RavenMotion.AppleDecelerationEasing,
         ),
         targetOffsetX = RavenMotion::computeNavPushParentExitOffset,
+    ) + scaleOut(
+        targetScale = RavenMotion.PUSH_PARENT_EXIT_SCALE,
+        animationSpec = tween(
+            durationMillis = RavenMotion.PUSH_TRANSITION_DURATION_MS,
+            easing = RavenMotion.AppleDecelerationEasing,
+        ),
     ) + fadeOut(
         animationSpec = tween(
             durationMillis = RavenMotion.PUSH_TRANSITION_DURATION_MS,
@@ -1047,6 +1101,12 @@ private fun ravenPopParentEnterTransition(): EnterTransition =
             easing = RavenMotion.AppleDecelerationEasing,
         ),
         initialOffsetX = RavenMotion::computeNavPopParentEnterOffset,
+    ) + scaleIn(
+        initialScale = RavenMotion.PUSH_PARENT_EXIT_SCALE,
+        animationSpec = tween(
+            durationMillis = RavenMotion.POP_TRANSITION_DURATION_MS,
+            easing = RavenMotion.AppleDecelerationEasing,
+        ),
     ) + fadeIn(
         animationSpec = tween(
             durationMillis = RavenMotion.POP_TRANSITION_DURATION_MS,
@@ -1062,4 +1122,80 @@ private fun ravenPopExitTransition(): ExitTransition =
             easing = RavenMotion.AppleDecelerationEasing,
         ),
         targetOffsetX = { fullWidth -> fullWidth },
+    ) + fadeOut(
+        animationSpec = tween(
+            durationMillis = RavenMotion.POP_TRANSITION_DURATION_MS,
+            easing = RavenMotion.AppleDecelerationEasing,
+        ),
+        targetAlpha = 0.85f,
+    )
+
+private fun ravenModalEnterTransition(): EnterTransition =
+    slideInVertically(
+        animationSpec = tween(
+            durationMillis = RavenMotion.MODAL_ENTER_DURATION_MS,
+            easing = RavenMotion.AppleDecelerationEasing,
+        ),
+        initialOffsetY = { fullHeight -> fullHeight / 14 },
+    ) + scaleIn(
+        initialScale = RavenMotion.MODAL_INITIAL_SCALE,
+        animationSpec = tween(
+            durationMillis = RavenMotion.MODAL_ENTER_DURATION_MS,
+            easing = RavenMotion.AppleDecelerationEasing,
+        ),
+    ) + fadeIn(
+        animationSpec = tween(
+            durationMillis = RavenMotion.MODAL_ENTER_DURATION_MS - 60,
+            easing = RavenMotion.AppleDecelerationEasing,
+        ),
+    )
+
+private fun ravenModalParentExitTransition(): ExitTransition =
+    scaleOut(
+        targetScale = RavenMotion.PUSH_PARENT_EXIT_SCALE,
+        animationSpec = tween(
+            durationMillis = RavenMotion.MODAL_ENTER_DURATION_MS,
+            easing = RavenMotion.AppleDecelerationEasing,
+        ),
+    ) + fadeOut(
+        animationSpec = tween(
+            durationMillis = RavenMotion.MODAL_ENTER_DURATION_MS,
+            easing = RavenMotion.AppleDecelerationEasing,
+        ),
+        targetAlpha = RavenMotion.PUSH_EXIT_ALPHA,
+    )
+
+private fun ravenModalParentEnterTransition(): EnterTransition =
+    scaleIn(
+        initialScale = RavenMotion.PUSH_PARENT_EXIT_SCALE,
+        animationSpec = tween(
+            durationMillis = RavenMotion.MODAL_EXIT_DURATION_MS,
+            easing = RavenMotion.AppleDecelerationEasing,
+        ),
+    ) + fadeIn(
+        animationSpec = tween(
+            durationMillis = RavenMotion.MODAL_EXIT_DURATION_MS,
+            easing = RavenMotion.AppleDecelerationEasing,
+        ),
+        initialAlpha = RavenMotion.PUSH_EXIT_ALPHA,
+    )
+
+private fun ravenModalExitTransition(): ExitTransition =
+    slideOutVertically(
+        animationSpec = tween(
+            durationMillis = RavenMotion.MODAL_EXIT_DURATION_MS,
+            easing = RavenMotion.AppleDecelerationEasing,
+        ),
+        targetOffsetY = { fullHeight -> fullHeight / 14 },
+    ) + scaleOut(
+        targetScale = RavenMotion.MODAL_INITIAL_SCALE,
+        animationSpec = tween(
+            durationMillis = RavenMotion.MODAL_EXIT_DURATION_MS,
+            easing = RavenMotion.AppleDecelerationEasing,
+        ),
+    ) + fadeOut(
+        animationSpec = tween(
+            durationMillis = RavenMotion.MODAL_EXIT_DURATION_MS - 30,
+            easing = RavenMotion.AppleDecelerationEasing,
+        ),
     )
