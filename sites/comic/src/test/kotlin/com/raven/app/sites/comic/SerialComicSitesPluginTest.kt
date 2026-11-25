@@ -270,6 +270,84 @@ class SerialComicSitesPluginTest {
     }
 
     // -------------------------------------------------------------------------
+    // MyComic
+    // -------------------------------------------------------------------------
+
+    private val mycomicListHtml = """
+        <html><body>
+          <div class="list">
+            <div class="item">
+              <a href="/comics/1128">第07話</a>
+              <a href="/comics/1128">ONE PIECE航海王</a>
+              <img data-src="/covers/1128.webp">
+            </div>
+            <div class="item">
+              <a href="/comics/55355">第01話</a>
+              <a href="/comics/55355">獵人遊戲W</a>
+            </div>
+          </div>
+        </body></html>
+    """.trimIndent()
+
+    private val mycomicDetailHtml = """
+        <html><head>
+          <meta property="og:title" content="ONE PIECE航海王">
+          <meta property="og:image" content="https://cdn.mycomic.com/covers/1128.webp">
+        </head><body>
+          <a href="/chapters/817597">第07話</a>
+          <a href="/chapters/794527">第06話</a>
+        </body></html>
+    """.trimIndent()
+
+    private val mycomicChapterHtml = """
+        <html><body>
+          <img src="https://cdn.mycomic.com/static/logo.png">
+          <img data-src="https://cdn.mycomic.com/manga/1128/1.jpg">
+          <img data-src="https://cdn.mycomic.com/manga/1128/2.webp">
+        </body></html>
+    """.trimIndent()
+
+    @Test
+    fun `mycomic parses comics list, detail chapters and reader images`() = runTest {
+        val http = FakeHttpClientAdapter()
+        http.onUrlText("https://mycomic.com/comics?sort=-update", mycomicListHtml)
+        http.onUrlText("https://mycomic.com/comics/1128", mycomicDetailHtml)
+        http.onUrlText("https://mycomic.com/chapters/817597", mycomicChapterHtml)
+
+        val plugin = MycomicSitePlugin(http)
+        val feed = plugin.feedSource.loadFeed(FeedRequest(siteId = SiteId.MYCOMIC))
+        assertEquals(2, feed.items.size)
+        assertEquals("1128", feed.items.first().id)
+        assertEquals("ONE PIECE航海王", feed.items.first().title)
+        assertEquals("https://mycomic.com/covers/1128.webp", feed.items.first().coverUrl)
+
+        val detail = plugin.gallerySource.loadGalleryDetail("https://mycomic.com/comics/1128")
+        assertEquals("ONE PIECE航海王", detail.item.title)
+        assertEquals(2, detail.pageCount)
+        assertEquals("817597", detail.item.extra["chapterId"])
+        assertEquals(
+            listOf(
+                "https://cdn.mycomic.com/manga/1128/1.jpg",
+                "https://cdn.mycomic.com/manga/1128/2.webp",
+            ),
+            detail.pages.map { it.imageUrl },
+        )
+        assertTrue(detail.chaptersUrl.orEmpty().endsWith("#chapters"))
+
+        val page = plugin.gallerySource.resolvePageImage(
+            "https://mycomic.com/chapters/817597#2",
+            preferOriginal = false,
+            forceReload = true,
+        )
+        assertEquals(2, page.index)
+        assertEquals("https://cdn.mycomic.com/manga/1128/2.webp", page.imageUrl)
+
+        val resolved = plugin.linkResolver.resolve("https://mycomic.com/comics/1128?from=list")
+        assertTrue(resolved is ResolvedLink.Gallery)
+        assertNull(plugin.linkResolver.resolve("https://unrelated-domain.invalid/comics/1"))
+    }
+
+    // -------------------------------------------------------------------------
     // 嬉皮漫畫
     // -------------------------------------------------------------------------
 
