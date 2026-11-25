@@ -295,7 +295,7 @@ class MangacopySitePlugin(
                     val name = chapter.string("name").ifBlank { uuid }
                     ChapterEntry(uuid, name)
                 } }
-                .asReversed() // 接口按最新在前返回，反转为阅读顺序
+            // 官方接口已按阅读顺序（最早 → 最新）返回
             collected += list
         }
         return collected
