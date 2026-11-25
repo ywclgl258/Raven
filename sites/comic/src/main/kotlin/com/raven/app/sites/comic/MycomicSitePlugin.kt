@@ -379,7 +379,7 @@ class MycomicSitePlugin(
         val SITE_ID: SiteId = SiteId.MYCOMIC
         const val BASE_URL: String = "https://mycomic.com"
 
-        private val CHAPTER_JSON_REGEX = Regex("""(?<=chapters: )\[\{.*?}]""")
+        private val CHAPTER_JSON_REGEX = Regex("""(?<=chapters: )\[\{.*?\}\]""")
         private val IMAGE_ATTRIBUTE_REGEX = Regex(
             """(?:data-src|data-original|data-lazy-src|data-echo|data-url|src)\s*=\s*["'](https?://[^"']+)["']""",
             RegexOption.IGNORE_CASE,

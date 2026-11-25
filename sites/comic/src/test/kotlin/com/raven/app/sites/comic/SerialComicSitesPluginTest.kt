@@ -665,4 +665,58 @@ class SerialComicSitesPluginTest {
             koinApp.close()
         }
     }
+    @Test
+    fun `comic plugin regex literals escape closing braces and brackets for ART ICU`() {
+        val pluginClasses = listOf(
+            EhentaiSitePlugin::class.java,
+            ExhentaiSitePlugin::class.java,
+            NhentaiSitePlugin::class.java,
+            HitomiSitePlugin::class.java,
+            WnacgSitePlugin::class.java,
+            JmcomicSitePlugin::class.java,
+            HdoujinSitePlugin::class.java,
+            MangacopySitePlugin::class.java,
+            Mh160SitePlugin::class.java,
+            GuazimanhuaSitePlugin::class.java,
+            MycomicSitePlugin::class.java,
+            HipmhSitePlugin::class.java,
+        )
+        val violations = mutableListOf<String>()
+        pluginClasses.forEach { pluginClass ->
+            val companion = pluginClass.declaredClasses.firstOrNull { it.simpleName == "Companion" }
+                ?: return@forEach
+            companion.declaredFields
+                .filter { Regex::class.java.isAssignableFrom(it.type) }
+                .forEach { field ->
+                    field.isAccessible = true
+                    val pattern = (field.get(null) as? Regex)?.pattern ?: return@forEach
+                    val openBraces = countUnescaped(pattern, '{')
+                    val closeBraces = countUnescaped(pattern, '}')
+                    val openBrackets = countUnescaped(pattern, '[')
+                    val closeBrackets = countUnescaped(pattern, ']')
+                    if (closeBraces > openBraces || closeBrackets > openBrackets) {
+                        violations += "${pluginClass.simpleName}.${field.name}: $pattern"
+                    }
+                }
+        }
+        assertTrue(
+            "Unescaped } or ] will crash Android ART ICU: $violations",
+            violations.isEmpty(),
+        )
+    }
+
+    private fun countUnescaped(pattern: String, target: Char): Int {
+        var count = 0
+        var backslashes = 0
+        pattern.forEach { ch ->
+            if (ch == '\\') {
+                backslashes++
+                return@forEach
+            }
+            if (ch == target && backslashes % 2 == 0) count++
+            backslashes = 0
+        }
+        return count
+    }
+
 }
