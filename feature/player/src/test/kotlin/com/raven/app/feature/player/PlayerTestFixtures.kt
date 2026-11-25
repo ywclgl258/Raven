@@ -398,6 +398,22 @@ internal class FakePlayerPlaybackPort(
         }
     }
 
+    var selectedAudioTrackPair: Pair<Int, Int>? = null
+    var selectedSubtitleTrackPair: Pair<Int, Int>? = null
+    var subtitlesDisabledCount: Int = 0
+
+    override fun selectAudioTrack(groupIndex: Int, trackIndex: Int) {
+        selectedAudioTrackPair = groupIndex to trackIndex
+    }
+
+    override fun selectSubtitleTrack(groupIndex: Int, trackIndex: Int) {
+        selectedSubtitleTrackPair = groupIndex to trackIndex
+    }
+
+    override fun disableSubtitles() {
+        subtitlesDisabledCount += 1
+    }
+
     override fun release() {
         released = true
         _state.value = PlayerEngineState()

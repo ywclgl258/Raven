@@ -419,7 +419,11 @@ class DownloadCoordinator(
             videoDownloadEngine.pauseAll()
             galleryDownloadEngine.withWritersStopped {
                 storageRootManager.migratePrivateToShared(
-                    copyVideos = { downloadCaches.copyPrivateDownloadsToShared() },
+                    copyVideos = {
+                        downloadCaches.copyPrivateDownloadsToShared { copied, total ->
+                            onProgress(copied, total, "正在迁移缓存视频")
+                        }
+                    },
                     isCompleteComicBook = { folder -> galleryPageRepository.isCompleteBookDirectory(folder) },
                     onProgress = onProgress,
                 )

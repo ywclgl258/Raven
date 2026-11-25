@@ -185,6 +185,10 @@ class RavenDesignTokensTest {
         assertFalse(isRavenRailWidth(599))
         assertTrue(isRavenRailWidth(600))
         assertTrue(isRavenRailWidth(840))
+        assertTrue(isRavenRailWidth(1199))
+        assertFalse(isRavenRailWidth(1200))
+        assertFalse(com.raven.app.core.designsystem.component.isRavenDrawerWidth(1199))
+        assertTrue(com.raven.app.core.designsystem.component.isRavenDrawerWidth(1200))
 
         assertEquals("全部", ComicLanguage.ALL.displayLabel())
         assertEquals("中文", ComicLanguage.CHINESE.displayLabel())

@@ -52,11 +52,11 @@ interface BrowseNavigator {
 
     fun openBlockedTerms(siteId: SiteId)
 
-    fun openFavorites()
+    fun openFavorites(siteId: SiteId? = null)
 
     fun openHistory()
 
-    fun openDownloads()
+    fun openDownloads(siteId: SiteId? = null)
 
     fun openSubscriptions(siteId: SiteId? = null)
 

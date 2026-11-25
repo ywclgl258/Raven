@@ -62,6 +62,8 @@ class RavenApplication : Application(), SingletonImageLoader.Factory {
                 .onFailure { Log.w(TAG, "Failed to apply pending storage location on cold start", it) }
             runCatching { downloadCoordinator.start() }
                 .onFailure { Log.w(TAG, "Failed to start DownloadCoordinator", it) }
+            runCatching { RavenBackgroundMaintenanceWorker.schedulePeriodic(this@RavenApplication) }
+                .onFailure { Log.w(TAG, "Failed to schedule periodic background maintenance", it) }
         }
 
         applicationScope.launch(dispatchers.io) {

@@ -71,7 +71,12 @@ class SubscriptionRepository(
         slug: String,
         scope: SearchScope = SearchScope.TAG,
     ) {
-        tagSubscriptionDao.delete(siteId.value, slug.trim(), scope)
+        val cleanSlug = slug.trim()
+        val sourceId = "${siteId.value}:${scope.name}:$cleanSlug"
+        transactionRunner {
+            tagSubscriptionDao.delete(siteId.value, cleanSlug, scope)
+            updateInboxDao.deleteBySource(InboxSourceKind.TAG_SUBSCRIPTION, sourceId)
+        }
     }
 
     /**
@@ -260,6 +265,7 @@ class SubscriptionRepository(
                 effective.toEntity()
             }
             updateInboxDao.upsertAll(merged)
+            updateInboxDao.prune(UpdateInboxDao.MAX_INBOX_ITEMS)
         }
     }
 

@@ -1,6 +1,7 @@
 package com.raven.app.core.common
 
 import java.net.URI
+import java.util.Locale
 
 /**
  * Pure-JVM URL validation, host matching, and incoming share-text extraction utilities.
@@ -25,7 +26,7 @@ object UrlSanitizer {
 
     fun isSafeHttpUrl(raw: String, allowHttp: Boolean = false): Boolean {
         val uri = parseUriOrNull(raw) ?: return false
-        val scheme = uri.scheme?.lowercase() ?: return false
+        val scheme = uri.scheme?.lowercase(Locale.ROOT) ?: return false
         val schemeAllowed = scheme == "https" || (allowHttp && scheme == "http")
         if (!schemeAllowed) return false
         if (uri.host.isNullOrBlank()) return false
@@ -39,9 +40,9 @@ object UrlSanitizer {
      */
     fun normalizeHttpsUrl(raw: String, preserveFragment: Boolean = false): String? {
         val uri = parseUriOrNull(raw) ?: return null
-        val scheme = uri.scheme?.lowercase() ?: return null
+        val scheme = uri.scheme?.lowercase(Locale.ROOT) ?: return null
         if (scheme != "http" && scheme != "https") return null
-        val host = uri.host?.lowercase()?.takeIf { it.isNotBlank() } ?: return null
+        val host = uri.host?.lowercase(Locale.ROOT)?.takeIf { it.isNotBlank() } ?: return null
         if (!uri.rawUserInfo.isNullOrEmpty()) return null
         val portPart = if (uri.port > 0 && uri.port != 443 && uri.port != 80) ":${uri.port}" else ""
         val pathPart = uri.rawPath.orEmpty().ifEmpty { "/" }
@@ -51,14 +52,14 @@ object UrlSanitizer {
         return result.takeIf { it.length <= MAX_URL_LENGTH }
     }
 
-    fun extractHost(raw: String): String? = parseUriOrNull(raw)?.host?.lowercase()?.takeIf { it.isNotBlank() }
+    fun extractHost(raw: String): String? = parseUriOrNull(raw)?.host?.lowercase(Locale.ROOT)?.takeIf { it.isNotBlank() }
 
     /**
      * Strict domain check: matches exact [domain] or subdomain `*.domain`, rejecting lookalike prefixes.
      */
     fun hostMatchesDomain(host: String, domain: String): Boolean {
-        val normalizedHost = host.trim().lowercase().trimEnd('.')
-        val normalizedDomain = domain.trim().lowercase().trimEnd('.')
+        val normalizedHost = host.trim().lowercase(Locale.ROOT).trimEnd('.')
+        val normalizedDomain = domain.trim().lowercase(Locale.ROOT).trimEnd('.')
         if (normalizedHost.isEmpty() || normalizedDomain.isEmpty()) return false
         return normalizedHost == normalizedDomain || normalizedHost.endsWith(".$normalizedDomain")
     }
@@ -67,12 +68,12 @@ object UrlSanitizer {
      * Checks whether [host] belongs to [primaryHost] or any of [mirrors] (including `www.` variants).
      */
     fun hostMatchesSite(host: String, primaryHost: String, mirrors: Collection<String> = emptyList()): Boolean {
-        val candidate = host.trim().lowercase().trimEnd('.')
+        val candidate = host.trim().lowercase(Locale.ROOT).trimEnd('.')
         if (candidate.isEmpty()) return false
         val knownHosts = buildList {
-            if (primaryHost.isNotBlank()) add(primaryHost.trim().lowercase().trimEnd('.'))
+            if (primaryHost.isNotBlank()) add(primaryHost.trim().lowercase(Locale.ROOT).trimEnd('.'))
             mirrors.forEach { m ->
-                val n = m.trim().lowercase().trimEnd('.')
+                val n = m.trim().lowercase(Locale.ROOT).trimEnd('.')
                 if (n.isNotBlank()) add(n)
             }
         }
@@ -89,7 +90,7 @@ object UrlSanitizer {
     fun resolveRelative(baseUrl: String, raw: String): String? {
         val value = raw.trim()
         if (value.isEmpty()) return null
-        val lower = value.lowercase()
+        val lower = value.lowercase(Locale.ROOT)
         if (lower.startsWith("data:") || lower.startsWith("javascript:") || lower.startsWith("blob:")) return null
         if (lower.startsWith("//")) return "https:$value".takeIf { isHttpsUrl(it) }
         if (lower.startsWith("http://") || lower.startsWith("https://")) {

@@ -410,4 +410,38 @@ class WnacgAndJmcomicPluginTest {
         assertEquals(FeedSort.LIKES, parsedLikes!!.sort)
         assertEquals(3, parsedLikes.page)
     }
+
+    @Test
+    fun `jmcomic accepts bare catalogue links and numbered org cdn hosts while wnacg accepts dynamic tN wnimg1 hosts`() = runTest {
+        val jm = JmcomicSitePlugin(FakeHttpClientAdapter())
+        val bareCatalogue = jm.parseFeedLink(ComicUrl.requireParse("https://jmcomic-zzz.one/albums?page=2"))
+        assertEquals(FeedRequest(SiteId.JMCOMIC, section = "latest", sort = FeedSort.NEWEST, page = 2), bareCatalogue)
+        val bareCat = jm.parseFeedLink(ComicUrl.requireParse("https://jmcomic-zzz.one/albums/hanman"))
+        assertEquals(FeedRequest(SiteId.JMCOMIC, category = "hanman", sort = FeedSort.NEWEST, page = 1), bareCat)
+
+        val http = FakeHttpClientAdapter()
+        http.onMatch({ req -> req.url.endsWith("/albums?o=mr") }) { req ->
+            FakeHttpClientAdapter.htmlResponse(
+                req.url,
+                jmCatalogueHtml("jmcomic-zzz.one").replace(
+                    "https://cdn-msp.18comic.ink/media/albums/500001_3x4.jpg",
+                    "https://cdn-msp9.jmcomic-zzz.org/media/albums/500001_3x4.jpg",
+                ),
+            )
+        }
+        val jmWithDynamicCdn = JmcomicSitePlugin(http)
+        val feed = jmWithDynamicCdn.feedSource!!.loadFeed(FeedRequest(SiteId.JMCOMIC))
+        assertEquals("https://cdn-msp9.jmcomic-zzz.org/media/albums/500001_3x4.jpg", feed.items.single().coverUrl)
+
+        val wnacgHttp = FakeHttpClientAdapter()
+        wnacgHttp.onMatch({ req -> req.url.endsWith("/albums-index-page-1.html") }) { req ->
+            FakeHttpClientAdapter.htmlResponse(
+                req.url,
+                wnacgFeedHtml(listOf(909 to "Sample")).replace("//t2.wnimg1.ru/data/t/00/909.jpg", "//t7.wnimg1.ru/data/cover/909.jpg"),
+            )
+        }
+        val wnacg = WnacgSitePlugin(wnacgHttp)
+        val wFeed = wnacg.feedSource!!.loadFeed(FeedRequest(SiteId.WNACG))
+        assertEquals("https://t7.wnimg1.ru/data/cover/909.jpg", wFeed.items.single().coverUrl)
+    }
 }

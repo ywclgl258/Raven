@@ -27,6 +27,7 @@ import com.raven.app.core.sitespi.SearchSource
 import com.raven.app.core.sitespi.SitePlugin
 import com.raven.app.core.sitespi.SiteRequestKind
 import com.raven.app.core.sitespi.VideoSource
+import java.util.Locale
 import org.jsoup.Jsoup
 import org.jsoup.nodes.Document
 
@@ -257,6 +258,7 @@ class CosplayteleSitePlugin(
         )
         private val BLOCKQUOTE_KV_REGEX = Regex("^(Cosplayer|Character|Appear\\s*In|Series)\\s*[:：]\\s*(.+)$", RegexOption.IGNORE_CASE)
         private val BLOCKQUOTE_LINE_SPLIT_REGEX = Regex("<br\\s*/?>|</p>|</li>|\\r?\\n", RegexOption.IGNORE_CASE)
+        private val WHITESPACE_REGEX = Regex("\\s+")
 
         val DESCRIPTOR: SiteDescriptor = SiteDescriptor(
             id = SiteId.COSPLAYTELE,
@@ -285,7 +287,7 @@ class CosplayteleSitePlugin(
                     mediaKind = MediaKind.PHOTO,
                 ),
             ),
-            searchScopes = listOf(SearchScope.ALL),
+            searchScopes = listOf(SearchScope.ALL, SearchScope.TAG),
             networkProfile = SiteNetworkProfile(
                 referer = "https://cosplaytele.com/",
                 mediaReferer = "https://cosplaytele.com/",
@@ -400,20 +402,20 @@ class CosplayteleSitePlugin(
                 for (rawLine in lines) {
                     val text = GalleryUrlUtils.cleanHtmlText(Jsoup.parseBodyFragment(rawLine).text())
                     val match = BLOCKQUOTE_KV_REGEX.matchEntire(text) ?: continue
-                    val key = match.groupValues[1].lowercase()
+                    val key = match.groupValues[1].lowercase(Locale.ROOT)
                     val value = match.groupValues[2].trim()
                     if (value.isBlank()) continue
                     when {
                         key.startsWith("cosplayer") -> {
-                            val slug = value.lowercase().replace(Regex("\\s+"), "-")
+                            val slug = value.lowercase(Locale.ROOT).replace(WHITESPACE_REGEX, "-")
                             authors += AuthorRef(id = slug, name = value, role = "cosplayer")
                         }
                         key.startsWith("character") -> {
-                            val slug = value.lowercase().replace(Regex("\\s+"), "-")
+                            val slug = value.lowercase(Locale.ROOT).replace(WHITESPACE_REGEX, "-")
                             characters += TagRef(slug = slug, label = value, namespace = "character")
                         }
                         key.startsWith("appear") || key.startsWith("series") -> {
-                            val slug = value.lowercase().replace(Regex("\\s+"), "-")
+                            val slug = value.lowercase(Locale.ROOT).replace(WHITESPACE_REGEX, "-")
                             tags += TagRef(slug = slug, label = value, namespace = "series")
                         }
                     }
@@ -425,7 +427,7 @@ class CosplayteleSitePlugin(
                 if (label.isBlank()) continue
                 val href = GalleryUrlUtils.resolveAbsoluteUrl(anchor.absUrl("href").ifBlank { anchor.attr("href") }, baseUrl).orEmpty()
                 val slug = GalleryUrlUtils.parseUri(href)?.let { GalleryUrlUtils.pathSegments(it).lastOrNull() }
-                    ?: label.lowercase().replace(Regex("\\s+"), "-")
+                    ?: label.lowercase(Locale.ROOT).replace(WHITESPACE_REGEX, "-")
                 categories += TagRef(slug = slug, label = label, namespace = "category", url = href)
             }
 
@@ -434,15 +436,15 @@ class CosplayteleSitePlugin(
                 if (label.isBlank()) continue
                 val href = GalleryUrlUtils.resolveAbsoluteUrl(anchor.absUrl("href").ifBlank { anchor.attr("href") }, baseUrl).orEmpty()
                 val slug = GalleryUrlUtils.parseUri(href)?.let { GalleryUrlUtils.pathSegments(it).lastOrNull() }
-                    ?: label.lowercase().replace(Regex("\\s+"), "-")
+                    ?: label.lowercase(Locale.ROOT).replace(WHITESPACE_REGEX, "-")
                 tags += TagRef(slug = slug, label = label, namespace = "tag", url = href)
             }
 
             return ExtractedGalleryMetadata(
-                tags = tags.distinctBy { it.slug.lowercase() },
-                authors = authors.distinctBy { it.name.lowercase() },
-                characters = characters.distinctBy { it.label.lowercase() },
-                categories = categories.distinctBy { it.slug.lowercase() },
+                tags = tags.distinctBy { it.slug.lowercase(Locale.ROOT) },
+                authors = authors.distinctBy { it.name.lowercase(Locale.ROOT) },
+                characters = characters.distinctBy { it.label.lowercase(Locale.ROOT) },
+                categories = categories.distinctBy { it.slug.lowercase(Locale.ROOT) },
             )
         }
     }

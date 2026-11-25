@@ -475,6 +475,10 @@ class GallerySitesPluginsTest {
             val resolved4khd = registry.resolveLinkFromText("https://www.4khd.com/content/04/sample-set-one.html")
             assertEquals(SiteId.FOURKHD, resolved4khd?.first?.id)
             assertTrue(resolved4khd?.second is ResolvedLink.Gallery)
+
+            listOf(SiteId.EVERIA, SiteId.FOURKHD, SiteId.FOURKUP, SiteId.COSPLAYTELE).forEach { id ->
+                assertTrue("$id should advertise TAG scope", SearchScope.TAG in registry.require(id).descriptor.searchScopes)
+            }
         } finally {
             koinApp.close()
         }

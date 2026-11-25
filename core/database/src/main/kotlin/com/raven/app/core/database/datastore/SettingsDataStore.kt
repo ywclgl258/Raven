@@ -2,6 +2,7 @@ package com.raven.app.core.database.datastore
 
 import android.content.Context
 import androidx.datastore.core.DataStore
+import androidx.datastore.core.handlers.ReplaceFileCorruptionHandler
 import androidx.datastore.preferences.core.MutablePreferences
 import androidx.datastore.preferences.core.PreferenceDataStoreFactory
 import androidx.datastore.preferences.core.Preferences
@@ -9,6 +10,7 @@ import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.emptyPreferences
 import androidx.datastore.preferences.core.floatPreferencesKey
+import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStoreFile
@@ -195,6 +197,60 @@ class SettingsDataStore(
         dataStore.edit { prefs -> prefs[Keys.BLOCK_TAGS_GLOBALLY] = enabled }
     }
 
+    suspend fun setAutoplayVideo(enabled: Boolean) {
+        dataStore.edit { prefs -> prefs[Keys.AUTOPLAY_VIDEO] = enabled }
+    }
+
+    suspend fun setBackgroundAudioPlayback(enabled: Boolean) {
+        dataStore.edit { prefs -> prefs[Keys.BACKGROUND_AUDIO_PLAYBACK] = enabled }
+    }
+
+    suspend fun setReaderTapZonesEnabled(enabled: Boolean) {
+        dataStore.edit { prefs -> prefs[Keys.READER_TAP_ZONES_ENABLED] = enabled }
+    }
+
+    suspend fun setReaderShowStatusBar(enabled: Boolean) {
+        dataStore.edit { prefs -> prefs[Keys.READER_SHOW_STATUS_BAR] = enabled }
+    }
+
+    suspend fun setReaderPrefetchPages(pages: Int) {
+        val clamped = pages.coerceIn(AppSettings.MIN_READER_PREFETCH_PAGES, AppSettings.MAX_READER_PREFETCH_PAGES)
+        dataStore.edit { prefs -> prefs[Keys.READER_PREFETCH_PAGES] = clamped }
+    }
+
+    suspend fun setReaderMemoryBudgetMb(budgetMb: Int) {
+        val clamped = budgetMb.coerceIn(AppSettings.MIN_READER_MEMORY_BUDGET_MB, AppSettings.MAX_READER_MEMORY_BUDGET_MB)
+        dataStore.edit { prefs -> prefs[Keys.READER_MEMORY_BUDGET_MB] = clamped }
+    }
+
+    suspend fun setReaderAutoSplitWidePages(enabled: Boolean) {
+        dataStore.edit { prefs -> prefs[Keys.READER_AUTO_SPLIT_WIDE_PAGES] = enabled }
+    }
+
+    suspend fun setBackgroundSubscriptionSync(enabled: Boolean) {
+        dataStore.edit { prefs -> prefs[Keys.BACKGROUND_SUBSCRIPTION_SYNC] = enabled }
+    }
+
+    suspend fun setPrivacyScreenSecure(enabled: Boolean) {
+        dataStore.edit { prefs -> prefs[Keys.PRIVACY_SCREEN_SECURE] = enabled }
+    }
+
+    suspend fun setAppLockEnabled(enabled: Boolean) {
+        dataStore.edit { prefs -> prefs[Keys.APP_LOCK_ENABLED] = enabled }
+    }
+
+    suspend fun setAppLockTimeoutSeconds(seconds: Int) {
+        dataStore.edit { prefs -> prefs[Keys.APP_LOCK_TIMEOUT_SECONDS] = seconds.coerceIn(0, 3600) }
+    }
+
+    suspend fun setIncognitoMode(enabled: Boolean) {
+        dataStore.edit { prefs -> prefs[Keys.INCOGNITO_MODE] = enabled }
+    }
+
+    suspend fun setWebDavLastSyncAt(epochMs: Long) {
+        dataStore.edit { prefs -> prefs[Keys.WEBDAV_LAST_SYNC_AT] = epochMs.coerceAtLeast(0L) }
+    }
+
     /**
      * Atomically marks `site_switch_tutorial_seen = true`.
      * Returns `true` strictly once when transitioning from unseen (`false`) to seen (`true`).
@@ -374,6 +430,21 @@ class SettingsDataStore(
             tagDictReleaseTag = prefs[Keys.TAG_DICT_RELEASE_TAG].orEmpty(),
             tagDictUpdatedAt = prefs[Keys.TAG_DICT_UPDATED_AT] ?: 0L,
             blockTagsGlobally = prefs[Keys.BLOCK_TAGS_GLOBALLY] ?: true,
+            autoplayVideo = prefs[Keys.AUTOPLAY_VIDEO] ?: true,
+            backgroundAudioPlayback = prefs[Keys.BACKGROUND_AUDIO_PLAYBACK] ?: false,
+            readerTapZonesEnabled = prefs[Keys.READER_TAP_ZONES_ENABLED] ?: true,
+            readerShowStatusBar = prefs[Keys.READER_SHOW_STATUS_BAR] ?: false,
+            readerPrefetchPages = (prefs[Keys.READER_PREFETCH_PAGES] ?: AppSettings.DEFAULT_READER_PREFETCH_PAGES)
+                .coerceIn(AppSettings.MIN_READER_PREFETCH_PAGES, AppSettings.MAX_READER_PREFETCH_PAGES),
+            readerMemoryBudgetMb = (prefs[Keys.READER_MEMORY_BUDGET_MB] ?: AppSettings.DEFAULT_READER_MEMORY_BUDGET_MB)
+                .coerceIn(AppSettings.MIN_READER_MEMORY_BUDGET_MB, AppSettings.MAX_READER_MEMORY_BUDGET_MB),
+            readerAutoSplitWidePages = prefs[Keys.READER_AUTO_SPLIT_WIDE_PAGES] ?: false,
+            backgroundSubscriptionSync = prefs[Keys.BACKGROUND_SUBSCRIPTION_SYNC] ?: true,
+            privacyScreenSecure = prefs[Keys.PRIVACY_SCREEN_SECURE] ?: false,
+            appLockEnabled = prefs[Keys.APP_LOCK_ENABLED] ?: false,
+            appLockTimeoutSeconds = (prefs[Keys.APP_LOCK_TIMEOUT_SECONDS] ?: 0).coerceIn(0, 3600),
+            incognitoMode = prefs[Keys.INCOGNITO_MODE] ?: false,
+            webDavLastSyncAt = (prefs[Keys.WEBDAV_LAST_SYNC_AT] ?: 0L).coerceAtLeast(0L),
         )
     }
 
@@ -398,6 +469,19 @@ class SettingsDataStore(
         val TAG_DICT_RELEASE_TAG = stringPreferencesKey(KEY_TAG_DICT_RELEASE_TAG)
         val TAG_DICT_UPDATED_AT = longPreferencesKey(KEY_TAG_DICT_UPDATED_AT)
         val BLOCK_TAGS_GLOBALLY = booleanPreferencesKey(KEY_BLOCK_TAGS_GLOBALLY)
+        val AUTOPLAY_VIDEO = booleanPreferencesKey(KEY_AUTOPLAY_VIDEO)
+        val BACKGROUND_AUDIO_PLAYBACK = booleanPreferencesKey(KEY_BACKGROUND_AUDIO_PLAYBACK)
+        val READER_TAP_ZONES_ENABLED = booleanPreferencesKey(KEY_READER_TAP_ZONES_ENABLED)
+        val READER_SHOW_STATUS_BAR = booleanPreferencesKey(KEY_READER_SHOW_STATUS_BAR)
+        val READER_PREFETCH_PAGES = intPreferencesKey(KEY_READER_PREFETCH_PAGES)
+        val READER_MEMORY_BUDGET_MB = intPreferencesKey(KEY_READER_MEMORY_BUDGET_MB)
+        val READER_AUTO_SPLIT_WIDE_PAGES = booleanPreferencesKey(KEY_READER_AUTO_SPLIT_WIDE_PAGES)
+        val BACKGROUND_SUBSCRIPTION_SYNC = booleanPreferencesKey(KEY_BACKGROUND_SUBSCRIPTION_SYNC)
+        val PRIVACY_SCREEN_SECURE = booleanPreferencesKey(KEY_PRIVACY_SCREEN_SECURE)
+        val APP_LOCK_ENABLED = booleanPreferencesKey(KEY_APP_LOCK_ENABLED)
+        val APP_LOCK_TIMEOUT_SECONDS = intPreferencesKey(KEY_APP_LOCK_TIMEOUT_SECONDS)
+        val INCOGNITO_MODE = booleanPreferencesKey(KEY_INCOGNITO_MODE)
+        val WEBDAV_LAST_SYNC_AT = longPreferencesKey(KEY_WEBDAV_LAST_SYNC_AT)
 
         fun siteLanguage(siteId: SiteId): Preferences.Key<String> =
             stringPreferencesKey("$SITE_LANGUAGE_PREFIX${siteId.value}")
@@ -432,6 +516,19 @@ class SettingsDataStore(
         const val KEY_TAG_DICT_RELEASE_TAG: String = "tag_dict_release_tag"
         const val KEY_TAG_DICT_UPDATED_AT: String = "tag_dict_updated_at"
         const val KEY_BLOCK_TAGS_GLOBALLY: String = "block_tags_globally"
+        const val KEY_AUTOPLAY_VIDEO: String = "autoplay_video"
+        const val KEY_BACKGROUND_AUDIO_PLAYBACK: String = "background_audio_playback"
+        const val KEY_READER_TAP_ZONES_ENABLED: String = "reader_tap_zones_enabled"
+        const val KEY_READER_SHOW_STATUS_BAR: String = "reader_show_status_bar"
+        const val KEY_READER_PREFETCH_PAGES: String = "reader_prefetch_pages"
+        const val KEY_READER_MEMORY_BUDGET_MB: String = "reader_memory_budget_mb"
+        const val KEY_READER_AUTO_SPLIT_WIDE_PAGES: String = "reader_auto_split_wide_pages"
+        const val KEY_BACKGROUND_SUBSCRIPTION_SYNC: String = "background_subscription_sync"
+        const val KEY_PRIVACY_SCREEN_SECURE: String = "privacy_screen_secure"
+        const val KEY_APP_LOCK_ENABLED: String = "app_lock_enabled"
+        const val KEY_APP_LOCK_TIMEOUT_SECONDS: String = "app_lock_timeout_seconds"
+        const val KEY_INCOGNITO_MODE: String = "incognito_mode"
+        const val KEY_WEBDAV_LAST_SYNC_AT: String = "webdav_last_sync_at"
 
         /** Keys safe to include in encrypted cross-device backups (never device paths/credentials). */
         val PORTABLE_BACKUP_KEYS: Set<String> = setOf(
@@ -456,6 +553,7 @@ class SettingsDataStore(
 
         fun createDataStore(context: Context): DataStore<Preferences> =
             PreferenceDataStoreFactory.create(
+                corruptionHandler = ReplaceFileCorruptionHandler { emptyPreferences() },
                 produceFile = { context.applicationContext.preferencesDataStoreFile(FILE_NAME) },
             )
 

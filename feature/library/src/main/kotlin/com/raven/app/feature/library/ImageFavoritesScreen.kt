@@ -17,6 +17,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.outlined.Collections
@@ -198,11 +199,13 @@ fun ImageFavoritesScreen(
             },
         )
 
-        LazyColumn(
-            modifier = Modifier.fillMaxSize(),
-            contentPadding = PaddingValues(top = 10.dp, bottom = 28.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
-        ) {
+        BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
+            val columns = computeLibraryGridColumns(maxWidth.value.toInt())
+            LazyColumn(
+                modifier = Modifier.fillMaxSize(),
+                contentPadding = PaddingValues(top = 10.dp, bottom = 28.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
             if (!uiState.message.isNullOrBlank()) {
                 item(key = "img_fav_msg") {
                     LibraryFeedbackBanner(
@@ -246,90 +249,85 @@ fun ImageFavoritesScreen(
                     )
                 }
             } else {
-                item(key = "img_fav_grid") {
-                    BoxWithConstraints(
+                val rows = uiState.items.chunked(columns)
+                itemsIndexed(
+                    items = rows,
+                    key = { idx, row -> "img_fav_row_${idx}_${row.first().id}" },
+                ) { _, rowItems ->
+                    Row(
                         modifier = Modifier
                             .fillMaxWidth()
                             .padding(horizontal = 16.dp),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
                     ) {
-                        val columns = computeLibraryGridColumns(maxWidth.value.toInt())
-                        val rows = remember(uiState.items, columns) { uiState.items.chunked(columns) }
-                        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                            rows.forEach { rowItems ->
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                        rowItems.forEach { fav ->
+                            val siteLabel = uiState.siteLabels[fav.siteId] ?: fav.siteId.value
+                            val displayPage = fav.pageIndex.coerceAtLeast(1)
+                            Column(
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .clip(RavenShapes.CardShape)
+                                    .background(colors.surface1)
+                                    .border(0.5.dp, colors.hairline, RavenShapes.CardShape)
+                                    .ravenSpringPress()
+                                    .clickable(role = Role.Button) { previewTarget = fav }
+                                    .testTag("image_favorite_card_${fav.id}"),
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .aspectRatio(0.74f)
+                                        .background(colors.surface2),
                                 ) {
-                                    rowItems.forEach { fav ->
-                                        val siteLabel = uiState.siteLabels[fav.siteId] ?: fav.siteId.value
-                                        val displayPage = fav.pageIndex.coerceAtLeast(1)
-                                        Column(
-                                            modifier = Modifier
-                                                .weight(1f)
-                                                .clip(RavenShapes.CardShape)
-                                                .background(colors.surface1)
-                                                .border(0.5.dp, colors.hairline, RavenShapes.CardShape)
-                                                .ravenSpringPress()
-                                                .clickable(role = Role.Button) { previewTarget = fav }
-                                                .testTag("image_favorite_card_${fav.id}"),
-                                        ) {
-                                            Box(
-                                                modifier = Modifier
-                                                    .fillMaxWidth()
-                                                    .aspectRatio(0.74f)
-                                                    .background(colors.surface2),
-                                            ) {
-                                                RavenImage(
-                                                    url = fav.imageUrl.ifBlank { fav.pageUrl },
-                                                    siteId = fav.siteId,
-                                                    contentDescription = fav.mediaTitle,
-                                                    contentScale = ContentScale.Crop,
-                                                    modifier = Modifier.fillMaxSize(),
-                                                )
-                                                Box(
-                                                    modifier = Modifier
-                                                        .align(Alignment.BottomEnd)
-                                                        .padding(6.dp)
-                                                        .clip(RavenShapes.BadgeShape)
-                                                        .background(colors.badgeBackdrop)
-                                                        .padding(horizontal = 6.dp, vertical = 2.dp),
-                                                ) {
-                                                    Text(
-                                                        text = "P$displayPage",
-                                                        style = MaterialTheme.typography.labelSmall.tabular(),
-                                                        color = colors.inkPrimary,
-                                                    )
-                                                }
-                                            }
-                                            Column(
-                                                modifier = Modifier.padding(8.dp),
-                                                verticalArrangement = Arrangement.spacedBy(2.dp),
-                                            ) {
-                                                Text(
-                                                    text = fav.mediaTitle.ifBlank { fav.mediaId },
-                                                    style = MaterialTheme.typography.labelMedium,
-                                                    color = colors.inkPrimary,
-                                                    maxLines = 1,
-                                                    overflow = TextOverflow.Ellipsis,
-                                                )
-                                                Text(
-                                                    text = siteLabel,
-                                                    style = MaterialTheme.typography.labelSmall,
-                                                    color = colors.inkSecondary,
-                                                    maxLines = 1,
-                                                )
-                                            }
-                                        }
-                                    }
-                                    repeat(columns - rowItems.size) {
-                                        Spacer(modifier = Modifier.weight(1f))
+                                    RavenImage(
+                                        url = fav.imageUrl.ifBlank { fav.pageUrl },
+                                        siteId = fav.siteId,
+                                        contentDescription = fav.mediaTitle,
+                                        contentScale = ContentScale.Crop,
+                                        modifier = Modifier.fillMaxSize(),
+                                    )
+                                    Box(
+                                        modifier = Modifier
+                                            .align(Alignment.BottomEnd)
+                                            .padding(6.dp)
+                                            .clip(RavenShapes.BadgeShape)
+                                            .background(colors.badgeBackdrop)
+                                            .padding(horizontal = 6.dp, vertical = 2.dp),
+                                    ) {
+                                        Text(
+                                            text = "P$displayPage",
+                                            style = MaterialTheme.typography.labelSmall.tabular(),
+                                            color = colors.inkPrimary,
+                                        )
                                     }
                                 }
+                                Column(
+                                    modifier = Modifier.padding(8.dp),
+                                    verticalArrangement = Arrangement.spacedBy(2.dp),
+                                ) {
+                                    Text(
+                                        text = fav.mediaTitle.ifBlank { fav.mediaId },
+                                        style = MaterialTheme.typography.labelMedium,
+                                        color = colors.inkPrimary,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                    )
+                                    Text(
+                                        text = siteLabel,
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = colors.inkSecondary,
+                                        maxLines = 1,
+                                    )
+                                }
                             }
+                        }
+                        repeat(columns - rowItems.size) {
+                            Spacer(modifier = Modifier.weight(1f))
                         }
                     }
                 }
             }
+        }
         }
     }
 

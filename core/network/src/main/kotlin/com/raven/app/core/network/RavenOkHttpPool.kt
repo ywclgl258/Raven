@@ -159,17 +159,40 @@ class RavenOkHttpPool(
         .cookieJar(CookieJar.NO_COOKIES)
         .build()
 
+    private val mediaNoCookieNoRedirectClient: OkHttpClient = mediaNoRedirectClient.newBuilder()
+        .cookieJar(CookieJar.NO_COOKIES)
+        .build()
+
+    private val imageNoCookieNoRedirectClient: OkHttpClient = imageNoRedirectClient.newBuilder()
+        .cookieJar(CookieJar.NO_COOKIES)
+        .build()
+
+    private val pageNoCookieNoRetryClient: OkHttpClient = pageNoRetryClient.newBuilder()
+        .cookieJar(CookieJar.NO_COOKIES)
+        .build()
+
+    private val apiNoCookieNoRetryClient: OkHttpClient = apiNoRetryClient.newBuilder()
+        .cookieJar(CookieJar.NO_COOKIES)
+        .build()
+
+    private val probeFollowRedirectsClient: OkHttpClient = probeClient.newBuilder()
+        .followRedirects(true)
+        .followSslRedirects(true)
+        .build()
+
     /**
      * Selects the exact pre-built [OkHttpClient] matching [request] without allocating any client.
      */
     fun clientFor(request: SiteHttpRequest): OkHttpClient = when (request.kind) {
-        SiteRequestKind.PROBE -> probeClient
+        SiteRequestKind.PROBE -> if (request.followRedirects) probeFollowRedirectsClient else probeClient
         SiteRequestKind.MEDIA -> when {
+            !request.followRedirects && !request.allowCookies -> mediaNoCookieNoRedirectClient
             !request.followRedirects -> mediaNoRedirectClient
             !request.allowCookies -> mediaNoCookieClient
             else -> mediaClient
         }
         SiteRequestKind.IMAGE -> when {
+            !request.followRedirects && !request.allowCookies -> imageNoCookieNoRedirectClient
             !request.followRedirects -> imageNoRedirectClient
             !request.allowCookies -> imageNoCookieClient
             else -> imageClient
@@ -177,6 +200,7 @@ class RavenOkHttpPool(
         SiteRequestKind.API -> when {
             !request.followRedirects && !request.allowCookies -> apiNoCookieNoRedirectClient
             !request.followRedirects -> apiNoRedirectClient
+            !request.allowCookies && !request.allowRetry -> apiNoCookieNoRetryClient
             !request.allowCookies -> apiNoCookieClient
             !request.allowRetry -> apiNoRetryClient
             else -> apiClient
@@ -184,6 +208,7 @@ class RavenOkHttpPool(
         SiteRequestKind.PAGE -> when {
             !request.followRedirects && !request.allowCookies -> pageNoCookieNoRedirectClient
             !request.followRedirects -> pageNoRedirectClient
+            !request.allowCookies && !request.allowRetry -> pageNoCookieNoRetryClient
             !request.allowCookies -> pageNoCookieClient
             !request.allowRetry -> pageNoRetryClient
             else -> pageClient

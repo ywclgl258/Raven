@@ -760,4 +760,63 @@ class PlayerViewModelTest {
             cancelAndIgnoreRemainingEvents()
         }
     }
+
+    @Test
+    fun `autoplayVideo, backgroundAudioPlayback, incognito skip, track selection and shelf actions behave correctly`() = runTest {
+        val harness = PlayerTestHarness(mainDispatcherRule.dispatcher)
+        harness.preferencesRepository.setAutoplayVideo(false)
+        harness.preferencesRepository.setBackgroundAudioPlayback(true)
+        harness.preferencesRepository.setIncognitoMode(true)
+        val (registry, _) = buildRegistry(
+            r34vDetailHandler = {
+                VideoDetail(
+                    item = sampleVideoItem(SiteId.R34V, "vid-cfg", title = "Config Video"),
+                    streams = sampleStreams("vid-cfg"),
+                )
+            },
+        )
+        val vm = harness.createViewModel(
+            registry,
+            initialArgs = PlayerLaunchArgs(
+                siteId = SiteId.R34V,
+                mediaId = "vid-cfg",
+                url = "https://r34v.example/video/vid-cfg",
+                autoplay = true,
+            ),
+        )
+
+        vm.uiState.test {
+            advanceUntilIdle()
+            val state = expectMostRecentItem()
+            // autoplayVideo = false disables initial autoPlay
+            assertFalse(harness.playbackPort.onlineLoads.single().autoPlay)
+            assertTrue(state.backgroundAudioPlayback)
+
+            // Playing then backgrounding with backgroundAudioPlayback = true keeps playback running
+            vm.play()
+            vm.onBackgrounded(isInPipMode = false)
+            advanceUntilIdle()
+            assertTrue(harness.playbackPort.state.value.isPlaying)
+
+            // Incognito skips persisting watch progress
+            harness.playbackPort.seekTo(60_000L)
+            vm.flushWatchProgress()
+            advanceUntilIdle()
+            assertNull(harness.historyRepository.getWatchProgress(SiteId.R34V, "vid-cfg"))
+
+            // Audio & subtitle track selection delegates to playback port
+            vm.selectAudioTrack(groupIndex = 1, trackIndex = 0)
+            vm.selectSubtitleTrack(groupIndex = 2, trackIndex = 1)
+            vm.disableSubtitles()
+            assertEquals(1 to 0, harness.playbackPort.selectedAudioTrackPair)
+            assertEquals(2 to 1, harness.playbackPort.selectedSubtitleTrackPair)
+            assertEquals(1, harness.playbackPort.subtitlesDisabledCount)
+
+            // Custom shelf creation adds item
+            vm.createShelfAndAdd("夜宵精选")
+            advanceUntilIdle()
+            assertTrue(expectMostRecentItem().shelves.any { it.shelf.name == "夜宵精选" && it.itemCount == 1 })
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
 }

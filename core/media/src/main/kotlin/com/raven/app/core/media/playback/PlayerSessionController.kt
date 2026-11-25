@@ -5,25 +5,34 @@ package com.raven.app.core.media.playback
 import android.content.Context
 import android.net.Uri
 import android.util.Rational
+import androidx.media3.common.AudioAttributes
+import androidx.media3.common.C
 import androidx.media3.common.MediaItem
+import androidx.media3.common.MediaMetadata
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.PlaybackParameters
 import androidx.media3.common.Player
+import androidx.media3.common.TrackSelectionOverride
+import androidx.media3.common.Tracks
 import androidx.media3.common.VideoSize
 import androidx.media3.datasource.DefaultDataSource
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.hls.HlsMediaSource
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.exoplayer.source.MediaSource
+import androidx.media3.session.MediaSession
 import com.raven.app.core.common.AppDispatchers
 import com.raven.app.core.common.DefaultAppDispatchers
 import com.raven.app.core.model.SiteId
 import com.raven.app.core.model.VideoStream
 import java.io.File
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlin.math.roundToInt
 
 /**
@@ -63,6 +72,17 @@ data class VideoLoopRange(
 }
 
 /**
+ * Selectable audio or subtitle track option exposed by [PlayerSessionController].
+ */
+data class MediaTrackOption(
+    val groupIndex: Int,
+    val trackIndex: Int,
+    val label: String,
+    val language: String?,
+    val selected: Boolean,
+)
+
+/**
  * Immutable playback engine state projected to `:feature:player` via [StateFlow].
  */
 data class PlayerEngineState(
@@ -78,9 +98,13 @@ data class PlayerEngineState(
     val videoHeight: Int = 0,
     val siteId: SiteId? = null,
     val mediaId: String? = null,
+    val title: String = "",
     val sourceUrl: String = "",
     val currentStream: VideoStream? = null,
     val availableStreams: List<VideoStream> = emptyList(),
+    val audioTracks: List<MediaTrackOption> = emptyList(),
+    val subtitleTracks: List<MediaTrackOption> = emptyList(),
+    val subtitlesEnabled: Boolean = false,
     val activeBufferPlan: BufferPlan? = null,
     val loopRange: VideoLoopRange = VideoLoopRange.NONE,
     val isOffline: Boolean = false,
@@ -100,7 +124,7 @@ data class PlayerEngineState(
 /**
  * Lifecycle-aware ExoPlayer session controller managing stream selection, dynamic buffer-plan
  * rebuilds, stall auto-downgrade, 1-time expired stream refresh, A-B loop evaluation, PiP aspect
- * ratio calculation, and local / complete-offline MP4 seek-bar preview decoding.
+ * ratio calculation, track selection, [MediaSession], and local/offline MP4 seek previews.
  */
 class PlayerSessionController(
     private val context: Context,
@@ -114,11 +138,15 @@ class PlayerSessionController(
     private val stallTracker = StallTracker(clockMs)
 
     private var player: ExoPlayer? = null
+    private var mediaSession: MediaSession? = null
+    private var currentTracks: Tracks? = null
     private var activeBufferPlan: BufferPlan? = null
     private var activeHlsSeekSession: HlsSeekSession? = null
     private var activeCacheKey: String? = null
     private var activeSourceRoot: String = ""
     private var activeLocalFilePath: String? = null
+    private var activeTitle: String = ""
+    private var activeArtworkUrl: String = ""
     private var activeStreamCacheEnabled: Boolean = false
     private var activeSeekCacheEnabled: Boolean = true
 
@@ -127,13 +155,32 @@ class PlayerSessionController(
 
     private val playerListener = object : Player.Listener {
         override fun onPlaybackStateChanged(playbackState: Int) {
-            val buffering = playbackState == Player.STATE_BUFFERING
-            stallTracker.onBufferingChanged(buffering, clockMs())
+            updateStallTrackerBuffering()
             syncSnapshot(clearError = playbackState == Player.STATE_READY)
+        }
+
+        override fun onPlayWhenReadyChanged(playWhenReady: Boolean, reason: Int) {
+            updateStallTrackerBuffering()
+            syncSnapshot()
         }
 
         override fun onIsPlayingChanged(isPlaying: Boolean) {
             syncSnapshot()
+        }
+
+        override fun onTracksChanged(tracks: Tracks) {
+            currentTracks = tracks
+            val (audio, subtitles, textDisabled) = extractTrackOptions(
+                tracks = tracks,
+                textTrackDisabled = C.TRACK_TYPE_TEXT in (player?.trackSelectionParameters?.disabledTrackTypes ?: emptySet()),
+            )
+            _state.update {
+                it.copy(
+                    audioTracks = audio,
+                    subtitleTracks = subtitles,
+                    subtitlesEnabled = !textDisabled && subtitles.any(MediaTrackOption::selected),
+                )
+            }
         }
 
         override fun onVideoSizeChanged(videoSize: VideoSize) {
@@ -161,6 +208,12 @@ class PlayerSessionController(
         }
     }
 
+    private fun updateStallTrackerBuffering() {
+        val exo = player ?: return
+        val activeBuffering = exo.playbackState == Player.STATE_BUFFERING && exo.playWhenReady
+        stallTracker.onBufferingChanged(activeBuffering, clockMs())
+    }
+
     fun currentPlayer(): ExoPlayer? = player
 
     /**
@@ -178,6 +231,8 @@ class PlayerSessionController(
         streamCacheEnabled: Boolean = false,
         seekCacheEnabled: Boolean = true,
         bandwidthKbps: Int = linkSpeedEstimator.estimateKbps(),
+        title: String = "",
+        artworkUrl: String = "",
     ): VideoStream {
         require(streams.isNotEmpty()) { "没有可播放的视频流" }
         val chosen = StreamSelector.pick(streams, preferredQuality, bandwidthKbps)
@@ -190,6 +245,8 @@ class PlayerSessionController(
         activeSeekCacheEnabled = seekCacheEnabled
         activeLocalFilePath = null
         activeSourceRoot = ""
+        activeTitle = title
+        activeArtworkUrl = artworkUrl
         activeCacheKey = cacheKey(siteId, mediaId, chosen.quality.ifBlank { chosen.label })
 
         val plan = BufferPlanner.planFor(chosen, bandwidthKbps)
@@ -202,6 +259,8 @@ class PlayerSessionController(
             cacheKey = activeCacheKey.orEmpty(),
             streamCacheEnabled = streamCacheEnabled,
             seekCacheEnabled = seekCacheEnabled,
+            title = title,
+            artworkUrl = artworkUrl,
         )
 
         exo.setMediaSource(mediaSource, startPositionMs.coerceAtLeast(0L))
@@ -213,9 +272,15 @@ class PlayerSessionController(
                 isInitialized = true,
                 siteId = siteId,
                 mediaId = mediaId,
+                title = title.ifBlank { if (isNewMedia) "" else it.title },
                 sourceUrl = sourceUrl,
                 currentStream = chosen,
                 availableStreams = streams,
+                videoWidth = if (isNewMedia) 0 else it.videoWidth,
+                videoHeight = if (isNewMedia) 0 else it.videoHeight,
+                audioTracks = if (isNewMedia) emptyList() else it.audioTracks,
+                subtitleTracks = if (isNewMedia) emptyList() else it.subtitleTracks,
+                subtitlesEnabled = if (isNewMedia) false else it.subtitlesEnabled,
                 activeBufferPlan = plan,
                 isOffline = false,
                 isLocal = false,
@@ -232,6 +297,39 @@ class PlayerSessionController(
     }
 
     /**
+     * Pre-warms offline cache metadata on IO before binding ExoPlayer on the main thread.
+     */
+    suspend fun loadOfflineAsync(
+        siteId: SiteId,
+        mediaId: String,
+        sourceUrl: String,
+        cacheKey: String,
+        sourceRoot: String = "",
+        qualityLabel: String = "",
+        startPositionMs: Long = 0L,
+        autoPlay: Boolean = true,
+        title: String = "",
+        artworkUrl: String = "",
+    ) {
+        val hlsUri = withContext(dispatchers.io) { downloadCaches.hlsUri(cacheKey, sourceRoot) }
+        withContext(dispatchers.main) {
+            loadOfflineInternal(
+                siteId = siteId,
+                mediaId = mediaId,
+                sourceUrl = sourceUrl,
+                cacheKey = cacheKey,
+                sourceRoot = sourceRoot,
+                qualityLabel = qualityLabel,
+                startPositionMs = startPositionMs,
+                autoPlay = autoPlay,
+                title = title,
+                artworkUrl = artworkUrl,
+                preResolvedHlsUri = hlsUri,
+            )
+        }
+    }
+
+    /**
      * Plays a downloaded video strictly from the permanent offline [DownloadCaches] (`upstream = null`).
      */
     fun loadOffline(
@@ -243,16 +341,47 @@ class PlayerSessionController(
         qualityLabel: String = "",
         startPositionMs: Long = 0L,
         autoPlay: Boolean = true,
+        title: String = "",
+        artworkUrl: String = "",
+    ) {
+        loadOfflineInternal(
+            siteId = siteId,
+            mediaId = mediaId,
+            sourceUrl = sourceUrl,
+            cacheKey = cacheKey,
+            sourceRoot = sourceRoot,
+            qualityLabel = qualityLabel,
+            startPositionMs = startPositionMs,
+            autoPlay = autoPlay,
+            title = title,
+            artworkUrl = artworkUrl,
+            preResolvedHlsUri = downloadCaches.hlsUri(cacheKey, sourceRoot),
+        )
+    }
+
+    private fun loadOfflineInternal(
+        siteId: SiteId,
+        mediaId: String,
+        sourceUrl: String,
+        cacheKey: String,
+        sourceRoot: String,
+        qualityLabel: String,
+        startPositionMs: Long,
+        autoPlay: Boolean,
+        title: String,
+        artworkUrl: String,
+        preResolvedHlsUri: String?,
     ) {
         stallTracker.reset()
         closeActiveHlsSeekSession()
         activeLocalFilePath = null
         activeCacheKey = cacheKey
         activeSourceRoot = sourceRoot
+        activeTitle = title
+        activeArtworkUrl = artworkUrl
 
-        val hlsUri = downloadCaches.hlsUri(cacheKey, sourceRoot)
-        val isHls = hlsUri != null
-        val effectiveUri = hlsUri ?: sourceUrl.takeIf { it.startsWith("http", ignoreCase = true) }
+        val isHls = preResolvedHlsUri != null
+        val effectiveUri = preResolvedHlsUri ?: sourceUrl.takeIf { it.startsWith("http", ignoreCase = true) }
             ?: "https://raven.local/offline"
         val stream = VideoStream(
             quality = qualityLabel.ifBlank { cacheKey.substringAfterLast(':') },
@@ -262,6 +391,7 @@ class PlayerSessionController(
         )
         val plan = BufferPlanner.STANDARD_720P_PLAN
         val exo = ensurePlayer(plan, _state.value.playbackSpeed)
+        val metadata = buildMediaMetadata(siteId, mediaId, title, artworkUrl)
 
         val mediaSource: MediaSource = if (isHls) {
             val hlsFactory = downloadCaches.createHlsDataSourceFactory(
@@ -273,6 +403,7 @@ class PlayerSessionController(
             val mediaItem = MediaItem.Builder()
                 .setUri(effectiveUri)
                 .setMediaId("${siteId.value}:$mediaId")
+                .setMediaMetadata(metadata)
                 .setMimeType(androidx.media3.common.MimeTypes.APPLICATION_M3U8)
                 .build()
             HlsMediaSource.Factory(hlsFactory).createMediaSource(mediaItem)
@@ -285,6 +416,7 @@ class PlayerSessionController(
             val mediaItem = MediaItem.Builder()
                 .setUri(effectiveUri)
                 .setMediaId("${siteId.value}:$mediaId")
+                .setMediaMetadata(metadata)
                 .setCustomCacheKey(cacheKey)
                 .build()
             DefaultMediaSourceFactory(factory).createMediaSource(mediaItem)
@@ -299,9 +431,15 @@ class PlayerSessionController(
                 isInitialized = true,
                 siteId = siteId,
                 mediaId = mediaId,
+                title = title,
                 sourceUrl = sourceUrl,
                 currentStream = stream,
                 availableStreams = listOf(stream),
+                videoWidth = 0,
+                videoHeight = 0,
+                audioTracks = emptyList(),
+                subtitleTracks = emptyList(),
+                subtitlesEnabled = false,
                 activeBufferPlan = plan,
                 loopRange = VideoLoopRange.NONE,
                 isOffline = true,
@@ -325,6 +463,8 @@ class PlayerSessionController(
         filePath: String,
         startPositionMs: Long = 0L,
         autoPlay: Boolean = true,
+        title: String = "",
+        artworkUrl: String = "",
     ) {
         val file = File(filePath)
         require(file.isFile && file.canRead()) { "本地视频文件不可用：$filePath" }
@@ -333,6 +473,8 @@ class PlayerSessionController(
         activeLocalFilePath = file.absolutePath
         activeCacheKey = null
         activeSourceRoot = ""
+        activeTitle = title
+        activeArtworkUrl = artworkUrl
 
         val plan = BufferPlanner.STANDARD_720P_PLAN
         val exo = ensurePlayer(plan, _state.value.playbackSpeed)
@@ -340,6 +482,7 @@ class PlayerSessionController(
         val mediaItem = MediaItem.Builder()
             .setUri(uri)
             .setMediaId("${siteId.value}:$mediaId")
+            .setMediaMetadata(buildMediaMetadata(siteId, mediaId, title, artworkUrl))
             .build()
         val mediaSource = DefaultMediaSourceFactory(DefaultDataSource.Factory(appContext))
             .createMediaSource(mediaItem)
@@ -354,9 +497,15 @@ class PlayerSessionController(
                 isInitialized = true,
                 siteId = siteId,
                 mediaId = mediaId,
+                title = title,
                 sourceUrl = uri.toString(),
                 currentStream = localStream,
                 availableStreams = listOf(localStream),
+                videoWidth = 0,
+                videoHeight = 0,
+                audioTracks = emptyList(),
+                subtitleTracks = emptyList(),
+                subtitlesEnabled = false,
                 activeBufferPlan = plan,
                 loopRange = VideoLoopRange.NONE,
                 isOffline = true,
@@ -433,8 +582,10 @@ class PlayerSessionController(
         val freshStreams = runCatching { refresher() }.getOrNull().orEmpty()
         if (freshStreams.isEmpty()) return false
         val selected = StreamSelector.afterRefresh(freshStreams, previous, linkSpeedEstimator.estimateKbps())
-        _state.update { it.copy(availableStreams = freshStreams) }
-        switchStream(selected, preservePosition = true, notice = "播放地址已自动刷新")
+        withContext(dispatchers.main) {
+            _state.update { it.copy(availableStreams = freshStreams) }
+            switchStream(selected, preservePosition = true, notice = "播放地址已自动刷新")
+        }
         return true
     }
 
@@ -601,6 +752,9 @@ class PlayerSessionController(
 
     fun release() {
         closeActiveHlsSeekSession()
+        runCatching { mediaSession?.release() }
+        mediaSession = null
+        currentTracks = null
         player?.removeListener(playerListener)
         player?.release()
         player = null
@@ -608,8 +762,43 @@ class PlayerSessionController(
         activeCacheKey = null
         activeSourceRoot = ""
         activeLocalFilePath = null
+        activeTitle = ""
+        activeArtworkUrl = ""
         stallTracker.reset()
         _state.value = PlayerEngineState()
+    }
+
+    fun selectAudioTrack(groupIndex: Int, trackIndex: Int) {
+        val exo = player ?: return
+        val tracks = currentTracks ?: exo.currentTracks
+        val group = tracks.groups.getOrNull(groupIndex) ?: return
+        if (group.type != C.TRACK_TYPE_AUDIO || trackIndex !in 0 until group.length) return
+        exo.trackSelectionParameters = exo.trackSelectionParameters
+            .buildUpon()
+            .setTrackTypeDisabled(C.TRACK_TYPE_AUDIO, false)
+            .setOverrideForType(TrackSelectionOverride(group.mediaTrackGroup, trackIndex))
+            .build()
+    }
+
+    fun selectSubtitleTrack(groupIndex: Int, trackIndex: Int) {
+        val exo = player ?: return
+        val tracks = currentTracks ?: exo.currentTracks
+        val group = tracks.groups.getOrNull(groupIndex) ?: return
+        if (group.type != C.TRACK_TYPE_TEXT || trackIndex !in 0 until group.length) return
+        exo.trackSelectionParameters = exo.trackSelectionParameters
+            .buildUpon()
+            .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, false)
+            .setOverrideForType(TrackSelectionOverride(group.mediaTrackGroup, trackIndex))
+            .build()
+    }
+
+    fun disableSubtitles() {
+        val exo = player ?: return
+        exo.trackSelectionParameters = exo.trackSelectionParameters
+            .buildUpon()
+            .clearOverridesOfType(C.TRACK_TYPE_TEXT)
+            .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, true)
+            .build()
     }
 
     private fun ensurePlayer(plan: BufferPlan, speed: Float): ExoPlayer {
@@ -617,12 +806,21 @@ class PlayerSessionController(
         if (existing != null && activeBufferPlan?.signature == plan.signature) {
             return existing
         }
+        runCatching { mediaSession?.release() }
+        mediaSession = null
         existing?.removeListener(playerListener)
         existing?.release()
+
+        val audioAttributes = AudioAttributes.Builder()
+            .setUsage(C.USAGE_MEDIA)
+            .setContentType(C.AUDIO_CONTENT_TYPE_MOVIE)
+            .build()
 
         val created = ExoPlayer.Builder(appContext)
             .setLoadControl(BufferPlanner.createLoadControl(plan))
             .setBandwidthMeter(linkSpeedEstimator.meter)
+            .setAudioAttributes(audioAttributes, true)
+            .setHandleAudioBecomingNoisy(true)
             .build()
             .apply {
                 setPlaybackSpeed(speed.coerceIn(MIN_SPEED, MAX_SPEED))
@@ -630,6 +828,12 @@ class PlayerSessionController(
             }
         player = created
         activeBufferPlan = plan
+        currentTracks = null
+        mediaSession = runCatching {
+            MediaSession.Builder(appContext, created)
+                .setId("raven_player_${System.identityHashCode(this)}")
+                .build()
+        }.getOrNull()
         return created
     }
 
@@ -640,6 +844,8 @@ class PlayerSessionController(
         cacheKey: String,
         streamCacheEnabled: Boolean,
         seekCacheEnabled: Boolean,
+        title: String = activeTitle,
+        artworkUrl: String = activeArtworkUrl,
     ): MediaSource {
         closeActiveHlsSeekSession()
         val mimeHint = transportFactory.resolveMimeTypeHint(siteId, stream.url, stream.mimeTypeHint)
@@ -648,10 +854,10 @@ class PlayerSessionController(
         val itemBuilder = MediaItem.Builder()
             .setUri(stream.url)
             .setMediaId("${siteId.value}:$mediaId")
+            .setMediaMetadata(buildMediaMetadata(siteId, mediaId, title, artworkUrl))
+            .setCustomCacheKey(cacheKey)
         if (mimeHint != null) {
             itemBuilder.setMimeType(mimeHint)
-        } else {
-            itemBuilder.setCustomCacheKey(cacheKey)
         }
         val mediaItem = itemBuilder.build()
 
@@ -692,6 +898,24 @@ class PlayerSessionController(
         activeHlsSeekSession = null
     }
 
+    private fun buildMediaMetadata(
+        siteId: SiteId,
+        mediaId: String,
+        title: String,
+        artworkUrl: String,
+    ): MediaMetadata {
+        val builder = MediaMetadata.Builder()
+            .setTitle(title.ifBlank { mediaId })
+            .setArtist(siteId.value)
+        if (artworkUrl.startsWith("http://", ignoreCase = true) ||
+            artworkUrl.startsWith("https://", ignoreCase = true) ||
+            artworkUrl.startsWith("file://", ignoreCase = true)
+        ) {
+            runCatching { Uri.parse(artworkUrl) }.getOrNull()?.let { builder.setArtworkUri(it) }
+        }
+        return builder.build()
+    }
+
     companion object {
         const val MIN_SPEED: Float = 0.25f
         const val MAX_SPEED: Float = 4.0f
@@ -700,6 +924,51 @@ class PlayerSessionController(
 
         fun cacheKey(siteId: SiteId, mediaId: String, quality: String): String =
             "${siteId.value}:$mediaId:$quality"
+
+        internal fun extractTrackOptions(
+            tracks: Tracks,
+            textTrackDisabled: Boolean = false,
+        ): Triple<List<MediaTrackOption>, List<MediaTrackOption>, Boolean> {
+            val audio = mutableListOf<MediaTrackOption>()
+            val subtitles = mutableListOf<MediaTrackOption>()
+            tracks.groups.forEachIndexed { groupIdx, group ->
+                when (group.type) {
+                    C.TRACK_TYPE_AUDIO -> {
+                        for (trackIdx in 0 until group.length) {
+                            if (!group.isTrackSupported(trackIdx)) continue
+                            val fmt = group.getTrackFormat(trackIdx)
+                            val label = fmt.label?.takeIf(String::isNotBlank)
+                                ?: fmt.language?.takeIf(String::isNotBlank)
+                                ?: "音轨 ${audio.size + 1}"
+                            audio += MediaTrackOption(
+                                groupIndex = groupIdx,
+                                trackIndex = trackIdx,
+                                label = label,
+                                language = fmt.language,
+                                selected = group.isTrackSelected(trackIdx),
+                            )
+                        }
+                    }
+                    C.TRACK_TYPE_TEXT -> {
+                        for (trackIdx in 0 until group.length) {
+                            if (!group.isTrackSupported(trackIdx)) continue
+                            val fmt = group.getTrackFormat(trackIdx)
+                            val label = fmt.label?.takeIf(String::isNotBlank)
+                                ?: fmt.language?.takeIf(String::isNotBlank)
+                                ?: "字幕 ${subtitles.size + 1}"
+                            subtitles += MediaTrackOption(
+                                groupIndex = groupIdx,
+                                trackIndex = trackIdx,
+                                label = label,
+                                language = fmt.language,
+                                selected = !textTrackDisabled && group.isTrackSelected(trackIdx),
+                            )
+                        }
+                    }
+                }
+            }
+            return Triple(audio, subtitles, textTrackDisabled)
+        }
 
         /**
          * Pure-Kotlin PiP aspect ratio numerator/denominator pair clamped to Android's strict

@@ -27,6 +27,7 @@ import com.raven.app.core.sitespi.ResolvedLink
 import com.raven.app.core.sitespi.SearchSource
 import com.raven.app.core.sitespi.SitePlugin
 import com.raven.app.core.sitespi.VideoSource
+import com.raven.app.core.sitespi.suspendRunCatching
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import org.jsoup.Jsoup
@@ -51,7 +52,7 @@ class JableSitePlugin(
             val newRequest = FeedRequest(siteId = SiteId.JABLE, section = "new", sort = FeedSort.NEWEST)
             val hotRequest = FeedRequest(siteId = SiteId.JABLE, section = "hot", sort = FeedSort.POPULAR)
             val newDeferred = async { loadFeed(newRequest) }
-            val hotDeferred = async { runCatching { loadFeed(hotRequest) }.getOrNull() }
+            val hotDeferred = async { suspendRunCatching { loadFeed(hotRequest) }.getOrNull() }
             val newPage = newDeferred.await()
             val hotPage = hotDeferred.await()
             VideoSiteSupport.buildHomeFeed(
@@ -233,7 +234,6 @@ class JableSitePlugin(
                 SiteCapability.SEARCH,
                 SiteCapability.TAGS,
                 SiteCapability.RELATED,
-                SiteCapability.MIRRORS,
             ),
             feedSorts = listOf(FeedSort.NEWEST, FeedSort.POPULAR),
             sections = listOf(

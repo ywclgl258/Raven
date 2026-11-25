@@ -289,6 +289,8 @@ class HitomiSitePlugin(
                         parseGalleryDetail(fetchGalleryInfo(id.toString(), forceRefresh = false), routing).item
                     } catch (_: SiteException.NotFound) {
                         null
+                    } catch (_: SiteException.Forbidden) {
+                        null
                     }
                 }
             }
@@ -607,7 +609,9 @@ class HitomiSitePlugin(
             throw SiteException.ParseError("Hitomi 返回的画廊编号不一致", siteId = SiteId.HITOMI)
         }
         val blocked = (obj["blocked"] as? JsonPrimitive)?.booleanOrNull == true ||
-            obj.stringOrEmpty("blocked").equals("true", ignoreCase = true)
+            (obj["blocked"] as? JsonPrimitive)?.intOrNull == 1 ||
+            obj.stringOrEmpty("blocked").equals("true", ignoreCase = true) ||
+            obj.stringOrEmpty("blocked") == "1"
         if (blocked) {
             throw SiteException.Forbidden(message = "原站不允许访问此画廊", siteId = SiteId.HITOMI)
         }
@@ -914,6 +918,7 @@ class HitomiSitePlugin(
                 SiteCapability.FEED,
                 SiteCapability.EXPLORE,
                 SiteCapability.SEARCH,
+                SiteCapability.ADVANCED_SEARCH,
                 SiteCapability.TAGS,
                 SiteCapability.AUTHORS,
                 SiteCapability.CHARACTERS,

@@ -8,12 +8,15 @@ import androidx.lifecycle.viewModelScope
 import com.raven.app.core.common.AppDispatchers
 import com.raven.app.core.database.model.BackupSummary as DatabaseBackupSummary
 import com.raven.app.core.database.repository.BackupDataRepository
+import com.raven.app.core.database.repository.PreferencesRepository
 import com.raven.app.core.model.RavenBackupPayload
 import com.raven.app.core.security.BackupCodec
 import com.raven.app.core.security.BackupFormat
 import com.raven.app.core.security.BackupSummary as SecurityBackupSummary
 import com.raven.app.core.security.BackupValidator
 import com.raven.app.core.security.DecodedBackup
+import com.raven.app.core.security.WebDavConfig
+import com.raven.app.core.security.WebDavCredentialStore
 import java.io.ByteArrayOutputStream
 import java.io.IOException
 import kotlinx.coroutines.CancellationException
@@ -83,6 +86,7 @@ class AndroidBackupSafBridge(
 enum class BackupRestoreTab {
     EXPORT,
     IMPORT,
+    WEBDAV,
 }
 
 data class ExportCompletedSummary(
@@ -119,6 +123,17 @@ data class BackupRestoreUiState(
     val isRestoring: Boolean = false,
     val importError: String? = null,
     val restoreCompleted: RestoreCompletedSummary? = null,
+    // WebDAV Cloud Sync
+    val webDavEndpointUrl: String = "",
+    val webDavUsername: String = "",
+    val webDavPassword: String = "",
+    val webDavPassphrase: String = "",
+    val webDavRemoteFileName: String = WebDavConfig.DEFAULT_REMOTE_FILE_NAME,
+    val webDavSaved: Boolean = false,
+    val webDavLastSyncAt: Long = 0L,
+    val isWebDavBusy: Boolean = false,
+    val webDavStatusMessage: String? = null,
+    val webDavError: String? = null,
 ) {
     val exportPasswordValidationError: String?
         get() = when {
@@ -158,10 +173,36 @@ class BackupRestoreViewModel(
     private val safBridge: BackupSafBridge,
     private val appInfo: RavenAppInfo,
     private val dispatchers: AppDispatchers,
+    private val webDavCredentialStore: WebDavCredentialStore? = null,
+    private val webDavSyncClient: WebDavSyncClient? = null,
+    private val preferencesRepository: PreferencesRepository? = null,
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(BackupRestoreUiState())
     val uiState: StateFlow<BackupRestoreUiState> = _uiState.asStateFlow()
+
+    init {
+        if (webDavCredentialStore != null || preferencesRepository != null) {
+            viewModelScope.launch {
+                val config = withContext(dispatchers.io) {
+                    runCatching { webDavCredentialStore?.load() }.getOrNull()
+                }
+                val lastSync = runCatching { preferencesRepository?.currentSettings()?.webDavLastSyncAt ?: 0L }
+                    .getOrDefault(0L)
+                _uiState.update { state ->
+                    state.copy(
+                        webDavEndpointUrl = config?.endpointUrl ?: state.webDavEndpointUrl,
+                        webDavUsername = config?.username ?: state.webDavUsername,
+                        webDavPassword = config?.password ?: state.webDavPassword,
+                        webDavPassphrase = config?.backupPassphrase ?: state.webDavPassphrase,
+                        webDavRemoteFileName = config?.remoteFileName ?: state.webDavRemoteFileName,
+                        webDavSaved = config != null,
+                        webDavLastSyncAt = lastSync,
+                    )
+                }
+            }
+        }
+    }
 
     private var stagedImportUri: String? = null
     private var stagedImportBytes: ByteArray? = null
@@ -425,6 +466,152 @@ class BackupRestoreViewModel(
                 importPreview = null,
                 importError = null,
             )
+        }
+    }
+
+    // ---- WebDAV Cloud Sync ----
+
+    fun updateWebDavEndpointUrl(value: String) {
+        _uiState.update { it.copy(webDavEndpointUrl = value, webDavError = null) }
+    }
+
+    fun updateWebDavUsername(value: String) {
+        _uiState.update { it.copy(webDavUsername = value, webDavError = null) }
+    }
+
+    fun updateWebDavPassword(value: String) {
+        _uiState.update { it.copy(webDavPassword = value, webDavError = null) }
+    }
+
+    fun updateWebDavPassphrase(value: String) {
+        _uiState.update { it.copy(webDavPassphrase = value, webDavError = null) }
+    }
+
+    fun updateWebDavRemoteFileName(value: String) {
+        _uiState.update { it.copy(webDavRemoteFileName = value, webDavError = null) }
+    }
+
+    private fun currentWebDavDraft(): WebDavConfig = WebDavConfig(
+        endpointUrl = _uiState.value.webDavEndpointUrl,
+        username = _uiState.value.webDavUsername,
+        password = _uiState.value.webDavPassword,
+        backupPassphrase = _uiState.value.webDavPassphrase,
+        remoteFileName = _uiState.value.webDavRemoteFileName,
+    )
+
+    fun saveWebDavConfig() {
+        val store = webDavCredentialStore ?: return
+        viewModelScope.launch {
+            _uiState.update { it.copy(isWebDavBusy = true, webDavError = null, webDavStatusMessage = null) }
+            try {
+                val saved = withContext(dispatchers.io) { store.save(currentWebDavDraft()) }
+                _uiState.update {
+                    it.copy(
+                        webDavEndpointUrl = saved.endpointUrl,
+                        webDavUsername = saved.username,
+                        webDavPassword = saved.password,
+                        webDavPassphrase = saved.backupPassphrase,
+                        webDavRemoteFileName = saved.remoteFileName,
+                        webDavSaved = true,
+                        isWebDavBusy = false,
+                        webDavStatusMessage = "WebDAV 配置已使用 AES-256-GCM 加密保存在本地",
+                    )
+                }
+            } catch (ce: CancellationException) {
+                throw ce
+            } catch (e: Exception) {
+                _uiState.update {
+                    it.copy(
+                        isWebDavBusy = false,
+                        webDavError = e.message ?: "WebDAV 配置校验失败",
+                    )
+                }
+            }
+        }
+    }
+
+    fun clearWebDavConfig() {
+        viewModelScope.launch {
+            withContext(dispatchers.io) { runCatching { webDavCredentialStore?.clear() } }
+            _uiState.update {
+                it.copy(
+                    webDavEndpointUrl = "",
+                    webDavUsername = "",
+                    webDavPassword = "",
+                    webDavPassphrase = "",
+                    webDavRemoteFileName = WebDavConfig.DEFAULT_REMOTE_FILE_NAME,
+                    webDavSaved = false,
+                    webDavError = null,
+                    webDavStatusMessage = "已清除本地保存的 WebDAV 凭据",
+                )
+            }
+        }
+    }
+
+    fun testWebDavConnection() {
+        val client = webDavSyncClient ?: return
+        if (_uiState.value.isWebDavBusy) return
+        viewModelScope.launch {
+            _uiState.update { it.copy(isWebDavBusy = true, webDavError = null, webDavStatusMessage = null) }
+            when (val outcome = client.testConnection(currentWebDavDraft())) {
+                is WebDavSyncOutcome.Connected -> {
+                    _uiState.update { it.copy(isWebDavBusy = false, webDavStatusMessage = outcome.message) }
+                }
+                is WebDavSyncOutcome.Error -> {
+                    _uiState.update { it.copy(isWebDavBusy = false, webDavError = outcome.message) }
+                }
+                else -> _uiState.update { it.copy(isWebDavBusy = false) }
+            }
+        }
+    }
+
+    fun pushWebDavBackup() {
+        val client = webDavSyncClient ?: return
+        if (_uiState.value.isWebDavBusy) return
+        viewModelScope.launch {
+            _uiState.update { it.copy(isWebDavBusy = true, webDavError = null, webDavStatusMessage = null) }
+            val draft = currentWebDavDraft()
+            runCatching { withContext(dispatchers.io) { webDavCredentialStore?.save(draft) } }
+            when (val outcome = client.pushBackup(draft)) {
+                is WebDavSyncOutcome.PushCompleted -> {
+                    _uiState.update {
+                        it.copy(
+                            webDavSaved = true,
+                            webDavLastSyncAt = outcome.syncedAtMs,
+                            isWebDavBusy = false,
+                            webDavStatusMessage = "已加密上传 (${outcome.uploadedBytes} B · ${outcome.summary.favoritesCount} 收藏 · ${outcome.summary.shelvesCount} 片单)",
+                        )
+                    }
+                }
+                is WebDavSyncOutcome.Error -> {
+                    _uiState.update { it.copy(isWebDavBusy = false, webDavError = outcome.message) }
+                }
+                else -> _uiState.update { it.copy(isWebDavBusy = false) }
+            }
+        }
+    }
+
+    fun pullAndRestoreWebDavBackup() {
+        val client = webDavSyncClient ?: return
+        if (_uiState.value.isWebDavBusy) return
+        viewModelScope.launch {
+            _uiState.update { it.copy(isWebDavBusy = true, webDavError = null, webDavStatusMessage = null) }
+            val draft = currentWebDavDraft()
+            when (val outcome = client.pullAndRestore(draft)) {
+                is WebDavSyncOutcome.PullCompleted -> {
+                    _uiState.update {
+                        it.copy(
+                            webDavLastSyncAt = outcome.syncedAtMs,
+                            isWebDavBusy = false,
+                            webDavStatusMessage = "已从云端恢复并合并 (${outcome.mergedSummary.favoritesCount} 收藏 · ${outcome.mergedSummary.totalHistoryCount} 历史)",
+                        )
+                    }
+                }
+                is WebDavSyncOutcome.Error -> {
+                    _uiState.update { it.copy(isWebDavBusy = false, webDavError = outcome.message) }
+                }
+                else -> _uiState.update { it.copy(isWebDavBusy = false) }
+            }
         }
     }
 

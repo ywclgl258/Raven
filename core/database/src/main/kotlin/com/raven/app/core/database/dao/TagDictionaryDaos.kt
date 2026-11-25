@@ -28,8 +28,8 @@ interface TagTranslationDao {
     @Query(
         """
         SELECT * FROM tag_translations
-        WHERE raw_slug LIKE '%' || :query || '%'
-           OR chinese_name LIKE '%' || :query || '%'
+        WHERE raw_slug LIKE '%' || :query || '%' ESCAPE '\'
+           OR chinese_name LIKE '%' || :query || '%' ESCAPE '\'
         ORDER BY CASE WHEN source = 'USER_CUSTOM' THEN 0 ELSE 1 END,
                  LENGTH(raw_slug) ASC,
                  raw_slug ASC

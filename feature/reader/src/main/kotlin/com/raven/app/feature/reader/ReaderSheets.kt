@@ -399,6 +399,8 @@ internal fun ReaderSettingsSheet(
     onCropChange: (Int) -> Unit,
     onCombineCoverChange: (Boolean) -> Unit,
     onShowStatusBarChange: (Boolean) -> Unit,
+    onTapZonesEnabledChange: (Boolean) -> Unit,
+    onAutoSplitWidePagesChange: (Boolean) -> Unit,
     onPreferOriginalChange: (Boolean) -> Unit,
     onBrightnessPercentChange: (Int) -> Unit,
     onKeepScreenOnChange: (Boolean) -> Unit,
@@ -555,6 +557,20 @@ internal fun ReaderSettingsSheet(
                     subtitle = "隐藏控制栏时在角落显示时间、电量与页码",
                     checked = uiState.showStatusBar,
                     onCheckedChange = onShowStatusBarChange,
+                )
+                RavenGroupedDivider(insetWithIcon = true)
+                RavenGroupedSwitchRow(
+                    title = "三区点按翻页",
+                    subtitle = "左 28% / 右 28% 区域点按翻页，中间 44% 切换菜单栏",
+                    checked = uiState.tapZonesEnabled,
+                    onCheckedChange = onTapZonesEnabledChange,
+                )
+                RavenGroupedDivider(insetWithIcon = true)
+                RavenGroupedSwitchRow(
+                    title = "自动分割宽幅跨页",
+                    subtitle = "竖屏单页阅读时自动拆分横向双页跨图以便逐半页阅读",
+                    checked = uiState.autoSplitWidePages,
+                    onCheckedChange = onAutoSplitWidePagesChange,
                 )
                 if (uiState.supportsOriginalImages) {
                     RavenGroupedDivider(insetWithIcon = true)

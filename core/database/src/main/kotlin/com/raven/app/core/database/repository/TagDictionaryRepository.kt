@@ -15,6 +15,8 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 /**
  * Persists community EhTagTranslation entries and user custom tag overrides in Room
@@ -27,6 +29,7 @@ class TagDictionaryRepository(
     private val clock: () -> Long = System::currentTimeMillis,
 ) {
     private val _revision = MutableStateFlow(0L)
+    private val hydrateMutex = Mutex()
 
     /** Monotonic counter incremented every time [hydrateRuntimeDictionary] refreshes [runtimeDictionary]. */
     fun observeRevision(): StateFlow<Long> = _revision.asStateFlow()
@@ -52,12 +55,13 @@ class TagDictionaryRepository(
     suspend fun searchEntries(query: String, limit: Int = 50): List<TagTranslationEntry> {
         val trimmed = query.trim()
         if (trimmed.isEmpty() || limit <= 0) return emptyList()
-        return tagTranslationDao.search(trimmed, limit).map { it.toDomain() }
+        val escaped = escapeLikeQuery(trimmed)
+        return tagTranslationDao.search(escaped, limit).map { it.toDomain() }
     }
 
     /**
      * Adds or updates a `USER_CUSTOM` translation override and immediately refreshes
-     * [runtimeDictionary] dynamic layers.
+     * [runtimeDictionary] custom layer without reloading 40,000+ community entries.
      */
     suspend fun upsertCustomEntry(
         rawSlug: String,
@@ -81,7 +85,7 @@ class TagDictionaryRepository(
                 updatedAt = clock(),
             ),
         )
-        hydrateRuntimeDictionary()
+        hydrateCustomLayer()
         return true
     }
 
@@ -102,7 +106,7 @@ class TagDictionaryRepository(
             namespace = normalizedNs,
             rawSlug = normalizedSlug,
         )
-        hydrateRuntimeDictionary()
+        hydrateCustomLayer()
     }
 
     suspend fun deleteCustomTranslation(rawSlug: String, namespace: String = "") =
@@ -110,7 +114,7 @@ class TagDictionaryRepository(
 
     suspend fun clearCustomEntries() {
         tagTranslationDao.deleteBySource(TagTranslationSource.USER_CUSTOM)
-        hydrateRuntimeDictionary()
+        hydrateCustomLayer()
     }
 
     /**
@@ -144,7 +148,7 @@ class TagDictionaryRepository(
                 tagTranslationDao.upsertAll(chunk)
             }
         }
-        hydrateRuntimeDictionary()
+        hydrateCommunityLayer()
         return normalizedList.size
     }
 
@@ -153,36 +157,41 @@ class TagDictionaryRepository(
 
     suspend fun clearCommunityEntries() {
         tagTranslationDao.deleteBySource(TagTranslationSource.COMMUNITY_EHTAG)
-        hydrateRuntimeDictionary()
+        hydrateCommunityLayer()
+    }
+
+    suspend fun hydrateCustomLayer(): Int = hydrateMutex.withLock {
+        val customRows = tagTranslationDao.getBySource(TagTranslationSource.USER_CUSTOM)
+        val (customBare, customNamespaced) = partitionRows(customRows)
+        runtimeDictionary.updateCustomLayer(
+            customBare = customBare,
+            customNamespaced = customNamespaced,
+        )
+        _revision.update { it + 1L }
+        customRows.size
+    }
+
+    suspend fun hydrateCommunityLayer(): Int = hydrateMutex.withLock {
+        val communityRows = tagTranslationDao.getBySource(TagTranslationSource.COMMUNITY_EHTAG)
+        val (communityBare, communityNamespaced) = partitionRows(communityRows)
+        runtimeDictionary.updateCommunityLayer(
+            communityBare = communityBare,
+            communityNamespaced = communityNamespaced,
+        )
+        _revision.update { it + 1L }
+        communityRows.size
     }
 
     /**
      * Loads persisted `COMMUNITY_EHTAG` and `USER_CUSTOM` rows from Room and pushes them
      * atomically into [runtimeDictionary] via [TagDictionary.updateDynamicLayers].
      */
-    suspend fun hydrateRuntimeDictionary(): TagDictionaryStats {
+    suspend fun hydrateRuntimeDictionary(): TagDictionaryStats = hydrateMutex.withLock {
         val communityRows = tagTranslationDao.getBySource(TagTranslationSource.COMMUNITY_EHTAG)
         val customRows = tagTranslationDao.getBySource(TagTranslationSource.USER_CUSTOM)
 
-        val communityBare = LinkedHashMap<String, String>()
-        val communityNamespaced = LinkedHashMap<String, String>()
-        for (row in communityRows) {
-            if (row.namespace.isBlank()) {
-                communityBare[row.rawSlug] = row.chineseName
-            } else {
-                communityNamespaced["${row.namespace}:${row.rawSlug}"] = row.chineseName
-            }
-        }
-
-        val customBare = LinkedHashMap<String, String>()
-        val customNamespaced = LinkedHashMap<String, String>()
-        for (row in customRows) {
-            if (row.namespace.isBlank()) {
-                customBare[row.rawSlug] = row.chineseName
-            } else {
-                customNamespaced["${row.namespace}:${row.rawSlug}"] = row.chineseName
-            }
-        }
+        val (communityBare, communityNamespaced) = partitionRows(communityRows)
+        val (customBare, customNamespaced) = partitionRows(customRows)
 
         runtimeDictionary.updateDynamicLayers(
             communityBare = communityBare,
@@ -192,12 +201,30 @@ class TagDictionaryRepository(
         )
         _revision.update { it + 1L }
 
-        return TagDictionaryStats(
+        TagDictionaryStats(
             builtInCount = runtimeDictionary.builtInSize,
             communityCount = communityRows.size,
             customCount = customRows.size,
         )
     }
+
+    private fun partitionRows(rows: List<TagTranslationEntity>): Pair<Map<String, String>, Map<String, String>> {
+        val bare = LinkedHashMap<String, String>()
+        val namespaced = LinkedHashMap<String, String>()
+        for (row in rows) {
+            if (row.namespace.isBlank()) {
+                bare[row.rawSlug] = row.chineseName
+            } else {
+                namespaced["${row.namespace}:${row.rawSlug}"] = row.chineseName
+            }
+        }
+        return bare to namespaced
+    }
+
+    private fun escapeLikeQuery(raw: String): String = raw
+        .replace("\\", "\\\\")
+        .replace("%", "\\%")
+        .replace("_", "\\_")
 
     companion object {
         private const val UPSERT_CHUNK_SIZE: Int = 150

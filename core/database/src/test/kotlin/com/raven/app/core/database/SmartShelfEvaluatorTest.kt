@@ -177,5 +177,16 @@ class SmartShelfEvaluatorTest {
             now = now,
         )
         assertEquals(listOf("p-downloading", "p-offline"), recentEveria.map { it.mediaId })
+
+        // Global SiteId.GLOBAL blocked terms filter across all sites in SmartShelf catalog
+        val globalFilteredCatalog = SmartShelfEvaluator.buildCatalog(
+            watchProgress = listOf(watchUnfinished),
+            readingProgress = listOf(readingUnfinished),
+            favorites = emptyList(),
+            shelfItems = emptyList(),
+            downloads = emptyList(),
+            blockedTerms = listOf(BlockedTerm(SiteId.GLOBAL, "ongoing", now)),
+        )
+        assertEquals(listOf("c-unfinished"), globalFilteredCatalog.map { it.mediaId })
     }
 }

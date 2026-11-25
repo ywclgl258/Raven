@@ -404,4 +404,35 @@ class EhSitesPluginTest {
         assertTrue(fSearch.contains("-\"big breasts\""))
         assertTrue(fSearch.contains("-female:\"sole female\""))
     }
+
+    @Test
+    fun `ehentai formats TAG scope search with quotes and deduplicates same artist id`() = runTest {
+        val http = FakeHttpClientAdapter()
+        val store = InMemorySiteSessionStore()
+        val eh = EhentaiSitePlugin(http, store)
+        http.onMatch({ true }) { req ->
+            FakeHttpClientAdapter.htmlResponse(req.url, sampleFeedHtml("e-hentai.org"))
+        }
+
+        eh.searchSource!!.search(
+            FeedRequest(siteId = SiteId.EHENTAI, query = "female:big breasts", scope = SearchScope.TAG),
+        )
+        val url = ComicUrl.requireParse(http.recordedRequests.last().url)
+        assertEquals("female:\"big breasts\"", url.queryParameter("f_search"))
+
+        val detailHtml = """
+            <html><body>
+            <div id="gd2"><h1 id="gn">Demo</h1></div>
+            <div id="gdc"><div class="cn">Manga</div></div>
+            <div id="taglist">
+                <a href="https://e-hentai.org/tag/artist:alice">alice</a>
+                <a href="https://e-hentai.org/tag/group:alice">alice</a>
+            </div>
+            <div id="gdt"><a href="https://e-hentai.org/s/aaaaaaaaaa/1-1"><img src="https://ehgt.org/t/1.jpg" /></a></div>
+            </body></html>
+        """.trimIndent()
+        http.onUrlText("https://e-hentai.org/g/1/aaaaaaaaaa/", detailHtml)
+        val detail = eh.gallerySource!!.loadGalleryDetail("https://e-hentai.org/g/1/aaaaaaaaaa/")
+        assertEquals(listOf("alice"), detail.authors.map { it.id })
+    }
 }

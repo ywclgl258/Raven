@@ -79,6 +79,8 @@ interface ReaderNavigator {
         siteId: SiteId,
         mediaId: String,
         url: String,
+        offlineOnly: Boolean = false,
+        queueToken: String? = null,
     ) = Unit
 
     /**

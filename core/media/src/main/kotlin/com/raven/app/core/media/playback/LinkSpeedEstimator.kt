@@ -23,6 +23,8 @@ import java.io.IOException
 import java.util.Locale
 import java.util.WeakHashMap
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
@@ -323,9 +325,11 @@ class MediaBandwidthProber(
                 HlsDownloadSupport.isHlsUrl(res.request.url.toString(), hook) ||
                 LinkSpeedEstimator.isPlaylistContentType(res.header("Content-Type")) ||
                 (limitBytes >= HLS_HEADER.size && source.rangeEquals(0, HLS_HEADER))
+            val ctx = currentCoroutineContext()
             var total = 0L
             val buffer = ByteArray(64 * 1024)
             while (total < limitBytes) {
+                ctx.ensureActive()
                 val read = source.read(buffer, 0, minOf(buffer.size.toLong(), limitBytes - total).toInt())
                 if (read < 0) break
                 total += read

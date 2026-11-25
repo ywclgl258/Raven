@@ -1,6 +1,7 @@
 package com.raven.app.core.common
 
 import com.raven.app.core.model.TagTranslationSource
+import java.util.Locale
 import kotlinx.serialization.json.Json
 
 data class TagSuggestion(
@@ -33,35 +34,47 @@ class TagDictionary(
         val source: TagTranslationSource,
     )
 
-    private class DynamicSnapshot(
-        val communityBare: Map<String, String>,
-        val communityNamespaced: Map<String, String>,
-        val customBare: Map<String, String>,
-        val customNamespaced: Map<String, String>,
-        val reverseCustomZhToEn: Map<String, List<String>>,
-        val reverseCommunityZhToEn: Map<String, List<String>>,
-        val customSuggestions: List<SuggestionIndexEntry>,
-        val communitySuggestions: List<SuggestionIndexEntry>,
-        val dynamicCount: Int,
+    private class CommunityLayer(
+        val bare: Map<String, String>,
+        val namespaced: Map<String, String>,
+        val reverseZhToEn: Map<String, List<String>>,
+        val suggestions: List<SuggestionIndexEntry>,
+        val prefixBuckets: Map<Char, List<SuggestionIndexEntry>>,
+        val count: Int,
     ) {
         companion object {
-            val EMPTY = DynamicSnapshot(
-                communityBare = emptyMap(),
-                communityNamespaced = emptyMap(),
-                customBare = emptyMap(),
-                customNamespaced = emptyMap(),
-                reverseCustomZhToEn = emptyMap(),
-                reverseCommunityZhToEn = emptyMap(),
-                customSuggestions = emptyList(),
-                communitySuggestions = emptyList(),
-                dynamicCount = 0,
+            val EMPTY = CommunityLayer(
+                bare = emptyMap(),
+                namespaced = emptyMap(),
+                reverseZhToEn = emptyMap(),
+                suggestions = emptyList(),
+                prefixBuckets = emptyMap(),
+                count = 0,
+            )
+        }
+    }
+
+    private class CustomLayer(
+        val bare: Map<String, String>,
+        val namespaced: Map<String, String>,
+        val reverseZhToEn: Map<String, List<String>>,
+        val suggestions: List<SuggestionIndexEntry>,
+        val count: Int,
+    ) {
+        companion object {
+            val EMPTY = CustomLayer(
+                bare = emptyMap(),
+                namespaced = emptyMap(),
+                reverseZhToEn = emptyMap(),
+                suggestions = emptyList(),
+                count = 0,
             )
         }
     }
 
     private val builtInOriginalMap: Map<String, String> = buildMap(entries.size) {
         entries.forEach { (k, v) ->
-            val slug = k.trim().lowercase()
+            val slug = k.trim().lowercase(Locale.ROOT)
             if (slug.isNotEmpty() && v.isNotBlank()) {
                 put(slug, v.trim())
             }
@@ -86,30 +99,119 @@ class TagDictionary(
             normalizedBare = normalizeBareSlug(slug),
             namespace = "",
             localizedName = zh,
-            localizedNameLower = zh.lowercase(),
+            localizedNameLower = zh.lowercase(Locale.ROOT),
             source = TagTranslationSource.BUILTIN,
         )
     }
 
     @Volatile
-    private var dynamicSnapshot: DynamicSnapshot = DynamicSnapshot.EMPTY
+    private var communityLayer: CommunityLayer = CommunityLayer.EMPTY
+
+    @Volatile
+    private var customLayer: CustomLayer = CustomLayer.EMPTY
 
     val builtInSize: Int get() = builtInOriginalMap.size
 
-    val size: Int get() = builtInOriginalMap.size + dynamicSnapshot.dynamicCount
+    val size: Int get() = builtInOriginalMap.size + communityLayer.count + customLayer.count
 
     fun allEntries(): Map<String, String> {
-        val snap = dynamicSnapshot
-        if (snap.dynamicCount == 0) return builtInOriginalMap
-        return buildMap(builtInOriginalMap.size + snap.communityBare.size + snap.customBare.size) {
+        val community = communityLayer
+        val custom = customLayer
+        if (community.count == 0 && custom.count == 0) return builtInOriginalMap
+        return buildMap(builtInOriginalMap.size + community.bare.size + custom.bare.size) {
             putAll(builtInOriginalMap)
-            putAll(snap.communityBare)
-            putAll(snap.customBare)
+            putAll(community.bare)
+            putAll(custom.bare)
         }
     }
 
     /**
-     * Atomically replaces the dynamic runtime layers hydrated from Room (`COMMUNITY_EHTAG` + `USER_CUSTOM`).
+     * Atomically replaces only the `COMMUNITY_EHTAG` dynamic layer without touching `USER_CUSTOM`.
+     */
+    fun updateCommunityLayer(
+        communityBare: Map<String, String> = emptyMap(),
+        communityNamespaced: Map<String, String> = emptyMap(),
+    ) {
+        val normBare = LinkedHashMap<String, String>(communityBare.size)
+        val normNs = LinkedHashMap<String, String>(communityNamespaced.size)
+
+        communityBare.forEach { (k, v) ->
+            val bare = normalizeBareSlug(k)
+            val zh = v.trim()
+            if (bare.isNotEmpty() && zh.isNotEmpty()) {
+                normBare[bare] = zh
+            }
+        }
+        val explicitBareCount = normBare.size
+        communityNamespaced.forEach { (k, v) ->
+            val (ns, bare) = parseNamespacedKey(k)
+            val zh = v.trim()
+            if (bare.isNotEmpty() && zh.isNotEmpty()) {
+                if (ns.isNotEmpty()) {
+                    normNs["$ns:$bare"] = zh
+                    normBare.putIfAbsent(bare, zh)
+                } else {
+                    normBare[bare] = zh
+                }
+            }
+        }
+
+        val reverse = buildReverseIndex(normBare, normNs)
+        val suggestions = buildSuggestionIndex(normBare, normNs, TagTranslationSource.COMMUNITY_EHTAG)
+        val buckets = buildPrefixBuckets(suggestions)
+        val count = explicitBareCount + normNs.size
+        communityLayer = CommunityLayer(
+            bare = normBare,
+            namespaced = normNs,
+            reverseZhToEn = reverse,
+            suggestions = suggestions,
+            prefixBuckets = buckets,
+            count = count,
+        )
+    }
+
+    /**
+     * Atomically replaces only the `USER_CUSTOM` dynamic layer without rebuilding 40,000+ community tags.
+     */
+    fun updateCustomLayer(
+        customBare: Map<String, String> = emptyMap(),
+        customNamespaced: Map<String, String> = emptyMap(),
+    ) {
+        val normBare = LinkedHashMap<String, String>(customBare.size)
+        val normNs = LinkedHashMap<String, String>(customNamespaced.size)
+
+        customBare.forEach { (k, v) ->
+            val bare = normalizeBareSlug(k)
+            val zh = v.trim()
+            if (bare.isNotEmpty() && zh.isNotEmpty()) {
+                normBare[bare] = zh
+            }
+        }
+        customNamespaced.forEach { (k, v) ->
+            val (ns, bare) = parseNamespacedKey(k)
+            val zh = v.trim()
+            if (bare.isNotEmpty() && zh.isNotEmpty()) {
+                if (ns.isNotEmpty()) {
+                    normNs["$ns:$bare"] = zh
+                } else {
+                    normBare[bare] = zh
+                }
+            }
+        }
+
+        val reverse = buildReverseIndex(normBare, normNs)
+        val suggestions = buildSuggestionIndex(normBare, normNs, TagTranslationSource.USER_CUSTOM)
+        customLayer = CustomLayer(
+            bare = normBare,
+            namespaced = normNs,
+            reverseZhToEn = reverse,
+            suggestions = suggestions,
+            count = normBare.size + normNs.size,
+        )
+    }
+
+    /**
+     * Replaces both dynamic runtime layers hydrated from Room (`COMMUNITY_EHTAG` + `USER_CUSTOM`).
      * Namespaced map keys may be supplied as `"namespace:rawSlug"` (e.g. `"female:big_breasts"`).
      */
     fun updateDynamicLayers(
@@ -118,73 +220,14 @@ class TagDictionary(
         customBare: Map<String, String> = emptyMap(),
         customNamespaced: Map<String, String> = emptyMap(),
     ) {
-        val normCommunityBare = LinkedHashMap<String, String>(communityBare.size)
-        val normCommunityNs = LinkedHashMap<String, String>(communityNamespaced.size)
-        val normCustomBare = LinkedHashMap<String, String>(customBare.size)
-        val normCustomNs = LinkedHashMap<String, String>(customNamespaced.size)
-
-        communityBare.forEach { (k, v) ->
-            val bare = normalizeBareSlug(k)
-            val zh = v.trim()
-            if (bare.isNotEmpty() && zh.isNotEmpty()) {
-                normCommunityBare[bare] = zh
-            }
-        }
-        val explicitCommunityBareCount = normCommunityBare.size
-        communityNamespaced.forEach { (k, v) ->
-            val (ns, bare) = parseNamespacedKey(k)
-            val zh = v.trim()
-            if (bare.isNotEmpty() && zh.isNotEmpty()) {
-                if (ns.isNotEmpty()) {
-                    normCommunityNs["$ns:$bare"] = zh
-                    normCommunityBare.putIfAbsent(bare, zh)
-                } else {
-                    normCommunityBare[bare] = zh
-                }
-            }
-        }
-        customBare.forEach { (k, v) ->
-            val bare = normalizeBareSlug(k)
-            val zh = v.trim()
-            if (bare.isNotEmpty() && zh.isNotEmpty()) {
-                normCustomBare[bare] = zh
-            }
-        }
-        customNamespaced.forEach { (k, v) ->
-            val (ns, bare) = parseNamespacedKey(k)
-            val zh = v.trim()
-            if (bare.isNotEmpty() && zh.isNotEmpty()) {
-                if (ns.isNotEmpty()) {
-                    normCustomNs["$ns:$bare"] = zh
-                } else {
-                    normCustomBare[bare] = zh
-                }
-            }
-        }
-
-        val customReverse = buildReverseIndex(normCustomBare, normCustomNs)
-        val communityReverse = buildReverseIndex(normCommunityBare, normCommunityNs)
-
-        val customList = buildSuggestionIndex(normCustomBare, normCustomNs, TagTranslationSource.USER_CUSTOM)
-        val communityList = buildSuggestionIndex(normCommunityBare, normCommunityNs, TagTranslationSource.COMMUNITY_EHTAG)
-
-        val count = explicitCommunityBareCount + normCommunityNs.size + normCustomBare.size + normCustomNs.size
-        dynamicSnapshot = DynamicSnapshot(
-            communityBare = normCommunityBare,
-            communityNamespaced = normCommunityNs,
-            customBare = normCustomBare,
-            customNamespaced = normCustomNs,
-            reverseCustomZhToEn = customReverse,
-            reverseCommunityZhToEn = communityReverse,
-            customSuggestions = customList,
-            communitySuggestions = communityList,
-            dynamicCount = count,
-        )
+        updateCommunityLayer(communityBare, communityNamespaced)
+        updateCustomLayer(customBare, customNamespaced)
     }
 
     /** Clears all dynamic community & custom layers (primarily for deterministic unit tests). */
     fun resetDynamicLayers() {
-        dynamicSnapshot = DynamicSnapshot.EMPTY
+        communityLayer = CommunityLayer.EMPTY
+        customLayer = CustomLayer.EMPTY
     }
 
     /**
@@ -197,10 +240,11 @@ class TagDictionary(
         val bare = normalizeBareSlug(bareRaw)
         if (bare.isEmpty()) return null
         val effectiveNs = normalizeNamespace(namespace).ifEmpty { embeddedNs }
-        val snap = dynamicSnapshot
+        val custom = customLayer
+        val community = communityLayer
 
-        lookupDirect(snap, bare, effectiveNs)?.let { return it }
-        return translateCompound(snap, bare)
+        lookupDirect(custom, community, bare, effectiveNs)?.let { return it }
+        return translateCompound(custom, community, bare)
     }
 
     fun displayLabel(rawSlug: String, fallbackLabel: String = rawSlug, namespace: String? = null): String =
@@ -215,7 +259,8 @@ class TagDictionary(
         val bare = normalizeBareSlug(bareRaw)
         if (bare.isEmpty()) return emptySet()
 
-        val snap = dynamicSnapshot
+        val custom = customLayer
+        val community = communityLayer
         val result = LinkedHashSet<String>(4)
         if (ns.isNotEmpty()) {
             result.add("$ns:$bare")
@@ -223,16 +268,16 @@ class TagDictionary(
         result.add(bare)
 
         // Forward lookup (English -> Chinese) using exact/inflection layers only (no compound noise)
-        lookupDirect(snap, bare, ns)?.let { zh ->
+        lookupDirect(custom, community, bare, ns)?.let { zh ->
             val zhNorm = normalizeChineseKey(zh)
             if (zhNorm.isNotEmpty()) result.add(zhNorm)
         }
 
         // Reverse lookup (Chinese -> English) across Custom -> Built-in -> Community
         val zhKey = normalizeChineseKey(bare)
-        snap.reverseCustomZhToEn[zhKey]?.forEach(result::add)
+        custom.reverseZhToEn[zhKey]?.forEach(result::add)
         builtInReverseZhToEn[zhKey]?.forEach(result::add)
-        snap.reverseCommunityZhToEn[zhKey]?.forEach(result::add)
+        community.reverseZhToEn[zhKey]?.forEach(result::add)
 
         return result
     }
@@ -251,7 +296,8 @@ class TagDictionary(
             return listOf(formatted)
         }
 
-        val snap = dynamicSnapshot
+        val custom = customLayer
+        val community = communityLayer
         val zhKey = normalizeChineseKey(bare)
         val matches = LinkedHashSet<String>()
         fun collect(list: List<String>?) {
@@ -261,9 +307,9 @@ class TagDictionary(
                 }
             }
         }
-        collect(snap.reverseCustomZhToEn[zhKey])
+        collect(custom.reverseZhToEn[zhKey])
         collect(builtInReverseZhToEn[zhKey])
-        collect(snap.reverseCommunityZhToEn[zhKey])
+        collect(community.reverseZhToEn[zhKey])
         return matches.toList()
     }
 
@@ -274,16 +320,17 @@ class TagDictionary(
 
     /**
      * Returns prefix-first tag suggestions across Custom + Built-in + Community layers matching
-     * either English slug or Chinese translation. Bounded single-pass scan safe for 40,000+ tags.
+     * either English slug or Chinese translation. Prefix-bucketed for fast 40,000+ tag autocomplete.
      */
     fun suggest(rawQuery: String, limit: Int = 8): List<TagSuggestion> {
         if (rawQuery.isBlank() || limit <= 0) return emptyList()
         val (nsFilter, bareRaw) = splitNamespace(rawQuery)
         val needle = normalizeBareSlug(bareRaw)
-        val needleRaw = bareRaw.trim().lowercase()
+        val needleRaw = bareRaw.trim().lowercase(Locale.ROOT)
         if (needle.isEmpty()) return emptyList()
 
-        val snap = dynamicSnapshot
+        val custom = customLayer
+        val community = communityLayer
         val exact = ArrayList<SuggestionIndexEntry>()
         val slugPrefix = ArrayList<SuggestionIndexEntry>()
         val zhPrefix = ArrayList<SuggestionIndexEntry>()
@@ -291,11 +338,24 @@ class TagDictionary(
         val containsCap = maxOf(limit * 8, 64)
         val seenBare = HashSet<String>()
 
-        fun consider(list: List<SuggestionIndexEntry>) {
+        fun consider(list: List<SuggestionIndexEntry>, containsOnly: Boolean = false) {
             for (entry in list) {
                 if (nsFilter.isNotEmpty() && entry.namespace.isNotEmpty() && entry.namespace != nsFilter) {
                     continue
                 }
+                if (containsOnly) {
+                    if (contains.size >= containsCap) return
+                    val isContains = entry.normalizedBare.contains(needle) ||
+                        entry.displaySlugLower.contains(needleRaw) ||
+                        entry.localizedNameLower.contains(needle)
+                    if (!isContains) continue
+                    val dedupeKey = if (nsFilter.isNotEmpty()) "${entry.namespace}:${entry.normalizedBare}" else entry.normalizedBare
+                    if (seenBare.add(dedupeKey)) {
+                        contains.add(entry)
+                    }
+                    continue
+                }
+
                 val isExact = entry.normalizedBare == needle ||
                     entry.displaySlugLower == needleRaw ||
                     entry.localizedNameLower == needle
@@ -326,9 +386,18 @@ class TagDictionary(
         }
 
         // Scan highest-priority source first so dedupe preserves Custom > Built-in > Community
-        consider(snap.customSuggestions)
+        consider(custom.suggestions)
         consider(builtInSuggestions)
-        consider(snap.communitySuggestions)
+
+        val primaryChar = needle.first()
+        community.prefixBuckets[primaryChar]?.let { consider(it) }
+        val rawFirst = needleRaw.firstOrNull()
+        if (rawFirst != null && rawFirst != primaryChar) {
+            community.prefixBuckets[rawFirst]?.let { consider(it) }
+        }
+        if (exact.size + slugPrefix.size + zhPrefix.size < limit && contains.size < containsCap) {
+            consider(community.suggestions, containsOnly = true)
+        }
 
         val entryComparator = compareBy<SuggestionIndexEntry>(
             { sourceRank(it.source) },
@@ -361,18 +430,23 @@ class TagDictionary(
         return out
     }
 
-    private fun lookupDirect(snap: DynamicSnapshot, bare: String, ns: String): String? {
+    private fun lookupDirect(
+        custom: CustomLayer,
+        community: CommunityLayer,
+        bare: String,
+        ns: String,
+    ): String? {
         // Tier 1: User Custom (namespaced -> bare -> singular/plural)
         if (ns.isNotEmpty()) {
-            lookupWithInflection(snap.customNamespaced, bare, ns)?.let { return it }
+            lookupWithInflection(custom.namespaced, bare, ns)?.let { return it }
         }
-        lookupWithInflection(snap.customBare, bare, "")?.let { return it }
+        lookupWithInflection(custom.bare, bare, "")?.let { return it }
 
         // Tier 2: Community EhTagTranslation (namespaced -> bare -> singular/plural)
         if (ns.isNotEmpty()) {
-            lookupWithInflection(snap.communityNamespaced, bare, ns)?.let { return it }
+            lookupWithInflection(community.namespaced, bare, ns)?.let { return it }
         }
-        lookupWithInflection(snap.communityBare, bare, "")?.let { return it }
+        lookupWithInflection(community.bare, bare, "")?.let { return it }
 
         // Tier 3: Built-in 165 (bare -> singular/plural)
         lookupWithInflection(builtInNormalizedMap, bare, "")?.let { return it }
@@ -399,7 +473,11 @@ class TagDictionary(
      * Tier 4: Greedily matches longest known 3/2/1-word phrases across Tiers 1..3.
      * Succeeds only when at least 2 segments translate AND at least 50% of tokens are covered.
      */
-    private fun translateCompound(snap: DynamicSnapshot, bare: String): String? {
+    private fun translateCompound(
+        custom: CustomLayer,
+        community: CommunityLayer,
+        bare: String,
+    ): String? {
         val tokens = bare.split(' ').filter { it.isNotEmpty() }
         if (tokens.size !in 2..8) return null
 
@@ -416,7 +494,7 @@ class TagDictionary(
                 } else {
                     tokens.subList(idx, idx + len).joinToString(" ")
                 }
-                val translated = lookupDirect(snap, phrase, "")
+                val translated = lookupDirect(custom, community, phrase, "")
                 if (translated != null) {
                     parts.add(translated)
                     matchedSegments++
@@ -479,7 +557,7 @@ class TagDictionary(
                     normalizedBare = bare,
                     namespace = ns,
                     localizedName = zh,
-                    localizedNameLower = zh.lowercase(),
+                    localizedNameLower = zh.lowercase(Locale.ROOT),
                     source = source,
                 ),
             )
@@ -492,12 +570,28 @@ class TagDictionary(
                     normalizedBare = bare,
                     namespace = "",
                     localizedName = zh,
-                    localizedNameLower = zh.lowercase(),
+                    localizedNameLower = zh.lowercase(Locale.ROOT),
                     source = source,
                 ),
             )
         }
         return list
+    }
+
+    private fun buildPrefixBuckets(
+        entries: List<SuggestionIndexEntry>,
+    ): Map<Char, List<SuggestionIndexEntry>> {
+        if (entries.isEmpty()) return emptyMap()
+        val buckets = HashMap<Char, ArrayList<SuggestionIndexEntry>>()
+        for (entry in entries) {
+            val c1 = entry.normalizedBare.firstOrNull()
+            val c2 = entry.displaySlugLower.firstOrNull()
+            val c3 = entry.localizedNameLower.firstOrNull()
+            if (c1 != null) buckets.getOrPut(c1) { ArrayList() }.add(entry)
+            if (c2 != null && c2 != c1) buckets.getOrPut(c2) { ArrayList() }.add(entry)
+            if (c3 != null && c3 != c1 && c3 != c2) buckets.getOrPut(c3) { ArrayList() }.add(entry)
+        }
+        return buckets
     }
 
     companion object {
@@ -517,7 +611,7 @@ class TagDictionary(
         }
 
         fun normalizeNamespace(raw: String?): String =
-            raw?.trim()?.lowercase().orEmpty()
+            raw?.trim()?.lowercase(Locale.ROOT).orEmpty()
 
         /**
          * Splits optional leading `-` exclusion and `namespace:` prefix.
@@ -527,7 +621,7 @@ class TagDictionary(
             val cleaned = raw.trim().removePrefix("-").trim()
             val colonIdx = cleaned.indexOf(':')
             if (colonIdx > 0 && colonIdx < cleaned.lastIndex) {
-                val nsPart = cleaned.substring(0, colonIdx).trim().lowercase()
+                val nsPart = cleaned.substring(0, colonIdx).trim().lowercase(Locale.ROOT)
                 val rest = cleaned.substring(colonIdx + 1).trim()
                 if (nsPart.isNotEmpty() && nsPart.all { it.isLetterOrDigit() || it == '_' || it == '-' } && rest.isNotEmpty()) {
                     return nsPart to rest
@@ -547,7 +641,7 @@ class TagDictionary(
                 .replace(SEPARATOR_REGEX, " ")
                 .replace(MULTI_SPACE_REGEX, " ")
                 .trim()
-                .lowercase()
+                .lowercase(Locale.ROOT)
         }
 
         private fun parseNamespacedKey(raw: String): Pair<String, String> {
@@ -556,7 +650,7 @@ class TagDictionary(
         }
 
         private fun normalizeChineseKey(raw: String): String =
-            raw.trim().replace(MULTI_SPACE_REGEX, " ").lowercase()
+            raw.trim().replace(MULTI_SPACE_REGEX, " ").lowercase(Locale.ROOT)
 
         private fun containsCjk(text: String): Boolean = text.any { ch ->
             val code = ch.code

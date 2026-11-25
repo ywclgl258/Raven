@@ -228,7 +228,7 @@ class StorageRootManager(
         val storedPending = currentSettings?.pendingStorageLocation ?: pendingLocation
 
         if (storedPending != null) {
-            val targetWritable = storedPending == StorageLocation.PRIVATE || isSharedWritable(createDirectories = false)
+            val targetWritable = storedPending == StorageLocation.PRIVATE || isSharedWritable(createDirectories = true)
             val resolved = if (targetWritable) storedPending else StorageLocation.PRIVATE
             settingsDataStore?.setStorageLocation(resolved)
             settingsDataStore?.setPendingStorageLocation(null)
@@ -356,6 +356,8 @@ class StorageRootManager(
             note = note,
         )
     }
+
+    suspend fun statusAsync(): StorageStatus = withContext(dispatchers.io) { status() }
 
     fun permissionIntent(): Intent? {
         val appContext = context?.applicationContext ?: return null
@@ -676,10 +678,33 @@ class StorageRootManager(
             ensureConfined(destination.root, temp)
             try {
                 check(parent.isDirectory || parent.mkdirs()) { "无法创建目录：${parent.path}" }
+                val copyDigest = MessageDigest.getInstance("SHA-256")
+                val srcDigest = MessageDigest.getInstance("SHA-256")
                 src.inputStream().use { input ->
-                    temp.outputStream().use { output -> input.copyTo(output, 64 * 1024) }
+                    temp.outputStream().use { output ->
+                        val buffer = ByteArray(64 * 1024)
+                        while (true) {
+                            coroutineCtx.ensureActive()
+                            val count = input.read(buffer)
+                            if (count < 0) break
+                            srcDigest.update(buffer, 0, count)
+                            output.write(buffer, 0, count)
+                        }
+                    }
                 }
-                check(filesIdentical(src, temp)) { "${src.name} SHA-256 校验不一致" }
+                val verifiedTemp = temp.inputStream().use { input ->
+                    val buffer = ByteArray(64 * 1024)
+                    while (true) {
+                        coroutineCtx.ensureActive()
+                        val count = input.read(buffer)
+                        if (count < 0) break
+                        copyDigest.update(buffer, 0, count)
+                    }
+                    copyDigest.digest()
+                }
+                check(temp.length() == src.length() && srcDigest.digest().contentEquals(verifiedTemp)) {
+                    "${src.name} SHA-256 校验不一致"
+                }
                 if (!temp.renameTo(dst)) {
                     if (dst.exists()) dst.delete()
                     check(temp.renameTo(dst)) { "无法写入迁移文件：${dst.path}" }

@@ -5,6 +5,7 @@ import com.raven.app.core.model.ComicLanguage
 import com.raven.app.core.model.FeedRequest
 import com.raven.app.core.model.FeedSort
 import com.raven.app.core.model.SearchScope
+import com.raven.app.core.model.SiteCapability
 import com.raven.app.core.model.SiteException
 import com.raven.app.core.model.SiteId
 import com.raven.app.core.sitespi.ResolvedLink
@@ -389,5 +390,23 @@ class HitomiSitePluginTest {
         val searchLink = resolver.resolve("https://hitomi.la/search.html?query=artist%3Aalpha_artist") as ResolvedLink.Feed
         assertEquals("artist:alpha_artist", searchLink.request.query)
         assertNotNull(resolver.canonicalize("https://hitomi.la/doujinshi/test-123456.html"))
+    }
+
+    @Test
+    fun `hitomi advertises ADVANCED_SEARCH, recognizes blocked int 1, and skips Forbidden card in feed`() = runTest {
+        val http = FakeHttpClientAdapter()
+        http.onUrlText("${HitomiSitePlugin.CDN_BASE}/gg.js", sampleGgJs)
+        http.onBinaryWithRange("${HitomiSitePlugin.CDN_BASE}/index-all.nozomi", packBigEndianInts(listOf(700, 701)))
+        http.onUrlText(
+            "${HitomiSitePlugin.CDN_BASE}/galleries/700.js",
+            galleryJs(700).replace("\"blocked\": false", "\"blocked\": 1"),
+        )
+        http.onUrlText("${HitomiSitePlugin.CDN_BASE}/galleries/701.js", galleryJs(701))
+
+        val plugin = HitomiSitePlugin(http)
+        assertTrue(plugin.descriptor.hasCapability(SiteCapability.ADVANCED_SEARCH))
+
+        val feed = plugin.feedSource!!.loadFeed(FeedRequest(SiteId.HITOMI, sort = FeedSort.NEWEST, page = 1))
+        assertEquals(listOf("701"), feed.items.map { it.id })
     }
 }

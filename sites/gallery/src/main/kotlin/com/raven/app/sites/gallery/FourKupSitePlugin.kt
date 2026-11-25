@@ -67,7 +67,7 @@ class FourKupSitePlugin(
                     mediaKind = MediaKind.PHOTO,
                 ),
             ),
-            searchScopes = listOf(SearchScope.ALL),
+            searchScopes = listOf(SearchScope.ALL, SearchScope.TAG),
             networkProfile = SiteNetworkProfile(
                 referer = "https://4kup.net/",
                 mediaReferer = "https://4kup.net/",

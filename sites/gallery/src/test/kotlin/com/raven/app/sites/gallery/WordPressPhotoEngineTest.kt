@@ -174,4 +174,39 @@ class WordPressPhotoEngineTest {
         val netErr = runCatching { plugin.searchSource.search(FeedRequest(SiteId.EVERIA, query = "servererr")) }.exceptionOrNull()
         assertTrue(netErr is SiteException.Network)
     }
+
+    @Test
+    fun parseTotalPagesReadsBareDataPagedAndStrictPrimaryContainerDoesNotFallback() = runTest {
+        val fakeHttp = FakeHttpClientAdapter()
+        val cosplayPlugin = CosplayteleSitePlugin(fakeHttp)
+
+        val pagedDoc = Jsoup.parse(
+            """<html><body><div class="pagination"><a href="#" data-paged="14">14</a></div></body></html>""",
+        )
+        assertEquals(14, cosplayPlugin.engine.parseTotalPages(pagedDoc))
+
+        // Cosplaytele enables strictPrimaryContainer=true on #gallery-1; without #gallery-1, secondary selectors must NOT leak images
+        val fallbackTrapDoc = Jsoup.parse(
+            """<html><body><div class="entry-content single-page"><img src="https://cosplaytele.com/wp-content/uploads/related-leak.webp" /></div></body></html>""",
+        )
+        assertEquals(emptyList<String>(), cosplayPlugin.engine.extractImages(fallbackTrapDoc))
+    }
+
+    @Test
+    fun galleryEpicRscFallbackMatchesOnlyFullCdnImageUrlsNotArbitraryUuids() = runTest {
+        val fakeHttp = FakeHttpClientAdapter()
+        val imageUuid = "aaaaaaaa-1111-4111-8111-111111111111"
+        val trackerUuid = "99999999-9999-4999-8999-999999999999"
+        val html = """
+            <html><head><title>Test Gallery - Gallery Epic</title></head><body>
+              <div data-analytics-id="$trackerUuid"></div>
+              <img src="https://static.galleryepic.xyz/image/$imageUuid" />
+              <dl><dt>Published</dt><dd><time dateTime="2026-11-03T00:00:00Z">2026-11-03</time></dd></dl>
+            </body></html>
+        """.trimIndent()
+        val plugin = GalleryEpicSitePlugin(fakeHttp)
+        fakeHttp.stubHtml("https://galleryepic.com/en/cosplay/555", html)
+        val detail = plugin.gallerySource.loadGalleryDetail("https://galleryepic.com/en/cosplay/555")
+        assertEquals(listOf("https://static.galleryepic.xyz/image/$imageUuid"), detail.pages.map { it.imageUrl })
+    }
 }

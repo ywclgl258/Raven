@@ -67,6 +67,8 @@ class PlayerActivity : ComponentActivity() {
     private var isInPipMode by mutableStateOf(false)
     private var isFullscreen by mutableStateOf(false)
     private var suppressAutoPipOnce: Boolean = false
+    private var latestVideoBounds: android.graphics.Rect? = null
+    private var latestAppSettings: AppSettings = AppSettings()
 
     private val playerNavigator: PlayerNavigator = object : PlayerNavigator {
         override fun openTagFeed(siteId: SiteId, tag: TagRef) {
@@ -88,14 +90,33 @@ class PlayerActivity : ComponentActivity() {
             }
         }
 
-        override fun openGallery(siteId: SiteId, mediaId: String, url: String) {
-            navigateBackToMain(
-                RavenRoute.GalleryDetail(
-                    siteId = siteId.value,
-                    mediaId = mediaId,
-                    url = url,
-                ),
-            )
+        override fun openGallery(
+            siteId: SiteId,
+            mediaId: String,
+            url: String,
+            offlineOnly: Boolean,
+            queueToken: String?,
+        ) {
+            if (!queueToken.isNullOrBlank()) {
+                navigateBackToMain(
+                    RavenRoute.Reader(
+                        siteId = siteId.value,
+                        mediaId = mediaId,
+                        url = url,
+                        startPage = 1,
+                        offlineOnly = offlineOnly,
+                        queueToken = queueToken,
+                    ),
+                )
+            } else {
+                navigateBackToMain(
+                    RavenRoute.GalleryDetail(
+                        siteId = siteId.value,
+                        mediaId = mediaId,
+                        url = url,
+                    ),
+                )
+            }
         }
 
         override fun openSiteAccount(siteId: SiteId) {
@@ -164,6 +185,15 @@ class PlayerActivity : ComponentActivity() {
                 initialValue = AppSettings(),
             )
             val uiState by playerViewModel.uiState.collectAsStateWithLifecycle()
+            latestAppSettings = appSettings
+
+            LaunchedEffect(appSettings.privacyScreenSecure) {
+                if (appSettings.privacyScreenSecure) {
+                    window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
+                } else {
+                    window.clearFlags(WindowManager.LayoutParams.FLAG_SECURE)
+                }
+            }
 
             LaunchedEffect(uiState.isPlaying) {
                 if (uiState.isPlaying) {
@@ -171,6 +201,15 @@ class PlayerActivity : ComponentActivity() {
                 } else {
                     window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
                 }
+            }
+
+            LaunchedEffect(
+                uiState.isPlaying,
+                uiState.videoWidth,
+                uiState.videoHeight,
+                appSettings.backgroundAudioPlayback,
+            ) {
+                updatePipParams()
             }
 
             RavenTheme(reduceTransparency = appSettings.reduceTransparency) {
@@ -182,6 +221,10 @@ class PlayerActivity : ComponentActivity() {
                         navigator = playerNavigator,
                         isInPipMode = isInPipMode,
                         isFullscreen = isFullscreen,
+                        onVideoBoundsChanged = { bounds ->
+                            latestVideoBounds = bounds
+                            updatePipParams(bounds)
+                        },
                     )
                 }
             }
@@ -206,7 +249,11 @@ class PlayerActivity : ComponentActivity() {
             suppressAutoPipOnce = false
             return
         }
-        if (initialLaunchArgs != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && !isInPictureInPictureMode) {
+        if (latestAppSettings.backgroundAudioPlayback) return
+        if (initialLaunchArgs != null &&
+            Build.VERSION.SDK_INT in Build.VERSION_CODES.O until Build.VERSION_CODES.S &&
+            !isInPictureInPictureMode
+        ) {
             val state = playerViewModel.uiState.value
             if (state.isPlaying) {
                 val ratio = if (state.videoWidth > 0 && state.videoHeight > 0) {
@@ -231,12 +278,38 @@ class PlayerActivity : ComponentActivity() {
         }
     }
 
+    private fun updatePipParams(sourceRectHint: android.graphics.Rect? = latestVideoBounds) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
+        if (!packageManager.hasSystemFeature(PackageManager.FEATURE_PICTURE_IN_PICTURE)) return
+        val state = playerViewModel.uiState.value
+        val ratio = if (state.videoWidth > 0 && state.videoHeight > 0) {
+            state.videoWidth to state.videoHeight
+        } else {
+            16 to 9
+        }
+        val builder = PictureInPictureParams.Builder()
+            .setAspectRatio(toSafePipRational(ratio))
+        if (sourceRectHint != null && !sourceRectHint.isEmpty) {
+            builder.setSourceRectHint(sourceRectHint)
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            builder.setAutoEnterEnabled(state.isPlaying && !latestAppSettings.backgroundAudioPlayback)
+        }
+        runCatching {
+            setPictureInPictureParams(builder.build())
+        }
+    }
+
     private fun enterPipMode(aspectRatio: Pair<Int, Int>?) {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
         if (!packageManager.hasSystemFeature(PackageManager.FEATURE_PICTURE_IN_PICTURE)) return
 
         val builder = PictureInPictureParams.Builder()
             .setAspectRatio(toSafePipRational(aspectRatio))
+        val hint = latestVideoBounds
+        if (hint != null && !hint.isEmpty) {
+            builder.setSourceRectHint(hint)
+        }
         runCatching {
             enterPictureInPictureMode(builder.build())
         }

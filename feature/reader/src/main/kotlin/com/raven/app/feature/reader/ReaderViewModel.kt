@@ -36,7 +36,9 @@ import com.raven.app.core.model.SiteCapability
 import com.raven.app.core.model.SiteDescriptor
 import com.raven.app.core.model.SiteException
 import com.raven.app.core.model.SiteId
+import com.raven.app.core.model.TagRef
 import com.raven.app.core.sitespi.SiteRegistry
+import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
@@ -102,7 +104,9 @@ data class ReaderUiState(
     val isPerBookOverride: Boolean = false,
     val isLandscapeViewport: Boolean = false,
     val chromeVisible: Boolean = true,
-    val showStatusBar: Boolean = true,
+    val showStatusBar: Boolean = false,
+    val tapZonesEnabled: Boolean = true,
+    val autoSplitWidePages: Boolean = false,
     val activeSheet: ReaderSheet = ReaderSheet.NONE,
     val activeQuickPanel: ReaderQuickPanel = ReaderQuickPanel.NONE,
     val autoPageIntervalSeconds: Int = 0,
@@ -234,12 +238,14 @@ class ReaderViewModel(
         persistenceScope = applicationScope,
     )
 
-    private val siteId: SiteId = SiteId.of(route.siteId)
+    private val parsedSiteId: SiteId? = runCatching { SiteId.of(route.siteId) }.getOrNull()
+    private val siteId: SiteId = parsedSiteId ?: SiteId.GLOBAL
+    private val isInvalidSiteId: Boolean = parsedSiteId == null
     private val mediaId: String = route.mediaId
     private val url: String = route.url
     private val offlineOnly: Boolean = route.offlineOnly || siteId.isLocal
 
-    private val plugin = siteRegistry.get(siteId)
+    private val plugin = if (isInvalidSiteId) null else siteRegistry.get(siteId)
     private val descriptor: SiteDescriptor? = plugin?.descriptor
     private val supportsOriginalImages: Boolean =
         descriptor?.hasCapability(SiteCapability.ORIGINAL_IMAGES) == true
@@ -248,7 +254,7 @@ class ReaderViewModel(
      * Preserved across all reading mode switches, `preferOriginalImages` reloads, and
      * configuration changes so page placeholders never jump in height.
      */
-    private val sharedAspectRatios: MutableMap<Int, Float> = LinkedHashMap()
+    private val sharedAspectRatios: MutableMap<Int, Float> = ConcurrentHashMap()
 
     private val _uiState = MutableStateFlow(
         ReaderUiState(
@@ -257,13 +263,14 @@ class ReaderViewModel(
             url = url,
             offlineOnly = offlineOnly,
             siteDisplayName = when {
+                isInvalidSiteId -> route.siteId
                 siteId.isLocal -> "本地导入"
                 descriptor != null -> descriptor.displayName
                 else -> siteId.value
             },
             supportsOriginalImages = supportsOriginalImages,
             currentPage = route.startPage.coerceAtLeast(1),
-            queueSession = playbackQueueStore.sessionFor(route.queueToken, siteId, mediaId),
+            queueSession = if (isInvalidSiteId) null else playbackQueueStore.sessionFor(route.queueToken, siteId, mediaId),
         ),
     )
     val uiState: StateFlow<ReaderUiState> = _uiState.asStateFlow()
@@ -282,6 +289,10 @@ class ReaderViewModel(
     private var lastSavedPage: Int = -1
     private var lastSavedOffsetPx: Int = -1
     private var activePreferOriginal: Boolean = false
+    private var activePrefetchPages: Int = ReaderBuffer.PREFETCH_AHEAD
+    private var activeMemoryBudgetBytes: Long = ReaderBuffer.DEFAULT_OFFSCREEN_BUDGET_BYTES
+    private var latestIncognitoMode: Boolean = false
+    private var autoPagePausedByLifecycle: Boolean = false
     private var isUserZoomedOrDragging: Boolean = false
     private var hasPromptedQueueForCurrentBook: Boolean = false
 
@@ -292,6 +303,38 @@ class ReaderViewModel(
     }
 
     private fun observePreferencesAndBookmarks() {
+        viewModelScope.launch(dispatchers.main) {
+            preferencesRepository.settings.collectLatest { appSettings ->
+                val targetPrefetch = appSettings.readerPrefetchPages.coerceIn(1, 12)
+                val targetBudgetBytes = appSettings.readerMemoryBudgetMb.coerceIn(16, 512).toLong() * 1024L * 1024L
+                latestIncognitoMode = appSettings.incognitoMode
+                _uiState.update { state ->
+                    state.copy(
+                        showStatusBar = appSettings.readerShowStatusBar,
+                        tapZonesEnabled = appSettings.readerTapZonesEnabled,
+                        autoSplitWidePages = appSettings.readerAutoSplitWidePages,
+                    )
+                }
+                val detail = _uiState.value.detail
+                if (detail != null &&
+                    readerBuffer != null &&
+                    (activePrefetchPages != targetPrefetch || activeMemoryBudgetBytes != targetBudgetBytes)
+                ) {
+                    rebuildBuffer(
+                        detail = detail,
+                        pageNumbers = _uiState.value.pageNumbers,
+                        sourceRoot = _uiState.value.sourceRoot,
+                        preferOriginal = activePreferOriginal,
+                        prefetchAhead = targetPrefetch,
+                        offscreenBudgetBytes = targetBudgetBytes,
+                    )
+                } else {
+                    activePrefetchPages = targetPrefetch
+                    activeMemoryBudgetBytes = targetBudgetBytes
+                }
+            }
+        }
+        if (isInvalidSiteId) return
         viewModelScope.launch(dispatchers.main) {
             combine(
                 preferencesRepository.observeBookReaderPreferences(siteId, mediaId),
@@ -364,6 +407,16 @@ class ReaderViewModel(
                 )
             }
 
+            if (isInvalidSiteId) {
+                _uiState.update {
+                    it.copy(
+                        isLoading = false,
+                        errorMessage = "无效的站点标识：${route.siteId}",
+                    )
+                }
+                return@launch
+            }
+
             // Pre-check auth gate when opening online from an auth-gated site.
             val currentPlugin = plugin
             if (!offlineOnly && !siteId.isLocal && currentPlugin != null && currentPlugin.authProvider.requiresAuthGate) {
@@ -426,6 +479,12 @@ class ReaderViewModel(
                     0
                 }
 
+                val currentSettings = runCatching { preferencesRepository.currentSettings() }.getOrNull()
+                if (currentSettings != null) {
+                    activePrefetchPages = currentSettings.readerPrefetchPages.coerceIn(1, 12)
+                    activeMemoryBudgetBytes = currentSettings.readerMemoryBudgetMb.coerceIn(16, 512).toLong() * 1024L * 1024L
+                    latestIncognitoMode = currentSettings.incognitoMode
+                }
                 val preferOriginal = supportsOriginalImages && effectivePrefs.preferOriginalImages
                 _uiState.update {
                     it.copy(
@@ -439,6 +498,9 @@ class ReaderViewModel(
                         pendingStripRestoreOffsetPx = initialOffset.takeIf { off -> off > 0 },
                         pageAspectRatios = sharedAspectRatios.toMap(),
                         preferences = effectivePrefs,
+                        showStatusBar = currentSettings?.readerShowStatusBar ?: it.showStatusBar,
+                        tapZonesEnabled = currentSettings?.readerTapZonesEnabled ?: it.tapZonesEnabled,
+                        autoSplitWidePages = currentSettings?.readerAutoSplitWidePages ?: it.autoSplitWidePages,
                         errorMessage = null,
                         authRequired = false,
                     )
@@ -499,19 +561,24 @@ class ReaderViewModel(
         pageNumbers: List<Int>,
         sourceRoot: String,
         preferOriginal: Boolean,
+        prefetchAhead: Int = activePrefetchPages,
+        offscreenBudgetBytes: Long = activeMemoryBudgetBytes,
     ) {
         bufferCollectJob?.cancel()
         readerBuffer?.close()
         activePreferOriginal = preferOriginal
+        activePrefetchPages = prefetchAhead
+        activeMemoryBudgetBytes = offscreenBudgetBytes
 
         val buffer = ReaderBuffer<LoadedReaderPage>(
             pageNumbers = pageNumbers,
             scope = viewModelScope,
             byteSizeOf = { it.byteSize },
             aspectRatioOf = { it.aspectRatio },
-            offscreenBudgetBytes = ReaderBuffer.DEFAULT_OFFSCREEN_BUDGET_BYTES,
+            offscreenBudgetBytes = offscreenBudgetBytes,
             maxConcurrency = ReaderBuffer.MAX_CONCURRENT_LOADS,
             sharedRatios = sharedAspectRatios,
+            prefetchAhead = prefetchAhead,
             loader = { pageNumber, forceReload ->
                 pageLoader.loadRenderedPage(
                     detail = detail,
@@ -649,6 +716,23 @@ class ReaderViewModel(
 
     fun setShowStatusBar(show: Boolean) {
         _uiState.update { it.copy(showStatusBar = show) }
+        viewModelScope.launch(dispatchers.io) {
+            preferencesRepository.setReaderShowStatusBar(show)
+        }
+    }
+
+    fun setTapZonesEnabled(enabled: Boolean) {
+        _uiState.update { it.copy(tapZonesEnabled = enabled) }
+        viewModelScope.launch(dispatchers.io) {
+            preferencesRepository.setReaderTapZonesEnabled(enabled)
+        }
+    }
+
+    fun setAutoSplitWidePages(enabled: Boolean) {
+        _uiState.update { it.copy(autoSplitWidePages = enabled) }
+        viewModelScope.launch(dispatchers.io) {
+            preferencesRepository.setReaderAutoSplitWidePages(enabled)
+        }
     }
 
     fun openSheet(sheet: ReaderSheet) {
@@ -684,6 +768,20 @@ class ReaderViewModel(
      * - Supports normal (`down -> next, up -> prev`) and reversed (`up -> next, down -> prev`) direction.
      * - Supports long-press jump straight to first / last page via [SpreadNavigator.boundaryPage].
      */
+    fun navigateAdjacentPage(forward: Boolean): Boolean {
+        val state = _uiState.value
+        val nav = state.spreadNavigator ?: return false
+        val target = nav.adjacentPage(currentPage = state.currentPage, forward = forward)
+        if (target != null) {
+            jumpToPage(target)
+            return true
+        } else if (forward && state.queueSession?.hasNext == true) {
+            _uiState.update { it.copy(showQueueNextCard = true) }
+            return true
+        }
+        return false
+    }
+
     fun handleVolumeKey(up: Boolean, isLongPress: Boolean): Boolean {
         val state = _uiState.value
         if (!state.preferences.volumeKeyPaging || state.pageNumbers.isEmpty()) {
@@ -806,6 +904,17 @@ class ReaderViewModel(
         restartAutoPageLoop()
     }
 
+    fun setAutoPagePausedByLifecycle(paused: Boolean) {
+        if (autoPagePausedByLifecycle == paused) return
+        autoPagePausedByLifecycle = paused
+        if (paused) {
+            autoPageJob?.cancel()
+            autoPageJob = null
+        } else if (_uiState.value.autoPageIntervalSeconds > 0) {
+            restartAutoPageLoop()
+        }
+    }
+
     fun setSlideshowOrder(order: SlideshowOrder) {
         _uiState.update { it.copy(slideshowOrder = order) }
     }
@@ -813,7 +922,7 @@ class ReaderViewModel(
     private fun restartAutoPageLoop() {
         autoPageJob?.cancel()
         val intervalSeconds = _uiState.value.autoPageIntervalSeconds
-        if (intervalSeconds <= 0) return
+        if (intervalSeconds <= 0 || autoPagePausedByLifecycle) return
 
         autoPageJob = viewModelScope.launch(dispatchers.main) {
             val visitedRandom = LinkedHashSet<Int>()
@@ -1260,6 +1369,10 @@ class ReaderViewModel(
         totalPages: Int,
         scrollOffsetPx: Int,
     ) {
+        if (isInvalidSiteId || latestIncognitoMode) {
+            hasDirtyProgress = false
+            return
+        }
         val clampedPage = currentPage.coerceIn(1, totalPages.coerceAtLeast(1))
         val clampedOffset = scrollOffsetPx.coerceAtLeast(0)
         runCatching {

@@ -6,7 +6,9 @@ import com.raven.app.core.model.SiteId
 import com.raven.app.core.model.SiteNetworkProfile
 import com.raven.app.core.security.InMemoryVaultStorage
 import com.raven.app.core.security.SessionVault
+import com.raven.app.core.security.SessionVaultException
 import com.raven.app.core.security.SoftwareAesGcmVaultCipher
+import com.raven.app.core.sitespi.SiteSessionStore
 import com.raven.app.core.sitespi.AuthMode
 import com.raven.app.core.sitespi.AuthProvider
 import com.raven.app.core.sitespi.SitePlugin
@@ -192,5 +194,34 @@ class SiteCookieJarTest {
         jar.clearSite(SiteId.EXHENTAI)
         assertEquals(mapOf("nw" to "1"), jar.loadForRequest("https://exhentai.org/".toHttpUrl()).associate { it.name to it.value })
         assertEquals("keep-me", vault.getCookies(SiteId.R34V)["PHPSESSID"])
+    }
+
+    @Test
+    fun `saveFromResponse degrades gracefully when SessionVaultException occurs`() {
+        val brokenStore = object : SiteSessionStore {
+            override fun getCookies(siteId: SiteId): Map<String, String> = throw SessionVaultException("broken keystore")
+            override fun saveCookies(siteId: SiteId, cookies: Map<String, String>) = throw SessionVaultException("broken keystore")
+            override fun removeCookies(siteId: SiteId, names: Set<String>) {}
+            override fun replaceCookies(siteId: SiteId, cookies: Map<String, String>) {}
+            override fun getBearerToken(siteId: SiteId): String? = null
+            override fun saveBearerToken(siteId: SiteId, token: String, username: String?) {}
+            override fun getUsername(siteId: SiteId): String? = null
+            override fun saveUsername(siteId: SiteId, username: String?) {}
+            override fun getSecret(siteId: SiteId, key: String): String? = throw SessionVaultException("broken keystore")
+            override fun saveSecret(siteId: SiteId, key: String, value: String?) {}
+            override fun clearSite(siteId: SiteId) {}
+            override fun authEpoch(siteId: SiteId): Long = 0L
+        }
+        val jar = SiteCookieJar(sessionStore = brokenStore, siteRegistry = registry)
+        val cookie = Cookie.Builder()
+            .name("sid")
+            .value("123")
+            .hostOnlyDomain("rule34video.com")
+            .path("/")
+            .expiresAt(System.currentTimeMillis() + 60_000L)
+            .build()
+        // Must not throw SessionVaultException
+        jar.saveFromResponse("https://rule34video.com/".toHttpUrl(), listOf(cookie))
+        assertTrue(jar.loadForRequest("https://rule34video.com/".toHttpUrl()).isEmpty())
     }
 }

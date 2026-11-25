@@ -35,6 +35,8 @@ import com.raven.app.core.sitespi.SearchSource
 import com.raven.app.core.sitespi.SitePlugin
 import com.raven.app.core.sitespi.SiteSessionStore
 import com.raven.app.core.sitespi.VideoSource
+import com.raven.app.core.sitespi.suspendRunCatching
+import java.util.Locale
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import org.jsoup.Jsoup
@@ -58,7 +60,7 @@ class HanimeSitePlugin(
             val recentRequest = FeedRequest(siteId = SiteId.HANIME1, section = "recent", sort = FeedSort.DEFAULT)
             val todayRequest = FeedRequest(siteId = SiteId.HANIME1, section = "today", sort = FeedSort.POPULAR)
             val recentDeferred = async { loadFeed(recentRequest) }
-            val todayDeferred = async { runCatching { loadFeed(todayRequest) }.getOrNull() }
+            val todayDeferred = async { suspendRunCatching { loadFeed(todayRequest) }.getOrNull() }
             val recentPage = recentDeferred.await()
             val todayPage = todayDeferred.await()
             VideoSiteSupport.buildHomeFeed(
@@ -202,6 +204,9 @@ class HanimeSitePlugin(
                 allowCache = false,
             )
             if (verifyResp.code != 404) {
+                if (verifyResp.code == 403 || verifyResp.code == 429 || verifyResp.code >= 500) {
+                    throw VideoSiteSupport.toSiteException(verifyResp, SiteId.HANIME1)
+                }
                 throw SiteException.AuthRequired("邮箱或密码错误，或站点要求完成验证", siteId = SiteId.HANIME1)
             }
             cookies.putAll(VideoSiteSupport.extractSetCookies(verifyResp))
@@ -259,8 +264,8 @@ class HanimeSitePlugin(
             val genre = params["genre"]?.firstOrNull()?.takeIf { it.isNotBlank() }
             val query = params["query"]?.firstOrNull()?.takeIf { it.isNotBlank() }
             val brand = params["brands[]"]?.firstOrNull()?.takeIf { it.isNotBlank() }
-            val year = params["year"]?.firstOrNull()?.let { Regex("(\\d{4})").find(it)?.groupValues?.get(1)?.toIntOrNull() }
-            val month = params["month"]?.firstOrNull()?.let { Regex("(\\d{1,2})").find(it)?.groupValues?.get(1)?.toIntOrNull() }
+            val year = params["year"]?.firstOrNull()?.let { yearExtractRegex.find(it)?.groupValues?.get(1)?.toIntOrNull() }
+            val month = params["month"]?.firstOrNull()?.let { monthExtractRegex.find(it)?.groupValues?.get(1)?.toIntOrNull() }
             val page = params["page"]?.firstOrNull()?.toIntOrNull()?.coerceAtLeast(1) ?: 1
             val sortParam = params["sort"]?.firstOrNull()
             val mappedSection = sortKeyMap.entries.firstOrNull { it.value == sortParam }?.key
@@ -333,6 +338,9 @@ class HanimeSitePlugin(
         private val viewsLabelRegex = Regex("觀看次數：([^\\s]+)")
         private val dateLabelRegex = Regex("(\\d{4}-\\d{2}-\\d{2})")
         private val sourceLiteralRegex = Regex("""const\s+source\s*=\s*(['"])([^'"]+)\1""")
+        private val yearExtractRegex = Regex("(\\d{4})")
+        private val monthExtractRegex = Regex("(\\d{1,2})")
+        private val whitespaceRegex = Regex("\\s+")
 
         val sortKeyMap: Map<String, String> = mapOf(
             "recent" to "最新上市",
@@ -447,7 +455,8 @@ class HanimeSitePlugin(
             if (query.isNotEmpty()) {
                 when (request.scope) {
                     SearchScope.TAG -> tagValues.add(query)
-                    SearchScope.ALL, SearchScope.AUTHOR, SearchScope.CHARACTER -> params["query"] = query
+                    SearchScope.AUTHOR -> params["brands[]"] = query
+                    SearchScope.ALL, SearchScope.CHARACTER -> params["query"] = query
                 }
             }
             if (category.isNotEmpty()) {
@@ -723,6 +732,6 @@ class HanimeSitePlugin(
         }
 
         private fun slugify(text: String): String =
-            text.lowercase().replace(Regex("\\s+"), "-")
+            text.lowercase(Locale.ROOT).replace(whitespaceRegex, "-")
     }
 }

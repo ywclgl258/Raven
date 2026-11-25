@@ -39,6 +39,7 @@ import kotlinx.coroutines.CancellationException
 import org.jsoup.Jsoup
 import org.jsoup.nodes.Document
 import java.net.ProtocolException
+import java.util.Locale
 
 /**
  * Shared protocol engine powering both [EhentaiSitePlugin] and [ExhentaiSitePlugin].
@@ -724,7 +725,7 @@ class EhSharedEngine(
             }
             when (namespace) {
                 "artist", "group" -> {
-                    if (authors.none { it.id == fullTag }) {
+                    if (authors.none { it.id == label }) {
                         authors.add(AuthorRef(id = label, name = label, role = namespace, url = href))
                     }
                 }
@@ -903,8 +904,12 @@ class EhSharedEngine(
         element.attr(attr).toIntOrNull()?.takeIf { it > 0 }?.let { return it }
         val style = element.attr("style")
         if (style.isNotBlank()) {
-            Regex("""$attr\s*:\s*(\d+)px""", RegexOption.IGNORE_CASE)
-                .find(style)?.groupValues?.get(1)?.toIntOrNull()?.let { return it }
+            val regex = when (attr.lowercase(Locale.ROOT)) {
+                "width" -> STYLE_WIDTH_REGEX
+                "height" -> STYLE_HEIGHT_REGEX
+                else -> return 0
+            }
+            regex.find(style)?.groupValues?.get(1)?.toIntOrNull()?.let { return it }
         }
         return 0
     }
@@ -941,7 +946,8 @@ class EhSharedEngine(
                 if (query.startsWith("uploader:", ignoreCase = true)) query
                 else "uploader:\"${query.replace("\"", "\\\"")}\""
             }
-            SearchScope.ALL, SearchScope.TAG, SearchScope.CHARACTER -> query
+            SearchScope.TAG, SearchScope.CHARACTER -> formatSearchTag(query, exclude = false) ?: query
+            SearchScope.ALL -> query
         }
     }
 
@@ -1078,6 +1084,8 @@ class EhSharedEngine(
         private val DIGITS_REGEX = Regex("""[\d,]+""")
         private val FLOAT_REGEX = Regex("""\d+(?:\.\d+)?""")
         private val CSS_URL_REGEX = Regex("""url\(\s*['"]?([^)'"\s]+)""")
+        private val STYLE_WIDTH_REGEX = Regex("""width\s*:\s*(\d+)px""", RegexOption.IGNORE_CASE)
+        private val STYLE_HEIGHT_REGEX = Regex("""height\s*:\s*(\d+)px""", RegexOption.IGNORE_CASE)
         private val NL_TOKEN_REGEX = Regex("""nl\(['"]([A-Za-z0-9-]+)['"]\)""")
         private val ORIGINAL_SIZE_REGEX = Regex(
             """(?:Load|Download)\s+original[^,]*,\s*size:\s*([\d.]+\s*[KMGT]?B)""",

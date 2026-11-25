@@ -125,8 +125,8 @@ class SiteDirectoryViewModel(
     private val tagDictionary: TagDictionary = TagDictionary.default,
 ) : ViewModel() {
 
-    val siteId: SiteId = SiteId.of(route.siteId)
-    val plugin: SitePlugin? = siteRegistry.get(siteId)
+    val siteId: SiteId? = runCatching { SiteId.of(route.siteId) }.getOrNull()
+    val plugin: SitePlugin? = siteId?.let(siteRegistry::get)
 
     private val availableSections: List<SiteSectionSpec> = buildList {
         plugin?.directorySource?.directorySections()?.let(::addAll)

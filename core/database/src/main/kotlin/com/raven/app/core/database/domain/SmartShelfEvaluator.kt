@@ -185,9 +185,15 @@ object SmartShelfEvaluator {
         }
 
         val blockedBySite = blockedTerms.groupBy(BlockedTerm::siteId) { it.term }
+        val globalTerms = blockedBySite[SiteId.GLOBAL].orEmpty()
         return entries.values
             .filter { entry ->
-                val terms = blockedBySite[entry.siteId].orEmpty()
+                val siteTerms = blockedBySite[entry.siteId].orEmpty()
+                val terms = when {
+                    globalTerms.isEmpty() -> siteTerms
+                    siteTerms.isEmpty() -> globalTerms
+                    else -> globalTerms + siteTerms
+                }
                 if (terms.isEmpty()) {
                     true
                 } else {

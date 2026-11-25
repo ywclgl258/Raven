@@ -54,9 +54,11 @@ interface LibraryNavigator {
 
     fun openSmartShelfDetail(smartShelfId: String)
 
-    fun openDownloads()
+    fun openDownloads(siteId: SiteId? = null)
 
-    fun openFavorites()
+    fun openFavorites(siteId: SiteId? = null)
+
+    fun openStats()
 
     fun openHistory()
 

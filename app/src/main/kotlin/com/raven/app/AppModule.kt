@@ -17,6 +17,7 @@ import com.raven.app.feature.settings.settingsFeatureModule
 import com.raven.app.sites.comic.comicSitesModule
 import com.raven.app.sites.gallery.gallerySitesModule
 import com.raven.app.sites.video.videoSitesModule
+import org.koin.androidx.workmanager.dsl.workerOf
 import org.koin.core.module.Module
 import org.koin.dsl.module
 
@@ -63,6 +64,8 @@ val appModule: Module = module {
     single<SiteRegistry> {
         createOrderedSiteRegistry(getAll<SitePlugin>())
     }
+
+    workerOf(::RavenBackgroundMaintenanceWorker)
 }
 
 /**

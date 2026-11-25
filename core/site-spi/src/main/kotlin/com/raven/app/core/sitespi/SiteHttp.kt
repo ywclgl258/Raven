@@ -6,6 +6,19 @@ import java.nio.charset.Charset
 import java.text.SimpleDateFormat
 import java.util.Locale
 import java.util.TimeZone
+import kotlin.coroutines.cancellation.CancellationException
+
+/**
+ * Coroutine-safe replacement for [runCatching] inside `suspend` blocks that always rethrows
+ * [CancellationException] instead of swallowing structured concurrency cancellations.
+ */
+inline fun <T> suspendRunCatching(block: () -> T): Result<T> = try {
+    Result.success(block())
+} catch (ce: CancellationException) {
+    throw ce
+} catch (t: Throwable) {
+    Result.failure(t)
+}
 
 enum class SiteHttpMethod {
     GET,

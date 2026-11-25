@@ -54,6 +54,7 @@ data class SavedSearchEntity(
     indices = [
         Index(value = ["is_read", "discovered_at"], orders = [Index.Order.ASC, Index.Order.DESC]),
         Index(value = ["source_kind", "source_id"]),
+        Index(value = ["site_id", "discovered_at"], orders = [Index.Order.ASC, Index.Order.DESC]),
     ],
 )
 data class UpdateInboxEntity(

@@ -60,11 +60,14 @@ val coreNetworkModule: Module = module {
     } bind CookieJar::class
 
     single {
+        val redirectCache = get<MediaRedirectCache>()
         NetworkMonitor(
             context = androidContext(),
             proxySelector = get(),
             connectionPool = get(),
-        )
+        ).apply {
+            addRouteInvalidationListener { redirectCache.clear() }
+        }
     }
 
     single {

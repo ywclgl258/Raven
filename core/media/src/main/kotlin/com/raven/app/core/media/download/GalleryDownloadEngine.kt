@@ -415,9 +415,6 @@ class GalleryDownloadEngine(
             updateIf(task.id, predicate = { it.status == DownloadStatus.DOWNLOADING }) { current ->
                 current.copy(
                     totalUnits = detail.pageCount,
-                    completedUnits = 0,
-                    progressFraction = 0f,
-                    downloadedBytes = 0L,
                     updatedAt = clockMs(),
                 )
             }
@@ -438,10 +435,10 @@ class GalleryDownloadEngine(
                 val fraction = (completedCount.toFloat() / totalRequested.toFloat()).coerceIn(0f, 1f)
                 updateIf(task.id, predicate = { it.status == DownloadStatus.DOWNLOADING }) { current ->
                     current.copy(
-                        completedUnits = completedCount,
+                        completedUnits = maxOf(current.completedUnits, completedCount),
                         totalUnits = detail.pageCount,
-                        progressFraction = fraction,
-                        downloadedBytes = totalBytes,
+                        progressFraction = maxOf(current.progressFraction, fraction),
+                        downloadedBytes = maxOf(current.downloadedBytes, totalBytes),
                         errorCategory = null,
                         errorMessage = null,
                         updatedAt = clockMs(),
@@ -550,6 +547,9 @@ class GalleryDownloadEngine(
     private fun scheduleRetryTimer(task: DownloadItem) {
         val targetRetryAt = task.retryAtEpochMs ?: return
         val delayMs = (targetRetryAt - clockMs()).coerceAtLeast(0L)
+        context?.let { appContext ->
+            runCatching { GalleryRetryWakeupWorker.schedule(appContext, delayMs) }
+        }
         val job = applicationScope.launch(dispatchers.io, start = CoroutineStart.LAZY) {
             delay(delayMs)
             // Conditional transition: never overwrite a task that the user manually paused or deleted.
@@ -681,10 +681,14 @@ class GalleryDownloadService : Service() {
     private var lastStartId: Int = 0
     private var wakeLock: PowerManager.WakeLock? = null
 
+    @Volatile
+    private var isStopping: Boolean = false
+
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onCreate() {
         super.onCreate()
+        isStopping = false
         enterForeground()
         runCatching {
             val pm = getSystemService(PowerManager::class.java)
@@ -697,14 +701,16 @@ class GalleryDownloadService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         lastStartId = startId
+        isStopping = false
         enterForeground()
         if (pumpJob?.isActive != true) {
             startPump()
         }
-        return START_STICKY
+        return START_NOT_STICKY
     }
 
     override fun onTimeout(startId: Int, fgsType: Int) {
+        isStopping = true
         val cleanupScope = runCatching {
             GlobalContext.get().get<CoroutineScope>(com.raven.app.core.network.NetworkQualifiers.APPLICATION_SCOPE)
         }.getOrElse { CoroutineScope(SupervisorJob() + dispatchers.io) }
@@ -717,6 +723,7 @@ class GalleryDownloadService : Service() {
     }
 
     override fun onDestroy() {
+        isStopping = true
         serviceScope.cancel()
         wakeLock?.let { lock -> if (lock.isHeld) runCatching { lock.release() } }
         wakeLock = null
@@ -762,15 +769,16 @@ class GalleryDownloadService : Service() {
 
     private fun startPump() {
         pumpJob = serviceScope.launch {
-            while (isActive) {
+            while (isActive && !isStopping) {
                 val job = engine.launchNext(this) ?: break
                 job.join()
             }
             withContext(dispatchers.main) {
                 pumpJob = null
-                if (engine.hasPendingRunnable() && engine.canRun) {
+                if (!isStopping && engine.hasPendingRunnable() && engine.canRun) {
                     startPump()
                 } else {
+                    isStopping = true
                     progressJob?.cancel()
                     stopForeground(STOP_FOREGROUND_REMOVE)
                     stopSelfResult(lastStartId)

@@ -1,5 +1,6 @@
 package com.raven.app.core.database.mapper
 
+import java.util.Locale
 import com.raven.app.core.database.entity.BlockedTermEntity
 import com.raven.app.core.database.entity.BrowsePositionEntity
 import com.raven.app.core.database.entity.DownloadItemEntity
@@ -509,8 +510,8 @@ fun BrowsePositionEntity.toDomain(): BrowsePosition = BrowsePosition(
 )
 
 fun TagTranslationEntry.toEntity(): TagTranslationEntity = TagTranslationEntity(
-    namespace = namespace.trim().lowercase(),
-    rawSlug = rawSlug.trim().lowercase(),
+    namespace = namespace.trim().lowercase(Locale.ROOT),
+    rawSlug = rawSlug.trim().lowercase(Locale.ROOT),
     source = source,
     chineseName = chineseName.trim(),
     intro = intro.trim(),

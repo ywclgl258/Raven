@@ -70,6 +70,7 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import org.koin.androidx.compose.koinViewModel
+import org.koin.core.parameter.parametersOf
 
 enum class FavoriteKindFilter(val label: String, val kind: FavoriteKind?) {
     ALL("全部", null),
@@ -95,6 +96,13 @@ data class FavoritesUiState(
     val message: String? = null,
 )
 
+/**
+ * Wrapper passed through Koin `parametersOf(...)` to avoid `@JvmInline value class` boxing issues.
+ */
+data class FavoritesParams(
+    val initialSiteId: SiteId? = null,
+)
+
 private data class FavoritesControls(
     val searchQuery: String = "",
     val kindFilter: FavoriteKindFilter = FavoriteKindFilter.ALL,
@@ -109,9 +117,10 @@ class FavoritesViewModel(
     private val shelfRepository: ShelfRepository,
     private val siteRegistry: SiteRegistry,
     private val dispatchers: AppDispatchers,
+    initialSiteId: SiteId? = null,
 ) : ViewModel() {
 
-    private val controls = MutableStateFlow(FavoritesControls())
+    private val controls = MutableStateFlow(FavoritesControls(siteFilter = initialSiteId))
 
     val uiState: StateFlow<FavoritesUiState> = combine(
         favoriteRepository.observeAll(),
@@ -289,7 +298,11 @@ class FavoritesViewModel(
 fun FavoritesScreen(
     navigator: LibraryNavigator,
     modifier: Modifier = Modifier,
-    viewModel: FavoritesViewModel = koinViewModel(),
+    siteId: SiteId? = null,
+    viewModel: FavoritesViewModel = koinViewModel(
+        key = "favorites_${siteId?.value.orEmpty()}",
+        parameters = { parametersOf(FavoritesParams(siteId)) },
+    ),
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val colors = LocalRavenColors.current

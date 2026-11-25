@@ -1,6 +1,9 @@
 package com.raven.app.feature.player
 
 import androidx.compose.runtime.Immutable
+import com.raven.app.core.database.model.ShelfWithSummary
+import com.raven.app.core.media.cast.LanCastDevice
+import com.raven.app.core.media.playback.MediaTrackOption
 import com.raven.app.core.media.playback.VideoLoopRange
 import com.raven.app.core.model.AuthorRef
 import com.raven.app.core.model.CommentItem
@@ -69,12 +72,28 @@ data class PlayerSleepTimerState(
 }
 
 /**
+ * Cycleable video aspect scaling modes supported by [VideoPlayerScreen].
+ */
+enum class VideoResizeMode(val label: String) {
+    FIT("适应"),
+    FILL("铺满"),
+    ZOOM("裁剪");
+
+    fun next(): VideoResizeMode = when (this) {
+        FIT -> FILL
+        FILL -> ZOOM
+        ZOOM -> FIT
+    }
+}
+
+/**
  * Single-screen modal bottom sheets hosted by [VideoPlayerScreen] (zero chained modal dialogs).
  */
 sealed interface PlayerSheet {
     data object Settings : PlayerSheet
     data object Speed : PlayerSheet
     data object Quality : PlayerSheet
+    data object Tracks : PlayerSheet
     data object AbLoop : PlayerSheet
     data object SleepTimer : PlayerSheet
     data class BookmarkEditor(
@@ -84,6 +103,8 @@ sealed interface PlayerSheet {
     data class TagActions(val tag: PlayerTagDisplay) : PlayerSheet
     data object Download : PlayerSheet
     data object ExternalPlayers : PlayerSheet
+    data object ShelfPicker : PlayerSheet
+    data object Cast : PlayerSheet
 }
 
 /**
@@ -144,6 +165,16 @@ data class PlayerUiState(
     val translateTags: Boolean = true,
     val blockTagsGlobally: Boolean = true,
     val reduceTransparency: Boolean = false,
+    val backgroundAudioPlayback: Boolean = false,
+    // Tracks, custom shelves & LAN cast
+    val audioTracks: List<MediaTrackOption> = emptyList(),
+    val subtitleTracks: List<MediaTrackOption> = emptyList(),
+    val subtitlesEnabled: Boolean = false,
+    val shelves: List<ShelfWithSummary> = emptyList(),
+    val containingShelfIds: Set<String> = emptySet(),
+    val castDevices: List<LanCastDevice> = emptyList(),
+    val isScanningCast: Boolean = false,
+    val activeCastDevice: LanCastDevice? = null,
     // Controls, loop, sleep timer & lock
     val loopRange: VideoLoopRange = VideoLoopRange.NONE,
     val sleepTimer: PlayerSleepTimerState = PlayerSleepTimerState(),

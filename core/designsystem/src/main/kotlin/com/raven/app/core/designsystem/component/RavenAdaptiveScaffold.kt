@@ -26,6 +26,7 @@ import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.outlined.MenuBook
 import androidx.compose.material.icons.filled.Explore
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Person
@@ -33,7 +34,6 @@ import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.VideoLibrary
 import androidx.compose.material.icons.outlined.Explore
 import androidx.compose.material.icons.outlined.Home
-import androidx.compose.material.icons.outlined.MenuBook
 import androidx.compose.material.icons.outlined.Movie
 import androidx.compose.material.icons.outlined.Person
 import androidx.compose.material.icons.outlined.PhotoLibrary
@@ -148,15 +148,22 @@ enum class RavenTopDestination(
 /** Breakpoint threshold in dp at which Raven switches from bottom bar to persistent left NavigationRail. */
 const val RAVEN_RAIL_BREAKPOINT_DP: Int = 600
 
+/** Breakpoint threshold in dp at which Raven expands into a permanent NavigationDrawer. */
+const val RAVEN_DRAWER_BREAKPOINT_DP: Int = 1200
+
 /** Pure helper determining whether a window width should display the persistent left NavigationRail. */
-fun isRavenRailWidth(widthDp: Int): Boolean = widthDp >= RAVEN_RAIL_BREAKPOINT_DP
+fun isRavenRailWidth(widthDp: Int): Boolean = widthDp in RAVEN_RAIL_BREAKPOINT_DP until RAVEN_DRAWER_BREAKPOINT_DP
+
+/** Pure helper determining whether a window width should display the expanded NavigationDrawer. */
+fun isRavenDrawerWidth(widthDp: Int): Boolean = widthDp >= RAVEN_DRAWER_BREAKPOINT_DP
 
 /**
  * Adaptive primary navigation shell built on Material 3 `NavigationSuiteScaffold`.
  *
  * - `< 600dp`: Sleek OLED dark bottom bar (`Surface1`) with crisp top [RavenColors.Hairline] and
  *   [RavenColors.Crimson] active indicator & icon tint.
- * - `>= 600dp`: Automatically switches to persistent left `NavigationRail` with vertical `Hairline`.
+ * - `600dp..1199dp`: Persistent left `NavigationRail` with vertical `Hairline`.
+ * - `>= 1200dp`: Permanent `NavigationDrawer` with expanded labels.
  * - Set [showNavigation] to `false` on full-screen sub-routes (e.g. Reader / GalleryDetail).
  */
 @Composable
@@ -166,6 +173,7 @@ fun RavenAdaptiveScaffold(
     modifier: Modifier = Modifier,
     showNavigation: Boolean = true,
     badges: Map<RavenTopDestination, Int> = emptyMap(),
+    isIncognito: Boolean = false,
     content: @Composable () -> Unit,
 ) {
     val colors = LocalRavenColors.current
@@ -173,6 +181,8 @@ fun RavenAdaptiveScaffold(
     val adaptiveInfo = currentWindowAdaptiveInfo()
     val layoutType = when {
         !showNavigation -> NavigationSuiteType.None
+        adaptiveInfo.windowSizeClass.isWidthAtLeastBreakpoint(RAVEN_DRAWER_BREAKPOINT_DP) ->
+            NavigationSuiteType.NavigationDrawer
         adaptiveInfo.windowSizeClass.isWidthAtLeastBreakpoint(WindowSizeClass.WIDTH_DP_MEDIUM_LOWER_BOUND) ->
             NavigationSuiteType.NavigationRail
         else -> NavigationSuiteType.NavigationBar
@@ -284,7 +294,38 @@ fun RavenAdaptiveScaffold(
         },
     ) {
         Box(modifier = Modifier.fillMaxSize()) {
-            content()
+            Column(modifier = Modifier.fillMaxSize()) {
+                if (isIncognito) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .background(colors.surface2)
+                            .statusBarsPadding()
+                            .padding(horizontal = 14.dp, vertical = 5.dp)
+                            .testTag("raven_incognito_strip"),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(6.dp)
+                                .clip(CircleShape)
+                                .background(colors.crimson),
+                        )
+                        Text(
+                            text = "无痕模式已开启 · 暂停保存历史、搜索与浏览进度",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = colors.inkPrimary,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                    HorizontalDivider(thickness = 0.5.dp, color = colors.hairline)
+                }
+                Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
+                    content()
+                }
+            }
             when (layoutType) {
                 NavigationSuiteType.NavigationBar -> {
                     Box(
@@ -295,7 +336,9 @@ fun RavenAdaptiveScaffold(
                             .background(horizontalSpecularHairline),
                     )
                 }
-                NavigationSuiteType.NavigationRail -> {
+                NavigationSuiteType.NavigationRail,
+                NavigationSuiteType.NavigationDrawer,
+                -> {
                     Box(
                         modifier = Modifier
                             .align(Alignment.CenterStart)
@@ -474,7 +517,7 @@ fun RavenSiteSwitcherPill(
     val interactionSource = remember { MutableInteractionSource() }
     val kindIcon = when (mediaKind) {
         MediaKind.VIDEO -> Icons.Outlined.Movie
-        MediaKind.COMIC -> Icons.Outlined.MenuBook
+        MediaKind.COMIC -> Icons.AutoMirrored.Outlined.MenuBook
         MediaKind.PHOTO -> Icons.Outlined.PhotoLibrary
     }
     val kindLabel = when (mediaKind) {

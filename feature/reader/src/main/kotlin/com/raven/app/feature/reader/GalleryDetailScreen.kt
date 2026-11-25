@@ -38,6 +38,7 @@ import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.WatchLater
 import androidx.compose.material.icons.outlined.Archive
 import androidx.compose.material.icons.outlined.Block
+import androidx.compose.material.icons.outlined.BookmarkAdd
 import androidx.compose.material.icons.outlined.BookmarkBorder
 import androidx.compose.material.icons.outlined.DeleteOutline
 import androidx.compose.material.icons.outlined.Download
@@ -98,6 +99,8 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.raven.app.core.designsystem.component.RavenBottomSheet
 import com.raven.app.core.designsystem.component.RavenCrimsonProgressBar
 import com.raven.app.core.designsystem.component.RavenErrorState
+import com.raven.app.core.designsystem.component.RavenShelfOption
+import com.raven.app.core.designsystem.component.RavenShelfPickerSheet
 import com.raven.app.core.designsystem.component.RavenFilterChip
 import com.raven.app.core.designsystem.component.RavenFormatters
 import com.raven.app.core.designsystem.component.RavenGalleryCard
@@ -277,6 +280,7 @@ fun GalleryDetailScreen(
                         onLongPressTag = viewModel::openTagActions,
                         onToggleWatchLater = viewModel::toggleWatchLater,
                         onToggleFavorite = viewModel::toggleFavorite,
+                        onOpenShelfPicker = viewModel::openShelfPicker,
                         onOpenDownloadSheet = viewModel::openDownloadSheet,
                         onExportCbz = { viewModel.exportCbz() },
                         onDeleteBookmark = viewModel::deleteBookmark,
@@ -367,6 +371,26 @@ fun GalleryDetailScreen(
             },
         )
     }
+
+    if (uiState.showShelfPicker && uiState.detail != null) {
+        val options = remember(uiState.shelves, uiState.containingShelfIds) {
+            uiState.shelves.map { summary ->
+                RavenShelfOption(
+                    id = summary.shelf.id,
+                    name = summary.shelf.name,
+                    itemCount = summary.itemCount,
+                    selected = summary.shelf.id in uiState.containingShelfIds,
+                )
+            }
+        }
+        RavenShelfPickerSheet(
+            title = "加入片单 / 书架",
+            shelves = options,
+            onToggleShelf = viewModel::setShelfMembership,
+            onCreateShelf = viewModel::createShelfAndAdd,
+            onDismiss = viewModel::dismissShelfPicker,
+        )
+    }
 }
 
 @OptIn(ExperimentalLayoutApi::class)
@@ -385,6 +409,7 @@ private fun GalleryDetailContent(
     onLongPressTag: (TagRef) -> Unit,
     onToggleWatchLater: () -> Unit,
     onToggleFavorite: () -> Unit,
+    onOpenShelfPicker: () -> Unit,
     onOpenDownloadSheet: () -> Unit,
     onExportCbz: () -> Unit,
     onDeleteBookmark: (String) -> Unit,
@@ -424,6 +449,7 @@ private fun GalleryDetailContent(
                     onOpenAuthor = onOpenAuthor,
                     onToggleWatchLater = onToggleWatchLater,
                     onToggleFavorite = onToggleFavorite,
+                    onOpenShelfPicker = onOpenShelfPicker,
                     onOpenDownloadSheet = onOpenDownloadSheet,
                     onExportCbz = onExportCbz,
                 )
@@ -677,6 +703,7 @@ private fun GalleryHeroHeader(
     onOpenAuthor: (AuthorRef) -> Unit,
     onToggleWatchLater: () -> Unit,
     onToggleFavorite: () -> Unit,
+    onOpenShelfPicker: () -> Unit,
     onOpenDownloadSheet: () -> Unit,
     onExportCbz: () -> Unit,
 ) {
@@ -917,7 +944,8 @@ private fun GalleryHeroHeader(
             }
         }
 
-        // Frosted Action Bar: Watch Later / Favorite / Download / Export CBZ
+        // Frosted Action Bar: Watch Later / Favorite / Shelf / Download / Export CBZ
+        val inCustomShelf = uiState.containingShelfIds.any { it != com.raven.app.core.model.Shelf.WATCH_LATER_ID }
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -934,6 +962,13 @@ private fun GalleryHeroHeader(
                 label = if (uiState.isFavorite) "已收藏" else "收藏",
                 active = uiState.isFavorite,
                 onClick = onToggleFavorite,
+                modifier = Modifier.weight(1f),
+            )
+            FrostedHeroActionButton(
+                icon = Icons.Outlined.BookmarkAdd,
+                label = if (inCustomShelf) "已入片单" else "片单",
+                active = inCustomShelf,
+                onClick = onOpenShelfPicker,
                 modifier = Modifier.weight(1f),
             )
             if (!uiState.isLocal) {

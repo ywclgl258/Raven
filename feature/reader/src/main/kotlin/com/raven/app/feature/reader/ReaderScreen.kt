@@ -183,9 +183,13 @@ fun ReaderScreen(
         }
     }
 
-    // Also flush reading progress whenever the screen stops (e.g., backgrounded or screen locked).
+    // Also pause active auto-page loop and flush reading progress when the screen stops; resume on start.
     LifecycleEventEffect(Lifecycle.Event.ON_STOP) {
+        viewModel.setAutoPagePausedByLifecycle(true)
         viewModel.flushProgress()
+    }
+    LifecycleEventEffect(Lifecycle.Event.ON_START) {
+        viewModel.setAutoPagePausedByLifecycle(false)
     }
 
     // Snackbar messages
@@ -267,19 +271,34 @@ fun ReaderScreen(
             .onPreviewKeyEvent { keyEvent ->
                 val isVolUp = keyEvent.key == Key.VolumeUp
                 val isVolDown = keyEvent.key == Key.VolumeDown
-                if (!isVolUp && !isVolDown) return@onPreviewKeyEvent false
-                if (!uiState.preferences.volumeKeyPaging) return@onPreviewKeyEvent false
-                if (keyEvent.type == KeyEventType.KeyDown) {
-                    val native: AndroidKeyEvent = keyEvent.nativeKeyEvent
-                    val isLongPress = native.isLongPress || native.repeatCount >= 4
-                    // Avoid firing multiple rapid single-page steps while holding key until long-press fires.
-                    if (native.repeatCount == 0 || native.repeatCount == 4 || native.isLongPress) {
-                        viewModel.handleVolumeKey(up = isVolUp, isLongPress = isLongPress)
+                if (isVolUp || isVolDown) {
+                    if (!uiState.preferences.volumeKeyPaging) return@onPreviewKeyEvent false
+                    return@onPreviewKeyEvent if (keyEvent.type == KeyEventType.KeyDown) {
+                        val native: AndroidKeyEvent = keyEvent.nativeKeyEvent
+                        val isLongPress = native.isLongPress || native.repeatCount >= 4
+                        // Avoid firing multiple rapid single-page steps while holding key until long-press fires.
+                        if (native.repeatCount == 0 || native.repeatCount == 4 || native.isLongPress) {
+                            viewModel.handleVolumeKey(up = isVolUp, isLongPress = isLongPress)
+                        } else {
+                            true
+                        }
                     } else {
                         true
                     }
-                } else {
-                    true
+                }
+                if (keyEvent.type != KeyEventType.KeyDown ||
+                    uiState.activeSheet != ReaderSheet.NONE ||
+                    uiState.detail == null
+                ) {
+                    return@onPreviewKeyEvent false
+                }
+                val isRtl = uiState.preferences.mode == ReaderMode.RTL
+                when (keyEvent.key) {
+                    Key.DirectionLeft -> viewModel.navigateAdjacentPage(forward = isRtl)
+                    Key.DirectionRight -> viewModel.navigateAdjacentPage(forward = !isRtl)
+                    Key.DirectionUp, Key.PageUp -> viewModel.navigateAdjacentPage(forward = false)
+                    Key.DirectionDown, Key.PageDown, Key.Spacebar -> viewModel.navigateAdjacentPage(forward = true)
+                    else -> false
                 }
             }
             .testTag(ReaderTestTags.READER_SCREEN),
@@ -358,6 +377,8 @@ fun ReaderScreen(
                             onSingleTap = viewModel::toggleChrome,
                             onRetryPage = viewModel::retryPage,
                             onZoomedChanged = viewModel::onInteractionStateChanged,
+                            onPreviousPage = { viewModel.navigateAdjacentPage(forward = false) },
+                            onNextPage = { viewModel.navigateAdjacentPage(forward = true) },
                         )
                     }
                     ReaderMode.RTL -> {
@@ -369,6 +390,8 @@ fun ReaderScreen(
                             onSingleTap = viewModel::toggleChrome,
                             onRetryPage = viewModel::retryPage,
                             onZoomedChanged = viewModel::onInteractionStateChanged,
+                            onPreviousPage = { viewModel.navigateAdjacentPage(forward = false) },
+                            onNextPage = { viewModel.navigateAdjacentPage(forward = true) },
                         )
                     }
                     ReaderMode.SPREAD -> {
@@ -386,6 +409,8 @@ fun ReaderScreen(
                                 onSingleTap = viewModel::toggleChrome,
                                 onRetryPage = viewModel::retryPage,
                                 onZoomedChanged = viewModel::onInteractionStateChanged,
+                                onPreviousPage = { viewModel.navigateAdjacentPage(forward = false) },
+                                onNextPage = { viewModel.navigateAdjacentPage(forward = true) },
                             )
                         }
                     }
@@ -536,6 +561,7 @@ fun ReaderScreen(
                 ReaderBottomControlBar(
                     uiState = uiState,
                     onScrubStart = { viewModel.onInteractionStateChanged(true) },
+                    onScrubPreview = { targetPage -> viewModel.jumpToPage(targetPage) },
                     onScrubCommit = { targetPage ->
                         viewModel.onInteractionStateChanged(false)
                         viewModel.jumpToPage(targetPage)
@@ -623,6 +649,8 @@ fun ReaderScreen(
                 onCropChange = viewModel::setCropPercent,
                 onCombineCoverChange = viewModel::setCombineCover,
                 onShowStatusBarChange = viewModel::setShowStatusBar,
+                onTapZonesEnabledChange = viewModel::setTapZonesEnabled,
+                onAutoSplitWidePagesChange = viewModel::setAutoSplitWidePages,
                 onPreferOriginalChange = viewModel::setPreferOriginalImages,
                 onBrightnessPercentChange = viewModel::setBrightnessPercent,
                 onKeepScreenOnChange = viewModel::setKeepScreenOn,
@@ -824,6 +852,8 @@ private fun PagedHorizontalViewport(
     onSingleTap: () -> Unit,
     onRetryPage: (Int) -> Unit,
     onZoomedChanged: (Boolean) -> Unit,
+    onPreviousPage: () -> Unit,
+    onNextPage: () -> Unit,
 ) {
     val pageNumbers = uiState.pageNumbers
     key(reverseLayout, pageNumbers.size) {
@@ -881,6 +911,11 @@ private fun PagedHorizontalViewport(
                         onZoomedChanged(zoomed)
                     }
                 },
+                tapZonesEnabled = uiState.tapZonesEnabled,
+                isRtl = reverseLayout,
+                autoSplitWidePages = uiState.autoSplitWidePages,
+                onPreviousPage = onPreviousPage,
+                onNextPage = onNextPage,
             )
         }
     }
@@ -895,6 +930,8 @@ private fun SpreadReaderViewport(
     onSingleTap: () -> Unit,
     onRetryPage: (Int) -> Unit,
     onZoomedChanged: (Boolean) -> Unit,
+    onPreviousPage: () -> Unit,
+    onNextPage: () -> Unit,
 ) {
     val sheets = navigator.sheets
     key(navigator.spread, navigator.combineCover, sheets.size) {
@@ -950,6 +987,9 @@ private fun SpreadReaderViewport(
                         onZoomedChanged(zoomed)
                     }
                 },
+                tapZonesEnabled = uiState.tapZonesEnabled,
+                onPreviousPage = onPreviousPage,
+                onNextPage = onNextPage,
             )
         }
     }
@@ -959,6 +999,7 @@ private fun SpreadReaderViewport(
 private fun ReaderBottomControlBar(
     uiState: ReaderUiState,
     onScrubStart: () -> Unit,
+    onScrubPreview: (Int) -> Unit,
     onScrubCommit: (Int) -> Unit,
     onOpenThumbnails: () -> Unit,
     onOpenBookmarks: () -> Unit,
@@ -976,6 +1017,13 @@ private fun ReaderBottomControlBar(
 
     var isScrubbing by remember { mutableStateOf(false) }
     var scrubIndex by remember(currentIdx) { mutableIntStateOf(currentIdx) }
+    LaunchedEffect(isScrubbing, scrubIndex) {
+        if (isScrubbing) {
+            kotlinx.coroutines.delay(250L)
+            val target = pages.getOrElse(scrubIndex) { uiState.currentPage }
+            onScrubPreview(target)
+        }
+    }
     val displayPage = pages.getOrElse(if (isScrubbing) scrubIndex else currentIdx) { uiState.currentPage }
     val displayPercent = if (uiState.totalPages <= 0) 0 else ((displayPage.toFloat() / uiState.totalPages) * 100f).toInt().coerceIn(0, 100)
 

@@ -8,11 +8,13 @@ import com.raven.app.core.model.ShelfItem
 import com.raven.app.core.model.SiteId
 import com.raven.app.core.model.SmartShelf
 import com.raven.app.core.model.SmartShelfRule
+import com.raven.app.core.model.WatchProgress
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -295,6 +297,81 @@ class ShelfDetailViewModelTest {
             val updated = expectMostRecentItem()
             assertEquals("近期新增", updated.title)
             assertEquals(SmartShelfRule.RECENT, updated.smartShelf?.rule)
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    @Test
+    fun `missing shelf sets isNotFound and unmarking completed overrides auto-completion`() = runTest {
+        val harness = LibraryTestHarness(mainRule.dispatcher, tempFolder.newFolder("shelf4"))
+
+        // Non-existent shelf sets isNotFound even when not triggered by delete button
+        val missingVm = ShelfDetailViewModel(
+            target = ShelfDetailTarget.Custom("missing-id"),
+            shelfRepository = harness.shelfRepository,
+            historyRepository = harness.historyRepository,
+            downloadGateway = harness.downloadGateway,
+            playbackQueueStore = harness.playbackQueueStore,
+            siteRegistry = harness.siteRegistry,
+            dispatchers = harness.dispatchers,
+            clockMs = harness.clock,
+        )
+        missingVm.uiState.test {
+            awaitItem()
+            advanceUntilIdle()
+            assertTrue(expectMostRecentItem().isNotFound)
+            cancelAndIgnoreRemainingEvents()
+        }
+
+        // Auto-completed item via WatchProgress can be un-marked via toggleItemCompleted
+        val shelf = harness.shelfRepository.createShelf(name = "完成开关")
+        harness.shelfRepository.addItem(
+            shelf.id,
+            ShelfItem(
+                shelfId = shelf.id,
+                siteId = SiteId.R34V,
+                mediaId = "w99",
+                url = "https://rule34video.com/video/99/",
+                kind = MediaKind.VIDEO,
+                title = "Auto Completed",
+                coverUrl = "",
+                addedAt = 100L,
+                completed = false,
+            ),
+        )
+        harness.historyRepository.saveWatchProgress(
+            WatchProgress(
+                siteId = SiteId.R34V,
+                mediaId = "w99",
+                url = "https://rule34video.com/video/99/",
+                title = "Auto Completed",
+                positionMs = 115_000L,
+                durationMs = 120_000L,
+                updatedAt = 200L,
+                completed = true,
+            ),
+        )
+
+        val vm = ShelfDetailViewModel(
+            target = ShelfDetailTarget.Custom(shelf.id),
+            shelfRepository = harness.shelfRepository,
+            historyRepository = harness.historyRepository,
+            downloadGateway = harness.downloadGateway,
+            playbackQueueStore = harness.playbackQueueStore,
+            siteRegistry = harness.siteRegistry,
+            dispatchers = harness.dispatchers,
+            clockMs = harness.clock,
+        )
+        vm.uiState.test {
+            awaitItem()
+            advanceUntilIdle()
+            val initialEntry = expectMostRecentItem().allEntries.single()
+            assertTrue(initialEntry.completed)
+
+            vm.toggleItemCompleted(initialEntry)
+            advanceUntilIdle()
+            val afterUnmark = expectMostRecentItem().allEntries.single()
+            assertFalse(afterUnmark.completed)
             cancelAndIgnoreRemainingEvents()
         }
     }

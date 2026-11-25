@@ -88,7 +88,9 @@ import com.raven.app.core.designsystem.theme.tabular
 import com.raven.app.core.model.DownloadItem
 import com.raven.app.core.model.DownloadKind
 import com.raven.app.core.model.DownloadStatus
+import com.raven.app.core.model.SiteId
 import org.koin.androidx.compose.koinViewModel
+import org.koin.core.parameter.parametersOf
 import kotlin.math.roundToInt
 
 /**
@@ -98,7 +100,11 @@ import kotlin.math.roundToInt
 fun DownloadsScreen(
     navigator: LibraryNavigator,
     modifier: Modifier = Modifier,
-    viewModel: DownloadsViewModel = koinViewModel(),
+    siteId: SiteId? = null,
+    viewModel: DownloadsViewModel = koinViewModel(
+        key = "downloads_${siteId?.value.orEmpty()}",
+        parameters = { parametersOf(DownloadsParams(siteId)) },
+    ),
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val colors = LocalRavenColors.current

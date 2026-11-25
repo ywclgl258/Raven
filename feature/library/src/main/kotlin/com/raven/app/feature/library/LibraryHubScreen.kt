@@ -23,6 +23,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Add
@@ -234,11 +235,13 @@ fun LibraryHubScreenContent(
             },
         )
 
-        LazyColumn(
-            modifier = Modifier.fillMaxSize(),
-            contentPadding = PaddingValues(top = 12.dp, bottom = 28.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp),
-        ) {
+        BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
+            val localGridColumns = computeLibraryGridColumns(maxWidth.value.toInt())
+            LazyColumn(
+                modifier = Modifier.fillMaxSize(),
+                contentPadding = PaddingValues(top = 12.dp, bottom = 28.dp),
+                verticalArrangement = Arrangement.spacedBy(16.dp),
+            ) {
             if (!uiState.message.isNullOrBlank()) {
                 item(key = "hub_feedback") {
                     LibraryFeedbackBanner(
@@ -271,7 +274,7 @@ fun LibraryHubScreenContent(
                         title = "收藏",
                         count = uiState.favoriteCount,
                         icon = Icons.Outlined.FavoriteBorder,
-                        onClick = navigator::openFavorites,
+                        onClick = { navigator.openFavorites() },
                         testTag = "metric_tile_favorites",
                         modifier = Modifier.weight(1f),
                     )
@@ -281,7 +284,7 @@ fun LibraryHubScreenContent(
                         icon = Icons.Outlined.Download,
                         highlightBadgeCount = uiState.activeDownloadCount,
                         subtitle = if (uiState.activeDownloadCount > 0) "下载中" else "下载",
-                        onClick = navigator::openDownloads,
+                        onClick = { navigator.openDownloads() },
                         testTag = "metric_tile_downloads",
                         modifier = Modifier.weight(1f),
                     )
@@ -406,35 +409,52 @@ fun LibraryHubScreenContent(
                             )
                         }
                     } else {
-                        item(key = "local_books_grid") {
-                            LocalBooksPreviewGrid(
-                                books = uiState.localBooks,
-                                mediaItems = uiState.localBookItems,
-                                onOpenBook = { book ->
-                                    val item = uiState.localBookItems[book.id]
-                                    if (item != null) {
-                                        navigator.openMedia(item, offlineOnly = true)
-                                    } else if (book.kind == MediaKind.VIDEO) {
-                                        navigator.openVideo(
-                                            siteId = SiteId.LOCAL,
-                                            mediaId = book.id,
-                                            url = LocalLibraryImporter.buildLocalUri(book.id),
-                                            title = book.title,
-                                            offlineOnly = true,
-                                        )
-                                    } else {
-                                        navigator.openReader(
-                                            siteId = SiteId.LOCAL,
-                                            mediaId = book.id,
-                                            url = LocalLibraryImporter.buildLocalUri(book.id),
-                                            startPage = 1,
-                                            offlineOnly = true,
-                                        )
-                                    }
-                                },
-                                onRemoveBook = { removingLocalBook = it },
-                                modifier = Modifier.padding(horizontal = 16.dp),
-                            )
+                        val rows = uiState.localBooks.chunked(localGridColumns)
+                        itemsIndexed(
+                            items = rows,
+                            key = { idx, row -> "hub_local_row_${idx}_${row.first().id}" },
+                        ) { _, rowBooks ->
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 16.dp),
+                                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                            ) {
+                                rowBooks.forEach { book ->
+                                    val cover = uiState.localBookItems[book.id]?.coverUrl.orEmpty()
+                                    LocalBookGridCard(
+                                        book = book,
+                                        coverUrl = cover,
+                                        onClick = {
+                                            val item = uiState.localBookItems[book.id]
+                                            if (item != null) {
+                                                navigator.openMedia(item, offlineOnly = true)
+                                            } else if (book.kind == MediaKind.VIDEO) {
+                                                navigator.openVideo(
+                                                    siteId = SiteId.LOCAL,
+                                                    mediaId = book.id,
+                                                    url = LocalLibraryImporter.buildLocalUri(book.id),
+                                                    title = book.title,
+                                                    offlineOnly = true,
+                                                )
+                                            } else {
+                                                navigator.openReader(
+                                                    siteId = SiteId.LOCAL,
+                                                    mediaId = book.id,
+                                                    url = LocalLibraryImporter.buildLocalUri(book.id),
+                                                    startPage = 1,
+                                                    offlineOnly = true,
+                                                )
+                                            }
+                                        },
+                                        onRemoveClick = { removingLocalBook = book },
+                                        modifier = Modifier.weight(1f),
+                                    )
+                                }
+                                repeat(localGridColumns - rowBooks.size) {
+                                    Spacer(modifier = Modifier.weight(1f))
+                                }
+                            }
                         }
                     }
                 }
@@ -488,6 +508,7 @@ fun LibraryHubScreenContent(
                     )
                 }
             }
+        }
         }
     }
 
@@ -923,42 +944,6 @@ private fun LocalImportPanel(
                 onClick = onOpenFromLink,
                 modifier = Modifier.testTag("local_tab_open_link_row"),
             )
-        }
-    }
-}
-
-@Composable
-private fun LocalBooksPreviewGrid(
-    books: List<LocalBook>,
-    mediaItems: Map<String, MediaItem>,
-    onOpenBook: (LocalBook) -> Unit,
-    onRemoveBook: (LocalBook) -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    BoxWithConstraints(modifier = modifier.fillMaxWidth()) {
-        val columns = computeLibraryGridColumns(maxWidth.value.toInt())
-        val rows = remember(books, columns) { books.chunked(columns) }
-        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            rows.forEach { rowBooks ->
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(10.dp),
-                ) {
-                    rowBooks.forEach { book ->
-                        val cover = mediaItems[book.id]?.coverUrl.orEmpty()
-                        LocalBookGridCard(
-                            book = book,
-                            coverUrl = cover,
-                            onClick = { onOpenBook(book) },
-                            onRemoveClick = { onRemoveBook(book) },
-                            modifier = Modifier.weight(1f),
-                        )
-                    }
-                    repeat(columns - rowBooks.size) {
-                        Spacer(modifier = Modifier.weight(1f))
-                    }
-                }
-            }
         }
     }
 }

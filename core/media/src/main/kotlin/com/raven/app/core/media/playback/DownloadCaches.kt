@@ -75,10 +75,17 @@ class DownloadCaches(
             LeastRecentlyUsedCacheEvictor(HLS_SEEK_CACHE_MAX_BYTES),
             databaseProvider,
         ).also { cache ->
-            // Drop any orphaned keys left behind by a prior process kill.
-            cache.keys.toList().forEach { key -> runCatching { cache.removeResource(key) } }
+            // Drop any orphaned keys left behind by a prior process kill on an IO worker.
+            val staleKeys = cache.keys.toList()
+            if (staleKeys.isNotEmpty()) {
+                applicationScope.launch(dispatchers.io) {
+                    staleKeys.forEach { key -> runCatching { cache.removeResource(key) } }
+                }
+            }
         }
     }
+
+    private val seekSessionLock = Any()
 
     @Volatile
     private var activeSeekSessionKey: String? = null
@@ -163,7 +170,9 @@ class DownloadCaches(
      * Copies private Media3 cache spans + metadata into the shared root cache without clobbering
      * an existing shared cache UID or existing entries.
      */
-    fun copyPrivateDownloadsToShared() {
+    fun copyPrivateDownloadsToShared(
+        onProgress: (copiedBytes: Long, totalBytes: Long) -> Unit = { _, _ -> },
+    ) {
         val source = existingDownloadCache(storageRootManager.layoutOf(StorageLocation.PRIVATE)) ?: return
         val target = downloadCache(storageRootManager.layoutOf(StorageLocation.SHARED).root.absolutePath)
         if (source === target) return
@@ -177,13 +186,21 @@ class DownloadCaches(
             .setUpstreamDataSourceFactory(offlineSource)
             .setFlags(CacheDataSource.FLAG_BLOCK_ON_CACHE)
 
-        for (key in source.keys.toList()) {
+        val keys = source.keys.toList()
+        val totalBytes = keys.sumOf { key ->
+            source.getCachedSpans(key).sumOf { span -> span.length.coerceAtLeast(0L) }
+        }
+        var copiedBytes = 0L
+
+        for (key in keys) {
+            if (Thread.currentThread().isInterrupted) throw InterruptedException("Migration cancelled")
             val length = ContentMetadata.getContentLength(source.getContentMetadata(key))
             val previousLength = ContentMetadata.getContentLength(target.getContentMetadata(key))
             check(length <= 0L || previousLength <= 0L || length == previousLength) {
                 "同一视频的缓存长度不一致，已停止迁移"
             }
             for (span in source.getCachedSpans(key).toList()) {
+                if (Thread.currentThread().isInterrupted) throw InterruptedException("Migration cancelled")
                 val spec = DataSpec.Builder()
                     .setUri("https://raven.local/cache-copy")
                     .setKey(key)
@@ -191,6 +208,8 @@ class DownloadCaches(
                     .setLength(span.length)
                     .build()
                 CacheWriter(destination.createDataSource(), spec, null, null).cache()
+                copiedBytes += span.length.coerceAtLeast(0L)
+                onProgress(copiedBytes, totalBytes)
             }
             val metadata = source.getContentMetadata(key)
             val mutations = ContentMetadataMutations()
@@ -247,7 +266,7 @@ class DownloadCaches(
                 siteId = siteId,
                 sourceRoot = sourceRoot,
                 hlsKey = hlsKey,
-                cacheStreaming = false,
+                cacheStreaming = cacheStreaming,
                 hlsSeek = session,
                 extraHeaders = extraHeaders,
             )
@@ -331,12 +350,15 @@ class DownloadCaches(
 
                     if (!offline && sessionKey != null && dataSpec.length != 0L) {
                         val seekCache = seekCacheLazy.value
-                        if (activeSeekSessionKey != sessionKey) {
-                            activeSeekSessionKey = sessionKey
-                            seekCache.keys.toList()
-                                .filter { it != sessionKey }
-                                .forEach { staleKey -> runCatching { seekCache.removeResource(staleKey) } }
+                        val staleKeys = synchronized(seekSessionLock) {
+                            if (activeSeekSessionKey != sessionKey) {
+                                activeSeekSessionKey = sessionKey
+                                seekCache.keys.toList().filter { it != sessionKey }
+                            } else {
+                                emptyList()
+                            }
                         }
+                        staleKeys.forEach { staleKey -> runCatching { seekCache.removeResource(staleKey) } }
                         layeredFactory = CacheDataSource.Factory()
                             .setCache(seekCache)
                             .setCacheKeyFactory { sessionKey }
@@ -420,24 +442,44 @@ class DownloadCaches(
         }
     }
 
+    private fun directorySizeBytes(dir: File): Long {
+        if (!dir.exists()) return 0L
+        return dir.walkTopDown().filter { it.isFile }.sumOf { it.length() }
+    }
+
     fun streamingCacheBytes(): Long =
-        if (streamCacheLazy.isInitialized()) streamCacheLazy.value.cacheSpace else 0L
+        if (streamCacheLazy.isInitialized()) streamCacheLazy.value.cacheSpace else directorySizeBytes(File(appContext.cacheDir, "raven-streams"))
+
+    fun seekCacheBytes(): Long {
+        val mp4Bytes = if (seekCacheLazy.isInitialized()) seekCacheLazy.value.cacheSpace else directorySizeBytes(File(appContext.cacheDir, "raven-seeks"))
+        val hlsBytes = if (hlsSeekCacheLazy.isInitialized()) hlsSeekCacheLazy.value.cacheSpace else directorySizeBytes(File(appContext.cacheDir, "raven-hls-seeks"))
+        return mp4Bytes + hlsBytes
+    }
 
     fun clearStreamingCache() {
-        if (!streamCacheLazy.isInitialized()) return
-        val cache = streamCacheLazy.value
-        cache.keys.toList().forEach { key -> runCatching { cache.removeResource(key) } }
+        if (streamCacheLazy.isInitialized()) {
+            val cache = streamCacheLazy.value
+            cache.keys.toList().forEach { key -> runCatching { cache.removeResource(key) } }
+        } else {
+            runCatching { File(appContext.cacheDir, "raven-streams").deleteRecursively() }
+        }
     }
 
     fun clearSeekCaches() {
-        activeSeekSessionKey = null
+        synchronized(seekSessionLock) {
+            activeSeekSessionKey = null
+        }
         if (seekCacheLazy.isInitialized()) {
             val cache = seekCacheLazy.value
             cache.keys.toList().forEach { key -> runCatching { cache.removeResource(key) } }
+        } else {
+            runCatching { File(appContext.cacheDir, "raven-seeks").deleteRecursively() }
         }
         if (hlsSeekCacheLazy.isInitialized()) {
             val cache = hlsSeekCacheLazy.value
             cache.keys.toList().forEach { key -> runCatching { cache.removeResource(key) } }
+        } else {
+            runCatching { File(appContext.cacheDir, "raven-hls-seeks").deleteRecursively() }
         }
     }
 

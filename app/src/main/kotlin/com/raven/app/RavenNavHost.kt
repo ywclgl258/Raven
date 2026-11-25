@@ -91,6 +91,7 @@ import com.raven.app.feature.library.LocalLibraryScreen
 import com.raven.app.feature.library.ProfileScreen
 import com.raven.app.feature.library.ShelfDetailScreen
 import com.raven.app.feature.library.SmartShelfDetailScreen
+import com.raven.app.feature.library.StatsScreen
 import com.raven.app.feature.library.SubscriptionsScreen
 import com.raven.app.feature.player.PlayerLaunchArgs
 import com.raven.app.feature.reader.GalleryDetailScreen
@@ -152,6 +153,7 @@ fun RavenAppShell(
     pendingSharedLink: SharedLinkPrompt?,
     onDismissSharedLink: () -> Unit,
     modifier: Modifier = Modifier,
+    isIncognito: Boolean = false,
     navController: NavHostController = rememberNavController(),
 ) {
     val navBackStackEntry by navController.currentBackStackEntryAsState()
@@ -296,16 +298,20 @@ fun RavenAppShell(
                 }
             }
 
-            override fun openFavorites() {
-                navController.navigate(RavenRoute.Favorites) { launchSingleTop = true }
+            override fun openFavorites(siteId: SiteId?) {
+                navController.navigate(RavenRoute.Favorites(siteId = siteId?.value)) {
+                    launchSingleTop = true
+                }
             }
 
             override fun openHistory() {
                 navController.navigate(RavenRoute.History) { launchSingleTop = true }
             }
 
-            override fun openDownloads() {
-                navController.navigate(RavenRoute.Downloads) { launchSingleTop = true }
+            override fun openDownloads(siteId: SiteId?) {
+                navController.navigate(RavenRoute.Downloads(siteId = siteId?.value)) {
+                    launchSingleTop = true
+                }
             }
 
             override fun openSubscriptions(siteId: SiteId?) {
@@ -390,12 +396,20 @@ fun RavenAppShell(
                 navController.navigate(RavenRoute.SmartShelfDetail(smartShelfId = smartShelfId))
             }
 
-            override fun openDownloads() {
-                navController.navigate(RavenRoute.Downloads) { launchSingleTop = true }
+            override fun openDownloads(siteId: SiteId?) {
+                navController.navigate(RavenRoute.Downloads(siteId = siteId?.value)) {
+                    launchSingleTop = true
+                }
             }
 
-            override fun openFavorites() {
-                navController.navigate(RavenRoute.Favorites) { launchSingleTop = true }
+            override fun openFavorites(siteId: SiteId?) {
+                navController.navigate(RavenRoute.Favorites(siteId = siteId?.value)) {
+                    launchSingleTop = true
+                }
+            }
+
+            override fun openStats() {
+                navController.navigate(RavenRoute.Stats) { launchSingleTop = true }
             }
 
             override fun openHistory() {
@@ -473,10 +487,29 @@ fun RavenAppShell(
                 )
             }
 
-            override fun openGallery(siteId: SiteId, mediaId: String, url: String) {
-                navController.navigate(
-                    RavenRoute.GalleryDetail(siteId = siteId.value, mediaId = mediaId, url = url),
-                )
+            override fun openGallery(
+                siteId: SiteId,
+                mediaId: String,
+                url: String,
+                offlineOnly: Boolean,
+                queueToken: String?,
+            ) {
+                if (!queueToken.isNullOrBlank()) {
+                    navigateReaderRoute(
+                        RavenRoute.Reader(
+                            siteId = siteId.value,
+                            mediaId = mediaId,
+                            url = url,
+                            startPage = 1,
+                            offlineOnly = offlineOnly,
+                            queueToken = queueToken,
+                        ),
+                    )
+                } else {
+                    navController.navigate(
+                        RavenRoute.GalleryDetail(siteId = siteId.value, mediaId = mediaId, url = url),
+                    )
+                }
             }
 
             override fun openTagFeed(siteId: SiteId, tag: TagRef) {
@@ -600,6 +633,7 @@ fun RavenAppShell(
         onDestinationSelected = selectTopDestination,
         showNavigation = activeTopDestination != null,
         badges = badges,
+        isIncognito = isIncognito,
         modifier = modifier.fillMaxSize(),
     ) {
         NavHost(
@@ -709,8 +743,12 @@ fun RavenAppShell(
             }
 
             // ---- Library Sub-Routes ----
-            composable<RavenRoute.Downloads> {
-                DownloadsScreen(navigator = libraryNavigator)
+            composable<RavenRoute.Downloads> { backStackEntry ->
+                val route = backStackEntry.toRoute<RavenRoute.Downloads>()
+                val initialSiteId = route.siteId?.takeIf { it.isNotBlank() }?.let {
+                    runCatching { SiteId.of(it) }.getOrNull()
+                }
+                DownloadsScreen(navigator = libraryNavigator, siteId = initialSiteId)
             }
             composable<RavenRoute.ShelfDetail> { backStackEntry ->
                 val route = backStackEntry.toRoute<RavenRoute.ShelfDetail>()
@@ -720,8 +758,15 @@ fun RavenAppShell(
                 val route = backStackEntry.toRoute<RavenRoute.SmartShelfDetail>()
                 SmartShelfDetailScreen(smartShelfId = route.smartShelfId, navigator = libraryNavigator)
             }
-            composable<RavenRoute.Favorites> {
-                FavoritesScreen(navigator = libraryNavigator)
+            composable<RavenRoute.Favorites> { backStackEntry ->
+                val route = backStackEntry.toRoute<RavenRoute.Favorites>()
+                val initialSiteId = route.siteId?.takeIf { it.isNotBlank() }?.let {
+                    runCatching { SiteId.of(it) }.getOrNull()
+                }
+                FavoritesScreen(navigator = libraryNavigator, siteId = initialSiteId)
+            }
+            composable<RavenRoute.Stats> {
+                StatsScreen(navigator = libraryNavigator)
             }
             composable<RavenRoute.History> {
                 HistoryScreen(navigator = libraryNavigator)

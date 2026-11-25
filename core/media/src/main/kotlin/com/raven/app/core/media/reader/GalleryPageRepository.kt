@@ -193,9 +193,17 @@ class GalleryPageRepository(
 
     private val readingCacheBaseDir: File = cacheRootOverride
         ?: File(
-            checkNotNull(context?.applicationContext?.filesDir) { "Context or cacheRootOverride required" },
+            checkNotNull(context?.applicationContext?.cacheDir) { "Context or cacheRootOverride required" },
             "gallery-cache",
         )
+
+    private val legacyReadingCacheBaseDir: File? = if (cacheRootOverride == null) {
+        context?.applicationContext?.filesDir?.let { File(it, "gallery-cache") }
+    } else {
+        null
+    }
+
+    private val cacheTrimLock = Any()
 
     private fun readingCacheDir(siteId: SiteId): File =
         File(readingCacheBaseDir, siteId.value).apply { mkdirs() }
@@ -507,17 +515,149 @@ class GalleryPageRepository(
         offlineOnly: Boolean = false,
         sourceRoot: String = "",
     ): RenderedGalleryPage = withContext(dispatchers.io) {
-        val original = loadOriginalPage(
-            detail = detail,
-            pageIndex = pageIndex,
+        val item = detail.item
+        if (item.siteId.isLocal || offlineOnly) {
+            val original = loadOriginalPage(
+                detail = detail,
+                pageIndex = pageIndex,
+                preferOriginal = preferOriginal,
+                forceReload = false,
+                offlineOnly = offlineOnly,
+                sourceRoot = sourceRoot,
+            )
+            val thumb = decodeThumbnailBitmap(original.bytes, targetSizePx)
+                ?: decodeSampledBitmap(original.bytes, ImageStructureValidator.DEFAULT_MAX_DECODE_PIXELS)
+            return@withContext RenderedGalleryPage(original.page, thumb, original.fromCache)
+        }
+
+        val resolvedRoot = sourceRoot.ifBlank { resolveReadingRoot(item.siteId, item.id) }
+        val knownPageUrl = cachedPageUrl(item.siteId, item.id, item.url, pageIndex, resolvedRoot)
+            ?: detail.pages.firstOrNull { it.index == pageIndex }?.pageUrl
+
+        if (!knownPageUrl.isNullOrBlank()) {
+            val layout = storageRootManager.resolveSourceLayout(resolvedRoot)
+            val bookDir = bookFolder(item.siteId, item.id, layout)
+            val downloadUrl = readLinksMap(bookDir)[pageIndex] ?: knownPageUrl
+            val saved = readSavedPage(bookDir, downloadUrl, expectedIndex = pageIndex, json = json)
+            if (saved != null && saved.isValid(requireAndroidImageDecoder)) {
+                val bytes = readBytesBounded(saved.file, MAX_GALLERY_IMAGE_BYTES)
+                if (bytes != null) {
+                    val thumb = decodeThumbnailBitmap(bytes, targetSizePx)
+                        ?: decodeSampledBitmap(bytes, ImageStructureValidator.DEFAULT_MAX_DECODE_PIXELS)
+                    return@withContext RenderedGalleryPage(saved.page, thumb, fromCache = true)
+                }
+            }
+
+            val cacheDir = readingCacheDir(item.siteId)
+            val cached = readSavedPage(
+                folder = cacheDir,
+                pageUrl = knownPageUrl,
+                expectedIndex = pageIndex,
+                json = json,
+                preferOriginal = preferOriginal,
+            )
+            if (cached != null && cached.isValid(requireAndroidImageDecoder)) {
+                val bytes = readBytesBounded(cached.file, MAX_GALLERY_IMAGE_BYTES)
+                if (bytes != null) {
+                    val thumb = decodeThumbnailBitmap(bytes, targetSizePx)
+                        ?: decodeSampledBitmap(bytes, ImageStructureValidator.DEFAULT_MAX_DECODE_PIXELS)
+                    return@withContext RenderedGalleryPage(cached.page, thumb, fromCache = true)
+                }
+            }
+        }
+
+        val plugin = siteRegistryProvider().require(item.siteId)
+        val gallerySource = plugin.gallerySource
+            ?: throw SiteException.Unsupported("站点 ${item.siteId.value} 不支持图集读取", siteId = item.siteId)
+        val resolvedPage = try {
+            resolveOnlineGalleryPage(
+                detail = detail,
+                pageIndex = pageIndex,
+                hintPageUrl = knownPageUrl,
+                cacheDir = readingCacheDir(item.siteId),
+                gallerySource = gallerySource,
+                preferOriginal = preferOriginal,
+                forceReload = false,
+            )
+        } catch (ce: CancellationException) {
+            throw ce
+        } catch (error: Exception) {
+            if (!knownPageUrl.isNullOrBlank()) {
+                forgetCachedPageLink(item.siteId, item.url, pageIndex, knownPageUrl)
+                resolveOnlineGalleryPage(
+                    detail = detail,
+                    pageIndex = pageIndex,
+                    hintPageUrl = null,
+                    cacheDir = readingCacheDir(item.siteId),
+                    gallerySource = gallerySource,
+                    preferOriginal = preferOriginal,
+                    forceReload = true,
+                )
+            } else {
+                throw error
+            }
+        }
+
+        val (fetchedPage, rawBytes) = fetchRawImageBytesWithReload(
+            siteId = item.siteId,
+            initialPage = resolvedPage,
+            gallerySource = gallerySource,
             preferOriginal = preferOriginal,
-            forceReload = false,
-            offlineOnly = offlineOnly,
-            sourceRoot = sourceRoot,
+            refererHint = detail.item.extra["imageReferer"],
         )
-        val thumb = decodeThumbnailBitmap(original.bytes, targetSizePx)
-            ?: decodeSampledBitmap(original.bytes, ImageStructureValidator.DEFAULT_MAX_DECODE_PIXELS)
-        RenderedGalleryPage(original.page, thumb, original.fromCache)
+        val stripCount = unscrambler.resolveStripCount(fetchedPage, plugin.imageUnscrambler)
+        val thumb = if (stripCount > 0 && requireAndroidImageDecoder) {
+            unscrambler.decodeUnscrambledThumbnail(
+                bytes = rawBytes,
+                stripCount = stripCount,
+                unscrambler = plugin.imageUnscrambler,
+                targetSizePx = targetSizePx,
+            )
+        } else {
+            decodeThumbnailBitmap(rawBytes, targetSizePx)
+                ?: decodeSampledBitmap(rawBytes, ImageStructureValidator.DEFAULT_MAX_DECODE_PIXELS)
+        }
+        RenderedGalleryPage(fetchedPage, thumb, fromCache = false)
+    }
+
+    private suspend fun resolveOnlineGalleryPage(
+        detail: GalleryDetail,
+        pageIndex: Int,
+        hintPageUrl: String?,
+        cacheDir: File,
+        gallerySource: GallerySource,
+        preferOriginal: Boolean,
+        forceReload: Boolean,
+    ): GalleryPage {
+        val resolvedPage = if (!hintPageUrl.isNullOrBlank()) {
+            val previous = if (forceReload) {
+                readSavedPage(
+                    folder = cacheDir,
+                    pageUrl = hintPageUrl,
+                    expectedIndex = pageIndex,
+                    json = json,
+                    preferOriginal = preferOriginal,
+                )?.page
+            } else {
+                null
+            }
+            val reloadUrl = if (forceReload && previous != null) {
+                gallerySource.reloadUrlOnError(SiteException.Network("用户手动重试", siteId = detail.item.siteId), previous)
+                    ?: hintPageUrl
+            } else {
+                hintPageUrl
+            }
+            gallerySource.resolvePageImage(reloadUrl, preferOriginal = preferOriginal, forceReload = forceReload)
+        } else {
+            val page = gallerySource.loadGalleryPage(detail, pageIndex, forceReload = forceReload)
+            if (page.imageUrl.isBlank()) {
+                gallerySource.resolvePageImage(page.pageUrl, preferOriginal = preferOriginal, forceReload = forceReload)
+            } else {
+                page
+            }
+        }
+        check(resolvedPage.index == pageIndex) { "原站返回了错误的图页编号（期望 $pageIndex，实际 ${resolvedPage.index}）" }
+        return resolvedPage
     }
 
     private suspend fun loadOnlinePageBytes(
@@ -534,7 +674,13 @@ class GalleryPageRepository(
         val cacheDir = readingCacheDir(siteId)
         val initialPageUrl = hintPageUrl
         if (!forceReload && !initialPageUrl.isNullOrBlank()) {
-            val cached = readSavedPage(cacheDir, initialPageUrl, expectedIndex = pageIndex, json = json)
+            val cached = readSavedPage(
+                folder = cacheDir,
+                pageUrl = initialPageUrl,
+                expectedIndex = pageIndex,
+                json = json,
+                preferOriginal = preferOriginal,
+            )
             if (cached != null && cached.isValid(requireAndroidImageDecoder)) {
                 val bytes = readBytesBounded(cached.file, MAX_GALLERY_IMAGE_BYTES)
                 if (bytes != null) {
@@ -545,29 +691,15 @@ class GalleryPageRepository(
             }
         }
 
-        // Resolve page metadata via GallerySource
-        val resolvedPage = if (!initialPageUrl.isNullOrBlank()) {
-            val previous = if (forceReload) {
-                readSavedPage(cacheDir, initialPageUrl, expectedIndex = pageIndex, json = json)?.page
-            } else {
-                null
-            }
-            val reloadUrl = if (forceReload && previous != null) {
-                gallerySource.reloadUrlOnError(SiteException.Network("用户手动重试", siteId = siteId), previous)
-                    ?: initialPageUrl
-            } else {
-                initialPageUrl
-            }
-            gallerySource.resolvePageImage(reloadUrl, preferOriginal = preferOriginal, forceReload = forceReload)
-        } else {
-            val page = gallerySource.loadGalleryPage(detail, pageIndex, forceReload = forceReload)
-            if (page.imageUrl.isBlank()) {
-                gallerySource.resolvePageImage(page.pageUrl, preferOriginal = preferOriginal, forceReload = forceReload)
-            } else {
-                page
-            }
-        }
-        check(resolvedPage.index == pageIndex) { "原站返回了错误的图页编号（期望 $pageIndex，实际 ${resolvedPage.index}）" }
+        val resolvedPage = resolveOnlineGalleryPage(
+            detail = detail,
+            pageIndex = pageIndex,
+            hintPageUrl = initialPageUrl,
+            cacheDir = cacheDir,
+            gallerySource = gallerySource,
+            preferOriginal = preferOriginal,
+            forceReload = forceReload,
+        )
 
         val (finalPage, finalBytes) = fetchAndUnscrambleWithReload(
             siteId = siteId,
@@ -580,7 +712,7 @@ class GalleryPageRepository(
 
         val canonicalPageUrl = initialPageUrl ?: finalPage.pageUrl
         val normalizedPage = finalPage.copy(pageUrl = canonicalPageUrl)
-        val key = StorageRootManager.sha256Hex(canonicalPageUrl.substringBefore('?'))
+        val key = readingCacheKey(canonicalPageUrl, preferOriginal)
         val imageFile = File(cacheDir, "$key.image")
         val metaFile = File(cacheDir, "$key.page.json")
         runCatching {
@@ -590,7 +722,7 @@ class GalleryPageRepository(
                 json.encodeToString(SavedPageMeta.serializer(), SavedPageMeta(normalizedPage, finalBytes.size.toLong())).toByteArray(),
             )
             rememberCacheLink(siteId, galleryUrl, normalizedPage)
-            trimReadingCache(cacheDir)
+            trimReadingCache()
         }
         return OriginalGalleryPage(normalizedPage, finalBytes, fromCache = false)
     }
@@ -648,8 +780,15 @@ class GalleryPageRepository(
 
         // Reuse already-cached reading copy if valid.
         val cacheDir = readingCacheDir(siteId)
-        val cachedPage = existingLink?.let { readSavedPage(cacheDir, it, expectedIndex = pageIndex, json = json) }
-            ?.takeIf { it.isValid(requireAndroidImageDecoder) }
+        val cachedPage = existingLink?.let {
+            readSavedPage(
+                folder = cacheDir,
+                pageUrl = it,
+                expectedIndex = pageIndex,
+                json = json,
+                preferOriginal = preferOriginal,
+            )
+        }?.takeIf { it.isValid(requireAndroidImageDecoder) }
         val cachedBytes = cachedPage?.let { readBytesBounded(it.file, MAX_GALLERY_IMAGE_BYTES) }
 
         val (finalPage, bytes) = if (cachedPage != null && cachedBytes != null) {
@@ -846,6 +985,20 @@ class GalleryPageRepository(
         return uniquePages to files.sumOf(File::length)
     }
 
+    fun readingCacheBytes(): Long {
+        val current = readingCacheBaseDir.listFiles().orEmpty()
+            .filter { it.isDirectory }
+            .sumOf { siteDir -> readingCacheImages(siteDir).sumOf(File::length) }
+        val legacy = legacyReadingCacheBaseDir
+            ?.takeIf { it.isDirectory && it.canonicalPath != readingCacheBaseDir.canonicalPath }
+            ?.let { legacyRoot ->
+                legacyRoot.listFiles().orEmpty()
+                    .filter { it.isDirectory }
+                    .sumOf { siteDir -> readingCacheImages(siteDir).sumOf(File::length) }
+            } ?: 0L
+        return current + legacy
+    }
+
     fun clearReadingCache(siteId: SiteId) {
         readingCacheDir(siteId).listFiles().orEmpty()
             .filter { it.isFile }
@@ -853,10 +1006,15 @@ class GalleryPageRepository(
     }
 
     fun clearAllReadingCaches() {
-        readingCacheBaseDir.listFiles().orEmpty().forEach { siteDir ->
-            if (siteDir.isDirectory) {
-                siteDir.listFiles().orEmpty().filter { it.isFile }.forEach { it.delete() }
+        synchronized(cacheTrimLock) {
+            readingCacheBaseDir.listFiles().orEmpty().forEach { siteDir ->
+                if (siteDir.isDirectory) {
+                    siteDir.listFiles().orEmpty().filter { it.isFile }.forEach { it.delete() }
+                }
             }
+            legacyReadingCacheBaseDir
+                ?.takeIf { it.isDirectory && it.canonicalPath != readingCacheBaseDir.canonicalPath }
+                ?.deleteRecursively()
         }
     }
 
@@ -870,24 +1028,15 @@ class GalleryPageRepository(
         preferOriginal: Boolean,
         refererHint: String?,
     ): Pair<GalleryPage, ByteArray> {
-        var currentPage = initialPage
-        val rawBytes = try {
-            fetchImageBytes(siteId, currentPage, gallerySource, preferOriginal, refererHint)
-        } catch (ce: CancellationException) {
-            throw ce
-        } catch (cause: SiteException) {
-            val reloadUrl = gallerySource.reloadUrlOnError(cause, currentPage)
-                ?.takeIf { it.isNotBlank() }
-                ?: throw cause
-            currentPage = gallerySource.resolvePageImage(reloadUrl, preferOriginal = preferOriginal, forceReload = true)
-            check(currentPage.index == initialPage.index) { "刷新图源返回了错误的图页编号" }
-            fetchImageBytes(siteId, currentPage, gallerySource, preferOriginal, refererHint)
-        }
+        val (currentPage, rawBytes) = fetchRawImageBytesWithReload(
+            siteId = siteId,
+            initialPage = initialPage,
+            gallerySource = gallerySource,
+            preferOriginal = preferOriginal,
+            refererHint = refererHint,
+        )
 
         val finalBytes = if (unscrambler.needsUnscramble(currentPage, imageUnscrambler)) {
-            check(ImageStructureValidator.isValidImageBytes(rawBytes, MAX_GALLERY_IMAGE_BYTES, requireAndroidImageDecoder)) {
-                "分条图页已损坏，请重试"
-            }
             unscrambler.unscrambleToBytes(rawBytes, currentPage, imageUnscrambler)
         } else {
             rawBytes
@@ -897,6 +1046,37 @@ class GalleryPageRepository(
             "图源未返回可识别的完整图片，请重试此页"
         }
         return currentPage to finalBytes
+    }
+
+    private suspend fun fetchRawImageBytesWithReload(
+        siteId: SiteId,
+        initialPage: GalleryPage,
+        gallerySource: GallerySource,
+        preferOriginal: Boolean,
+        refererHint: String?,
+    ): Pair<GalleryPage, ByteArray> {
+        var currentPage = initialPage
+        suspend fun fetchAndValidate(page: GalleryPage): ByteArray {
+            val bytes = fetchImageBytes(siteId, page, gallerySource, preferOriginal, refererHint)
+            if (!ImageStructureValidator.isValidImageBytes(bytes, MAX_GALLERY_IMAGE_BYTES, requireAndroidImageDecoder)) {
+                throw SiteException.Network("图源未返回可识别的完整图片，正在尝试备用线路", siteId = siteId)
+            }
+            return bytes
+        }
+
+        val rawBytes = try {
+            fetchAndValidate(currentPage)
+        } catch (ce: CancellationException) {
+            throw ce
+        } catch (cause: SiteException) {
+            val reloadUrl = gallerySource.reloadUrlOnError(cause, currentPage)
+                ?.takeIf { it.isNotBlank() }
+                ?: throw cause
+            currentPage = gallerySource.resolvePageImage(reloadUrl, preferOriginal = preferOriginal, forceReload = true)
+            check(currentPage.index == initialPage.index) { "刷新图源返回了错误的图页编号" }
+            fetchAndValidate(currentPage)
+        }
+        return currentPage to rawBytes
     }
 
     private suspend fun fetchImageBytes(
@@ -942,6 +1122,7 @@ class GalleryPageRepository(
             throw SiteHttpErrorMapper.fromThrowable(e, siteId)
         }
 
+        val ctx = currentCoroutineContext()
         return response.use { res ->
             if (gallerySource.rejectCrossHostImageRedirect &&
                 !res.request.url.host.equals(parsedTarget.host, ignoreCase = true)
@@ -969,6 +1150,7 @@ class GalleryPageRepository(
                 val out = ByteArrayOutputStream()
                 val buf = ByteArray(16 * 1024)
                 while (true) {
+                    ctx.ensureActive()
                     val count = stream.read(buf)
                     if (count < 0) break
                     if (out.size() + count > MAX_GALLERY_IMAGE_BYTES) {
@@ -1134,15 +1316,22 @@ class GalleryPageRepository(
     private fun readingCacheImages(dir: File): List<File> =
         dir.listFiles().orEmpty().filter { it.isFile && (it.extension == "image" || it.extension == "strips") }
 
-    private fun trimReadingCache(dir: File) {
-        val files = readingCacheImages(dir).sortedBy { it.lastModified() }
-        var total = files.sumOf(File::length)
-        for (file in files) {
-            if (total <= READING_CACHE_MAX_BYTES) break
-            val len = file.length()
-            if (file.delete()) {
-                total -= len
-                File(dir, "${file.nameWithoutExtension}.page.json").delete()
+    private fun trimReadingCache() {
+        synchronized(cacheTrimLock) {
+            val files = readingCacheBaseDir.listFiles().orEmpty()
+                .filter { it.isDirectory }
+                .flatMap(::readingCacheImages)
+                .sortedBy { it.lastModified() }
+            var total = files.sumOf(File::length)
+            for (file in files) {
+                if (total <= READING_CACHE_MAX_BYTES) break
+                val len = file.length()
+                if (file.delete()) {
+                    total -= len
+                    file.parentFile?.let { parent ->
+                        File(parent, "${file.nameWithoutExtension}.page.json").delete()
+                    }
+                }
             }
         }
     }
@@ -1162,6 +1351,9 @@ class GalleryPageRepository(
                 "complete   整本下载完成标记\n\n" +
                 "把整个文件夹放回 Raven/comics/<站点>/ 之下，应用重装后可自动识别恢复。"
 
+        private fun readingCacheKey(pageUrl: String, preferOriginal: Boolean): String =
+            StorageRootManager.sha256Hex("${pageUrl.substringBefore('?')}|orig=$preferOriginal")
+
         private fun <T> readJsonFile(
             file: File,
             serializer: kotlinx.serialization.KSerializer<T>,
@@ -1180,9 +1372,14 @@ class GalleryPageRepository(
             pageUrl: String,
             expectedIndex: Int?,
             json: Json,
+            preferOriginal: Boolean? = null,
         ): SavedPageFile? = runCatching {
             if (pageUrl.isBlank()) return null
-            val key = StorageRootManager.sha256Hex(pageUrl.substringBefore('?'))
+            val key = if (preferOriginal != null) {
+                readingCacheKey(pageUrl, preferOriginal)
+            } else {
+                StorageRootManager.sha256Hex(pageUrl.substringBefore('?'))
+            }
             val metaFile = File(folder, "$key.page.json")
             val meta = readJsonFile(metaFile, SavedPageMeta.serializer(), MAX_PAGE_JSON_BYTES, json) ?: return null
             if (meta.page.pageUrl != pageUrl ||

@@ -598,16 +598,27 @@ class WnacgSitePlugin(
         url.isDefaultHttpsPort && descriptor.matchesHost(url.host)
 
     private fun extractCoverUrl(base: ComicUrl, img: Element?): String =
-        img?.let { validateMediaUrl(base, it.attr("src"), COVER_HOSTS) }.orEmpty()
+        img?.let { validateMediaUrl(base, it.attr("src"), COVER_HOSTS, COVER_HOST_REGEX) }.orEmpty()
 
-    private fun validateMediaUrl(base: ComicUrl, raw: String, allowedHosts: Set<String>): String? {
+    private fun validateMediaUrl(
+        base: ComicUrl,
+        raw: String,
+        allowedHosts: Set<String>,
+        hostRegex: Regex? = null,
+    ): String? {
         val value = raw.trim().takeIf { it.isNotEmpty() } ?: return null
         val resolved = if (value.startsWith("//")) {
             ComicUrl.parseStrictHttps("https:$value")
         } else {
             base.resolve(value)?.takeIf { it.isDefaultHttpsPort }
         } ?: return null
-        val hostAllowed = isSiteUrl(resolved) || resolved.host in allowedHosts
+        val matchesRegex = when {
+            hostRegex != null -> hostRegex.matches(resolved.host)
+            allowedHosts === IMAGE_HOSTS -> IMAGE_HOST_REGEX.matches(resolved.host)
+            allowedHosts === COVER_HOSTS -> COVER_HOST_REGEX.matches(resolved.host)
+            else -> false
+        }
+        val hostAllowed = isSiteUrl(resolved) || resolved.host in allowedHosts || matchesRegex
         if (!hostAllowed) return null
         if (!IMAGE_EXTENSION_REGEX.containsMatchIn(resolved.encodedPath)) return null
         return resolved.toString()
@@ -631,6 +642,8 @@ class WnacgSitePlugin(
 
         val COVER_HOSTS: Set<String> = setOf("t2.wnimg1.ru", "t3.wnimg1.ru", "t4.qy0.ru")
         val IMAGE_HOSTS: Set<String> = setOf("img2.wnimg1.ru", "img5.wnimg1.ru", "img5.qy0.ru")
+        private val COVER_HOST_REGEX = Regex("""^t\d+\.(?:wnimg1|qy0)\.ru$""", RegexOption.IGNORE_CASE)
+        private val IMAGE_HOST_REGEX = Regex("""^(?:img|t)\d+\.(?:wnimg1|qy0)\.ru$""", RegexOption.IGNORE_CASE)
 
         val CATEGORIES: LinkedHashMap<String, String> = linkedMapOf(
             "5" to "同人志",

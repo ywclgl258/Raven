@@ -512,5 +512,26 @@ class RepositoriesBehaviorTest {
             // Community entries remain untouched after backup restore
             assertEquals(2, db.tagTranslations.getBySource(TagTranslationSource.COMMUNITY_EHTAG).size)
             assertEquals(2, db.tagTranslations.getBySource(TagTranslationSource.USER_CUSTOM).size)
+
+            // Unsubscribe deletes tag subscription AND cleans up corresponding TAG_SUBSCRIPTION inbox entries
+            val subRepo = SubscriptionRepository(db.tagSubscriptions, db.savedSearches, db.updateInbox, db.transactionRunner, clock)
+            val sub = TagSubscription(SiteId.R34V, "3d", "3D", "https://rule34video.com/tags/3d/")
+            subRepo.subscribe(sub)
+            val subSourceId = "${sub.siteId.value}:${sub.scope.name}:${sub.slug}"
+            subRepo.upsertInboxItems(
+                listOf(
+                    UpdateInboxItem(
+                        id = "sub-in-1",
+                        sourceKind = InboxSourceKind.TAG_SUBSCRIPTION,
+                        sourceId = subSourceId,
+                        sourceLabel = "3D",
+                        item = MediaItem(SiteId.R34V, "v3d", "https://rule34video.com/v3d", MediaKind.VIDEO, "3D Vid"),
+                        discoveredAt = 123L,
+                    ),
+                ),
+            )
+            assertEquals(1, subRepo.observeInbox().first().size)
+            subRepo.unsubscribe(SiteId.R34V, "3d", SearchScope.TAG)
+            assertTrue(subRepo.observeInbox().first().isEmpty())
         }
 }

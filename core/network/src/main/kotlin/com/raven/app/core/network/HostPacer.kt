@@ -5,6 +5,7 @@ import com.raven.app.core.sitespi.SiteRequestKind
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import java.util.Locale
 import java.util.concurrent.ConcurrentHashMap
 
 /**
@@ -32,7 +33,7 @@ class HostPacer(
      * @return the number of milliseconds waited (0 if immediately dispatched).
      */
     suspend fun pace(host: String, gapMs: Long): Long {
-        val normalizedHost = host.trim().lowercase()
+        val normalizedHost = host.trim().lowercase(Locale.ROOT)
         if (normalizedHost.isEmpty() || gapMs <= 0L) return 0L
         val slot = slots.computeIfAbsent(normalizedHost) { HostSlot() }
         val waitMs = slot.mutex.withLock {

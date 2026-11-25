@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="raven_nav_home">首页</string>
+    <string name="raven_nav_explore">发现</string>
+    <string name="raven_nav_search">搜索</string>
+    <string name="raven_nav_library">片库</string>
+    <string name="raven_nav_profile">我的</string>
+    <string name="raven_retry">重试</string>
+    <string name="raven_load_failed">加载失败</string>
+    <string name="raven_incognito_banner">无痕模式开启中 · 暂停保存浏览、搜索与进度记录</string>
+    <string name="raven_shelf_picker_title">加入自定义片单 / 书架</string>
+    <string name="raven_shelf_create_hint">新建片单名称</string>
+    <string name="raven_shelf_create_action">新建</string>
+    <string name="raven_lock_title">输入安全 PIN 密码以解锁渡鸦</string>
+    <string name="raven_lock_biometric">生物识别解锁</string>
+    <string name="raven_lock_confirm">解锁</string>
+</resources>

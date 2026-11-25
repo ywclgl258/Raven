@@ -4,8 +4,13 @@ import android.app.Activity
 import android.content.ClipData
 import android.content.Intent
 import android.graphics.Color as AndroidColor
+import android.hardware.biometrics.BiometricManager
+import android.hardware.biometrics.BiometricPrompt
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
+import android.os.CancellationSignal
+import android.os.SystemClock
 import android.view.KeyEvent
 import android.view.WindowManager
 import android.widget.Toast
@@ -14,10 +19,18 @@ import androidx.activity.SystemBarStyle
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.annotation.RequiresApi
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Modifier
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
@@ -26,15 +39,18 @@ import com.raven.app.core.database.model.AppSettings
 import com.raven.app.core.database.repository.PreferencesRepository
 import com.raven.app.core.database.repository.SubscriptionRepository
 import com.raven.app.core.designsystem.component.LocalRavenImageRequestDecorator
+import com.raven.app.core.designsystem.component.RavenAppLockOverlay
 import com.raven.app.core.designsystem.theme.RavenTheme
 import com.raven.app.core.model.RavenRoute
 import com.raven.app.core.model.SiteId
 import com.raven.app.core.network.ravenImageRequestDecorator
+import com.raven.app.core.security.PrivacyLockStore
 import com.raven.app.core.sitespi.SiteRegistry
 import com.raven.app.feature.player.PlayerLaunchArgs
 import com.raven.app.feature.settings.RavenUpdateInstaller
 import com.raven.app.feature.settings.auth.SiteAuthActivity
 import java.io.File
+import kotlinx.coroutines.delay
 import org.koin.android.ext.android.inject
 
 /**
@@ -47,9 +63,18 @@ class MainActivity : ComponentActivity(), MainActivityHostActions {
     private val siteRegistry: SiteRegistry by inject()
     private val preferencesRepository: PreferencesRepository by inject()
     private val subscriptionRepository: SubscriptionRepository by inject()
+    private val privacyLockStore: PrivacyLockStore by inject()
 
     private var pendingNavigationRoute by mutableStateOf<RavenRoute?>(null)
     private var pendingSharedLink by mutableStateOf<SharedLinkPrompt?>(null)
+
+    private var isAppLocked by mutableStateOf(false)
+    private var lastBackgroundElapsedMs by mutableLongStateOf(0L)
+    private var lockErrorMessage by mutableStateOf<String?>(null)
+    private var failedPinAttempts by mutableIntStateOf(0)
+    private var lockoutUntilElapsedMs by mutableLongStateOf(0L)
+    private var lockInitialized by mutableStateOf(false)
+    private var latestAppSettings: AppSettings = AppSettings()
 
     private var pendingCreateDocumentCallback: ((Uri?) -> Unit)? = null
     private var pendingOpenDocumentCallback: ((Uri?) -> Unit)? = null
@@ -117,22 +142,158 @@ class MainActivity : ComponentActivity(), MainActivityHostActions {
                 initialValue = 0,
             )
 
+            latestAppSettings = appSettings
+
+            LaunchedEffect(appSettings.privacyScreenSecure) {
+                if (appSettings.privacyScreenSecure) {
+                    window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
+                } else {
+                    window.clearFlags(WindowManager.LayoutParams.FLAG_SECURE)
+                }
+            }
+
+            LaunchedEffect(appSettings.appLockEnabled) {
+                val hasPin = privacyLockStore.hasPin()
+                if (!lockInitialized) {
+                    lockInitialized = true
+                    if (appSettings.appLockEnabled && hasPin) {
+                        isAppLocked = true
+                    }
+                } else if (!appSettings.appLockEnabled || !hasPin) {
+                    isAppLocked = false
+                    lockErrorMessage = null
+                }
+            }
+
+            var lockoutSecondsRemaining by remember { mutableIntStateOf(0) }
+            LaunchedEffect(isAppLocked, lockoutUntilElapsedMs) {
+                while (isAppLocked && lockoutUntilElapsedMs > 0L) {
+                    val remainingMs = (lockoutUntilElapsedMs - SystemClock.elapsedRealtime()).coerceAtLeast(0L)
+                    lockoutSecondsRemaining = ((remainingMs + 999L) / 1_000L).toInt()
+                    if (remainingMs <= 0L) {
+                        lockoutUntilElapsedMs = 0L
+                        failedPinAttempts = 0
+                        break
+                    }
+                    delay(1_000L)
+                }
+                if (lockoutUntilElapsedMs <= 0L) {
+                    lockoutSecondsRemaining = 0
+                }
+            }
+
             RavenTheme(reduceTransparency = appSettings.reduceTransparency) {
                 CompositionLocalProvider(
                     LocalRavenImageRequestDecorator provides ::ravenImageRequestDecorator,
                 ) {
-                    RavenAppShell(
-                        siteRegistry = siteRegistry,
-                        hostActions = this,
-                        unreadInboxCount = unreadCount,
-                        pendingNavigationRoute = pendingNavigationRoute,
-                        onConsumeNavigationRoute = { pendingNavigationRoute = null },
-                        pendingSharedLink = pendingSharedLink,
-                        onDismissSharedLink = { pendingSharedLink = null },
-                    )
+                    Box(modifier = Modifier.fillMaxSize()) {
+                        RavenAppShell(
+                            siteRegistry = siteRegistry,
+                            hostActions = this@MainActivity,
+                            unreadInboxCount = unreadCount,
+                            isIncognito = appSettings.incognitoMode,
+                            pendingNavigationRoute = pendingNavigationRoute,
+                            onConsumeNavigationRoute = { pendingNavigationRoute = null },
+                            pendingSharedLink = pendingSharedLink,
+                            onDismissSharedLink = { pendingSharedLink = null },
+                        )
+
+                        if (isAppLocked && appSettings.appLockEnabled && privacyLockStore.hasPin()) {
+                            RavenAppLockOverlay(
+                                onSubmitPin = { candidate ->
+                                    val ok = privacyLockStore.verifyPin(candidate)
+                                    if (ok) {
+                                        isAppLocked = false
+                                        lockErrorMessage = null
+                                        failedPinAttempts = 0
+                                        lockoutUntilElapsedMs = 0L
+                                    } else {
+                                        failedPinAttempts += 1
+                                        if (failedPinAttempts >= MAX_PIN_ATTEMPTS) {
+                                            lockoutUntilElapsedMs = SystemClock.elapsedRealtime() + LOCKOUT_DURATION_MS
+                                        }
+                                    }
+                                    ok
+                                },
+                                errorMessage = lockErrorMessage,
+                                lockoutSecondsRemaining = lockoutSecondsRemaining,
+                                onBiometricClick = if (
+                                    Build.VERSION.SDK_INT >= Build.VERSION_CODES.P &&
+                                    canOfferBiometricUnlock()
+                                ) {
+                                    { triggerBiometricUnlock() }
+                                } else {
+                                    null
+                                },
+                            )
+                        }
+                    }
                 }
             }
         }
+    }
+
+    override fun onStart() {
+        super.onStart()
+        val settings = latestAppSettings
+        if (settings.appLockEnabled && privacyLockStore.hasPin() && lastBackgroundElapsedMs > 0L) {
+            val elapsedMs = SystemClock.elapsedRealtime() - lastBackgroundElapsedMs
+            if (elapsedMs >= settings.appLockTimeoutSeconds.coerceAtLeast(0) * 1_000L) {
+                isAppLocked = true
+            }
+        }
+        lastBackgroundElapsedMs = 0L
+    }
+
+    override fun onResume() {
+        super.onResume()
+        val apk = pendingInstallApk
+        if (apk != null && apk.isFile && RavenUpdateInstaller.canRequestPackageInstalls(this)) {
+            pendingInstallApk = null
+            startApkInstaller(apk)
+        }
+    }
+
+    override fun onStop() {
+        super.onStop()
+        lastBackgroundElapsedMs = SystemClock.elapsedRealtime()
+    }
+
+    private fun canOfferBiometricUnlock(): Boolean {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P) return false
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            val manager = getSystemService(BiometricManager::class.java) ?: return false
+            @Suppress("DEPRECATION")
+            return manager.canAuthenticate() == BiometricManager.BIOMETRIC_SUCCESS
+        }
+        return true
+    }
+
+    @RequiresApi(Build.VERSION_CODES.P)
+    private fun triggerBiometricUnlock() {
+        val signal = CancellationSignal()
+        val prompt = BiometricPrompt.Builder(this)
+            .setTitle("解锁 Raven")
+            .setSubtitle("请验证生物识别以继续使用")
+            .setNegativeButton("改用 PIN 密码", mainExecutor) { _, _ -> }
+            .build()
+        prompt.authenticate(
+            signal,
+            mainExecutor,
+            object : BiometricPrompt.AuthenticationCallback() {
+                override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult?) {
+                    isAppLocked = false
+                    lockErrorMessage = null
+                    failedPinAttempts = 0
+                    lockoutUntilElapsedMs = 0L
+                }
+            },
+        )
+    }
+
+    companion object {
+        private const val MAX_PIN_ATTEMPTS: Int = 5
+        private const val LOCKOUT_DURATION_MS: Long = 30_000L
     }
 
     override fun onNewIntent(intent: Intent) {

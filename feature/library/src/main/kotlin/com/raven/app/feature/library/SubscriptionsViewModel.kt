@@ -5,29 +5,19 @@ import androidx.lifecycle.viewModelScope
 import com.raven.app.core.common.AppDispatchers
 import com.raven.app.core.common.ContentFilter
 import com.raven.app.core.common.TagDictionary
-import com.raven.app.core.database.model.AppSettings
 import com.raven.app.core.database.repository.BlockedTermsRepository
 import com.raven.app.core.database.repository.MediaTagCacheRepository
 import com.raven.app.core.database.repository.PreferencesRepository
 import com.raven.app.core.database.repository.SubscriptionRepository
-import com.raven.app.core.model.FeedRequest
-import com.raven.app.core.model.FeedSort
 import com.raven.app.core.model.InboxSourceKind
-import com.raven.app.core.model.MediaItem
 import com.raven.app.core.model.SavedSearch
 import com.raven.app.core.model.SiteId
 import com.raven.app.core.model.TagRef
 import com.raven.app.core.model.TagSubscription
 import com.raven.app.core.model.UpdateInboxItem
-import com.raven.app.core.sitespi.ResolvedLink
-import com.raven.app.core.sitespi.SitePlugin
 import com.raven.app.core.sitespi.SiteRegistry
-import java.util.Collections
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.async
-import kotlinx.coroutines.awaitAll
-import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -37,8 +27,6 @@ import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.sync.Semaphore
-import kotlinx.coroutines.sync.withPermit
 
 enum class SubscriptionsTab(val label: String) {
     MANAGE("订阅管理"),
@@ -79,7 +67,7 @@ data class SubscriptionsUiState(
     val inboxSiteOptions: List<SiteFilterOption> = emptyList(),
     val siteLabels: Map<SiteId, String> = emptyMap(),
     val refreshProgress: InboxRefreshProgress = InboxRefreshProgress(),
-    val checkingSourceId: String? = null,
+    val checkingSourceIds: Set<String> = emptySet(),
     val message: String? = null,
 )
 
@@ -97,14 +85,8 @@ private data class SubscriptionsControls(
     val inboxSourceFilter: InboxSourceFilter = InboxSourceFilter.ALL,
     val inboxSiteFilter: SiteId? = null,
     val refreshProgress: InboxRefreshProgress = InboxRefreshProgress(),
-    val checkingSourceId: String? = null,
+    val checkingSourceIds: Set<String> = emptySet(),
     val message: String? = null,
-)
-
-private data class SourceCheckOutcome(
-    val newlyDiscovered: Int = 0,
-    val establishedBaseline: Boolean = false,
-    val failed: Boolean = false,
 )
 
 class SubscriptionsViewModel(
@@ -117,6 +99,16 @@ class SubscriptionsViewModel(
     private val clockMs: () -> Long = System::currentTimeMillis,
     private val tagDictionary: TagDictionary = TagDictionary.default,
     private val mediaTagCacheRepository: MediaTagCacheRepository? = null,
+    private val syncRunner: SubscriptionSyncRunner = SubscriptionSyncRunner(
+        subscriptionRepository = subscriptionRepository,
+        blockedTermsRepository = blockedTermsRepository,
+        preferencesRepository = preferencesRepository,
+        siteRegistry = siteRegistry,
+        dispatchers = dispatchers,
+        clockMs = clockMs,
+        tagDictionary = tagDictionary,
+        mediaTagCacheRepository = mediaTagCacheRepository,
+    ),
 ) : ViewModel() {
 
     private val controls = MutableStateFlow(
@@ -124,12 +116,6 @@ class SubscriptionsViewModel(
             selectedSiteId = initialSiteId,
         ),
     )
-
-    /**
-     * Tracks tag-subscription source IDs that have completed at least one successful baseline check
-     * even if the initial feed returned zero items.
-     */
-    private val baselinedSources: MutableSet<String> = Collections.synchronizedSet(mutableSetOf())
 
     private var refreshJob: Job? = null
 
@@ -209,7 +195,7 @@ class SubscriptionsViewModel(
             inboxSiteOptions = siteRegistry.buildSiteFilterOptions(allInbox.map { it.item.siteId }),
             siteLabels = allPresentSites.distinct().associateWith { siteRegistry.displayNameFor(it) },
             refreshProgress = ctrl.refreshProgress,
-            checkingSourceId = ctrl.checkingSourceId,
+            checkingSourceIds = ctrl.checkingSourceIds,
             message = ctrl.message,
         )
     }.stateIn(
@@ -266,7 +252,7 @@ class SubscriptionsViewModel(
             val sourceId = subscriptionSourceId(sub)
             subscriptionRepository.unsubscribe(sub.siteId, sub.slug, sub.scope)
             subscriptionRepository.clearInboxBySource(InboxSourceKind.TAG_SUBSCRIPTION, sourceId)
-            baselinedSources.remove(sourceId)
+            syncRunner.clearSourceBaseline(sourceId)
             controls.update { it.copy(message = "已取消订阅「${sub.label}」") }
         }
     }
@@ -274,7 +260,7 @@ class SubscriptionsViewModel(
     fun deleteSavedSearch(id: String) {
         viewModelScope.launch(dispatchers.io) {
             subscriptionRepository.deleteSavedSearch(id)
-            baselinedSources.remove(id)
+            syncRunner.clearSourceBaseline(id)
             controls.update { it.copy(message = "已删除保存的搜索") }
         }
     }
@@ -323,15 +309,12 @@ class SubscriptionsViewModel(
     fun checkSingleTag(sub: TagSubscription) {
         val sourceId = subscriptionSourceId(sub)
         viewModelScope.launch(dispatchers.io) {
-            controls.update { it.copy(checkingSourceId = sourceId) }
+            controls.update { it.copy(checkingSourceIds = it.checkingSourceIds + sourceId) }
             try {
-                val settings = preferencesRepository.currentSettings()
-                val blockedBySite = blockedTermsRepository.observeAllGrouped().first()
-                val cachedTags = mediaTagCacheRepository?.observeAllTags()?.first().orEmpty()
-                val outcome = refreshTagSubscription(sub, settings, blockedBySite, cachedTags)
+                val outcome = syncRunner.syncSingleTag(sub)
                 controls.update {
                     it.copy(
-                        checkingSourceId = null,
+                        checkingSourceIds = it.checkingSourceIds - sourceId,
                         message = when {
                             outcome.failed -> "检查「${sub.label}」更新失败，请稍后重试"
                             outcome.establishedBaseline -> "已为「${sub.label}」建立基线，后续新发布将自动提醒"
@@ -343,7 +326,7 @@ class SubscriptionsViewModel(
             } catch (ce: CancellationException) {
                 throw ce
             } finally {
-                controls.update { if (it.checkingSourceId == sourceId) it.copy(checkingSourceId = null) else it }
+                controls.update { it.copy(checkingSourceIds = it.checkingSourceIds - sourceId) }
             }
         }
     }
@@ -391,69 +374,42 @@ class SubscriptionsViewModel(
                 )
             }
 
-            val settings = preferencesRepository.currentSettings()
-            val blockedBySite = blockedTermsRepository.observeAllGrouped().first()
-            val cachedTags = mediaTagCacheRepository?.observeAllTags()?.first().orEmpty()
-            val semaphore = Semaphore(MAX_CONCURRENT_CHECKS)
-
             try {
-                val outcomes = coroutineScope {
-                    val tagJobs = allSubs.map { sub ->
-                        async(dispatchers.io) {
-                            semaphore.withPermit {
-                                val outcome = refreshTagSubscription(sub, settings, blockedBySite, cachedTags)
-                                recordProgressTick(outcome)
-                                outcome
-                            }
-                        }
-                    }
-                    val savedJobs = allSaved.map { saved ->
-                        async(dispatchers.io) {
-                            semaphore.withPermit {
-                                val outcome = refreshSavedSearch(saved, settings, blockedBySite, cachedTags)
-                                recordProgressTick(outcome)
-                                outcome
-                            }
-                        }
-                    }
-                    (tagJobs + savedJobs).awaitAll()
-                }
-
-                val newCount = outcomes.sumOf { it.newlyDiscovered }
-                val baselined = outcomes.count { it.establishedBaseline }
-                val failed = outcomes.count { it.failed }
-
-                val summaryMessage = buildString {
-                    when {
-                        newCount > 0 -> append("发现 $newCount 条新内容")
-                        baselined > 0 -> append("已为 $baselined 个来源建立首次基线")
-                        else -> append("检查完成，暂无新内容")
-                    }
-                    if (newCount > 0 && baselined > 0) {
-                        append("，另有 $baselined 个来源建立基线")
-                    }
-                    if (failed > 0) {
-                        append("（$failed 个来源刷新失败）")
-                    }
-                }
-
+                val summary = syncRunner.syncAll(
+                    includeTags = includeTags,
+                    includeSavedSearches = includeSavedSearches,
+                    siteFilter = siteFilter,
+                    onSourceStarted = { sourceId ->
+                        controls.update { it.copy(checkingSourceIds = it.checkingSourceIds + sourceId) }
+                    },
+                    onSourceFinished = { sourceId, outcome ->
+                        recordProgressTick(sourceId, outcome)
+                    },
+                )
                 controls.update {
                     it.copy(
                         refreshProgress = it.refreshProgress.copy(isRefreshing = false),
-                        message = summaryMessage,
+                        checkingSourceIds = emptySet(),
+                        message = summary.toStatusMessage(),
                     )
                 }
             } catch (ce: CancellationException) {
-                controls.update { it.copy(refreshProgress = it.refreshProgress.copy(isRefreshing = false)) }
+                controls.update {
+                    it.copy(
+                        refreshProgress = it.refreshProgress.copy(isRefreshing = false),
+                        checkingSourceIds = emptySet(),
+                    )
+                }
                 throw ce
             }
         }
     }
 
-    private fun recordProgressTick(outcome: SourceCheckOutcome) {
+    private fun recordProgressTick(sourceId: String, outcome: SourceCheckOutcome) {
         controls.update { current ->
             val p = current.refreshProgress
             current.copy(
+                checkingSourceIds = current.checkingSourceIds - sourceId,
                 refreshProgress = p.copy(
                     completedSources = p.completedSources + 1,
                     newlyDiscoveredCount = p.newlyDiscoveredCount + outcome.newlyDiscovered,
@@ -463,214 +419,6 @@ class SubscriptionsViewModel(
             )
         }
     }
-
-    private suspend fun refreshTagSubscription(
-        sub: TagSubscription,
-        settings: AppSettings,
-        blockedBySite: Map<SiteId, List<String>>,
-        cachedTagsByKey: Map<String, List<TagRef>>,
-    ): SourceCheckOutcome {
-        val plugin = siteRegistry.get(sub.siteId) ?: return SourceCheckOutcome(failed = true)
-        val sourceId = subscriptionSourceId(sub)
-        return try {
-            val existing = subscriptionRepository
-                .observeInboxBySource(InboxSourceKind.TAG_SUBSCRIPTION, sourceId)
-                .first()
-            val isBaseline = existing.isEmpty() && sourceId !in baselinedSources
-            val knownKeys = existing.mapTo(mutableSetOf()) { it.item.compositeKey }
-
-            val rawItems = fetchTagItems(plugin, sub, settings)
-            val allowed = filterBlocked(rawItems, blockedBySite, cachedTagsByKey)
-            val now = clockMs()
-
-            if (isBaseline) {
-                val baselineEntries = allowed.mapIndexed { idx, media ->
-                    UpdateInboxItem(
-                        id = inboxEntryId(InboxSourceKind.TAG_SUBSCRIPTION, sourceId, media.compositeKey),
-                        sourceKind = InboxSourceKind.TAG_SUBSCRIPTION,
-                        sourceId = sourceId,
-                        sourceLabel = sub.label,
-                        item = media,
-                        discoveredAt = (now - idx).coerceAtLeast(0L),
-                        isRead = true,
-                    )
-                }
-                if (baselineEntries.isNotEmpty()) {
-                    subscriptionRepository.upsertInboxItems(baselineEntries)
-                }
-                baselinedSources.add(sourceId)
-                SourceCheckOutcome(newlyDiscovered = 0, establishedBaseline = true)
-            } else {
-                val newlyFound = allowed.filter { it.compositeKey !in knownKeys }
-                if (newlyFound.isNotEmpty()) {
-                    val entries = newlyFound.mapIndexed { idx, media ->
-                        UpdateInboxItem(
-                            id = inboxEntryId(InboxSourceKind.TAG_SUBSCRIPTION, sourceId, media.compositeKey),
-                            sourceKind = InboxSourceKind.TAG_SUBSCRIPTION,
-                            sourceId = sourceId,
-                            sourceLabel = sub.label,
-                            item = media,
-                            discoveredAt = (now - idx).coerceAtLeast(0L),
-                            isRead = false,
-                        )
-                    }
-                    subscriptionRepository.upsertInboxItems(entries)
-                }
-                baselinedSources.add(sourceId)
-                SourceCheckOutcome(newlyDiscovered = newlyFound.size)
-            }
-        } catch (ce: CancellationException) {
-            throw ce
-        } catch (_: Throwable) {
-            SourceCheckOutcome(failed = true)
-        }
-    }
-
-    private suspend fun refreshSavedSearch(
-        saved: SavedSearch,
-        settings: AppSettings,
-        blockedBySite: Map<SiteId, List<String>>,
-        cachedTagsByKey: Map<String, List<TagRef>>,
-    ): SourceCheckOutcome {
-        val sourceId = saved.id
-        return try {
-            val existing = subscriptionRepository
-                .observeInboxBySource(InboxSourceKind.SAVED_SEARCH, sourceId)
-                .first()
-            val isBaseline = saved.lastCheckedAt == null &&
-                existing.isEmpty() &&
-                sourceId !in baselinedSources
-            val knownKeys = existing.mapTo(mutableSetOf()) { it.item.compositeKey }
-
-            val collected = linkedMapOf<String, MediaItem>()
-            var anySucceeded = false
-
-            for (siteId in saved.siteIds) {
-                val plugin = siteRegistry.get(siteId) ?: continue
-                try {
-                    val request = FeedRequest(
-                        siteId = siteId,
-                        query = saved.query.takeIf { it.isNotBlank() },
-                        scope = saved.scope,
-                        mediaKind = saved.mediaKind,
-                        sort = saved.sort,
-                        language = if (saved.language != com.raven.app.core.model.ComicLanguage.ALL) {
-                            saved.language
-                        } else {
-                            settings.languageFor(siteId)
-                        },
-                        advancedFilters = saved.filters,
-                        page = 1,
-                    )
-                    val items = executePluginQuery(plugin, request)
-                    anySucceeded = true
-                    for (media in items) {
-                        collected.putIfAbsent(media.compositeKey, media)
-                    }
-                } catch (ce: CancellationException) {
-                    throw ce
-                } catch (_: Throwable) {
-                    // Continue remaining target sites inside this saved search
-                }
-            }
-
-            if (!anySucceeded) {
-                return SourceCheckOutcome(failed = true)
-            }
-
-            val allowed = filterBlocked(collected.values.toList(), blockedBySite, cachedTagsByKey)
-            val now = clockMs()
-
-            if (isBaseline) {
-                val baselineEntries = allowed.mapIndexed { idx, media ->
-                    UpdateInboxItem(
-                        id = inboxEntryId(InboxSourceKind.SAVED_SEARCH, sourceId, media.compositeKey),
-                        sourceKind = InboxSourceKind.SAVED_SEARCH,
-                        sourceId = sourceId,
-                        sourceLabel = saved.name,
-                        item = media,
-                        discoveredAt = (now - idx).coerceAtLeast(0L),
-                        isRead = true,
-                    )
-                }
-                if (baselineEntries.isNotEmpty()) {
-                    subscriptionRepository.upsertInboxItems(baselineEntries)
-                }
-                subscriptionRepository.updateLastCheckedAt(saved.id, now)
-                baselinedSources.add(sourceId)
-                SourceCheckOutcome(newlyDiscovered = 0, establishedBaseline = true)
-            } else {
-                val newlyFound = allowed.filter { it.compositeKey !in knownKeys }
-                if (newlyFound.isNotEmpty()) {
-                    val entries = newlyFound.mapIndexed { idx, media ->
-                        UpdateInboxItem(
-                            id = inboxEntryId(InboxSourceKind.SAVED_SEARCH, sourceId, media.compositeKey),
-                            sourceKind = InboxSourceKind.SAVED_SEARCH,
-                            sourceId = sourceId,
-                            sourceLabel = saved.name,
-                            item = media,
-                            discoveredAt = (now - idx).coerceAtLeast(0L),
-                            isRead = false,
-                        )
-                    }
-                    subscriptionRepository.upsertInboxItems(entries)
-                }
-                subscriptionRepository.updateLastCheckedAt(saved.id, now)
-                baselinedSources.add(sourceId)
-                SourceCheckOutcome(newlyDiscovered = newlyFound.size)
-            }
-        } catch (ce: CancellationException) {
-            throw ce
-        } catch (_: Throwable) {
-            SourceCheckOutcome(failed = true)
-        }
-    }
-
-    private suspend fun fetchTagItems(
-        plugin: SitePlugin,
-        sub: TagSubscription,
-        settings: AppSettings,
-    ): List<MediaItem> {
-        val resolvedFeed = plugin.linkResolver
-            ?.takeIf { sub.url.isNotBlank() && it.canHandle(sub.url) }
-            ?.resolve(sub.url) as? ResolvedLink.Feed
-        val request = resolvedFeed?.request ?: FeedRequest(
-            siteId = sub.siteId,
-            query = sub.slug,
-            scope = sub.scope,
-            sort = FeedSort.NEWEST,
-            language = settings.languageFor(sub.siteId),
-            page = 1,
-        )
-        return executePluginQuery(plugin, request)
-    }
-
-    private suspend fun executePluginQuery(
-        plugin: SitePlugin,
-        request: FeedRequest,
-    ): List<MediaItem> {
-        val page = when {
-            !request.query.isNullOrBlank() && plugin.searchSource != null ->
-                requireNotNull(plugin.searchSource).search(request)
-            plugin.feedSource != null ->
-                requireNotNull(plugin.feedSource).loadFeed(request)
-            plugin.searchSource != null ->
-                requireNotNull(plugin.searchSource).search(request)
-            else -> return emptyList()
-        }
-        return page.items.distinctBy { it.compositeKey }
-    }
-
-    private fun filterBlocked(
-        items: List<MediaItem>,
-        blockedBySite: Map<SiteId, List<String>>,
-        cachedTagsByKey: Map<String, List<TagRef>>,
-    ): List<MediaItem> = ContentFilter.filterAllowed(
-        items = items,
-        blockedTermsBySite = blockedBySite,
-        tagDictionary = tagDictionary,
-        extraTagsByMediaKey = cachedTagsByKey,
-    )
 
     private fun filterInboxEntries(
         entries: List<UpdateInboxItem>,
@@ -708,15 +456,15 @@ class SubscriptionsViewModel(
     )
 
     companion object {
-        const val MAX_CONCURRENT_CHECKS: Int = 3
+        const val MAX_CONCURRENT_CHECKS: Int = SubscriptionSyncRunner.MAX_CONCURRENT_CHECKS
 
         fun subscriptionSourceId(sub: TagSubscription): String =
-            "${sub.siteId.value}:${sub.scope.name}:${sub.slug}"
+            SubscriptionSyncRunner.subscriptionSourceId(sub)
 
         fun inboxEntryId(
             sourceKind: InboxSourceKind,
             sourceId: String,
             itemCompositeKey: String,
-        ): String = "${sourceKind.name}:$sourceId:$itemCompositeKey"
+        ): String = SubscriptionSyncRunner.inboxEntryId(sourceKind, sourceId, itemCompositeKey)
     }
 }

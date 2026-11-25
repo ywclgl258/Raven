@@ -6,6 +6,7 @@ import com.raven.app.core.model.RavenRoute
 import com.raven.app.core.model.SearchScope
 import com.raven.app.core.model.SiteId
 import com.raven.app.core.model.TagRef
+import com.raven.app.core.network.NetworkQualifiers
 import com.raven.app.core.sitespi.HttpClientAdapter
 import com.raven.app.core.sitespi.InMemorySiteSessionStore
 import com.raven.app.core.sitespi.ResolvedLink
@@ -18,6 +19,7 @@ import com.raven.app.feature.settings.RavenAppInfo
 import com.raven.app.sites.comic.comicSitesModule
 import com.raven.app.sites.gallery.gallerySitesModule
 import com.raven.app.sites.video.videoSitesModule
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.serialization.json.Json
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
@@ -72,6 +74,9 @@ class AppDiGraphTest {
             assertEquals(BuildConfig.VERSION_NAME, appInfo.versionName)
             assertEquals(BuildConfig.VERSION_CODE.toLong(), appInfo.versionCode)
             assertEquals(BuildConfig.APPLICATION_ID, appInfo.packageName)
+
+            val appScope = koinApp.koin.get<CoroutineScope>(NetworkQualifiers.APPLICATION_SCOPE)
+            assertNotNull(appScope)
         } finally {
             koinApp.close()
         }
@@ -223,15 +228,16 @@ class AppDiGraphTest {
                 offlineOnly = true,
                 queueToken = "queue-uuid-01",
             ),
-            RavenRoute.Downloads,
+            RavenRoute.Downloads(siteId = SiteId.NHENTAI.value),
             RavenRoute.ShelfDetail(shelfId = "watch-later"),
             RavenRoute.SmartShelfDetail(smartShelfId = "unfinished"),
-            RavenRoute.Favorites,
+            RavenRoute.Favorites(siteId = SiteId.R34V.value),
             RavenRoute.History,
             RavenRoute.ImageFavorites,
             RavenRoute.Subscriptions(siteId = SiteId.IWARA.value),
             RavenRoute.GlobalInbox,
             RavenRoute.LocalLibrary,
+            RavenRoute.Stats,
             RavenRoute.Settings,
             RavenRoute.SiteAccount(siteId = SiteId.EXHENTAI.value),
             RavenRoute.BlockedTerms(siteId = SiteId.R34V.value),
@@ -241,7 +247,7 @@ class AppDiGraphTest {
             RavenRoute.DuplicateScanner,
         )
 
-        assertEquals(26, routes.size)
+        assertEquals(27, routes.size)
         val json = Json { encodeDefaults = true }
 
         routes.forEach { original ->

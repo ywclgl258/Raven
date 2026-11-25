@@ -16,6 +16,9 @@ import com.raven.app.core.network.RavenOkHttpPool
 import com.raven.app.core.network.SiteCookieJar
 import com.raven.app.core.network.SiteHttpClient
 import com.raven.app.core.network.SystemProxySelector
+import com.raven.app.core.security.PrivacyLockStore
+import com.raven.app.core.security.VaultCipher
+import com.raven.app.core.security.VaultStorage
 import com.raven.app.core.sitespi.InMemorySiteSessionStore
 import java.io.File
 import java.util.concurrent.TimeUnit
@@ -147,6 +150,19 @@ class SettingsViewModelTest {
             dispatchers = mainDispatcherRule.appDispatchers,
             releasesApiBaseUrlOverride = server?.url("/repos/ywclgl258/raven/releases")?.toString(),
         )
+        val lockStorage = object : VaultStorage {
+            private val map = HashMap<String, String>()
+            override fun getString(key: String): String? = map[key]
+            override fun putString(key: String, value: String) { map[key] = value }
+            override fun remove(key: String) { map.remove(key) }
+            override fun keysWithPrefix(prefix: String): Set<String> = map.keys.filter { it.startsWith(prefix) }.toSet()
+            override fun clear() { map.clear() }
+        }
+        val xorCipher = object : VaultCipher {
+            override fun encrypt(plaintext: ByteArray, associatedData: ByteArray): ByteArray = plaintext.copyOf()
+            override fun decrypt(ciphertext: ByteArray, associatedData: ByteArray): ByteArray = ciphertext.copyOf()
+        }
+        val privacyLockStore = PrivacyLockStore(cipher = xorCipher, storage = lockStorage)
 
         val vm = SettingsViewModel(
             preferencesRepository = db.preferencesRepository,
@@ -159,6 +175,7 @@ class SettingsViewModelTest {
             ravenUpdater = updater,
             appInfo = appInfo,
             dispatchers = mainDispatcherRule.appDispatchers,
+            privacyLockStore = privacyLockStore,
         )
         return vm to db
     }
@@ -284,13 +301,72 @@ class SettingsViewModelTest {
                 while (state.updateState !is UpdateUiState.Available) {
                     state = awaitItem()
                 }
-                val available = state.updateState as UpdateUiState.Available
+                val available = state.updateState
                 assertEquals("v1.2.0", available.release.tagName)
                 assertEquals("raven-1.2.0-universal-release.apk", available.release.asset.fileName)
                 cancelAndIgnoreRemainingEvents()
             }
         } finally {
             server.shutdown()
+        }
+    }
+
+    @Test
+    fun `privacy PIN guard, incognito, playback and reader settings, and cache clear work`() = runTest {
+        val (vm, db) = buildFixture()
+
+        vm.uiState.test {
+            advanceUntilIdle()
+            val initial = expectMostRecentItem()
+            assertFalse(initial.hasAppPin)
+            assertFalse(initial.settings.appLockEnabled)
+
+            // Enabling app lock without configuring a PIN must stay false and explain why
+            vm.setAppLockEnabled(true)
+            advanceUntilIdle()
+            val blocked = expectMostRecentItem()
+            assertFalse(blocked.settings.appLockEnabled)
+            assertNotNull(blocked.feedbackMessage)
+
+            // Configure valid PIN and verify lock + timeout + incognito + screen secure + reader settings persist
+            assertTrue(vm.configureAppPin("2580"))
+            vm.setAppLockTimeoutSeconds(60)
+            vm.setIncognitoMode(true)
+            vm.setPrivacyScreenSecure(true)
+            vm.setAutoplayVideo(false)
+            vm.setBackgroundAudioPlayback(true)
+            vm.setReaderTapZonesEnabled(false)
+            vm.setReaderShowStatusBar(true)
+            vm.setReaderPrefetchPages(5)
+            vm.setReaderMemoryBudgetMb(48)
+            vm.setReaderAutoSplitWidePages(true)
+            vm.setBackgroundSubscriptionSync(false)
+            vm.setBlockTagsGlobally(false)
+            advanceUntilIdle()
+
+            val updated = expectMostRecentItem()
+            assertTrue(updated.hasAppPin)
+            assertTrue(updated.settings.appLockEnabled)
+            assertEquals(60, updated.settings.appLockTimeoutSeconds)
+            assertTrue(updated.settings.incognitoMode)
+            assertTrue(updated.settings.privacyScreenSecure)
+            assertFalse(updated.settings.autoplayVideo)
+            assertTrue(updated.settings.backgroundAudioPlayback)
+            assertFalse(updated.settings.readerTapZonesEnabled)
+            assertTrue(updated.settings.readerShowStatusBar)
+            assertEquals(5, updated.settings.readerPrefetchPages)
+            assertEquals(48, updated.settings.readerMemoryBudgetMb)
+            assertTrue(updated.settings.readerAutoSplitWidePages)
+            assertFalse(updated.settings.backgroundSubscriptionSync)
+            assertFalse(updated.settings.blockTagsGlobally)
+
+            vm.clearAppPin()
+            advanceUntilIdle()
+            val cleared = expectMostRecentItem()
+            assertFalse(cleared.hasAppPin)
+            assertFalse(cleared.settings.appLockEnabled)
+            assertFalse(db.preferencesRepository.currentSettings().appLockEnabled)
+            cancelAndIgnoreRemainingEvents()
         }
     }
 }

@@ -1,9 +1,9 @@
 package com.raven.app.core.designsystem.theme
 
 import android.os.Build
+import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.CubicBezierEasing
 import androidx.compose.animation.core.Spring
-import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.snap
 import androidx.compose.animation.core.spring
 import androidx.compose.foundation.background
@@ -13,34 +13,41 @@ import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.waitForUpOrCancellation
 import androidx.compose.foundation.interaction.InteractionSource
 import androidx.compose.foundation.interaction.PressInteraction
-import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.composed
-import androidx.compose.ui.draw.BlurredEdgeTreatment
-import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shape
-import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.input.pointer.PointerEvent
+import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.Measurable
+import androidx.compose.ui.layout.MeasureResult
+import androidx.compose.ui.layout.MeasureScope
+import androidx.compose.ui.node.CompositionLocalConsumerModifierNode
+import androidx.compose.ui.node.LayoutModifierNode
+import androidx.compose.ui.node.ModifierNodeElement
+import androidx.compose.ui.node.PointerInputModifierNode
+import androidx.compose.ui.node.currentValueOf
+import androidx.compose.ui.platform.InspectorInfo
 import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.launch
 import kotlin.math.abs
 import kotlin.math.roundToInt
 
@@ -144,60 +151,167 @@ object RavenMotion {
  * Tactile spring press scale (`1.0f -> 0.968f`) matching Apple HIG physical responsiveness
  * with crisp critically damped recovery (`DampingRatioNoBouncy`, `StiffnessMedium`, zero wobble).
  *
- * When [interactionSource] is supplied, press state tracks Compose's interaction stream directly
- * (including keyboard/talkback presses). When omitted, a non-consuming pointer observer detects
- * down/up gestures cleanly without interfering with downstream `clickable` handlers.
+ * Implemented via [ModifierNodeElement] (`RavenSpringPressNode`) with zero per-composition
+ * allocations.
  */
 fun Modifier.ravenSpringPress(
     interactionSource: InteractionSource? = null,
     pressedScale: Float = RavenMotion.SPRING_PRESSED_SCALE,
     enabled: Boolean = true,
-): Modifier = composed {
-    val reducedMotion = LocalMotionReduced.current
-    val targetScale = pressedScale.coerceIn(0.90f, 1.0f)
-    var pointerPressed by remember { mutableStateOf(false) }
+): Modifier = this.then(
+    RavenSpringPressElement(
+        interactionSource = interactionSource,
+        pressedScale = pressedScale.coerceIn(0.90f, 1.0f),
+        enabled = enabled,
+    ),
+)
 
-    val interactionPressed = if (interactionSource != null) {
-        val state by interactionSource.collectIsPressedAsState()
-        state
-    } else {
-        false
+private data class RavenSpringPressElement(
+    val interactionSource: InteractionSource?,
+    val pressedScale: Float,
+    val enabled: Boolean,
+) : ModifierNodeElement<RavenSpringPressNode>() {
+    override fun create(): RavenSpringPressNode =
+        RavenSpringPressNode(interactionSource, pressedScale, enabled)
+
+    override fun update(node: RavenSpringPressNode) {
+        node.updateParams(interactionSource, pressedScale, enabled)
     }
 
-    val isPressed = enabled && (if (interactionSource != null) interactionPressed else pointerPressed)
-    val scale by animateFloatAsState(
-        targetValue = if (isPressed) targetScale else 1f,
-        animationSpec = if (reducedMotion) {
-            snap()
-        } else {
-            spring(
-                dampingRatio = Spring.DampingRatioNoBouncy,
-                stiffness = Spring.StiffnessMedium,
-            )
-        },
-        label = "ravenSpringPress",
-    )
+    override fun InspectorInfo.inspectableProperties() {
+        name = "ravenSpringPress"
+        properties["pressedScale"] = pressedScale
+        properties["enabled"] = enabled
+    }
+}
 
-    val observerModifier = if (interactionSource == null) {
-        Modifier.pointerInput(enabled) {
-            if (!enabled) {
-                pointerPressed = false
-                return@pointerInput
-            }
-            awaitEachGesture {
-                awaitFirstDown(requireUnconsumed = false)
-                pointerPressed = true
-                waitForUpOrCancellation()
-                pointerPressed = false
+private class RavenSpringPressNode(
+    private var interactionSource: InteractionSource?,
+    private var pressedScale: Float,
+    private var enabled: Boolean,
+) : Modifier.Node(),
+    LayoutModifierNode,
+    PointerInputModifierNode,
+    CompositionLocalConsumerModifierNode {
+
+    private val scaleAnim = Animatable(1f)
+    private var pointerPressed = false
+    private var interactionJob: Job? = null
+    private var animationJob: Job? = null
+    private val activePresses = mutableListOf<PressInteraction.Press>()
+
+    override fun onAttach() {
+        startCollectingInteractions()
+    }
+
+    override fun onDetach() {
+        interactionJob?.cancel()
+        animationJob?.cancel()
+        activePresses.clear()
+        pointerPressed = false
+    }
+
+    fun updateParams(
+        newSource: InteractionSource?,
+        newScale: Float,
+        newEnabled: Boolean,
+    ) {
+        val sourceChanged = interactionSource !== newSource
+        interactionSource = newSource
+        pressedScale = newScale
+        enabled = newEnabled
+        if (sourceChanged) {
+            activePresses.clear()
+            pointerPressed = false
+            startCollectingInteractions()
+        }
+        if (!newEnabled) {
+            pointerPressed = false
+        }
+        animateScale()
+    }
+
+    private fun startCollectingInteractions() {
+        interactionJob?.cancel()
+        val source = interactionSource ?: return
+        if (!isAttached) return
+        interactionJob = coroutineScope.launch {
+            source.interactions.collect { interaction ->
+                when (interaction) {
+                    is PressInteraction.Press -> {
+                        activePresses.add(interaction)
+                        animateScale()
+                    }
+                    is PressInteraction.Release -> {
+                        activePresses.remove(interaction.press)
+                        animateScale()
+                    }
+                    is PressInteraction.Cancel -> {
+                        activePresses.remove(interaction.press)
+                        animateScale()
+                    }
+                }
             }
         }
-    } else {
-        Modifier
     }
 
-    this.then(observerModifier).graphicsLayer {
-        scaleX = scale
-        scaleY = scale
+    private fun animateScale() {
+        if (!isAttached) return
+        val isPressed = enabled && if (interactionSource != null) {
+            activePresses.isNotEmpty()
+        } else {
+            pointerPressed
+        }
+        val target = if (isPressed) pressedScale else 1f
+        val reducedMotion = currentValueOf(LocalMotionReduced)
+        animationJob?.cancel()
+        animationJob = coroutineScope.launch {
+            if (reducedMotion) {
+                scaleAnim.snapTo(target)
+            } else {
+                scaleAnim.animateTo(
+                    targetValue = target,
+                    animationSpec = spring(
+                        dampingRatio = Spring.DampingRatioNoBouncy,
+                        stiffness = Spring.StiffnessMedium,
+                    ),
+                )
+            }
+        }
+    }
+
+    override fun onPointerEvent(
+        pointerEvent: PointerEvent,
+        pass: PointerEventPass,
+        bounds: IntSize,
+    ) {
+        if (interactionSource != null || !enabled || pass != PointerEventPass.Main) return
+        val nextPressed = pointerEvent.changes.any { it.pressed }
+        if (nextPressed != pointerPressed) {
+            pointerPressed = nextPressed
+            animateScale()
+        }
+    }
+
+    override fun onCancelPointerInput() {
+        if (pointerPressed) {
+            pointerPressed = false
+            animateScale()
+        }
+    }
+
+    override fun MeasureScope.measure(
+        measurable: Measurable,
+        constraints: Constraints,
+    ): MeasureResult {
+        val placeable = measurable.measure(constraints)
+        return layout(placeable.width, placeable.height) {
+            placeable.placeWithLayer(0, 0) {
+                val s = scaleAnim.value
+                scaleX = s
+                scaleY = s
+            }
+        }
     }
 }
 
@@ -287,17 +401,16 @@ fun Modifier.ravenFrostedSurface(
 fun Modifier.ravenFrostedBackdropLayer(
     reduceTransparency: Boolean = false,
     shape: Shape = RavenShapes.CardShape,
-    blurRadius: Dp = RavenMotion.DefaultFrostBlurRadius,
+    @Suppress("UNUSED_PARAMETER") blurRadius: Dp = RavenMotion.DefaultFrostBlurRadius,
 ): Modifier {
     return if (RavenMotion.supportsNativeBlur(reduceTransparency = reduceTransparency)) {
         this
             .clip(shape)
-            .blur(radius = blurRadius, edgeTreatment = BlurredEdgeTreatment(shape))
             .background(
                 brush = Brush.verticalGradient(
                     colors = listOf(
                         RavenColors.Surface2.copy(alpha = 0.72f),
-                        RavenColors.Surface1.copy(alpha = 0.82f),
+                        RavenColors.Surface1.copy(alpha = 0.84f),
                     ),
                 ),
                 shape = shape,

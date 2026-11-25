@@ -5,6 +5,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.os.BatteryManager
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -64,6 +65,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -110,22 +112,38 @@ internal fun PagedReaderCanvas(
     onRetry: () -> Unit,
     onZoomedChanged: (Boolean) -> Unit,
     modifier: Modifier = Modifier,
+    tapZonesEnabled: Boolean = true,
+    isRtl: Boolean = false,
+    autoSplitWidePages: Boolean = false,
+    onPreviousPage: () -> Unit = {},
+    onNextPage: () -> Unit = {},
 ) {
     val colors = LocalRavenColors.current
     var zoom by remember(pageKey) { mutableFloatStateOf(ReaderGeometry.MIN_ZOOM) }
     var pan by remember(pageKey) { mutableStateOf(PanOffset.ZERO) }
     var viewportSize by remember { mutableStateOf(IntSize.Zero) }
+    var wideHalfIndex by remember(pageKey) { mutableIntStateOf(0) }
 
     val currentFit by rememberUpdatedState(fit)
     val currentCrop by rememberUpdatedState(cropPercent)
     val currentLoaded by rememberUpdatedState(loadedPage)
     val currentOnSingleTap by rememberUpdatedState(onSingleTap)
     val currentOnZoomedChanged by rememberUpdatedState(onZoomedChanged)
+    val currentTapZonesEnabled by rememberUpdatedState(tapZonesEnabled)
+    val currentIsRtl by rememberUpdatedState(isRtl)
+    val currentAutoSplit by rememberUpdatedState(autoSplitWidePages)
+    val currentOnPreviousPage by rememberUpdatedState(onPreviousPage)
+    val currentOnNextPage by rememberUpdatedState(onNextPage)
+
+    val isWideSplit = autoSplitWidePages &&
+        loadedPage != null &&
+        loadedPage.pixelWidth > loadedPage.pixelHeight * 1.25f
 
     // Always notify parent when leaving a page or resetting zoom.
     LaunchedEffect(pageKey) {
         zoom = ReaderGeometry.MIN_ZOOM
         pan = PanOffset.ZERO
+        wideHalfIndex = 0
         currentOnZoomedChanged(false)
     }
 
@@ -134,11 +152,12 @@ internal fun PagedReaderCanvas(
     }
 
     // Re-clamp pan if fit, crop, or viewport dimensions change while zoomed.
-    LaunchedEffect(fit, cropPercent, viewportSize, loadedPage) {
+    LaunchedEffect(fit, cropPercent, viewportSize, loadedPage, isWideSplit) {
         val loaded = loadedPage
         if (loaded != null && viewportSize.width > 0 && viewportSize.height > 0) {
+            val effectiveWidth = if (isWideSplit) (loaded.pixelWidth / 2).coerceAtLeast(1) else loaded.pixelWidth
             val limit = ReaderGeometry.computePanLimit(
-                bitmapWidth = loaded.pixelWidth,
+                bitmapWidth = effectiveWidth,
                 bitmapHeight = loaded.pixelHeight,
                 containerWidth = viewportSize.width,
                 containerHeight = viewportSize.height,
@@ -158,17 +177,59 @@ internal fun PagedReaderCanvas(
             .onSizeChanged { viewportSize = it }
             .pointerInput(pageKey) {
                 detectTapGestures(
-                    onTap = { currentOnSingleTap() },
-                    onDoubleTap = {
+                    onTap = { tapOffset ->
+                        val vw = viewportSize.width
+                        val loaded = currentLoaded
+                        val activeWideSplit = currentAutoSplit &&
+                            loaded != null &&
+                            loaded.pixelWidth > loaded.pixelHeight * 1.25f
+                        if (!currentTapZonesEnabled || vw <= 0) {
+                            currentOnSingleTap()
+                            return@detectTapGestures
+                        }
+                        val fraction = tapOffset.x / vw.toFloat()
+                        val stepForward: () -> Unit = {
+                            if (activeWideSplit && wideHalfIndex == 0) {
+                                wideHalfIndex = 1
+                            } else {
+                                currentOnNextPage()
+                            }
+                        }
+                        val stepBackward: () -> Unit = {
+                            if (activeWideSplit && wideHalfIndex == 1) {
+                                wideHalfIndex = 0
+                            } else {
+                                currentOnPreviousPage()
+                            }
+                        }
+                        when {
+                            fraction < 0.28f -> if (currentIsRtl) stepForward() else stepBackward()
+                            fraction > 0.72f -> if (currentIsRtl) stepBackward() else stepForward()
+                            else -> currentOnSingleTap()
+                        }
+                    },
+                    onDoubleTap = { tapOffset ->
                         val nextZoom = ReaderGeometry.toggleDoubleTapZoom(zoom)
-                        zoom = nextZoom
                         if (nextZoom <= ReaderGeometry.MIN_ZOOM) {
+                            zoom = ReaderGeometry.MIN_ZOOM
                             pan = PanOffset.ZERO
                         } else {
                             val loaded = currentLoaded
-                            if (loaded != null && viewportSize.width > 0 && viewportSize.height > 0) {
+                            val vw = viewportSize.width.toFloat()
+                            val vh = viewportSize.height.toFloat()
+                            if (loaded != null && vw > 0f && vh > 0f) {
+                                val activeWideSplit = currentAutoSplit &&
+                                    loaded.pixelWidth > loaded.pixelHeight * 1.25f
+                                val effectiveWidth = if (activeWideSplit) {
+                                    (loaded.pixelWidth / 2).coerceAtLeast(1)
+                                } else {
+                                    loaded.pixelWidth
+                                }
+                                val scaleRatio = nextZoom / zoom.coerceAtLeast(ReaderGeometry.MIN_ZOOM)
+                                val anchorPanX = pan.x * scaleRatio + (vw / 2f - tapOffset.x) * (scaleRatio - 1f)
+                                val anchorPanY = pan.y * scaleRatio + (vh / 2f - tapOffset.y) * (scaleRatio - 1f)
                                 val limit = ReaderGeometry.computePanLimit(
-                                    bitmapWidth = loaded.pixelWidth,
+                                    bitmapWidth = effectiveWidth,
                                     bitmapHeight = loaded.pixelHeight,
                                     containerWidth = viewportSize.width,
                                     containerHeight = viewportSize.height,
@@ -176,8 +237,9 @@ internal fun PagedReaderCanvas(
                                     cropPercent = currentCrop,
                                     zoom = nextZoom,
                                 )
-                                pan = ReaderGeometry.clampPan(pan, limit)
+                                pan = ReaderGeometry.clampPan(PanOffset(anchorPanX, anchorPanY), limit)
                             }
+                            zoom = nextZoom
                         }
                     },
                 )
@@ -198,6 +260,28 @@ internal fun PagedReaderCanvas(
                             val activePointers = event.changes.count { it.pressed }
                             val zoomChange = event.calculateZoom()
                             val panChange = event.calculatePan()
+                            val loaded = currentLoaded
+                            val activeWideSplit = currentAutoSplit &&
+                                loaded != null &&
+                                loaded.pixelWidth > loaded.pixelHeight * 1.25f
+                            val effectiveWidth = if (loaded != null) {
+                                if (activeWideSplit) (loaded.pixelWidth / 2).coerceAtLeast(1) else loaded.pixelWidth
+                            } else {
+                                viewportSize.width
+                            }
+                            val currentLimit = if (loaded != null && viewportSize.width > 0 && viewportSize.height > 0) {
+                                ReaderGeometry.computePanLimit(
+                                    bitmapWidth = effectiveWidth,
+                                    bitmapHeight = loaded.pixelHeight,
+                                    containerWidth = viewportSize.width,
+                                    containerHeight = viewportSize.height,
+                                    fit = currentFit,
+                                    cropPercent = currentCrop,
+                                    zoom = zoom,
+                                )
+                            } else {
+                                com.raven.app.core.media.reader.PanLimit.ZERO
+                            }
 
                             if (!gestureZooming) {
                                 accumZoom *= zoomChange
@@ -206,21 +290,25 @@ internal fun PagedReaderCanvas(
                                 val centroidSize = event.calculateCentroidSize(useCurrent = false)
                                 val zoomMotion = abs(1f - accumZoom) * centroidSize
                                 val panMotion = kotlin.math.hypot(accumPanX, accumPanY)
+                                val canVerticalOverflowPan = currentLimit.maxY > 4f && abs(accumPanY) > abs(accumPanX) * 1.15f && panMotion > touchSlop
+                                val canHorizontalOverflowPan = currentLimit.maxX > 4f && (
+                                    (pan.x < currentLimit.maxX - 1f && accumPanX > 0f) ||
+                                        (pan.x > -currentLimit.maxX + 1f && accumPanX < 0f)
+                                    ) && abs(accumPanX) > abs(accumPanY) && panMotion > touchSlop
                                 if (activePointers >= 2 && (zoomMotion > touchSlop || abs(1f - accumZoom) > 0.03f)) {
                                     gestureZooming = true
                                 } else if (zoom > ReaderGeometry.MIN_ZOOM + 0.01f && panMotion > touchSlop) {
+                                    gestureZooming = true
+                                } else if (canVerticalOverflowPan || canHorizontalOverflowPan) {
                                     gestureZooming = true
                                 }
                             }
 
                             if (gestureZooming) {
                                 val nextZoom = ReaderGeometry.clampZoom(zoom * zoomChange)
-                                val loaded = currentLoaded
-                                val nextPan = if (nextZoom <= ReaderGeometry.MIN_ZOOM + 0.005f) {
-                                    PanOffset.ZERO
-                                } else if (loaded != null && viewportSize.width > 0 && viewportSize.height > 0) {
+                                val nextPan = if (loaded != null && viewportSize.width > 0 && viewportSize.height > 0) {
                                     val limit = ReaderGeometry.computePanLimit(
-                                        bitmapWidth = loaded.pixelWidth,
+                                        bitmapWidth = effectiveWidth,
                                         bitmapHeight = loaded.pixelHeight,
                                         containerWidth = viewportSize.width,
                                         containerHeight = viewportSize.height,
@@ -228,10 +316,14 @@ internal fun PagedReaderCanvas(
                                         cropPercent = currentCrop,
                                         zoom = nextZoom,
                                     )
-                                    ReaderGeometry.clampPan(
-                                        PanOffset(pan.x + panChange.x, pan.y + panChange.y),
-                                        limit,
-                                    )
+                                    if (nextZoom <= ReaderGeometry.MIN_ZOOM + 0.005f && limit.maxX <= 1f && limit.maxY <= 1f) {
+                                        PanOffset.ZERO
+                                    } else {
+                                        ReaderGeometry.clampPan(
+                                            PanOffset(pan.x + panChange.x, pan.y + panChange.y),
+                                            limit,
+                                        )
+                                    }
                                 } else {
                                     PanOffset.ZERO
                                 }
@@ -252,25 +344,64 @@ internal fun PagedReaderCanvas(
                 val bmp = loadedPage.bitmap
                 val imageBitmap = remember(bmp) { bmp.asImageBitmap() }
                 val cropFactor = 1f + ReaderGeometry.clampCropPercent(cropPercent) / 100f
-                val contentScale = when (fit) {
-                    ReaderFit.WIDTH -> ContentScale.FillWidth
-                    ReaderFit.HEIGHT -> ContentScale.FillHeight
-                    ReaderFit.ORIGINAL -> ContentScale.None
+                if (isWideSplit) {
+                    val halfW = (imageBitmap.width / 2).coerceAtLeast(1)
+                    val takeRightHalf = (isRtl && wideHalfIndex == 0) || (!isRtl && wideHalfIndex == 1)
+                    val srcOffsetX = if (takeRightHalf) (imageBitmap.width - halfW).coerceAtLeast(0) else 0
+                    val srcSizeW = if (takeRightHalf) halfW else halfW
+                    Canvas(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .graphicsLayer {
+                                val totalScale = zoom * cropFactor
+                                scaleX = totalScale
+                                scaleY = totalScale
+                                translationX = pan.x
+                                translationY = pan.y
+                            },
+                    ) {
+                        val canvasW = size.width
+                        val canvasH = size.height
+                        if (canvasW > 0f && canvasH > 0f && srcSizeW > 0 && imageBitmap.height > 0) {
+                            val scale = when (fit) {
+                                ReaderFit.WIDTH -> canvasW / srcSizeW.toFloat()
+                                ReaderFit.HEIGHT -> canvasH / imageBitmap.height.toFloat()
+                                ReaderFit.ORIGINAL -> 1f
+                            }
+                            val dstW = (srcSizeW * scale).toInt().coerceAtLeast(1)
+                            val dstH = (imageBitmap.height * scale).toInt().coerceAtLeast(1)
+                            val dstX = ((canvasW - dstW) / 2f).toInt()
+                            val dstY = ((canvasH - dstH) / 2f).toInt()
+                            drawImage(
+                                image = imageBitmap,
+                                srcOffset = IntOffset(srcOffsetX, 0),
+                                srcSize = IntSize(srcSizeW, imageBitmap.height),
+                                dstOffset = IntOffset(dstX, dstY),
+                                dstSize = IntSize(dstW, dstH),
+                            )
+                        }
+                    }
+                } else {
+                    val contentScale = when (fit) {
+                        ReaderFit.WIDTH -> ContentScale.FillWidth
+                        ReaderFit.HEIGHT -> ContentScale.FillHeight
+                        ReaderFit.ORIGINAL -> ContentScale.None
+                    }
+                    Image(
+                        bitmap = imageBitmap,
+                        contentDescription = "第 $pageNumber 页",
+                        contentScale = contentScale,
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .graphicsLayer {
+                                val totalScale = zoom * cropFactor
+                                scaleX = totalScale
+                                scaleY = totalScale
+                                translationX = pan.x
+                                translationY = pan.y
+                            },
+                    )
                 }
-                Image(
-                    bitmap = imageBitmap,
-                    contentDescription = "第 $pageNumber 页",
-                    contentScale = contentScale,
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .graphicsLayer {
-                            val totalScale = zoom * cropFactor
-                            scaleX = totalScale
-                            scaleY = totalScale
-                            translationX = pan.x
-                            translationY = pan.y
-                        },
-                )
             }
             errorMessage != null -> {
                 ReaderPageErrorCard(
@@ -301,6 +432,9 @@ internal fun SpreadSheetCanvas(
     onRetryPage: (Int) -> Unit,
     onZoomedChanged: (Boolean) -> Unit,
     modifier: Modifier = Modifier,
+    tapZonesEnabled: Boolean = true,
+    onPreviousPage: () -> Unit = {},
+    onNextPage: () -> Unit = {},
 ) {
     if (sheetPages.size == 1) {
         val pageNum = sheetPages.first()
@@ -314,6 +448,9 @@ internal fun SpreadSheetCanvas(
             onSingleTap = onSingleTap,
             onRetry = { onRetryPage(pageNum) },
             onZoomedChanged = onZoomedChanged,
+            tapZonesEnabled = tapZonesEnabled,
+            onPreviousPage = onPreviousPage,
+            onNextPage = onNextPage,
             modifier = modifier,
         )
         return
@@ -327,6 +464,9 @@ internal fun SpreadSheetCanvas(
     val currentCrop by rememberUpdatedState(cropPercent)
     val currentOnSingleTap by rememberUpdatedState(onSingleTap)
     val currentOnZoomedChanged by rememberUpdatedState(onZoomedChanged)
+    val currentTapZonesEnabled by rememberUpdatedState(tapZonesEnabled)
+    val currentOnPreviousPage by rememberUpdatedState(onPreviousPage)
+    val currentOnNextPage by rememberUpdatedState(onNextPage)
 
     LaunchedEffect(sheetKey) {
         zoom = ReaderGeometry.MIN_ZOOM
@@ -346,11 +486,44 @@ internal fun SpreadSheetCanvas(
             .onSizeChanged { viewportSize = it }
             .pointerInput(sheetKey) {
                 detectTapGestures(
-                    onTap = { currentOnSingleTap() },
-                    onDoubleTap = {
+                    onTap = { tapOffset ->
+                        val vw = viewportSize.width
+                        if (!currentTapZonesEnabled || vw <= 0) {
+                            currentOnSingleTap()
+                            return@detectTapGestures
+                        }
+                        val fraction = tapOffset.x / vw.toFloat()
+                        when {
+                            fraction < 0.28f -> currentOnPreviousPage()
+                            fraction > 0.72f -> currentOnNextPage()
+                            else -> currentOnSingleTap()
+                        }
+                    },
+                    onDoubleTap = { tapOffset ->
                         val nextZoom = ReaderGeometry.toggleDoubleTapZoom(zoom)
-                        zoom = nextZoom
-                        if (nextZoom <= ReaderGeometry.MIN_ZOOM) pan = PanOffset.ZERO
+                        if (nextZoom <= ReaderGeometry.MIN_ZOOM) {
+                            zoom = ReaderGeometry.MIN_ZOOM
+                            pan = PanOffset.ZERO
+                        } else {
+                            val vw = viewportSize.width.toFloat()
+                            val vh = viewportSize.height.toFloat()
+                            if (vw > 0f && vh > 0f) {
+                                val scaleRatio = nextZoom / zoom.coerceAtLeast(ReaderGeometry.MIN_ZOOM)
+                                val anchorX = pan.x * scaleRatio + (vw / 2f - tapOffset.x) * (scaleRatio - 1f)
+                                val anchorY = pan.y * scaleRatio + (vh / 2f - tapOffset.y) * (scaleRatio - 1f)
+                                val limit = ReaderGeometry.computePanLimit(
+                                    bitmapWidth = viewportSize.width,
+                                    bitmapHeight = viewportSize.height,
+                                    containerWidth = viewportSize.width,
+                                    containerHeight = viewportSize.height,
+                                    fit = ReaderFit.HEIGHT,
+                                    cropPercent = currentCrop,
+                                    zoom = nextZoom,
+                                )
+                                pan = ReaderGeometry.clampPan(PanOffset(anchorX, anchorY), limit)
+                            }
+                            zoom = nextZoom
+                        }
                     },
                 )
             }

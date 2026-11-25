@@ -1,6 +1,8 @@
 package com.raven.app.feature.player
 
 import com.raven.app.core.common.TagDictionary
+import com.raven.app.core.network.NetworkQualifiers
+import kotlinx.coroutines.CoroutineScope
 import org.koin.core.module.Module
 import org.koin.core.module.dsl.viewModel
 import org.koin.dsl.module
@@ -36,6 +38,8 @@ val playerFeatureModule: Module = module {
             tagDictionary = getOrNull<TagDictionary>() ?: TagDictionary.default,
             mediaTagCacheRepository = get(),
             tagDictionaryRepository = get(),
+            lanCastManager = getOrNull(),
+            applicationScope = getOrNull<CoroutineScope>(NetworkQualifiers.APPLICATION_SCOPE),
         )
     }
 }

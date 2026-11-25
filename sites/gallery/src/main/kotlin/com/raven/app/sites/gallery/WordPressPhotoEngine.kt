@@ -28,6 +28,12 @@ import com.raven.app.core.sitespi.LruCache
 import com.raven.app.core.sitespi.ResolvedLink
 import com.raven.app.core.sitespi.SearchSource
 import com.raven.app.core.sitespi.SiteRequestKind
+import java.util.Locale
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import org.jsoup.Jsoup
 import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
@@ -190,11 +196,25 @@ class WordPressPhotoEngine(
             val imagesByPage = LinkedHashMap<Int, List<String>>(contentPageCount)
             val thumbsByPage = LinkedHashMap<Int, List<String?>>(contentPageCount)
             val sizes = ArrayList<Int>(contentPageCount)
+            val fetchedExtras = if (contentPageCount > 1) {
+                val semaphore = Semaphore(3)
+                coroutineScope {
+                    (2..contentPageCount).map { contentPage ->
+                        async {
+                            semaphore.withPermit {
+                                contentPage to loadAndCacheContentPage(canonical, contentPage, forceReload = false)
+                            }
+                        }
+                    }.awaitAll()
+                }.toMap()
+            } else {
+                emptyMap()
+            }
             for (contentPage in 1..contentPageCount) {
                 val extracted = if (contentPage == 1) {
                     firstExtracted
                 } else {
-                    loadAndCacheContentPage(canonical, contentPage, forceReload = false)
+                    fetchedExtras.getValue(contentPage)
                 }
                 if (extracted.images.isEmpty()) {
                     throw SiteException.ParseError(
@@ -602,9 +622,9 @@ class WordPressPhotoEngine(
         val links = doc.select(config.cardSpec.pagerLinkSelector)
         return links.mapNotNull { anchor ->
             val href = anchor.attr("href")
-            val dataPaged = anchor.attr("data-paged")
-            val combined = "$href $dataPaged"
-            PAGE_NUMBER_ATTR_REGEX.find(combined)?.groupValues?.get(1)?.toIntOrNull()
+            val dataPaged = anchor.attr("data-paged").trim()
+            dataPaged.toIntOrNull()
+                ?: PAGE_NUMBER_ATTR_REGEX.find(href)?.groupValues?.get(1)?.toIntOrNull()
                 ?: anchor.text().trim().replace(",", "").toIntOrNull()
         }.filter { it > 0 }.maxOrNull()
     }
@@ -639,7 +659,6 @@ class WordPressPhotoEngine(
         val baseUrl = doc.location().ifBlank { descriptor.baseUrl }
         val container = if (spec.strictPrimaryContainer && spec.containerSelectors.isNotEmpty()) {
             doc.selectFirst(spec.containerSelectors.first())
-                ?: spec.containerSelectors.drop(1).firstNotNullOfOrNull { doc.selectFirst(it) }
         } else {
             spec.containerSelectors.firstNotNullOfOrNull { doc.selectFirst(it) }
         } ?: return ExtractedImages(emptyList(), emptyList())
@@ -699,9 +718,9 @@ class WordPressPhotoEngine(
         }
 
         val uuids = if (matchedArrays.isNotEmpty()) {
-            matchedArrays.flatMap { segment -> UUID_REGEX.findAll(segment).map { it.value.lowercase() }.toList() }
+            matchedArrays.flatMap { segment -> UUID_REGEX.findAll(segment).map { it.value.lowercase(Locale.ROOT) }.toList() }
         } else {
-            UUID_REGEX.findAll(rawHtml).map { it.value.lowercase() }.toList()
+            GALLERY_EPIC_IMAGE_URL_REGEX.findAll(rawHtml).map { it.groupValues[1].lowercase(Locale.ROOT) }.toList()
         }
 
         return uuids.distinct().map { "$cdnPrefix$it" }
@@ -1067,7 +1086,7 @@ class WordPressPhotoEngine(
 
     private fun slugFromUrlOrText(url: String, fallback: String): String {
         val lastSeg = GalleryUrlUtils.parseUri(url)?.let { GalleryUrlUtils.pathSegments(it).lastOrNull() }
-        return lastSeg?.takeIf { it.isNotBlank() } ?: fallback.lowercase().replace(Regex("\\s+"), "-")
+        return lastSeg?.takeIf { it.isNotBlank() } ?: fallback.lowercase(Locale.ROOT).replace(WHITESPACE_REGEX, "-")
     }
 
     private fun extractPhotoCountFromTitle(title: String): Int? =
@@ -1088,6 +1107,11 @@ class WordPressPhotoEngine(
         private val IMAGES_JSON_ARRAY_REGEX = Regex("\"images\"\\s*:\\s*\\[(.*?)\\]", RegexOption.DOT_MATCHES_ALL)
         private val ESCAPED_IMAGES_ARRAY_REGEX = Regex("\\\\\"images\\\\\"\\s*:\\s*\\[(.*?)\\]", RegexOption.DOT_MATCHES_ALL)
         private val UUID_REGEX = Regex("[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}", RegexOption.IGNORE_CASE)
+        private val GALLERY_EPIC_IMAGE_URL_REGEX = Regex(
+            """https?://static\.galleryepic\.xyz/image/([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})""",
+            RegexOption.IGNORE_CASE,
+        )
+        private val WHITESPACE_REGEX = Regex("\\s+")
 
         private val GALLERY_EPIC_COSERS_REGEX = Regex("^/en/cosers/(\\d+)/?$")
         private val GALLERY_EPIC_COSER_REGEX = Regex("^/en/coser/(\\d+)/(\\d+)/?$")

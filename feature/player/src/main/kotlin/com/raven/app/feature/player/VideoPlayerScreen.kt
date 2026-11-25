@@ -9,6 +9,9 @@ import android.widget.FrameLayout
 import androidx.activity.compose.BackHandler
 import androidx.annotation.OptIn
 import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.calculatePan
+import androidx.compose.foundation.gestures.calculateZoom
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
@@ -28,17 +31,28 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.movableContentOf
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.boundsInWindow
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.Lifecycle
@@ -79,6 +93,7 @@ fun VideoPlayerScreen(
     modifier: Modifier = Modifier,
     isInPipMode: Boolean = false,
     isFullscreen: Boolean? = null,
+    onVideoBoundsChanged: (android.graphics.Rect) -> Unit = {},
 ) {
     val colors = LocalRavenColors.current
     val context = LocalContext.current
@@ -106,6 +121,15 @@ fun VideoPlayerScreen(
 
     val currentPipState by rememberUpdatedState(isInPipMode)
     val effectiveFullscreen = isFullscreen ?: uiState.isFullscreen
+    var resizeMode by rememberSaveable { mutableStateOf(VideoResizeMode.FIT) }
+    var zoomScale by remember { mutableFloatStateOf(1f) }
+    var panOffset by remember { mutableStateOf(Offset.Zero) }
+    var viewportSize by remember { mutableStateOf(IntSize.Zero) }
+
+    LaunchedEffect(uiState.siteId, uiState.mediaId, isInPipMode) {
+        zoomScale = 1f
+        panOffset = Offset.Zero
+    }
 
     // Keep ViewModel fullscreen state synchronized when host controls it explicitly
     LaunchedEffect(isFullscreen) {
@@ -163,7 +187,13 @@ fun VideoPlayerScreen(
                     }
                 }
                 is PlayerSideEffect.OpenGalleryFromQueue -> {
-                    navigator.openGallery(effect.item.siteId, effect.item.id, effect.item.url)
+                    navigator.openGallery(
+                        siteId = effect.item.siteId,
+                        mediaId = effect.item.id,
+                        url = effect.item.url,
+                        offlineOnly = effect.offlineOnly,
+                        queueToken = effect.queueToken,
+                    )
                 }
                 is PlayerSideEffect.ActiveMediaChanged -> {
                     navigator.onActiveMediaChanged(effect.args)
@@ -252,6 +282,42 @@ fun VideoPlayerScreen(
         viewModel.currentPlayer()
     }
 
+    val currentExoPlayer by rememberUpdatedState(exoPlayer)
+    val currentKeepScreenOn by rememberUpdatedState(uiState.isPlaying)
+    val currentResizeMode by rememberUpdatedState(resizeMode)
+    val currentZoomScale by rememberUpdatedState(zoomScale)
+    val currentPanOffset by rememberUpdatedState(panOffset)
+    val currentBoundsCallback by rememberUpdatedState(onVideoBoundsChanged)
+
+    val movableMediaSurface = remember {
+        movableContentOf {
+            Media3PlayerSurface(
+                player = currentExoPlayer,
+                keepScreenOn = currentKeepScreenOn,
+                resizeMode = currentResizeMode,
+                zoomScale = currentZoomScale,
+                panOffset = currentPanOffset,
+                modifier = Modifier
+                    .fillMaxSize()
+                    .onGloballyPositioned { coords ->
+                        if (!currentPipState) {
+                            val b = coords.boundsInWindow()
+                            if (b.width > 0f && b.height > 0f) {
+                                currentBoundsCallback(
+                                    android.graphics.Rect(
+                                        b.left.toInt(),
+                                        b.top.toInt(),
+                                        b.right.toInt(),
+                                        b.bottom.toInt(),
+                                    ),
+                                )
+                            }
+                        }
+                    },
+            )
+        }
+    }
+
     // PiP mode: render ONLY the crisp Media3 video surface with zero overlays or detail pane
     if (isInPipMode) {
         Box(
@@ -260,11 +326,7 @@ fun VideoPlayerScreen(
                 .background(colors.canvas)
                 .testTag(PlayerTestTags.PLAYER_SCREEN),
         ) {
-            Media3PlayerSurface(
-                player = exoPlayer,
-                keepScreenOn = uiState.isPlaying,
-                modifier = Modifier.fillMaxSize(),
-            )
+            movableMediaSurface()
         }
         return
     }
@@ -272,13 +334,43 @@ fun VideoPlayerScreen(
     val playerViewportContent: @Composable (Modifier) -> Unit = { viewportModifier ->
         Box(
             modifier = viewportModifier
-                .background(colors.canvas),
+                .clipToBounds()
+                .background(colors.canvas)
+                .onSizeChanged { viewportSize = it }
+                .pointerInput(uiState.isLocked) {
+                    if (uiState.isLocked) return@pointerInput
+                    awaitEachGesture {
+                        var zoomDetected = false
+                        while (true) {
+                            val event = awaitPointerEvent(PointerEventPass.Initial)
+                            val pressedCount = event.changes.count { it.pressed }
+                            if (pressedCount >= 2) {
+                                zoomDetected = true
+                                val zoomChange = event.calculateZoom()
+                                val panChange = event.calculatePan()
+                                val nextScale = (zoomScale * zoomChange).coerceIn(1f, 3f)
+                                val maxOffsetX = (viewportSize.width * (nextScale - 1f)) * 0.5f
+                                val maxOffsetY = (viewportSize.height * (nextScale - 1f)) * 0.5f
+                                zoomScale = if (nextScale <= 1.02f) 1f else nextScale
+                                panOffset = if (zoomScale <= 1f) {
+                                    Offset.Zero
+                                } else {
+                                    Offset(
+                                        x = (panOffset.x + panChange.x).coerceIn(-maxOffsetX, maxOffsetX),
+                                        y = (panOffset.y + panChange.y).coerceIn(-maxOffsetY, maxOffsetY),
+                                    )
+                                }
+                                event.changes.forEach { it.consume() }
+                            } else if (zoomDetected && pressedCount == 0) {
+                                break
+                            } else if (pressedCount == 0) {
+                                break
+                            }
+                        }
+                    }
+                },
         ) {
-            Media3PlayerSurface(
-                player = exoPlayer,
-                keepScreenOn = uiState.isPlaying,
-                modifier = Modifier.fillMaxSize(),
-            )
+            movableMediaSurface()
 
             PlayerGestureLayer(
                 isLocked = uiState.isLocked,
@@ -459,6 +551,11 @@ fun VideoPlayerScreen(
                     navigator.openGallery(item.siteId, item.id, item.url)
                 }
             },
+            onOpenShelfPicker = { activeSheet = PlayerSheet.ShelfPicker },
+            onOpenCast = {
+                viewModel.discoverCastDevices()
+                activeSheet = PlayerSheet.Cast
+            },
             modifier = paneModifier,
         )
     }
@@ -588,6 +685,21 @@ fun VideoPlayerScreen(
             onUpdateGestureSensitivitySeconds = { sec -> viewModel.updateGestureSensitivitySecondsPreference(sec) },
             onUpdateAutoFullscreen = { enabled -> viewModel.updateAutoFullscreenPreference(enabled) },
             onResetSitePreferences = { viewModel.resetSitePlaybackPreferences() },
+            resizeModeLabel = resizeMode.label,
+            onCycleResizeMode = {
+                resizeMode = resizeMode.next()
+                zoomScale = 1f
+                panOffset = Offset.Zero
+            },
+            onSelectAudioTrack = { g, t -> viewModel.selectAudioTrack(g, t) },
+            onSelectSubtitleTrack = { g, t -> viewModel.selectSubtitleTrack(g, t) },
+            onDisableSubtitles = { viewModel.disableSubtitles() },
+            onToggleShelfMembership = { shelfId, add -> viewModel.setShelfMembership(shelfId, add) },
+            onCreateShelfAndAdd = { name -> viewModel.createShelfAndAdd(name) },
+            onDiscoverCast = { viewModel.discoverCastDevices() },
+            onCastToDevice = { device -> viewModel.castCurrentVideo(device) },
+            onStopCast = { viewModel.stopCast() },
+            onLaunchSystemExternalPlayer = { viewModel.launchSystemExternalPlayer() },
         )
     }
 }
@@ -597,13 +709,21 @@ fun VideoPlayerScreen(
 private fun Media3PlayerSurface(
     player: ExoPlayer?,
     keepScreenOn: Boolean,
+    resizeMode: VideoResizeMode = VideoResizeMode.FIT,
+    zoomScale: Float = 1f,
+    panOffset: Offset = Offset.Zero,
     modifier: Modifier = Modifier,
 ) {
+    val targetResizeMode = when (resizeMode) {
+        VideoResizeMode.FIT -> AspectRatioFrameLayout.RESIZE_MODE_FIT
+        VideoResizeMode.FILL -> AspectRatioFrameLayout.RESIZE_MODE_FILL
+        VideoResizeMode.ZOOM -> AspectRatioFrameLayout.RESIZE_MODE_ZOOM
+    }
     AndroidView(
         factory = { ctx ->
             PlayerView(ctx).apply {
                 useController = false
-                resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
+                this.resizeMode = targetResizeMode
                 setShutterBackgroundColor(android.graphics.Color.TRANSPARENT)
                 layoutParams = FrameLayout.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT,
@@ -620,12 +740,22 @@ private fun Media3PlayerSurface(
             if (view.keepScreenOn != keepScreenOn) {
                 view.keepScreenOn = keepScreenOn
             }
+            if (view.resizeMode != targetResizeMode) {
+                view.resizeMode = targetResizeMode
+            }
         },
         onRelease = { view ->
             view.player = null
             view.keepScreenOn = false
         },
-        modifier = modifier.testTag(PlayerTestTags.PLAYER_SURFACE),
+        modifier = modifier
+            .graphicsLayer {
+                scaleX = zoomScale
+                scaleY = zoomScale
+                translationX = panOffset.x
+                translationY = panOffset.y
+            }
+            .testTag(PlayerTestTags.PLAYER_SURFACE),
     )
 }
 

@@ -19,6 +19,7 @@ import com.raven.app.core.sitespi.SiteRequestKind
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.test.runTest
 import okhttp3.ConnectionPool
+import okhttp3.CookieJar
 import okhttp3.Dispatcher
 import okhttp3.Dns
 import okhttp3.mockwebserver.MockResponse
@@ -448,5 +449,32 @@ class SiteHttpClientTest {
         } finally {
             server.shutdown()
         }
+    }
+
+    @Test
+    fun `RavenOkHttpPool clientFor honors all flag combinations accurately`() {
+        val stack = buildTestStack()
+        val mediaNoCookieNoRedir = stack.pool.clientFor(
+            SiteHttpRequest(url = "https://x.test/v.mp4", kind = SiteRequestKind.MEDIA, followRedirects = false, allowCookies = false),
+        )
+        assertFalse(mediaNoCookieNoRedir.followRedirects)
+        assertSame(CookieJar.NO_COOKIES, mediaNoCookieNoRedir.cookieJar)
+
+        val imageNoCookieNoRedir = stack.pool.clientFor(
+            SiteHttpRequest(url = "https://x.test/1.jpg", kind = SiteRequestKind.IMAGE, followRedirects = false, allowCookies = false),
+        )
+        assertFalse(imageNoCookieNoRedir.followRedirects)
+        assertSame(CookieJar.NO_COOKIES, imageNoCookieNoRedir.cookieJar)
+
+        val apiNoCookieNoRetry = stack.pool.clientFor(
+            SiteHttpRequest(url = "https://x.test/api", kind = SiteRequestKind.API, allowCookies = false, allowRetry = false),
+        )
+        assertSame(CookieJar.NO_COOKIES, apiNoCookieNoRetry.cookieJar)
+        assertFalse(apiNoCookieNoRetry.retryOnConnectionFailure)
+
+        val probeFollow = stack.pool.clientFor(
+            SiteHttpRequest(url = "https://x.test/", kind = SiteRequestKind.PROBE, followRedirects = true),
+        )
+        assertTrue(probeFollow.followRedirects)
     }
 }

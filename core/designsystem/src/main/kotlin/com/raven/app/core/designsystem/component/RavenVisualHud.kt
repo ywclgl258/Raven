@@ -57,10 +57,21 @@ fun RavenVisualHud(
     val reduceTransparency = LocalReduceTransparency.current
     val motionReduced = LocalMotionReduced.current
 
+    val enterTransition = if (motionReduced) {
+        fadeIn(androidx.compose.animation.core.snap())
+    } else {
+        fadeIn(tween(120)) + scaleIn(initialScale = 0.94f, animationSpec = tween(140))
+    }
+    val exitTransition = if (motionReduced) {
+        fadeOut(androidx.compose.animation.core.snap())
+    } else {
+        fadeOut(tween(150)) + scaleOut(targetScale = 0.94f, animationSpec = tween(150))
+    }
+
     AnimatedVisibility(
         visible = visible,
-        enter = fadeIn(tween(120)) + scaleIn(initialScale = 0.94f, animationSpec = tween(140)),
-        exit = fadeOut(tween(150)) + scaleOut(targetScale = 0.94f, animationSpec = tween(150)),
+        enter = enterTransition,
+        exit = exitTransition,
         modifier = modifier.testTag("raven_visual_hud"),
     ) {
         RavenFrostedBox(

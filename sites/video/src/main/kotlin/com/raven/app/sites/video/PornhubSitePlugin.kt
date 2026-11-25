@@ -30,6 +30,8 @@ import com.raven.app.core.sitespi.ResolvedLink
 import com.raven.app.core.sitespi.SearchSource
 import com.raven.app.core.sitespi.SitePlugin
 import com.raven.app.core.sitespi.VideoSource
+import com.raven.app.core.sitespi.suspendRunCatching
+import java.util.Locale
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import kotlinx.serialization.json.Json
@@ -58,7 +60,7 @@ class PornhubSitePlugin(
             val newestRequest = FeedRequest(siteId = SiteId.PORNHUB, section = "newest", sort = FeedSort.NEWEST)
             val viewedRequest = FeedRequest(siteId = SiteId.PORNHUB, section = "mostviewed", sort = FeedSort.VIEWS)
             val newestDeferred = async { loadFeed(newestRequest) }
-            val viewedDeferred = async { runCatching { loadFeed(viewedRequest) }.getOrNull() }
+            val viewedDeferred = async { suspendRunCatching { loadFeed(viewedRequest) }.getOrNull() }
             val newestPage = newestDeferred.await()
             val viewedPage = viewedDeferred.await()
             VideoSiteSupport.buildHomeFeed(
@@ -270,8 +272,7 @@ class PornhubSitePlugin(
     companion object {
         const val BASE_URL: String = "https://www.pornhub.com"
         private val searchPathRegex = Regex("^/video/search/?$", RegexOption.IGNORE_CASE)
-        private val viewKeyRegex = Regex("[0-9a-z]{8,24}")
-        private val pathViewKeyRegex = Regex("[0-9a-z]{10,20}")
+        private val viewKeyRegex = Regex("^[0-9a-z]{8,24}$", RegexOption.IGNORE_CASE)
         private val hrefViewKeyRegex = Regex("viewkey=([0-9a-z]+)")
         private val mediaDefRegex = Regex(
             """"height"\s*:\s*(\d+)[^{}]*?"format"\s*:\s*"(hls|mp4)"[^{}]*?"videoUrl"\s*:\s*"(https?:[^"]+)"""",
@@ -391,11 +392,16 @@ class PornhubSitePlugin(
         fun extractViewKey(raw: String): String? {
             if (raw.isBlank()) return null
             val uri = UrlSanitizer.parseUriOrNull(raw.trim()) ?: return null
-            val host = uri.host?.lowercase() ?: return null
+            val host = uri.host?.lowercase(Locale.ROOT) ?: return null
             if (!DESCRIPTOR.matchesHost(host)) return null
             val queryKey = VideoSiteSupport.queryParam(uri, "viewkey")
-            val candidate = queryKey ?: VideoSiteSupport.pathSegments(uri).firstOrNull {
-                pathViewKeyRegex.matches(it)
+            val candidate = queryKey ?: run {
+                val segments = VideoSiteSupport.pathSegments(uri)
+                if (segments.size >= 2 && segments[0].equals("embed", ignoreCase = true)) {
+                    segments[1]
+                } else {
+                    null
+                }
             }
             return candidate?.takeIf { viewKeyRegex.matches(it) }
         }
@@ -520,7 +526,10 @@ class PornhubSitePlugin(
             }
 
             if (found.isNotEmpty()) {
-                return found.values.sortedWith(
+                val allStreams = found.values.toList()
+                val directStreams = allStreams.filterNot { it.url.contains("/video/get_media", ignoreCase = true) }
+                val effective = directStreams.ifEmpty { allStreams }
+                return effective.sortedWith(
                     compareByDescending<VideoStream> { it.isHls }
                         .thenByDescending { VideoSiteSupport.parseStreamHeight(it.label) },
                 )
@@ -549,7 +558,8 @@ class PornhubSitePlugin(
         ) {
             val isMp4 = format == "mp4"
             val label = when {
-                isMp4 -> "原画"
+                isMp4 && height > 0 -> "${height}p MP4"
+                isMp4 -> "MP4 原画"
                 height > 0 -> "${height}p"
                 else -> "自动"
             }

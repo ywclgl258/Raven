@@ -9,7 +9,16 @@ import com.raven.app.core.sitespi.SiteHttpMethod
 import com.raven.app.core.sitespi.SiteHttpRequest
 import com.raven.app.core.sitespi.SiteHttpResponse
 import com.raven.app.core.sitespi.SiteRegistry
+import com.raven.app.core.sitespi.SiteRequestKind
 import com.raven.app.core.sitespi.SiteSessionStore
+import java.io.ByteArrayOutputStream
+import java.io.IOException
+import java.security.cert.CertificateException
+import java.util.concurrent.TimeUnit
+import javax.net.ssl.SSLException
+import kotlin.coroutines.resume
+import kotlin.coroutines.resumeWithException
+import kotlinx.coroutines.CancellableContinuation
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
@@ -21,12 +30,30 @@ import okhttp3.MediaType.Companion.toMediaTypeOrNull
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.Response
-import java.io.IOException
-import java.security.cert.CertificateException
-import java.util.concurrent.TimeUnit
-import javax.net.ssl.SSLException
-import kotlin.coroutines.resume
-import kotlin.coroutines.resumeWithException
+import okhttp3.ResponseBody
+
+/**
+ * Coroutine-cancellable OkHttp [Call.enqueue] bridge shared by feature modules (`RavenUpdater`,
+ * `TagDictionarySyncer`, `WebDavSyncClient`).
+ */
+suspend fun Call.awaitResponse(): Response = suspendCancellableCoroutine { continuation ->
+    continuation.invokeOnCancellation { cancel() }
+    enqueue(object : Callback {
+        override fun onFailure(call: Call, e: IOException) {
+            if (continuation.isActive) {
+                continuation.resumeWithException(e)
+            }
+        }
+
+        override fun onResponse(call: Call, response: Response) {
+            if (!continuation.isActive) {
+                response.close()
+                return
+            }
+            continuation.resume(response)
+        }
+    })
+}
 
 /**
  * Deterministic mapper from HTTP responses and transport exceptions to Raven's sealed [SiteException].
@@ -211,9 +238,10 @@ class SiteHttpClient(
         val okHttpRequest = buildOkHttpRequest(request, httpUrl.toString(), effectiveSiteId)
         val client = okHttpPool.clientFor(request)
 
+        val maxBytes = maxResponseBytesFor(request.kind)
         val response = withContext(dispatchers.io) {
             try {
-                executeCancellable(client, okHttpRequest, request.timeoutMs)
+                executeCancellable(client, okHttpRequest, request.timeoutMs, maxBytes)
             } catch (ce: CancellationException) {
                 throw ce
             } catch (se: SiteException) {
@@ -300,6 +328,7 @@ class SiteHttpClient(
         client: okhttp3.OkHttpClient,
         request: Request,
         timeoutMs: Long?,
+        maxResponseBytes: Long,
     ): SiteHttpResponse = suspendCancellableCoroutine { continuation ->
         val call = client.newCall(request)
         if (timeoutMs != null && timeoutMs > 0L) {
@@ -308,15 +337,19 @@ class SiteHttpClient(
         continuation.invokeOnCancellation { call.cancel() }
         call.enqueue(object : Callback {
             override fun onFailure(call: Call, e: IOException) {
-                if (!continuation.isCancelled) {
+                if (continuation.isActive) {
                     continuation.resumeWithException(e)
                 }
             }
 
             override fun onResponse(call: Call, response: Response) {
+                if (!continuation.isActive) {
+                    response.close()
+                    return
+                }
                 try {
                     val result = response.use { res ->
-                        val bytes = res.body?.bytes() ?: ByteArray(0)
+                        val bytes = readBoundedBytes(res.body, maxResponseBytes, continuation)
                         val headersMap = LinkedHashMap<String, MutableList<String>>()
                         val okHeaders = res.headers
                         for (i in 0 until okHeaders.size) {
@@ -332,15 +365,56 @@ class SiteHttpClient(
                             fromCache = res.networkResponse == null && res.cacheResponse != null,
                         )
                     }
-                    if (!continuation.isCancelled) {
+                    if (continuation.isActive) {
                         continuation.resume(result)
                     }
                 } catch (e: Throwable) {
-                    if (!continuation.isCancelled) {
+                    if (continuation.isActive) {
                         continuation.resumeWithException(e)
                     }
                 }
             }
         })
+    }
+
+    private fun readBoundedBytes(
+        body: ResponseBody?,
+        maxBytes: Long,
+        continuation: CancellableContinuation<*>,
+    ): ByteArray {
+        if (body == null) return ByteArray(0)
+        val contentLength = body.contentLength()
+        if (contentLength > maxBytes) {
+            throw IOException("响应体过大 ($contentLength bytes)，超过上限 $maxBytes bytes")
+        }
+        val initialCapacity = if (contentLength in 1..Int.MAX_VALUE) contentLength.toInt() else 8_192
+        val out = ByteArrayOutputStream(initialCapacity)
+        val buf = ByteArray(8_192)
+        var total = 0L
+        body.byteStream().use { stream ->
+            while (true) {
+                if (!continuation.isActive) {
+                    throw CancellationException("Request cancelled during body read")
+                }
+                val n = stream.read(buf)
+                if (n < 0) break
+                total += n
+                if (total > maxBytes) {
+                    throw IOException("响应体读取超过上限 ($maxBytes bytes)")
+                }
+                out.write(buf, 0, n)
+            }
+        }
+        return out.toByteArray()
+    }
+
+    companion object {
+        private const val MAX_TEXT_RESPONSE_BYTES: Long = 16L * 1024L * 1024L
+        private const val MAX_BINARY_RESPONSE_BYTES: Long = 32L * 1024L * 1024L
+
+        internal fun maxResponseBytesFor(kind: SiteRequestKind): Long = when (kind) {
+            SiteRequestKind.IMAGE, SiteRequestKind.MEDIA -> MAX_BINARY_RESPONSE_BYTES
+            SiteRequestKind.PAGE, SiteRequestKind.API, SiteRequestKind.PROBE -> MAX_TEXT_RESPONSE_BYTES
+        }
     }
 }

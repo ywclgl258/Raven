@@ -97,6 +97,44 @@ class PreferencesRepository(
 
     suspend fun setBlockTagsGlobally(enabled: Boolean) = settingsDataStore.setBlockTagsGlobally(enabled)
 
+    suspend fun setAutoplayVideo(enabled: Boolean) = settingsDataStore.setAutoplayVideo(enabled)
+
+    suspend fun setBackgroundAudioPlayback(enabled: Boolean) =
+        settingsDataStore.setBackgroundAudioPlayback(enabled)
+
+    suspend fun setReaderTapZonesEnabled(enabled: Boolean) =
+        settingsDataStore.setReaderTapZonesEnabled(enabled)
+
+    suspend fun setReaderShowStatusBar(enabled: Boolean) =
+        settingsDataStore.setReaderShowStatusBar(enabled)
+
+    suspend fun setReaderPrefetchPages(pages: Int) =
+        settingsDataStore.setReaderPrefetchPages(pages)
+
+    suspend fun setReaderMemoryBudgetMb(budgetMb: Int) =
+        settingsDataStore.setReaderMemoryBudgetMb(budgetMb)
+
+    suspend fun setReaderAutoSplitWidePages(enabled: Boolean) =
+        settingsDataStore.setReaderAutoSplitWidePages(enabled)
+
+    suspend fun setBackgroundSubscriptionSync(enabled: Boolean) =
+        settingsDataStore.setBackgroundSubscriptionSync(enabled)
+
+    suspend fun setPrivacyScreenSecure(enabled: Boolean) =
+        settingsDataStore.setPrivacyScreenSecure(enabled)
+
+    suspend fun setAppLockEnabled(enabled: Boolean) =
+        settingsDataStore.setAppLockEnabled(enabled)
+
+    suspend fun setAppLockTimeoutSeconds(seconds: Int) =
+        settingsDataStore.setAppLockTimeoutSeconds(seconds)
+
+    suspend fun setIncognitoMode(enabled: Boolean) =
+        settingsDataStore.setIncognitoMode(enabled)
+
+    suspend fun setWebDavLastSyncAt(epochMs: Long) =
+        settingsDataStore.setWebDavLastSyncAt(epochMs)
+
     // ---- Room PlaybackPreferences (global "*" + per-site override) ----
 
     fun observeGlobalPlaybackPreferences(): Flow<PlaybackPreferences> =

@@ -35,10 +35,8 @@ dependencies {
     api(project(":core:model"))
     api(project(":core:site-spi"))
     implementation(project(":core:common"))
-    implementation(project(":core:network"))
 
     implementation(libs.jsoup)
-    implementation(libs.okhttp)
     implementation(libs.kotlinx.coroutines.core)
     implementation(libs.kotlinx.serialization.json)
     implementation(platform(libs.koin.bom))
@@ -46,5 +44,4 @@ dependencies {
 
     testImplementation(libs.junit)
     testImplementation(libs.kotlinx.coroutines.test)
-    testImplementation(libs.okhttp.mockwebserver)
 }

@@ -293,4 +293,25 @@ class NhentaiSitePluginTest {
         )
         assertEquals("popular-today", trendingUrl.queryParameter("sort"))
     }
+
+    @Test
+    fun `nhentai skips single malformed feed entry without failing whole page and validates mediaId prefix`() = runTest {
+        val http = FakeHttpClientAdapter()
+        http.onUrlText("https://nhentai.net/api/v2/cdn", cdnJson)
+        http.onUrlText(
+            "https://nhentai.net/api/v2/galleries?page=1",
+            """
+                {
+                  "num_pages": 1,
+                  "result": [
+                    {"id": "bad"},
+                    ${gallerySummaryJson(123, 999, "Valid Gallery")}
+                  ]
+                }
+            """.trimIndent(),
+        )
+        val plugin = NhentaiSitePlugin(http)
+        val page = plugin.feedSource!!.loadFeed(FeedRequest(SiteId.NHENTAI, page = 1))
+        assertEquals(listOf("123"), page.items.map { it.id })
+    }
 }

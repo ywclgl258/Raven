@@ -209,6 +209,7 @@ internal fun PlayerGestureLayer(
             .pointerInput(Unit) {
                 awaitEachGesture {
                     val down = awaitFirstDown(requireUnconsumed = false)
+                    if (down.isConsumed) return@awaitEachGesture
                     val downPos = down.position
                     val downTime = down.uptimeMillis
                     val touchSlop = viewConfiguration.touchSlop
@@ -360,7 +361,7 @@ internal fun PlayerGestureLayer(
                             while (true) {
                                 val event = awaitPointerEvent(PointerEventPass.Main)
                                 val change = event.changes.firstOrNull { it.id == down.id }
-                                if (change == null) {
+                                if (change == null || change.isConsumed) {
                                     gestureCancelled = true
                                     break
                                 }

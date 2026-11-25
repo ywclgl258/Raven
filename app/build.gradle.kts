@@ -141,6 +141,10 @@ kotlin {
     }
 }
 
+composeCompiler {
+    stabilityConfigurationFiles.add(rootProject.layout.projectDirectory.file("compose_stability.conf"))
+}
+
 val validateReleaseSigningTask = tasks.register("validateReleaseSigning") {
     group = "verification"
     description = "Validates external Raven release signing properties, keystore presence, and SHA-256 certificate match."

@@ -77,6 +77,7 @@ import com.raven.app.core.designsystem.component.RavenVideoCard
 import com.raven.app.core.designsystem.component.RavenVideoCardSkeleton
 import com.raven.app.core.designsystem.component.displayLabel
 import com.raven.app.core.designsystem.component.rememberRavenShimmerBrush
+import com.raven.app.core.database.model.ShelfWithSummary
 import com.raven.app.core.designsystem.theme.LocalRavenColors
 import com.raven.app.core.model.ComicLanguage
 import com.raven.app.core.model.FeedSort
@@ -108,6 +109,8 @@ fun ExploreScreen(
     viewModel: ExploreViewModel = koinViewModel(),
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
+    val shelves by viewModel.shelfPickerShelves.collectAsStateWithLifecycle()
+    val inspectedShelfIds by viewModel.inspectedShelfIds.collectAsStateWithLifecycle()
 
     ExploreScreenContent(
         uiState = uiState,
@@ -122,6 +125,11 @@ fun ExploreScreen(
         onLoadNextPage = viewModel::loadNextPage,
         onToggleWatchLater = viewModel::toggleWatchLater,
         onSaveBrowsePosition = viewModel::saveBrowsePosition,
+        shelves = shelves,
+        selectedShelfIds = inspectedShelfIds,
+        onInspectShelfTarget = viewModel::inspectShelfTarget,
+        onToggleShelfMembership = viewModel::setShelfMembership,
+        onCreateShelfAndAdd = viewModel::createShelfAndAdd,
         modifier = modifier,
     )
 }
@@ -142,6 +150,11 @@ fun ExploreScreenContent(
     onToggleWatchLater: (MediaItem) -> Unit,
     onSaveBrowsePosition: (workId: String, throughPage: Int) -> Unit,
     modifier: Modifier = Modifier,
+    shelves: List<ShelfWithSummary> = emptyList(),
+    selectedShelfIds: Set<String> = emptySet(),
+    onInspectShelfTarget: (MediaItem?) -> Unit = {},
+    onToggleShelfMembership: (shelfId: String, item: MediaItem, add: Boolean) -> Unit = { _, _, _ -> },
+    onCreateShelfAndAdd: (name: String, item: MediaItem) -> Unit = { _, _ -> },
 ) {
     val colors = LocalRavenColors.current
     val pullState = rememberPullToRefreshState()
@@ -296,7 +309,7 @@ fun ExploreScreenContent(
                         onClick = onClearFilters,
                         contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
                         modifier = Modifier
-                            .heightIn(min = 40.dp)
+                            .heightIn(min = 48.dp)
                             .testTag("explore_clear_filters_button"),
                     ) {
                         Icon(
@@ -380,6 +393,7 @@ fun ExploreScreenContent(
                         onItemLongClick = { actionTargetItem = it },
                         onLoadNextPage = onLoadNextPage,
                         onSaveBrowsePosition = onSaveBrowsePosition,
+                        scrollResetKey = activeSite.id to uiState.filter,
                     )
                 }
                 else -> {
@@ -395,6 +409,7 @@ fun ExploreScreenContent(
                         onItemLongClick = { actionTargetItem = it },
                         onLoadNextPage = onLoadNextPage,
                         onSaveBrowsePosition = onSaveBrowsePosition,
+                        scrollResetKey = activeSite.id to uiState.filter,
                     )
                 }
             }
@@ -563,17 +578,19 @@ fun ExploreScreenContent(
         ExploreSheetKind.NONE -> Unit
     }
 
-    val sheetItem = actionTargetItem
-    if (sheetItem != null) {
-        MediaCardActionSheet(
-            item = sheetItem,
-            isInWatchLater = sheetItem.compositeKey in uiState.watchLaterKeys,
-            onDismiss = { actionTargetItem = null },
-            onOpen = { navigator.openMedia(sheetItem) },
-            onToggleWatchLater = { onToggleWatchLater(sheetItem) },
-            onSearchSimilar = { slug -> navigator.openSearch(initialQuery = slug, crossSite = false) },
-        )
-    }
+    MediaCardActionAndShelfHost(
+        targetItem = actionTargetItem,
+        watchLaterKeys = uiState.watchLaterKeys,
+        shelves = shelves,
+        selectedShelfIds = selectedShelfIds,
+        onInspectShelfTarget = onInspectShelfTarget,
+        onDismiss = { actionTargetItem = null },
+        onOpen = { navigator.openMedia(it) },
+        onToggleWatchLater = onToggleWatchLater,
+        onToggleShelfMembership = onToggleShelfMembership,
+        onCreateShelfAndAdd = onCreateShelfAndAdd,
+        onSearchSimilar = { slug -> navigator.openSearch(initialQuery = slug, crossSite = false) },
+    )
 }
 
 @Composable
@@ -589,8 +606,16 @@ internal fun ExploreVideoGrid(
     onLoadNextPage: () -> Unit,
     onSaveBrowsePosition: ((workId: String, throughPage: Int) -> Unit)? = null,
     badgeProvider: ((MediaItem) -> String?)? = null,
+    scrollResetKey: Any? = null,
 ) {
     val gridState = rememberLazyGridState()
+    var lastResetKey by remember { mutableStateOf(scrollResetKey) }
+    LaunchedEffect(scrollResetKey) {
+        if (lastResetKey != scrollResetKey) {
+            lastResetKey = scrollResetKey
+            gridState.scrollToItem(0)
+        }
+    }
 
     LaunchedEffect(gridState, hasMore, isLoadingMore, items.size) {
         snapshotFlow {
@@ -672,9 +697,17 @@ internal fun ExploreGalleryGrid(
     onLoadNextPage: () -> Unit,
     onSaveBrowsePosition: ((workId: String, throughPage: Int) -> Unit)? = null,
     badgeProvider: ((MediaItem) -> String?)? = null,
+    scrollResetKey: Any? = null,
 ) {
     val gridState = rememberLazyStaggeredGridState()
     val aspectRatioCache = remember(siteId) { mutableStateMapOf<String, Float>() }
+    var lastResetKey by remember { mutableStateOf(scrollResetKey) }
+    LaunchedEffect(scrollResetKey) {
+        if (lastResetKey != scrollResetKey) {
+            lastResetKey = scrollResetKey
+            gridState.scrollToItem(0)
+        }
+    }
 
     LaunchedEffect(gridState, hasMore, isLoadingMore, items.size) {
         snapshotFlow {

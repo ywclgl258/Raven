@@ -16,6 +16,7 @@ import com.raven.app.core.model.SiteSectionSpec
 import com.raven.app.core.model.VideoDetail
 import com.raven.app.core.model.VideoStream
 import java.net.URI
+import java.util.Locale
 
 interface FeedSource {
     suspend fun loadHome(language: ComicLanguage = ComicLanguage.ALL): HomeFeed
@@ -144,16 +145,29 @@ interface LinkResolver {
     fun resolve(url: String): ResolvedLink?
 }
 
+data class HostRouterDiagnostics(
+    val candidateHosts: List<String>,
+    val activeHost: String?,
+    val leaseRouteKey: String? = null,
+    val leaseRemainingMs: Long = 0L,
+    val coolingDownHosts: Map<String, Long> = emptyMap(),
+)
+
 interface HostRouter {
     suspend fun activeHost(routeKey: String = "default"): String
     fun candidateHosts(): List<String>
     fun rewriteUrl(url: String, host: String): String
     fun reportHostFailure(host: String, routeKey: String = "default", cause: Throwable? = null) {}
     fun reportHostSuccess(host: String, routeKey: String = "default") {}
+    fun diagnostics(): HostRouterDiagnostics = HostRouterDiagnostics(
+        candidateHosts = candidateHosts(),
+        activeHost = candidateHosts().firstOrNull(),
+    )
+    fun resetLease() {}
 
     class Standard(hosts: List<String>) : HostRouter {
         private val normalizedHosts: List<String> = hosts
-            .map { it.trim().lowercase() }
+            .map { it.trim().lowercase(Locale.ROOT) }
             .filter { it.isNotEmpty() }
             .distinct()
 
@@ -163,10 +177,10 @@ interface HostRouter {
         override fun candidateHosts(): List<String> = normalizedHosts
 
         override fun rewriteUrl(url: String, host: String): String {
-            val targetHost = host.trim().lowercase()
+            val targetHost = host.trim().lowercase(Locale.ROOT)
             if (targetHost.isEmpty()) return url
             val uri = runCatching { URI(url) }.getOrNull() ?: return url
-            val scheme = uri.scheme?.lowercase() ?: "https"
+            val scheme = uri.scheme?.lowercase(Locale.ROOT) ?: "https"
             val portPart = if (uri.port > 0 && uri.port != 443 && uri.port != 80) ":${uri.port}" else ""
             val pathPart = uri.rawPath.orEmpty()
             val queryPart = uri.rawQuery?.let { "?$it" }.orEmpty()

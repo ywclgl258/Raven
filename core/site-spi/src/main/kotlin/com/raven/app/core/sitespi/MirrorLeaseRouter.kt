@@ -1,5 +1,7 @@
 package com.raven.app.core.sitespi
 
+import java.util.Locale
+import kotlin.coroutines.cancellation.CancellationException
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
@@ -23,7 +25,7 @@ class MirrorLeaseRouter(
     )
 
     private val candidates: List<String> = hosts
-        .map { it.trim().lowercase() }
+        .map { it.trim().lowercase(Locale.ROOT) }
         .filter { it.isNotEmpty() }
         .distinct()
 
@@ -71,7 +73,13 @@ class MirrorLeaseRouter(
             val selected = if (probe != null) {
                 var picked: String? = null
                 for (host in orderedCandidates) {
-                    val ok = runCatching { probe.invoke(host) }.getOrDefault(false)
+                    val ok = try {
+                        probe.invoke(host)
+                    } catch (ce: CancellationException) {
+                        throw ce
+                    } catch (_: Throwable) {
+                        false
+                    }
                     if (ok) {
                         picked = host
                         break
@@ -96,7 +104,7 @@ class MirrorLeaseRouter(
     }
 
     override fun reportHostFailure(host: String, routeKey: String, cause: Throwable?) {
-        val normalized = host.trim().lowercase()
+        val normalized = host.trim().lowercase(Locale.ROOT)
         val now = clockMs()
         synchronized(stateLock) {
             failedUntilMs[normalized] = now + failureCooldownMs
@@ -107,7 +115,7 @@ class MirrorLeaseRouter(
     }
 
     override fun reportHostSuccess(host: String, routeKey: String) {
-        val normalized = host.trim().lowercase()
+        val normalized = host.trim().lowercase(Locale.ROOT)
         if (normalized !in candidates) return
         val now = clockMs()
         synchronized(stateLock) {
@@ -118,6 +126,36 @@ class MirrorLeaseRouter(
                 expiresAtMs = now + leaseDurationMs,
             )
         }
+    }
+
+    override fun diagnostics(): HostRouterDiagnostics {
+        val now = clockMs()
+        return synchronized(stateLock) {
+            val cooling = LinkedHashMap<String, Long>()
+            val it = failedUntilMs.entries.iterator()
+            while (it.hasNext()) {
+                val (host, until) = it.next()
+                val rem = until - now
+                if (rem <= 0L) {
+                    it.remove()
+                } else {
+                    cooling[host] = rem
+                }
+            }
+            val lease = activeLease
+            val validLease = lease?.takeIf { now < it.expiresAtMs && it.host !in cooling }
+            HostRouterDiagnostics(
+                candidateHosts = candidates,
+                activeHost = validLease?.host,
+                leaseRouteKey = validLease?.routeKey,
+                leaseRemainingMs = validLease?.let { (it.expiresAtMs - now).coerceAtLeast(0L) } ?: 0L,
+                coolingDownHosts = cooling,
+            )
+        }
+    }
+
+    override fun resetLease() {
+        invalidate()
     }
 
     fun invalidate() {

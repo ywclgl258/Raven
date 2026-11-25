@@ -740,6 +740,9 @@ internal class InMemoryUpdateInboxDao : UpdateInboxDao {
         rows.update { list -> list.filterNot { it.sourceKind == sourceKind && it.sourceId == sourceId } }
     }
     override suspend fun deleteAll() { rows.value = emptyList() }
+    override suspend fun prune(limit: Int) {
+        rows.update { list -> list.sortedByDescending { it.discoveredAt }.take(limit) }
+    }
 }
 
 internal class InMemoryTagTranslationDao : TagTranslationDao {

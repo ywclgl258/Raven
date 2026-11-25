@@ -81,6 +81,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -129,29 +131,37 @@ class SiteFunctionsViewModel(
     private val dispatchers: AppDispatchers,
 ) : ViewModel() {
 
-    val siteId: SiteId = SiteId.of(route.siteId)
-    private val plugin: SitePlugin? = siteRegistry.get(siteId)
+    val siteId: SiteId? = runCatching { SiteId.of(route.siteId) }.getOrNull()
+    private val plugin: SitePlugin? = siteId?.let(siteRegistry::get)
     private val authStateFlow = MutableStateFlow(AuthState(isAuthenticated = false))
 
-    private val countsFlow = combine(
-        favoriteRepository.observeBySite(siteId),
-        downloadStateRepository.observeBySite(siteId),
-        subscriptionRepository.observeSubscriptions(siteId),
-        blockedTermsRepository.observeEffectiveTermsBySite(siteId),
-    ) { favs, dls, subs, blocked ->
-        SiteCounts(
-            favorites = favs.size,
-            downloads = dls.size,
-            subscriptions = subs.size,
-            blockedTerms = blocked.size,
-        )
+    private val countsFlow = if (siteId != null) {
+        combine(
+            favoriteRepository.observeBySite(siteId),
+            downloadStateRepository.observeBySite(siteId),
+            subscriptionRepository.observeSubscriptions(siteId),
+            blockedTermsRepository.observeEffectiveTermsBySite(siteId),
+        ) { favs, dls, subs, blocked ->
+            SiteCounts(
+                favorites = favs.size,
+                downloads = dls.size,
+                subscriptions = subs.size,
+                blockedTerms = blocked.size,
+            )
+        }
+    } else {
+        flowOf(SiteCounts(favorites = 0, downloads = 0, subscriptions = 0, blockedTerms = 0))
     }
 
-    private val readerPrefsFlow = combine(
-        preferencesRepository.observeSiteReaderPreferences(siteId),
-        preferencesRepository.observeGlobalReaderPreferences(),
-    ) { siteOverride, globalDefault ->
-        siteOverride ?: globalDefault
+    private val readerPrefsFlow = if (siteId != null) {
+        combine(
+            preferencesRepository.observeSiteReaderPreferences(siteId),
+            preferencesRepository.observeGlobalReaderPreferences(),
+        ) { siteOverride, globalDefault ->
+            siteOverride ?: globalDefault
+        }
+    } else {
+        preferencesRepository.observeGlobalReaderPreferences()
     }
 
     val uiState: StateFlow<SiteFunctionsUiState> = combine(
@@ -161,7 +171,7 @@ class SiteFunctionsViewModel(
         authStateFlow,
     ) { settings, readerPrefs, counts, auth ->
         val descriptor = plugin?.descriptor
-        val supportsLang = descriptor?.hasCapability(SiteCapability.LANGUAGE_FILTER) == true
+        val supportsLang = siteId != null && descriptor?.hasCapability(SiteCapability.LANGUAGE_FILTER) == true
         val supportsGallery = descriptor?.supportedKinds?.any { it.isGallery } == true
         val supportsAuth = descriptor?.hasCapability(SiteCapability.AUTH) == true ||
             descriptor?.hasCapability(SiteCapability.COOKIE_IMPORT) == true
@@ -176,9 +186,9 @@ class SiteFunctionsViewModel(
 
         SiteFunctionsUiState(
             site = descriptor,
-            isActiveSite = settings.activeSiteId == siteId,
+            isActiveSite = siteId != null && settings.activeSiteId == siteId,
             supportsLanguageFilter = supportsLang,
-            comicLanguage = if (supportsLang) settings.languageFor(siteId) else ComicLanguage.ALL,
+            comicLanguage = if (supportsLang && siteId != null) settings.languageFor(siteId) else ComicLanguage.ALL,
             supportsGalleryReader = supportsGallery,
             readerMode = readerPrefs.mode,
             translateTags = settings.translateTags,
@@ -212,22 +222,26 @@ class SiteFunctionsViewModel(
     }
 
     fun activateSite() {
+        val id = siteId ?: return
         if (plugin == null) return
         viewModelScope.launch {
-            preferencesRepository.setActiveSiteId(siteId)
+            preferencesRepository.setActiveSiteId(id)
         }
     }
 
     fun setComicLanguage(language: ComicLanguage) {
+        val id = siteId ?: return
         viewModelScope.launch {
-            preferencesRepository.setSiteLanguage(siteId, language)
+            preferencesRepository.setSiteLanguage(id, language)
         }
     }
 
     fun setReaderMode(mode: ReaderMode) {
+        val id = siteId ?: return
         viewModelScope.launch {
-            val base = ReaderPreferences(siteId = siteId, mediaId = null, mode = mode)
-            preferencesRepository.saveReaderPreferences(base)
+            val existing = preferencesRepository.observeSiteReaderPreferences(id).first()
+                ?: preferencesRepository.observeGlobalReaderPreferences().first().copy(siteId = id, mediaId = null)
+            preferencesRepository.saveReaderPreferences(existing.copy(siteId = id, mediaId = null, mode = mode))
         }
     }
 
@@ -487,7 +501,7 @@ fun SiteFunctionsScreenContent(
                             value = "${uiState.favoriteCount}",
                             icon = Icons.Outlined.FavoriteBorder,
                             showChevron = true,
-                            onClick = navigator::openFavorites,
+                            onClick = { navigator.openFavorites(site.id) },
                         )
                         RavenGroupedDivider(insetWithIcon = true)
                         RavenGroupedRow(
@@ -495,7 +509,7 @@ fun SiteFunctionsScreenContent(
                             value = "${uiState.downloadCount}",
                             icon = Icons.Outlined.Download,
                             showChevron = true,
-                            onClick = navigator::openDownloads,
+                            onClick = { navigator.openDownloads(site.id) },
                         )
                         RavenGroupedDivider(insetWithIcon = true)
                         RavenGroupedRow(

@@ -180,6 +180,42 @@ class ReaderCoreTest {
         buffer.close()
     }
 
+    @Test
+    fun `reader buffer re-fetches previously evicted page when anchor moves and honors custom prefetchAhead`() =
+        runTest {
+            val tenMiB = 10L * 1024L * 1024L
+            val loadCounts = HashMap<Int, Int>()
+
+            val buffer = ReaderBuffer(
+                pageNumbers = (1..8).toList(),
+                scope = this,
+                byteSizeOf = { it.bytes },
+                offscreenBudgetBytes = 12L * 1024L * 1024L,
+                maxConcurrency = 1,
+                prefetchAhead = 5,
+                loader = { page, _ ->
+                    loadCounts[page] = (loadCounts[page] ?: 0) + 1
+                    FakeBitmapPage(page, bytes = tenMiB)
+                },
+            )
+
+            buffer.updateWindow(page = 1, visible = setOf(1))
+            advanceUntilIdle()
+
+            // Page 5 was within prefetchAhead=5, loaded and then evicted under 12MiB offscreen budget.
+            assertFalse(5 in buffer.currentPages())
+            assertTrue((loadCounts[5] ?: 0) >= 1)
+
+            // Moving anchor to page 5 clears anchor-local eviction tracking so page 5 re-fetches!
+            val priorCount = loadCounts[5] ?: 0
+            buffer.updateWindow(page = 5, visible = setOf(5))
+            advanceUntilIdle()
+            assertTrue(5 in buffer.currentPages())
+            assertEquals(priorCount + 1, loadCounts[5])
+
+            buffer.close()
+        }
+
     // ---- ImageStructureValidator & JmcomicBitmapUnscrambler ----
 
     @Test

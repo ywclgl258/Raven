@@ -571,4 +571,37 @@ class R34vAndHanimeSitePluginTest {
         )
         assertEquals(listOf("2002"), filtered.items.map { it.id })
     }
+
+    @Test
+    fun `hanime1 maps author scope to brands and preserves rate-limit or forbidden errors on verify`() = runTest {
+        val brandSearch = HanimeSitePlugin.resolveFeedUrl(
+            FeedRequest(SiteId.HANIME1, query = "Bunnywalker", scope = SearchScope.AUTHOR),
+        )
+        assertTrue(brandSearch.contains("brands%5B%5D=Bunnywalker"))
+        assertFalse(brandSearch.contains("query="))
+
+        val fakeHttp = FakeHttpClientAdapter()
+        val store = InMemorySiteSessionStore()
+        fakeHttp.onGet(
+            "https://hanime1.me/login",
+            body = """<form><input name="_token" value="csrf_token_1" /></form>""",
+        )
+        fakeHttp.onPost("https://hanime1.me/login") { req ->
+            SiteHttpResponse(code = 200, finalUrl = req.url, body = ByteArray(0))
+        }
+        fakeHttp.onGetDynamic("https://hanime1.me/login") { req ->
+            if (req.headers.containsKey("Cookie") || req.allowCache.not()) {
+                SiteHttpResponse(code = 429, finalUrl = req.url, headers = mapOf("Retry-After" to listOf("10")), body = ByteArray(0))
+            } else {
+                SiteHttpResponse(code = 200, finalUrl = req.url, body = """<form><input name="_token" value="csrf_token_1" /></form>""".toByteArray())
+            }
+        }
+        val plugin = HanimeSitePlugin(fakeHttp, store, rateLimitBackoffMs = 0L)
+        try {
+            plugin.authProvider.loginWithCredentials("user@example.com", "pw")
+            fail("Expected SiteException.RateLimited")
+        } catch (_: SiteException.RateLimited) {
+            // expected
+        }
+    }
 }

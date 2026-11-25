@@ -172,6 +172,7 @@ private data class ShelfEphemeralState(
     val pendingLaunch: ShelfQueueLaunchEvent? = null,
     val deleted: Boolean = false,
     val message: String? = null,
+    val manuallyUncompletedKeys: Set<String> = emptySet(),
 )
 
 class ShelfDetailViewModel(
@@ -305,12 +306,22 @@ class ShelfDetailViewModel(
 
     fun toggleItemCompleted(entry: ShelfEntryUi) {
         val customTarget = target as? ShelfDetailTarget.Custom ?: return
+        val nextCompleted = !entry.completed
+        val key = entry.compositeKey
+        ephemeralState.update { current ->
+            val updatedKeys = if (nextCompleted) {
+                current.manuallyUncompletedKeys - key
+            } else {
+                current.manuallyUncompletedKeys + key
+            }
+            current.copy(manuallyUncompletedKeys = updatedKeys)
+        }
         viewModelScope.launch(dispatchers.io) {
             shelfRepository.setItemCompleted(
                 shelfId = customTarget.shelfId,
                 siteId = entry.siteId,
                 mediaId = entry.mediaId,
-                completed = !entry.completed,
+                completed = nextCompleted,
             )
         }
     }
@@ -535,9 +546,11 @@ class ShelfDetailViewModel(
                 val reading = readingByKey[key]
                 val dls = downloadsByKey[key].orEmpty()
                 val bestStatus = resolveAggregateDownloadStatus(dls)
-                val isCompleted = item.completed ||
-                    (watch != null && CompletionPolicy.isWatchCompleted(watch)) ||
-                    (reading != null && CompletionPolicy.isReadingCompleted(reading))
+                val isCompleted = key !in ephemeral.manuallyUncompletedKeys && (
+                    item.completed ||
+                        (watch != null && CompletionPolicy.isWatchCompleted(watch)) ||
+                        (reading != null && CompletionPolicy.isReadingCompleted(reading))
+                    )
                 val fraction = when {
                     watch != null && watch.durationMs > 0L -> watch.progressFraction
                     reading != null && reading.totalPages > 0 -> reading.progressFraction
@@ -626,8 +639,8 @@ class ShelfDetailViewModel(
         val siteOptions = siteRegistry.buildSiteFilterOptions(rawEntries.map { it.siteId })
 
         val isNotFound = when (target) {
-            is ShelfDetailTarget.Custom -> source.shelf == null && ephemeral.deleted
-            is ShelfDetailTarget.Smart -> source.smartShelf == null && ephemeral.deleted
+            is ShelfDetailTarget.Custom -> source.shelf == null
+            is ShelfDetailTarget.Smart -> source.smartShelf == null
         }
 
         return ShelfDetailUiState(

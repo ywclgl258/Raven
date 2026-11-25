@@ -21,6 +21,22 @@ val coreSecurityModule: Module = module {
         )
     }
     single { SessionVault(cipher = get(), storage = get()) } bind SiteSessionStore::class
+    single {
+        PrivacyLockStore(
+            cipher = get(),
+            storage = SharedPreferencesVaultStorage(
+                androidContext().getSharedPreferences(PrivacyLockStore.DEFAULT_PREFS_NAME, Context.MODE_PRIVATE),
+            ),
+        )
+    }
+    single {
+        WebDavCredentialStore(
+            cipher = get(),
+            storage = SharedPreferencesVaultStorage(
+                androidContext().getSharedPreferences(WebDavCredentialStore.DEFAULT_PREFS_NAME, Context.MODE_PRIVATE),
+            ),
+        )
+    }
     single { BackupValidator(siteRegistryProvider = { get<SiteRegistry>() }) }
     single { BackupCodec(validator = get(), siteRegistryProvider = { get<SiteRegistry>() }) }
 }

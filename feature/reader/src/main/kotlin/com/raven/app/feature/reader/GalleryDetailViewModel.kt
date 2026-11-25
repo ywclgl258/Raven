@@ -8,6 +8,7 @@ import com.raven.app.core.common.AppDispatchers
 import com.raven.app.core.common.ContentFilter
 import com.raven.app.core.common.PageSelectionParser
 import com.raven.app.core.common.TagDictionary
+import com.raven.app.core.database.model.ShelfWithSummary
 import com.raven.app.core.database.repository.BlockedTermsRepository
 import com.raven.app.core.database.repository.BookmarkRepository
 import com.raven.app.core.database.repository.FavoriteRepository
@@ -100,6 +101,9 @@ data class GalleryDetailUiState(
     val readingProgress: ReadingProgress? = null,
     val isFavorite: Boolean = false,
     val isInWatchLater: Boolean = false,
+    val shelves: List<ShelfWithSummary> = emptyList(),
+    val containingShelfIds: Set<String> = emptySet(),
+    val showShelfPicker: Boolean = false,
     val pageBookmarks: List<PageBookmark> = emptyList(),
     val activeDownload: DownloadItem? = null,
     val translateTags: Boolean = true,
@@ -221,11 +225,13 @@ class GalleryDetailViewModel(
         tagDictionaryRepository = tagDictionaryRepository,
     )
 
-    private val siteId: SiteId = SiteId.of(route.siteId)
+    private val parsedSiteId: SiteId? = runCatching { SiteId.of(route.siteId) }.getOrNull()
+    private val siteId: SiteId = parsedSiteId ?: SiteId.GLOBAL
+    private val isInvalidSiteId: Boolean = parsedSiteId == null
     private val mediaId: String = route.mediaId
     private val url: String = route.url
 
-    private val plugin = siteRegistry.get(siteId)
+    private val plugin = if (isInvalidSiteId) null else siteRegistry.get(siteId)
     private val descriptor: SiteDescriptor? = plugin?.descriptor
 
     private val _uiState = MutableStateFlow(
@@ -235,11 +241,12 @@ class GalleryDetailViewModel(
             url = url,
             siteDescriptor = descriptor,
             siteDisplayName = when {
+                isInvalidSiteId -> route.siteId
                 siteId.isLocal -> "本地导入"
                 descriptor != null -> descriptor.displayName
                 else -> siteId.value
             },
-            isLocal = siteId.isLocal,
+            isLocal = !isInvalidSiteId && siteId.isLocal,
         ),
     )
     val uiState: StateFlow<GalleryDetailUiState> = _uiState.asStateFlow()
@@ -249,6 +256,7 @@ class GalleryDetailViewModel(
 
     private var loadJob: Job? = null
     private var exportJob: Job? = null
+    @Volatile
     private var latestCachedTagsByKey: Map<String, List<TagRef>> = emptyMap()
 
     init {
@@ -257,7 +265,8 @@ class GalleryDetailViewModel(
     }
 
     private fun observeLocalPersonalState() {
-        // Combine reading progress, bookmarks, watch-later membership, and downloads.
+        if (isInvalidSiteId) return
+        // Combine reading progress, bookmarks, watch-later / shelf membership, and downloads.
         viewModelScope.launch(dispatchers.main) {
             combine(
                 historyRepository.observeReadingProgress(siteId, mediaId),
@@ -269,7 +278,7 @@ class GalleryDetailViewModel(
                 PersonalBaseSnapshot(
                     progress = progress,
                     bookmarks = bookmarks,
-                    isInWatchLater = Shelf.WATCH_LATER_ID in shelfIds,
+                    containingShelfIds = shelfIds.toSet(),
                     activeDownload = downloads.maxByOrNull { it.updatedAt },
                     translateTags = settings.translateTags,
                     blockTagsGlobally = settings.blockTagsGlobally,
@@ -279,12 +288,19 @@ class GalleryDetailViewModel(
                     state.copy(
                         readingProgress = snapshot.progress,
                         pageBookmarks = snapshot.bookmarks,
-                        isInWatchLater = snapshot.isInWatchLater,
+                        containingShelfIds = snapshot.containingShelfIds,
+                        isInWatchLater = Shelf.WATCH_LATER_ID in snapshot.containingShelfIds,
                         activeDownload = snapshot.activeDownload,
                         translateTags = snapshot.translateTags,
                         blockTagsGlobally = snapshot.blockTagsGlobally,
                     )
                 }
+            }
+        }
+
+        viewModelScope.launch(dispatchers.main) {
+            shelfRepository.observeShelvesWithSummary().collectLatest { shelves ->
+                _uiState.update { it.copy(shelves = shelves) }
             }
         }
 
@@ -359,6 +375,16 @@ class GalleryDetailViewModel(
                     authRequired = false,
                     authMessage = null,
                 )
+            }
+
+            if (isInvalidSiteId) {
+                _uiState.update {
+                    it.copy(
+                        isLoading = false,
+                        errorMessage = "无效的站点标识：${route.siteId}",
+                    )
+                }
+                return@launch
             }
 
             // Pre-check auth gate on auth-gated sites (e.g., ExHentai) before firing network load.
@@ -497,6 +523,75 @@ class GalleryDetailViewModel(
                 ),
             )
             emitSnackbar(if (added) "已加入稍后看" else "已移出稍后看")
+        }
+    }
+
+    fun openShelfPicker() {
+        if (_uiState.value.detail == null) return
+        _uiState.update { it.copy(showShelfPicker = true) }
+    }
+
+    fun dismissShelfPicker() {
+        _uiState.update { it.copy(showShelfPicker = false) }
+    }
+
+    fun setShelfMembership(shelfId: String, add: Boolean) {
+        val detail = _uiState.value.detail ?: return
+        val item = detail.item
+        viewModelScope.launch(dispatchers.io) {
+            runCatching {
+                if (add) {
+                    shelfRepository.addItem(
+                        shelfId = shelfId,
+                        item = ShelfItem(
+                            shelfId = shelfId,
+                            siteId = item.siteId,
+                            mediaId = item.id,
+                            url = item.url,
+                            kind = item.kind,
+                            title = item.title,
+                            coverUrl = item.coverUrl,
+                            addedAt = clock(),
+                            pageCount = detail.pageCount,
+                        ),
+                    )
+                } else {
+                    shelfRepository.removeItem(shelfId, item.siteId, item.id)
+                }
+            }.onFailure { err ->
+                emitSnackbar(err.message?.takeIf(String::isNotBlank) ?: "更新片单失败")
+            }
+        }
+    }
+
+    fun createShelfAndAdd(name: String) {
+        val clean = name.trim()
+        if (clean.isEmpty()) return
+        val detail = _uiState.value.detail ?: return
+        val item = detail.item
+        viewModelScope.launch(dispatchers.io) {
+            runCatching {
+                val created = shelfRepository.createShelf(name = clean)
+                shelfRepository.addItem(
+                    shelfId = created.id,
+                    item = ShelfItem(
+                        shelfId = created.id,
+                        siteId = item.siteId,
+                        mediaId = item.id,
+                        url = item.url,
+                        kind = item.kind,
+                        title = item.title,
+                        coverUrl = item.coverUrl,
+                        addedAt = clock(),
+                        pageCount = detail.pageCount,
+                    ),
+                )
+                created
+            }.onSuccess { created ->
+                emitSnackbar("已加入片单「${created.name}」")
+            }.onFailure { err ->
+                emitSnackbar(err.message?.takeIf(String::isNotBlank) ?: "创建片单失败")
+            }
         }
     }
 
@@ -927,7 +1022,7 @@ class GalleryDetailViewModel(
     private data class PersonalBaseSnapshot(
         val progress: ReadingProgress?,
         val bookmarks: List<PageBookmark>,
-        val isInWatchLater: Boolean,
+        val containingShelfIds: Set<String>,
         val activeDownload: DownloadItem?,
         val translateTags: Boolean,
         val blockTagsGlobally: Boolean,

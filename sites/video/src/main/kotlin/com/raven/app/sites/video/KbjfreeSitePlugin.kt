@@ -27,6 +27,7 @@ import com.raven.app.core.sitespi.ResolvedLink
 import com.raven.app.core.sitespi.SearchSource
 import com.raven.app.core.sitespi.SitePlugin
 import com.raven.app.core.sitespi.VideoSource
+import com.raven.app.core.sitespi.suspendRunCatching
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import kotlinx.serialization.json.Json
@@ -55,7 +56,7 @@ class KbjfreeSitePlugin(
             val recentRequest = FeedRequest(siteId = SiteId.KBJFREE, section = "recent", sort = FeedSort.NEWEST)
             val popularRequest = FeedRequest(siteId = SiteId.KBJFREE, section = "popular", sort = FeedSort.POPULAR)
             val recentDeferred = async { loadFeed(recentRequest) }
-            val popularDeferred = async { runCatching { loadFeed(popularRequest) }.getOrNull() }
+            val popularDeferred = async { suspendRunCatching { loadFeed(popularRequest) }.getOrNull() }
             val recentPage = recentDeferred.await()
             val popularPage = popularDeferred.await()
             VideoSiteSupport.buildHomeFeed(
@@ -172,6 +173,14 @@ class KbjfreeSitePlugin(
         private val watchPathRegex = Regex("^/watch/([0-9a-f-]{16,40})/?$", RegexOption.IGNORE_CASE)
         private val rscVideoAnchorRegex = Regex("""\{"id":"([0-9a-f-]{16,40})","name":"((?:\\.|[^"\\])*)","categoryId"""")
         private val pageParamRegex = Regex("[?&]page=(\\d+)")
+        private val fieldRegexMap: Map<String, Regex> = listOf(
+            "mainThumbUrl",
+            "coverUrl",
+            "previewMediaUrl",
+            "duration",
+        ).associateWith { name ->
+            Regex("\"${Regex.escape(name)}\":\"((?:\\\\.|[^\"\\\\])*)\"")
+        }
         private val json = Json { ignoreUnknownKeys = true; isLenient = true }
 
         val DESCRIPTOR: SiteDescriptor = SiteDescriptor(
@@ -262,10 +271,12 @@ class KbjfreeSitePlugin(
             val payload = JsExtractor.extractNextRscFlightChunks(html)
             if (payload.isBlank()) return emptyList()
             val items = LinkedHashMap<String, MediaItem>()
-            for (match in rscVideoAnchorRegex.findAll(payload)) {
+            val matches = rscVideoAnchorRegex.findAll(payload).toList()
+            for ((index, match) in matches.withIndex()) {
                 val id = match.groupValues[1]
                 if (items.containsKey(id)) continue
-                val windowEnd = minOf(payload.length, match.range.first + 2_600)
+                val nextStart = matches.getOrNull(index + 1)?.range?.first ?: payload.length
+                val windowEnd = minOf(payload.length, nextStart, match.range.first + 2_600)
                 val window = payload.substring(match.range.first, windowEnd)
                 val title = HtmlUrlCleaner.cleanText(JsExtractor.unescapeJsString(match.groupValues[2])).ifBlank { id }
                 val thumb = extractStringField(window, "mainThumbUrl")
@@ -288,13 +299,15 @@ class KbjfreeSitePlugin(
             return items.values.toList()
         }
 
-        private fun extractStringField(window: String, name: String): String =
-            Regex("\"${Regex.escape(name)}\":\"((?:\\\\.|[^\"\\\\])*)\"")
-                .find(window)
+        private fun extractStringField(window: String, name: String): String {
+            val regex = fieldRegexMap[name]
+                ?: Regex("\"${Regex.escape(name)}\":\"((?:\\\\.|[^\"\\\\])*)\"")
+            return regex.find(window)
                 ?.groupValues
                 ?.get(1)
                 ?.let(JsExtractor::unescapeJsString)
                 .orEmpty()
+        }
 
         fun extractPreviewStreams(doc: Document, baseUrl: String = BASE_URL): List<VideoStream> {
             val streams = LinkedHashMap<String, VideoStream>()
@@ -303,12 +316,13 @@ class KbjfreeSitePlugin(
                 val contentUrl = (obj["contentUrl"] as? JsonPrimitive)?.contentOrNull?.trim().orEmpty()
                 val resolved = VideoSiteSupport.resolveAbsolute(baseUrl, contentUrl)
                 if (resolved.startsWith("http")) {
+                    val isHls = resolved.substringBefore('?').endsWith(".m3u8", ignoreCase = true)
                     streams["preview"] = VideoStream(
                         quality = "preview",
                         label = "预览",
                         url = resolved,
-                        isHls = resolved.substringBefore('?').endsWith(".m3u8", ignoreCase = true),
-                        mimeTypeHint = "video/mp4",
+                        isHls = isHls,
+                        mimeTypeHint = if (isHls) "application/vnd.apple.mpegurl" else "video/mp4",
                         isPreviewOnly = true,
                     )
                 }
@@ -318,14 +332,15 @@ class KbjfreeSitePlugin(
                     val src = video.attr("src").ifBlank { video.absUrl("src") }
                     val resolved = VideoSiteSupport.resolveAbsolute(baseUrl, src)
                     if (resolved.startsWith("http")) {
+                        val isHls = resolved.substringBefore('?').endsWith(".m3u8", ignoreCase = true)
                         streams.putIfAbsent(
                             "preview",
                             VideoStream(
                                 quality = "preview",
                                 label = "预览",
                                 url = resolved,
-                                isHls = resolved.substringBefore('?').endsWith(".m3u8", ignoreCase = true),
-                                mimeTypeHint = "video/mp4",
+                                isHls = isHls,
+                                mimeTypeHint = if (isHls) "application/vnd.apple.mpegurl" else "video/mp4",
                                 isPreviewOnly = true,
                             ),
                         )

@@ -1,5 +1,6 @@
 package com.raven.app.core.model
 
+import java.util.Locale
 import kotlinx.serialization.Serializable
 
 /**
@@ -82,7 +83,7 @@ value class SiteId(val value: String) {
             RETIRED_NETFLAV to "netflav.com",
         )
 
-        fun of(raw: String): SiteId = SiteId(raw.trim().lowercase())
+        fun of(raw: String): SiteId = SiteId(raw.trim().lowercase(Locale.ROOT))
     }
 }
 
@@ -222,9 +223,9 @@ data class SiteDescriptor(
 
     val allHosts: List<String>
         get() = buildList {
-            if (defaultHost.isNotBlank()) add(defaultHost.lowercase())
+            if (defaultHost.isNotBlank()) add(defaultHost.lowercase(Locale.ROOT))
             mirrorHosts.forEach { host ->
-                val normalized = host.trim().lowercase()
+                val normalized = host.trim().lowercase(Locale.ROOT)
                 if (normalized.isNotBlank() && normalized !in this) add(normalized)
             }
         }
@@ -232,7 +233,7 @@ data class SiteDescriptor(
     fun hasCapability(capability: SiteCapability): Boolean = capability in capabilities
 
     fun matchesHost(hostname: String): Boolean {
-        val candidate = hostname.trim().lowercase()
+        val candidate = hostname.trim().lowercase(Locale.ROOT)
         if (candidate.isEmpty()) return false
         return allHosts.any { known ->
             val bare = known.removePrefix("www.")
@@ -241,17 +242,17 @@ data class SiteDescriptor(
     }
 
     fun matchesRequestHost(hostname: String): Boolean {
-        val candidate = hostname.trim().lowercase()
+        val candidate = hostname.trim().lowercase(Locale.ROOT)
         if (candidate.isEmpty()) return false
         return matchesHost(candidate) || networkProfile.apiHosts.any { it.equals(candidate, ignoreCase = true) }
     }
 
     fun matchesMediaHost(hostname: String): Boolean {
-        val candidate = hostname.trim().lowercase()
+        val candidate = hostname.trim().lowercase(Locale.ROOT)
         if (candidate.isEmpty()) return false
         if (matchesRequestHost(candidate)) return true
         return networkProfile.mediaDomains.any { domain ->
-            val norm = domain.trim().lowercase()
+            val norm = domain.trim().lowercase(Locale.ROOT)
             candidate == norm || candidate.endsWith(".$norm")
         }
     }

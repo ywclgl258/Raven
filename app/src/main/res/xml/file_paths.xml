@@ -1,12 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <paths xmlns:android="http://schemas.android.com/apk/res/android">
-    <files-path
-        name="files"
-        path="." />
     <cache-path
-        name="cache"
-        path="." />
-    <external-files-path
-        name="external_files"
-        path="." />
+        name="updates"
+        path="updates/" />
+    <cache-path
+        name="exports"
+        path="raven-exports/" />
 </paths>

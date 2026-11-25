@@ -21,6 +21,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.BookmarkAdd
 import androidx.compose.material.icons.outlined.BookmarkRemove
 import androidx.compose.material.icons.outlined.Info
+import androidx.compose.material.icons.outlined.LibraryAdd
 import androidx.compose.material.icons.outlined.Lock
 import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material.icons.outlined.SwapHoriz
@@ -39,6 +40,10 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -49,6 +54,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.raven.app.core.database.model.ShelfWithSummary
 import com.raven.app.core.designsystem.component.RavenBottomSheet
 import com.raven.app.core.designsystem.component.RavenCrimsonProgressBar
 import com.raven.app.core.designsystem.component.RavenFormatters
@@ -56,6 +62,8 @@ import com.raven.app.core.designsystem.component.RavenGroupedDivider
 import com.raven.app.core.designsystem.component.RavenGroupedRow
 import com.raven.app.core.designsystem.component.RavenGroupedSection
 import com.raven.app.core.designsystem.component.RavenImage
+import com.raven.app.core.designsystem.component.RavenShelfOption
+import com.raven.app.core.designsystem.component.RavenShelfPickerSheet
 import com.raven.app.core.designsystem.component.RavenStatusPill
 import com.raven.app.core.designsystem.component.RavenStatusTone
 import com.raven.app.core.designsystem.theme.LocalRavenColors
@@ -63,6 +71,7 @@ import com.raven.app.core.designsystem.theme.RavenShapes
 import com.raven.app.core.designsystem.theme.ravenSpringPress
 import com.raven.app.core.designsystem.theme.tabular
 import com.raven.app.core.model.MediaItem
+import com.raven.app.core.model.Shelf
 import com.raven.app.core.model.ReadingProgress
 import com.raven.app.core.model.SiteDescriptor
 
@@ -240,7 +249,7 @@ internal fun SiteSwitchTutorialCard(
 
             IconButton(
                 onClick = onDismiss,
-                modifier = Modifier.size(36.dp),
+                modifier = Modifier.size(48.dp),
             ) {
                 Icon(
                     imageVector = Icons.Rounded.Close,
@@ -436,7 +445,7 @@ internal fun BrowsePaginationFooter(
                     Spacer(modifier = Modifier.width(8.dp))
                     TextButton(
                         onClick = onRetry,
-                        modifier = Modifier.heightIn(min = 40.dp),
+                        modifier = Modifier.heightIn(min = 48.dp),
                     ) {
                         Text(
                             text = "重试",
@@ -462,12 +471,79 @@ internal fun BrowsePaginationFooter(
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
+internal fun MediaCardActionAndShelfHost(
+    targetItem: MediaItem?,
+    watchLaterKeys: Set<String>,
+    shelves: List<ShelfWithSummary>,
+    selectedShelfIds: Set<String>,
+    onInspectShelfTarget: (MediaItem?) -> Unit,
+    onDismiss: () -> Unit,
+    onOpen: (MediaItem) -> Unit,
+    onToggleWatchLater: (MediaItem) -> Unit,
+    onToggleShelfMembership: (shelfId: String, item: MediaItem, add: Boolean) -> Unit,
+    onCreateShelfAndAdd: (name: String, item: MediaItem) -> Unit,
+    onSearchSimilar: ((String) -> Unit)? = null,
+) {
+    var shelfPickerItem by remember { mutableStateOf<MediaItem?>(null) }
+
+    if (targetItem != null) {
+        MediaCardActionSheet(
+            item = targetItem,
+            isInWatchLater = targetItem.compositeKey in watchLaterKeys,
+            onDismiss = onDismiss,
+            onOpen = { onOpen(targetItem) },
+            onToggleWatchLater = { onToggleWatchLater(targetItem) },
+            onAddToShelf = if (shelves.isNotEmpty() || onCreateShelfAndAdd != NOOP_CREATE_SHELF) {
+                {
+                    onInspectShelfTarget(targetItem)
+                    shelfPickerItem = targetItem
+                }
+            } else {
+                null
+            },
+            onSearchSimilar = onSearchSimilar,
+        )
+    }
+
+    val activePickerItem = shelfPickerItem
+    if (activePickerItem != null) {
+        RavenShelfPickerSheet(
+            title = activePickerItem.title,
+            shelves = shelves.map { summary ->
+                RavenShelfOption(
+                    id = summary.shelf.id,
+                    name = summary.shelf.name,
+                    itemCount = summary.itemCount,
+                    selected = summary.shelf.id in selectedShelfIds ||
+                        (summary.shelf.id == Shelf.WATCH_LATER_ID && activePickerItem.compositeKey in watchLaterKeys),
+                    isSystem = summary.shelf.isSystem,
+                )
+            },
+            onToggleShelf = { shelfId, add ->
+                onToggleShelfMembership(shelfId, activePickerItem, add)
+            },
+            onCreateShelf = { name ->
+                onCreateShelfAndAdd(name, activePickerItem)
+            },
+            onDismiss = {
+                shelfPickerItem = null
+                onInspectShelfTarget(null)
+            },
+        )
+    }
+}
+
+private val NOOP_CREATE_SHELF: (String, MediaItem) -> Unit = { _, _ -> }
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
 internal fun MediaCardActionSheet(
     item: MediaItem,
     isInWatchLater: Boolean,
     onDismiss: () -> Unit,
     onOpen: () -> Unit,
     onToggleWatchLater: () -> Unit,
+    onAddToShelf: (() -> Unit)? = null,
     onSearchSimilar: ((String) -> Unit)? = null,
 ) {
     val colors = LocalRavenColors.current
@@ -505,6 +581,19 @@ internal fun MediaCardActionSheet(
                     onDismiss()
                 },
             )
+            if (onAddToShelf != null) {
+                RavenGroupedDivider(insetWithIcon = true)
+                RavenGroupedRow(
+                    title = "加入自定义片单",
+                    subtitle = "添加到自定义片单 / 书架或新建分组",
+                    icon = Icons.Outlined.LibraryAdd,
+                    showChevron = true,
+                    onClick = {
+                        onDismiss()
+                        onAddToShelf()
+                    },
+                )
+            }
             if (firstTag != null && onSearchSimilar != null) {
                 RavenGroupedDivider(insetWithIcon = true)
                 RavenGroupedRow(
@@ -530,6 +619,7 @@ internal fun RestoredAnchorBanner(
     throughPage: Int,
     onDismiss: () -> Unit,
     modifier: Modifier = Modifier,
+    onJump: (() -> Unit)? = null,
 ) {
     val colors = LocalRavenColors.current
     Row(
@@ -538,9 +628,9 @@ internal fun RestoredAnchorBanner(
             .clip(RavenShapes.ControlShape)
             .background(colors.surface1)
             .border(0.5.dp, colors.hairline, RavenShapes.ControlShape)
-            .padding(horizontal = 12.dp, vertical = 8.dp),
+            .padding(horizontal = 12.dp, vertical = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
     ) {
         Icon(
             imageVector = Icons.Rounded.AutoAwesome,
@@ -552,11 +642,27 @@ internal fun RestoredAnchorBanner(
             text = "上次浏览至第 $throughPage 页",
             style = MaterialTheme.typography.bodySmall.tabular(),
             color = colors.inkSecondary,
-            modifier = Modifier.weight(1f),
+            modifier = Modifier
+                .weight(1f)
+                .padding(start = 4.dp),
         )
+        if (onJump != null) {
+            TextButton(
+                onClick = onJump,
+                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                modifier = Modifier.heightIn(min = 48.dp),
+            ) {
+                Text(
+                    text = "定位",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = colors.crimson,
+                )
+            }
+        }
         TextButton(
             onClick = onDismiss,
             contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+            modifier = Modifier.heightIn(min = 48.dp),
         ) {
             Text(
                 text = "隐藏",

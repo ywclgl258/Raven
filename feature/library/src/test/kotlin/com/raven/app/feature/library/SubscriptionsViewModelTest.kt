@@ -304,4 +304,52 @@ class SubscriptionsViewModelTest {
             cancelAndIgnoreRemainingEvents()
         }
     }
+
+    @Test
+    fun `SubscriptionSyncRunner tracks empty initial baseline and shared state across refreshes`() = runTest {
+        val feed = mutableListOf<MediaItem>()
+        val plugin = FakeLibrarySitePlugin(
+            descriptor = SiteDescriptor(
+                id = SiteId.R34V,
+                displayName = "Rule34Video",
+                shortName = "R34V",
+                primaryKind = MediaKind.VIDEO,
+                defaultHost = "rule34video.com",
+            ),
+            searchHandler = { FeedPage(items = feed.toList()) },
+        )
+        val harness = LibraryTestHarness(
+            dispatcher = mainRule.dispatcher,
+            localRootDir = tempFolder.newFolder("sub-empty-baseline"),
+            plugins = listOf(plugin),
+        )
+        harness.subscriptionRepository.subscribe(
+            TagSubscription(
+                siteId = SiteId.R34V,
+                slug = "rare_tag",
+                label = "稀有标签",
+                url = "",
+                scope = SearchScope.TAG,
+            ),
+        )
+        val runner = SubscriptionSyncRunner(
+            subscriptionRepository = harness.subscriptionRepository,
+            blockedTermsRepository = harness.blockedTermsRepository,
+            preferencesRepository = harness.preferencesRepository,
+            siteRegistry = harness.siteRegistry,
+            dispatchers = harness.dispatchers,
+            clockMs = harness.clock,
+        )
+
+        // First check returns empty feed -> still marks baseline cleanly without unread items
+        val firstPass = runner.syncAll()
+        assertEquals(1, firstPass.baselinedSourceCount)
+        assertEquals(0, firstPass.newlyDiscoveredCount)
+
+        // Second check sees new item -> discovers 1 unread entry
+        feed += sampleMedia(SiteId.R34V, "new-1", title = "Fresh Hit")
+        val secondPass = runner.syncAll()
+        assertEquals(0, secondPass.baselinedSourceCount)
+        assertEquals(1, secondPass.newlyDiscoveredCount)
+    }
 }

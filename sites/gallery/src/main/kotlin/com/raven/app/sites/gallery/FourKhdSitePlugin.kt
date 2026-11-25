@@ -91,7 +91,7 @@ class FourKhdSitePlugin(
                     mediaKind = MediaKind.PHOTO,
                 ),
             ),
-            searchScopes = listOf(SearchScope.ALL),
+            searchScopes = listOf(SearchScope.ALL, SearchScope.TAG),
             networkProfile = SiteNetworkProfile(
                 referer = "https://www.4khd.com/",
                 mediaReferer = "https://www.4khd.com/",

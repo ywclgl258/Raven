@@ -1,9 +1,11 @@
 package com.raven.app.core.media
 
 import com.raven.app.core.database.repository.PreferencesRepository
+import com.raven.app.core.media.cast.LanCastManager
 import com.raven.app.core.media.download.DownloadCoordinator
 import com.raven.app.core.media.download.DownloadPolicyController
 import com.raven.app.core.media.download.GalleryDownloadEngine
+import com.raven.app.core.media.download.GalleryRetryWakeupWorker
 import com.raven.app.core.media.download.PlaybackQueueStore
 import com.raven.app.core.media.download.VideoDownloadEngine
 import com.raven.app.core.media.playback.DownloadCaches
@@ -21,6 +23,7 @@ import com.raven.app.core.network.NetworkQualifiers
 import com.raven.app.core.sitespi.SiteRegistry
 import kotlinx.coroutines.flow.first
 import org.koin.android.ext.koin.androidContext
+import org.koin.androidx.workmanager.dsl.workerOf
 import org.koin.core.module.Module
 import org.koin.dsl.module
 
@@ -189,6 +192,17 @@ val coreMediaModule: Module = module {
         PlaybackQueueStore(
             context = androidContext(),
             dispatchers = get(),
+            applicationScope = get(NetworkQualifiers.APPLICATION_SCOPE),
         )
     }
+
+    single {
+        LanCastManager(
+            context = androidContext(),
+            okHttpClient = get(NetworkQualifiers.MEDIA),
+            dispatchers = get(),
+        )
+    }
+
+    workerOf(::GalleryRetryWakeupWorker)
 }

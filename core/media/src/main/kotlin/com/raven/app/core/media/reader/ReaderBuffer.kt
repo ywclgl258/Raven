@@ -43,19 +43,21 @@ class ReaderBuffer<T : Any>(
     private val offscreenBudgetBytes: Long = DEFAULT_OFFSCREEN_BUDGET_BYTES,
     maxConcurrency: Int = MAX_CONCURRENT_LOADS,
     private val sharedRatios: MutableMap<Int, Float> = LinkedHashMap(),
+    private val prefetchAhead: Int = PREFETCH_AHEAD,
     private val loader: suspend (pageNumber: Int, forceReload: Boolean) -> T,
 ) {
     private val stateLock = Any()
     private val loadedPages = LinkedHashMap<Int, T>()
     private val pageErrors = LinkedHashMap<Int, String>()
     private val activeJobs = LinkedHashMap<Int, Job>()
-    private val everLoaded = LinkedHashSet<Int>()
+    private val evictedInCurrentAnchor = LinkedHashSet<Int>()
     private val permits = Semaphore(maxConcurrency.coerceAtLeast(1))
 
     private var anchorPage: Int = pageNumbers.firstOrNull() ?: 0
     private var visiblePages: Set<Int> = emptySet()
     private var lastOffscreenBytes: Long = 0L
     private var disposed: Boolean = false
+    private val effectivePrefetchAhead: Int = prefetchAhead.coerceIn(0, MAX_PREFETCH_AHEAD)
 
     private val _state = MutableStateFlow(
         ReaderBufferState<T>(
@@ -84,11 +86,15 @@ class ReaderBuffer<T : Any>(
             val index = pageNumbers.binarySearch(page)
             if (index < 0) return
 
+            val previousAnchor = anchorPage
             anchorPage = page
             visiblePages = visible
+            if (previousAnchor != anchorPage) {
+                evictedInCurrentAnchor.clear()
+            }
 
             val startIdx = (index - PREFETCH_BEHIND).coerceAtLeast(0)
-            val endExclusive = minOf(pageNumbers.size, index + PREFETCH_AHEAD + 1)
+            val endExclusive = minOf(pageNumbers.size, index + effectivePrefetchAhead + 1)
             val windowPages = pageNumbers.subList(startIdx, endExclusive)
             val keep = LinkedHashSet<Int>(visible.size + windowPages.size).apply {
                 addAll(visible)
@@ -110,8 +116,8 @@ class ReaderBuffer<T : Any>(
                 }
             }
 
-            // Prefetch [anchor - 1] and [anchor + 1 .. anchor + 3] once anchor is already ready.
-            if (anchorPage in everLoaded) {
+            // Prefetch [anchor - 1] and [anchor + 1 .. anchor + prefetchAhead] once anchor is ready.
+            if (anchorPage in loadedPages) {
                 if (startIdx < index) {
                     scheduleLocked(pageNumbers[startIdx], force = false, prefetch = true)?.let(jobsToStart::add)
                 }
@@ -139,7 +145,7 @@ class ReaderBuffer<T : Any>(
             previousJob = activeJobs.remove(pageNumber)
             loadedPages.remove(pageNumber)
             pageErrors.remove(pageNumber)
-            everLoaded.remove(pageNumber)
+            evictedInCurrentAnchor.remove(pageNumber)
             jobToStart = scheduleLocked(pageNumber, force = true, prefetch = false)
             emitSnapshotLocked()
         }
@@ -159,6 +165,7 @@ class ReaderBuffer<T : Any>(
             activeJobs.clear()
             loadedPages.clear()
             pageErrors.clear()
+            evictedInCurrentAnchor.clear()
             lastOffscreenBytes = 0L
             emitSnapshotLocked()
         }
@@ -168,7 +175,7 @@ class ReaderBuffer<T : Any>(
     private fun scheduleLocked(number: Int, force: Boolean, prefetch: Boolean): Job? {
         if (disposed) return null
         if (activeJobs[number]?.isActive == true) return null
-        if (!force && (number in loadedPages || number in pageErrors || (prefetch && number in everLoaded))) {
+        if (!force && (number in loadedPages || number in pageErrors || (prefetch && number in evictedInCurrentAnchor))) {
             return null
         }
         pageErrors.remove(number)
@@ -181,7 +188,7 @@ class ReaderBuffer<T : Any>(
                     if (disposed) return@launch
                     if (ratio != null) sharedRatios[number] = ratio
                     loadedPages[number] = result
-                    everLoaded.add(number)
+                    evictedInCurrentAnchor.remove(number)
                     pageErrors.remove(number)
                 }
             } catch (ce: CancellationException) {
@@ -226,6 +233,7 @@ class ReaderBuffer<T : Any>(
             if (usedBytes + size > offscreenBudgetBytes) {
                 // Evict reference ONLY — never call Bitmap.recycle().
                 loadedPages.remove(page)
+                evictedInCurrentAnchor.add(page)
             } else {
                 usedBytes += size
             }
@@ -249,6 +257,7 @@ class ReaderBuffer<T : Any>(
         const val DEFAULT_OFFSCREEN_BUDGET_BYTES: Long = 24L * 1024L * 1024L
         const val PREFETCH_BEHIND: Int = 1
         const val PREFETCH_AHEAD: Int = 3
+        const val MAX_PREFETCH_AHEAD: Int = 8
         const val MAX_CONCURRENT_LOADS: Int = 2
 
         fun forRenderedPages(
@@ -256,6 +265,7 @@ class ReaderBuffer<T : Any>(
             scope: CoroutineScope,
             sharedRatios: MutableMap<Int, Float> = LinkedHashMap(),
             offscreenBudgetBytes: Long = DEFAULT_OFFSCREEN_BUDGET_BYTES,
+            prefetchAhead: Int = PREFETCH_AHEAD,
             loader: suspend (pageNumber: Int, forceReload: Boolean) -> RenderedGalleryPage,
         ): ReaderBuffer<RenderedGalleryPage> = ReaderBuffer(
             pageNumbers = pageNumbers,
@@ -270,6 +280,7 @@ class ReaderBuffer<T : Any>(
             },
             offscreenBudgetBytes = offscreenBudgetBytes,
             sharedRatios = sharedRatios,
+            prefetchAhead = prefetchAhead,
             loader = loader,
         )
     }

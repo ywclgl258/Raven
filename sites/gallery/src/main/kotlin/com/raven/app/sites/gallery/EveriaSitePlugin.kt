@@ -66,7 +66,7 @@ class EveriaSitePlugin(
                     mediaKind = MediaKind.PHOTO,
                 ),
             ),
-            searchScopes = listOf(SearchScope.ALL),
+            searchScopes = listOf(SearchScope.ALL, SearchScope.TAG),
             networkProfile = SiteNetworkProfile(
                 referer = "https://everia.club/",
                 mediaReferer = "https://everia.club/",

@@ -14,12 +14,12 @@
 | **English Name** | `Raven` | `Raven Debug` | `app/src/main/res/values/strings.xml` / `app/src/debug/res/values/strings.xml` |
 | **Chinese Name** | `渡鸦` | `渡鸦 开发版` | `app/src/main/res/values-zh/strings.xml` / `app/src/debug/res/values-zh/strings.xml` |
 | **Application ID** | `com.raven.app` | `com.raven.app.debug` | `app/build.gradle.kts` (`applicationIdSuffix = ".debug"`) |
-| **Launcher Icon** | Adaptive Icon (API 26+) + legacy mipmaps | Same | Derived read-only from `D:\rule34\design\raven\raven-icon.svg`, `raven-foreground.svg`, `raven-monochrome.svg` |
+| **Launcher Icon** | Adaptive Icon (API 26+) + legacy mipmaps | Same | **02 绯红疾翼** (`docs/icon-concepts/02-crimson-wing-android/`): `adaptive-background.svg`, `adaptive-foreground.svg`, `adaptive-monochrome.svg` |
 
-**Adaptive Icon Specification** (from `raven-icon.svg` / `raven-foreground.svg` / `raven-monochrome.svg`):
-- **Background layer**: Vertical dark obsidian gradient `#1B1B20` -> `#07070A` with subtle `#FF4D58` (`12%` opacity) radial highlight centered at `(69%, 24%)`.
-- **Foreground layer**: Geometric silver-white raven (`#FFFFFF` -> `#D8D5D9` with faceted wing shading `#C9C7CC` / `#E4E1E4` / `#CCC9CE`) and Raven Crimson eye `#FF4D58`.
-- **Monochrome layer**: Solid silhouette cutout for Android 13+ themed icons (`raven-monochrome.svg`).
+**Adaptive Icon Specification** (from `docs/icon-concepts/02-crimson-wing-android/source/`):
+- **Background layer**: Solid Dark Obsidian `#09090B` (`108dp × 108dp`, `viewport 1254×1254`).
+- **Foreground layer**: Stylized winged raven silhouette in Raven Crimson `#FF4D58` (`108dp × 108dp`, `viewport 1254×1254`, aligned inside Android Adaptive Icon safe zone).
+- **Monochrome layer**: Matching pure white `#FFFFFF` silhouette (`108dp × 108dp`, `viewport 1254×1254`) for Android 13+ themed icons.
 
 ### 1.2 Locked Toolchain & API-36 Compatibility Matrix
 All versions in [libs.versions.toml](../gradle/libs.versions.toml) are verified against `compileSdk = 36`, `AGP 9.0.1`, and `JDK 17` (do **NOT** bump AndroidX/Compose/Coil past API-36 limits; `compose-bom:2026.08+`, `core-ktx:1.19+`, `lifecycle:2.11+`, `navigation:2.10+`, and `coil3:3.6+` require `minCompileSdk = 37`).
@@ -98,20 +98,20 @@ flowchart TD
 | 1 | `:core:model` | Pure JVM | `com.raven.app.core.model` | All `@Serializable` domain, feed, personal, backup models & `SiteException` | **LOCKED by Foundation Lead** — additive changes only with coordinator approval |
 | 2 | `:core:common` | Pure JVM | `com.raven.app.core.common` | `AppDispatchers`, `NaturalSortComparator`, `UrlSanitizer`, `ContentFilter`, `TagDictionary` (165 entries), `TimestampParser`, `PageSelectionParser` | **LOCKED by Foundation Lead** |
 | 3 | `:core:site-spi` | Pure JVM | `com.raven.app.core.sitespi` | Composable `SitePlugin` SPI, `HttpClientAdapter`, immutable `SiteRegistry`, 9 `SiteKit` pure-Kotlin utilities | **LOCKED by Foundation Lead** |
-| 4 | `:core:security` | Android Lib | `com.raven.app.core.security` | `SessionVault` (AndroidKeyStore AES-256-GCM), `BackupCodec` (`RVNBK01` + `R34VBK01` import), TLS/cert helpers | Core Infra Builder |
+| 4 | `:core:security` | Android Lib | `com.raven.app.core.security` | `SessionVault`, `PrivacyLockStore`, `WebDavCredentialStore` (AndroidKeyStore AES-256-GCM), `BackupCodec` (`RVNBK01` + `R34VBK01` import), TLS/cert helpers | Core Infra Builder |
 | 5 | `:core:network` | Android Lib | `com.raven.app.core.network` | Shared OkHttp pool (`page`/`api`/`image`/`media`/`probe`), coroutine `HostPacer`, `Ipv4FirstDns`, `SystemProxySelector`, `MediaRedirectCache`, encrypted `SiteCookieJar`, `SiteHttpClient`, single Coil3 `ImageLoader` | Core Infra Builder |
-| 6 | `:core:database` | Android Lib + KSP + Room | `com.raven.app.core.database` | `RavenDatabase`, 18 Room entities/DAOs, repositories, `SettingsDataStore` | Core Infra Builder |
-| 7 | `:core:designsystem` | Android Lib + Compose | `com.raven.app.core.designsystem` | Raven Obsidian × Apple HIG × Netflix Cinema tokens, typography, adaptive navigation shell, cards, sheets, HUD components | Design System Builder |
-| 8 | `:core:media` | Android Lib | `com.raven.app.core.media` | Media3 `PlayerSessionController`, `StreamSelection`, `StallPolicy`, 4-tier caches, `RouPngDataSource`, `GalleryPageStore` + `ImageStructure` + JMComic strip bitmap renderer, `DownloadCoordinator` (Video + Gallery), `StorageRootManager`, `LocalLibraryImporter`, `DuplicateScanner` | Media & Download Builder |
+| 6 | `:core:database` | Android Lib + KSP + Room | `com.raven.app.core.database` | `RavenDatabase`, 20 Room entities/DAOs (schema v3), repositories, `SettingsDataStore` (33 fixed keys) | Core Infra Builder |
+| 7 | `:core:designsystem` | Android Lib + Compose | `com.raven.app.core.designsystem` | Raven Obsidian × Apple HIG × Netflix Cinema tokens, typography, adaptive navigation shell (`>= 1200dp` Drawer), cards, sheets (`RavenShelfPickerSheet`), `RavenAppLockOverlay`, HUD components | Design System Builder |
+| 8 | `:core:media` | Android Lib | `com.raven.app.core.media` | Media3 `PlayerSessionController`, `LanCastManager`, `StreamSelection`, `StallPolicy`, 4-tier caches, `RouPngDataSource`, `GalleryPageStore` + `ImageStructure` + JMComic strip bitmap renderer, `DownloadCoordinator` (Video + Gallery), `StorageRootManager`, `LocalLibraryImporter`, `DuplicateScanner` | Media & Download Builder |
 | 9 | `:sites:video` | Android Lib | `com.raven.app.sites.video` | 8 video plugins: `r34v`, `hanime1`, `iwara` (dual-media), `missav`, `jable`, `rouvideo`, `kbjfree`, `pornhub` + JVM fixture tests | Video Sites Builder |
 | 10 | `:sites:comic` | Android Lib | `com.raven.app.sites.comic` | 6 comic plugins: `ehentai`, `exhentai`, `nhentai`, `hitomi`, `wnacg`, `jmcomic` + JVM fixture tests | Comic Sites Builder |
 | 11 | `:sites:gallery` | Android Lib | `com.raven.app.sites.gallery` | 5 photo plugins: `4khd`, `everia`, `4kup`, `galleryepic`, `cosplaytele` (dual-media Cossora) + shared `WordPressPhotoEngine` + JVM fixture tests | Photo/Gallery Sites Builder |
 | 12 | `:feature:browse` | Android Lib + Compose | `com.raven.app.feature.browse` | Video Cinema Home (Hero/Top 10/Shelves), Comic/Photo Masonry Home, Explore, Single/Cross-Site Search + Advanced Filters, Site Switcher Drawer, Site Functions, Directory | Browse Feature Builder |
-| 13 | `:feature:library` | Android Lib + Compose | `com.raven.app.feature.library` | Profile/Personal Home, Library Hub, Shelves, Smart Shelves, Favorites, History, Downloads Center, Image Favorites, Tag Subscriptions, Global Update Inbox, Local Import | Library Feature Builder |
-| 14 | `:feature:player` | Android Lib + Compose | `com.raven.app.feature.player` | Video Detail & Media3 Player UI, Visual Gestures HUD, Grouped BottomSheet Controls, Quality/Speed/Sleep/A-B Loop/Time Bookmarks, PiP Host | Player Feature Builder |
-| 15 | `:feature:reader` | Android Lib + Compose | `com.raven.app.feature.reader` | Gallery Detail (with embedded videos) & 4-mode Reader (`STRIP`/`LTR`/`RTL`/`SPREAD`), Zoom/Pan/Crop, 3-page prefetch + 24MiB budget, Thumbnail Sheet, Bookmarks, CBZ/Image Export | Reader Feature Builder |
-| 16 | `:feature:settings` | Android Lib + Compose | `com.raven.app.feature.settings` | Grouped Inset Settings, Site Accounts + `SiteAuthActivity` WebView FSM, Blocked Terms, Storage Migration, Duplicate Scanner, Encrypted Backup/Restore, GitHub Release Updater | Settings Feature Builder |
-| 17 | `:app` | Android App + Compose | `com.raven.app` | `RavenApplication` (Koin root), `MainActivity`, `PlayerActivity` (PiP), `SiteAuthActivity`, Type-Safe `NavHost`, adaptive shell, launcher icons, `network_security_config.xml` + `isrg_root_x1.pem` | App Integration Builder |
+| 13 | `:feature:library` | Android Lib + Compose | `com.raven.app.feature.library` | Profile/Personal Home, `StatsScreen`, Library Hub, Shelves, Smart Shelves, Favorites, History, Downloads Center, Image Favorites, Tag Subscriptions (`SubscriptionSyncRunner`), Global Update Inbox, Local Import | Library Feature Builder |
+| 14 | `:feature:player` | Android Lib + Compose | `com.raven.app.feature.player` | Video Detail & Media3 Player UI, Visual Gestures HUD, Track & Cast Sheets, Grouped BottomSheet Controls, Quality/Speed/Sleep/A-B Loop/Time Bookmarks, PiP Host | Player Feature Builder |
+| 15 | `:feature:reader` | Android Lib + Compose | `com.raven.app.feature.reader` | Gallery Detail (with embedded videos & custom shelf picker) & 4-mode Reader (`STRIP`/`LTR`/`RTL`/`SPREAD`), 3-zone tap, wide-page split, Zoom/Pan/Crop, Thumbnail Sheet, Bookmarks, CBZ/Image Export | Reader Feature Builder |
+| 16 | `:feature:settings` | Android Lib + Compose | `com.raven.app.feature.settings` | Grouped Inset Settings, Site Accounts + `SiteAuthActivity` WebView FSM, Blocked Terms, Storage Migration, Duplicate Scanner, Encrypted Backup/Restore, WebDAV Sync (`WebDavSyncClient`), Privacy Lock, GitHub Release Updater | Settings Feature Builder |
+| 17 | `:app` | Android App + Compose | `com.raven.app` | `RavenApplication` (Koin root + `RavenBackgroundMaintenanceWorker`), `MainActivity` (`RavenAppLockOverlay` + `FLAG_SECURE`), `PlayerActivity` (PiP), `SiteAuthActivity`, Type-Safe `NavHost`, adaptive shell, launcher icons, `network_security_config.xml` + `isrg_root_x1.pem` | App Integration Builder |
 
 ### 2.3 Hard Architectural Invariants for Parallel Builders
 1. **Zero global mutable site state**: `SiteRegistry` is strictly immutable. Every model, Room entity, DAO query, ViewModel state, and Navigation route takes an explicit `SiteId`.
@@ -133,10 +133,10 @@ Each module exposes a single top-level `val <moduleName>Module: Module` inside i
 
 | Module | Exported Koin Module | Registered Bindings |
 |---|---|---|
-| `:core:security` | `coreSecurityModule` | `SessionVault`, `BackupCodec`, `BackupValidator` |
+| `:core:security` | `coreSecurityModule` | `SessionVault`, `PrivacyLockStore`, `WebDavCredentialStore`, `BackupCodec`, `BackupValidator` |
 | `:core:network` | `coreNetworkModule` | `AppDispatchers`, `ApplicationScope`, `Ipv4FirstDns`, `SystemProxySelector`, `HostPacer`, `SiteCookieJar`, `OkHttpClient` (named: `page`, `api`, `image`, `media`, `probe`), `HttpClientAdapter` (`SiteHttpClient`), `ImageLoader` (Coil3) |
-| `:core:database` | `coreDatabaseModule` | `RavenDatabase`, all Room DAOs, `SettingsDataStore`, domain repositories (`HistoryRepository`, `FavoriteRepository`, `ShelfRepository`, `BookmarkRepository`, `SubscriptionRepository`, `DownloadStateRepository`, `BrowsePositionRepository`) |
-| `:core:media` | `coreMediaModule` | `DownloadCaches`, `PlayerSessionController`, `GalleryPageRepository`, `DownloadCoordinator`, `StorageRootManager`, `LocalLibraryImporter`, `DuplicateScanner`, WorkManager workers (`workerOf(...)`) |
+| `:core:database` | `coreDatabaseModule` | `RavenDatabase`, all 20 Room DAOs, `SettingsDataStore`, domain repositories (`HistoryRepository`, `FavoriteRepository`, `ShelfRepository`, `BookmarkRepository`, `SubscriptionRepository`, `DownloadStateRepository`, `BrowsePositionRepository`, `TagDictionaryRepository`, `MediaTagCacheRepository`) |
+| `:core:media` | `coreMediaModule` | `DownloadCaches`, `PlayerSessionController`, `LanCastManager`, `GalleryPageRepository`, `DownloadCoordinator`, `StorageRootManager`, `LocalLibraryImporter`, `DuplicateScanner`, WorkManager workers (`workerOf(...)`) |
 | `:sites:video` | `videoSitesModule` | 8 video `SitePlugin` singletons bound with `bind<SitePlugin>()` |
 | `:sites:comic` | `comicSitesModule` | 6 comic `SitePlugin` singletons bound with `bind<SitePlugin>()` |
 | `:sites:gallery` | `gallerySitesModule` | 5 gallery `SitePlugin` singletons bound with `bind<SitePlugin>()` |
@@ -279,20 +279,22 @@ sealed interface RavenRoute {
     ) : RavenRoute
 
     // Library Sub-Routes
-    @Serializable data object Downloads : RavenRoute
+    @Serializable data class Downloads(val siteId: String? = null) : RavenRoute
     @Serializable data class ShelfDetail(val shelfId: String) : RavenRoute
     @Serializable data class SmartShelfDetail(val smartShelfId: String) : RavenRoute
-    @Serializable data object Favorites : RavenRoute
+    @Serializable data class Favorites(val siteId: String? = null) : RavenRoute
     @Serializable data object History : RavenRoute
     @Serializable data object ImageFavorites : RavenRoute
     @Serializable data class Subscriptions(val siteId: String? = null) : RavenRoute
     @Serializable data object GlobalInbox : RavenRoute
     @Serializable data object LocalLibrary : RavenRoute
+    @Serializable data object Stats : RavenRoute
 
     // Settings & Workflow Sub-Routes (zero chained dialogs)
     @Serializable data object Settings : RavenRoute
     @Serializable data class SiteAccount(val siteId: String) : RavenRoute
     @Serializable data class BlockedTerms(val siteId: String) : RavenRoute
+    @Serializable data object TagDictionary : RavenRoute
     @Serializable data object BackupRestore : RavenRoute
     @Serializable data object StorageMigration : RavenRoute
     @Serializable data object DuplicateScanner : RavenRoute
@@ -305,7 +307,7 @@ sealed interface RavenRoute {
 
 Replaces R34V's monolithic single-key `SharedPreferences` JSON blob (`personal_library_v1`) and 13 blocking `.commit()` calls with normalized **Room SQLite (`2.8.5`)** + **Preferences DataStore (`1.3.0`)**.
 
-### 6.1 Room Database (`RavenDatabase`, schema v1)
+### 6.1 Room Database (`RavenDatabase`, schema v3)
 
 | Table Name | Primary Key | Key Indices | Purpose |
 |---|---|---|---|
@@ -327,6 +329,8 @@ Replaces R34V's monolithic single-key `SharedPreferences` JSON blob (`personal_l
 | `playback_preferences` | `site_id` (`"*"` for global) | — | Per-site speed, long-press speed, seek step, sensitivity, quality |
 | `reader_preferences` | `(site_id, media_id)` (`""` for site default) | `(site_id)` | Per-site & per-book mode, fit, crop, spread cover, original-image toggle |
 | `browse_positions` | `position_key` | `(updated_at DESC)` | Last 32 cross-process scroll restoration anchors (`workId`, `throughPage`, `shelfId`) |
+| `tag_translations` | `(source, namespace, raw_slug)` | `(source)`, `(chinese_name)` | Synchronized community/user Chinese tag dictionary translations |
+| `media_tag_cache` | `(site_id, media_id)` | `(site_id)`, `(updated_at DESC)` | Cached per-item tag metadata used for local filtering & blocking |
 
 All DAOs expose `Flow<List<T>>` / `Flow<T?>` so Compose screens react atomically with zero `revision++` hacks.
 
@@ -351,6 +355,12 @@ All DAOs expose `Flow<List<T>>` / `Flow<T?>` so Compose screens react atomically
 | `reduce_transparency` | `Boolean` | `false` | Replace API 31+ frosted blur with opaque dark scrim |
 | `auto_update_check` | `Boolean` | `true` | 12-hour background GitHub Release check |
 | `site_switch_tutorial_seen` | `Boolean` | `false` | Consumed once on fresh install before showing switcher hint |
+| `background_subscription_sync` | `Boolean` | `true` | Enable 12-hour background subscription inbox sync (`RavenBackgroundMaintenanceWorker`) |
+| `privacy_screen_secure` | `Boolean` | `false` | Apply `WindowManager.LayoutParams.FLAG_SECURE` across main & player windows |
+| `app_lock_enabled` | `Boolean` | `false` | Require PIN / biometric unlock overlay on launch and after background timeout |
+| `app_lock_timeout_seconds` | `Int` | `0` | Grace timeout in seconds before re-locking after returning from background |
+| `incognito_mode` | `Boolean` | `false` | Skip watch/reading history writes and display incognito indicator strip |
+| `webdav_server_url` / `username` / `remote_path` / `last_sync_epoch_ms` | `String` / `Long` | `""` / `0L` | WebDAV encrypted backup sync configuration & timestamp (credentials in `WebDavCredentialStore`) |
 
 ---
 

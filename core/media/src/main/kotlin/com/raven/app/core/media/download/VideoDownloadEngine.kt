@@ -48,6 +48,8 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
@@ -108,6 +110,7 @@ data class VideoDownloadMeta(
     val groupName: String = "",
     val priority: Int = 0,
     val createdAt: Long = 0L,
+    val headers: Map<String, String> = emptyMap(),
 )
 
 /**
@@ -137,6 +140,7 @@ class VideoDownloadEngine(
     private val refreshedOnce = ConcurrentHashMap.newKeySet<String>()
     private val refreshJobs = ConcurrentHashMap<String, Job>()
     private val submittedIds = ConcurrentHashMap.newKeySet<String>()
+    private val projectionMutex = Mutex()
 
     private val _changes = MutableStateFlow(0L)
     val changes: StateFlow<Long> = _changes.asStateFlow()
@@ -146,7 +150,8 @@ class VideoDownloadEngine(
             cache = downloadCaches.downloadCache(),
             upstreamFactoryProvider = { request ->
                 val ownerSiteId = parseSiteIdFromDownloadId(request.id)
-                transportFactory.createFactory(siteId = ownerSiteId)
+                val headers = decodeMetaBytes(request.data)?.headers.orEmpty()
+                transportFactory.createFactory(siteId = ownerSiteId, extraHeaders = headers)
             },
             hookProvider = { request ->
                 val ownerSiteId = parseSiteIdFromDownloadId(request.id)
@@ -230,20 +235,28 @@ class VideoDownloadEngine(
     }
 
     fun setRequirements(requirements: Requirements) {
-        manager.requirements = requirements
+        applicationScope.launch(dispatchers.main) {
+            manager.requirements = requirements
+        }
     }
 
     fun pauseAllForTimeout() {
-        manager.pauseDownloads()
+        applicationScope.launch(dispatchers.main) {
+            manager.pauseDownloads()
+        }
     }
 
     fun pauseAll() {
-        manager.pauseDownloads()
+        applicationScope.launch(dispatchers.main) {
+            manager.pauseDownloads()
+        }
     }
 
     fun resumeAll() {
         storageRootManager.checkDownloadsAllowed()
-        manager.resumeDownloads()
+        applicationScope.launch(dispatchers.main) {
+            manager.resumeDownloads()
+        }
     }
 
     fun enqueue(
@@ -264,6 +277,7 @@ class VideoDownloadEngine(
             groupName = groupName.trim(),
             priority = priority,
             createdAt = clockMs(),
+            headers = stream.headers,
         )
         return enqueueInternal(meta, stream, expectedGeneration = null)
     }
@@ -388,9 +402,11 @@ class VideoDownloadEngine(
         }
     }
 
-    fun decodeMeta(download: Download): VideoDownloadMeta? = runCatching {
-        if (download.request.data.isEmpty()) return null
-        json.decodeFromString(VideoDownloadMeta.serializer(), String(download.request.data, Charsets.UTF_8))
+    fun decodeMeta(download: Download): VideoDownloadMeta? = decodeMetaBytes(download.request.data)
+
+    private fun decodeMetaBytes(data: ByteArray): VideoDownloadMeta? = runCatching {
+        if (data.isEmpty()) return null
+        json.decodeFromString(VideoDownloadMeta.serializer(), String(data, Charsets.UTF_8))
     }.getOrNull()
 
     fun isCached(cacheKey: String, sourceRoot: String = ""): Boolean =
@@ -404,49 +420,51 @@ class VideoDownloadEngine(
     }
 
     private suspend fun projectDownloadToRepository(download: Download, finalException: Exception?) {
-        val id = download.request.id
-        if (generationGuard.isRemoving(id)) return
-        val meta = decodeMeta(download) ?: return
-        val existing = downloadStateRepository.getById(id)
-        val status = mapMedia3State(download)
-        val classified = if (status == DownloadStatus.FAILED && finalException != null) {
-            DownloadErrorClassifier.classify(finalException, DownloadStage.DOWNLOADING_PAGE, clockMs())
-        } else {
-            null
+        projectionMutex.withLock {
+            val id = download.request.id
+            if (generationGuard.isRemoving(id)) return
+            val meta = decodeMeta(download) ?: return
+            val existing = downloadStateRepository.getById(id)
+            val status = mapMedia3State(download)
+            val classified = if (status == DownloadStatus.FAILED && finalException != null) {
+                DownloadErrorClassifier.classify(finalException, DownloadStage.DOWNLOADING_PAGE, clockMs())
+            } else {
+                null
+            }
+            val fraction = when {
+                status == DownloadStatus.COMPLETED -> 1f
+                download.percentDownloaded >= 0f -> (download.percentDownloaded / 100f).coerceIn(0f, 1f)
+                else -> existing?.progressFraction ?: 0f
+            }
+            val totalBytes = download.contentLength.takeIf { it > 0L } ?: existing?.totalBytes
+            downloadStateRepository.upsert(
+                DownloadItem(
+                    id = id,
+                    siteId = meta.siteId,
+                    mediaId = meta.mediaId,
+                    url = meta.url,
+                    title = meta.title,
+                    coverUrl = meta.coverUrl,
+                    kind = DownloadKind.VIDEO,
+                    status = status,
+                    quality = meta.quality,
+                    groupName = existing?.groupName ?: meta.groupName,
+                    progressFraction = fraction,
+                    completedUnits = if (status == DownloadStatus.COMPLETED) 1 else 0,
+                    totalUnits = 1,
+                    downloadedBytes = download.bytesDownloaded.coerceAtLeast(0L),
+                    totalBytes = totalBytes,
+                    errorCategory = classified?.category
+                        ?: if (status == DownloadStatus.FAILED) DownloadErrorCategory.NETWORK else null,
+                    errorMessage = classified?.message ?: if (status == DownloadStatus.FAILED) "视频下载失败" else null,
+                    priority = existing?.priority ?: meta.priority,
+                    storageLocation = existing?.storageLocation ?: storageRootManager.activeLocation(),
+                    localPath = existing?.localPath ?: storageRootManager.layout().root.absolutePath,
+                    createdAt = existing?.createdAt ?: meta.createdAt.takeIf { it > 0L } ?: download.startTimeMs,
+                    updatedAt = clockMs(),
+                ),
+            )
         }
-        val fraction = when {
-            status == DownloadStatus.COMPLETED -> 1f
-            download.percentDownloaded >= 0f -> (download.percentDownloaded / 100f).coerceIn(0f, 1f)
-            else -> existing?.progressFraction ?: 0f
-        }
-        val totalBytes = download.contentLength.takeIf { it > 0L } ?: existing?.totalBytes
-        downloadStateRepository.upsert(
-            DownloadItem(
-                id = id,
-                siteId = meta.siteId,
-                mediaId = meta.mediaId,
-                url = meta.url,
-                title = meta.title,
-                coverUrl = meta.coverUrl,
-                kind = DownloadKind.VIDEO,
-                status = status,
-                quality = meta.quality,
-                groupName = existing?.groupName ?: meta.groupName,
-                progressFraction = fraction,
-                completedUnits = if (status == DownloadStatus.COMPLETED) 1 else 0,
-                totalUnits = 1,
-                downloadedBytes = download.bytesDownloaded.coerceAtLeast(0L),
-                totalBytes = totalBytes,
-                errorCategory = classified?.category
-                    ?: if (status == DownloadStatus.FAILED) DownloadErrorCategory.NETWORK else null,
-                errorMessage = classified?.message ?: if (status == DownloadStatus.FAILED) "视频下载失败" else null,
-                priority = existing?.priority ?: meta.priority,
-                storageLocation = storageRootManager.activeLocation(),
-                localPath = storageRootManager.layout().root.absolutePath,
-                createdAt = existing?.createdAt ?: meta.createdAt.takeIf { it > 0L } ?: download.startTimeMs,
-                updatedAt = clockMs(),
-            ),
-        )
     }
 
     private fun writeCompletedSidecar(download: Download, meta: VideoDownloadMeta) {

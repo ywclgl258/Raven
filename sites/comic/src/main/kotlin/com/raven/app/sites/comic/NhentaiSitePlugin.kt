@@ -498,8 +498,11 @@ class NhentaiSitePlugin(
                 ?: throw SiteException.ParseError("nhentai 未返回画廊列表", siteId = SiteId.NHENTAI)
             totalPages = (obj.intOrZero("num_pages")).coerceAtLeast(1)
         }
-        val items = itemsArray.map { el ->
-            parseMediaItem(el.asObjectOrThrow("nhentai 画廊项无效"), cdn)
+        val items = itemsArray.mapNotNull { el ->
+            (el as? JsonObject)?.let { obj -> runCatching { parseMediaItem(obj, cdn) }.getOrNull() }
+        }
+        if (items.isEmpty() && itemsArray.isNotEmpty()) {
+            throw SiteException.ParseError("nhentai 画廊项解析全部失败", siteId = SiteId.NHENTAI)
         }
         val hasMore = page < totalPages && items.isNotEmpty()
         return FeedPage(
@@ -684,11 +687,8 @@ class NhentaiSitePlugin(
 
     internal fun buildValidatedMediaUrl(host: String, rawPath: String, mediaId: String): String {
         val cleaned = HtmlUrlCleaner.deduplicateImageExtension(rawPath.trim().trimStart('/'))
-        val pattern = Regex(
-            """^galleries/${Regex.escape(mediaId)}/[A-Za-z0-9_.-]+\.(?:webp|jpg|jpeg|png|gif)$""",
-            RegexOption.IGNORE_CASE,
-        )
-        if (!pattern.matches(cleaned)) {
+        val match = GALLERY_SUBPATH_REGEX.matchEntire(cleaned)
+        if (match == null || match.groupValues[1] != mediaId) {
             throw SiteException.ParseError("nhentai 图片地址无效：$rawPath", siteId = SiteId.NHENTAI)
         }
         return "${host.trimEnd('/')}/$cleaned"
@@ -764,6 +764,10 @@ class NhentaiSitePlugin(
         private val ALLOWED_CDN_HOST_REGEX = Regex("""^[it]\d*\.nhentai\.net$""")
         private val GALLERY_PATH_REGEX = Regex("""^/g/(\d+)/?$""")
         private val PAGE_PATH_REGEX = Regex("""^/g/(\d+)/(\d+)/?$""")
+        private val GALLERY_SUBPATH_REGEX = Regex(
+            """^galleries/(\d+)/[A-Za-z0-9_.-]+\.(?:webp|jpg|jpeg|png|gif)$""",
+            RegexOption.IGNORE_CASE,
+        )
         private val DIGITS_ONLY_REGEX = Regex("""^\d+$""")
         private val LINK_FACET_TYPES = setOf("tag", "artist", "group", "parody", "character", "language", "category")
 

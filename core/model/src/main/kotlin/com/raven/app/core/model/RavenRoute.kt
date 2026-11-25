@@ -70,7 +70,9 @@ sealed interface RavenRoute {
 
     // Library Sub-Routes
     @Serializable
-    data object Downloads : RavenRoute
+    data class Downloads(
+        val siteId: String? = null,
+    ) : RavenRoute
 
     @Serializable
     data class ShelfDetail(
@@ -83,7 +85,9 @@ sealed interface RavenRoute {
     ) : RavenRoute
 
     @Serializable
-    data object Favorites : RavenRoute
+    data class Favorites(
+        val siteId: String? = null,
+    ) : RavenRoute
 
     @Serializable
     data object History : RavenRoute
@@ -101,6 +105,9 @@ sealed interface RavenRoute {
 
     @Serializable
     data object LocalLibrary : RavenRoute
+
+    @Serializable
+    data object Stats : RavenRoute
 
     // Settings & Workflow Sub-Routes (zero chained AlertDialogs)
     @Serializable

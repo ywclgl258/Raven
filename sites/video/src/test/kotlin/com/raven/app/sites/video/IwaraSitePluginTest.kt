@@ -332,4 +332,37 @@ class IwaraSitePluginTest {
             IwaraSitePlugin.resolveFeedUrl(FeedRequest(SiteId.IWARA, query = "miku", sort = FeedSort.POPULAR)),
         )
     }
+
+    @Test
+    fun `iwara bypasses cache on signed source lookup and surfaces ParseError on malformed root`() = runTest {
+        val fakeHttp = FakeHttpClientAdapter()
+        val store = InMemorySiteSessionStore()
+        val allowCacheFlags = mutableListOf<Boolean>()
+        fakeHttp.onGet(
+            "https://apiq.iwara.tv/video/vid111",
+            body = """{"id":"vid111","title":"Demo","fileUrl":"https://filesq.iwara.tv/file/f1?expires=9999999999"}""",
+        )
+        fakeHttp.onGet("https://apiq.iwara.tv/video/vid111/related", body = """{"results":[]}""")
+        fakeHttp.onGet("https://apiq.iwara.tv/video/vid111/comments?limit=12&page=0", body = """{"results":[]}""")
+        fakeHttp.onGetDynamic("https://filesq.iwara.tv/file/f1?expires=9999999999") { req ->
+            allowCacheFlags += req.allowCache
+            SiteHttpResponse(
+                code = 200,
+                finalUrl = req.url,
+                body = """[{"name":"720","src":{"view":"//cdn.iwara.tv/720.mp4","download":"//cdn.iwara.tv/720_dl.mp4"}}]""".toByteArray(),
+            )
+        }
+        val plugin = IwaraSitePlugin(fakeHttp, store, rateLimitBackoffMs = 0L)
+        val detail = plugin.videoSource.loadVideoDetail("https://www.iwara.tv/video/vid111/demo")
+        assertEquals(listOf("720p"), detail.streams.map { it.label })
+        assertTrue(allowCacheFlags.isNotEmpty() && allowCacheFlags.all { !it })
+
+        fakeHttp.onGet("https://apiq.iwara.tv/video/badjson", body = """["unexpected","array"]""")
+        try {
+            plugin.videoSource.loadVideoDetail("https://www.iwara.tv/video/badjson/demo")
+            fail("Expected SiteException.ParseError")
+        } catch (_: SiteException.ParseError) {
+            // expected
+        }
+    }
 }

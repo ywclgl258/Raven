@@ -2,13 +2,14 @@ package com.raven.app.core.network
 
 import com.raven.app.core.model.SiteDescriptor
 import com.raven.app.core.model.SiteId
+import com.raven.app.core.security.SessionVaultException
 import com.raven.app.core.sitespi.SitePlugin
 import com.raven.app.core.sitespi.SiteRegistry
 import com.raven.app.core.sitespi.SiteSessionStore
+import java.util.Locale
 import okhttp3.Cookie
 import okhttp3.CookieJar
 import okhttp3.HttpUrl
-import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 
 /**
@@ -50,22 +51,26 @@ class SiteCookieJar(
         val now = clockMs()
 
         synchronized(lock) {
-            val bucket = loadSiteCookiesLocked(plugin, now).toMutableList()
-            var mutated = false
-            for (cookie in cookies) {
-                if (!descriptor.matchesHost(cookie.domain)) continue
-                bucket.removeAll { existing ->
-                    existing.name == cookie.name &&
-                        existing.domain.equals(cookie.domain, ignoreCase = true) &&
-                        existing.path == cookie.path
+            try {
+                val bucket = loadSiteCookiesLocked(plugin, now).toMutableList()
+                var mutated = false
+                for (cookie in cookies) {
+                    if (!descriptor.matchesHost(cookie.domain)) continue
+                    bucket.removeAll { existing ->
+                        existing.name == cookie.name &&
+                            existing.domain.equals(cookie.domain, ignoreCase = true) &&
+                            existing.path == cookie.path
+                    }
+                    if (cookie.expiresAt > now) {
+                        bucket.add(cookie)
+                    }
+                    mutated = true
                 }
-                if (cookie.expiresAt > now) {
-                    bucket.add(cookie)
+                if (mutated) {
+                    persistSiteCookiesLocked(plugin.id, bucket)
                 }
-                mutated = true
-            }
-            if (mutated) {
-                persistSiteCookiesLocked(plugin.id, bucket)
+            } catch (_: SessionVaultException) {
+                // Skip persisting when KeyStore decryption/encryption fails rather than crashing requests.
             }
         }
     }
@@ -167,7 +172,7 @@ class SiteCookieJar(
             }
         }
 
-        val defaultBareHost = descriptor.defaultHost.trim().lowercase().removePrefix("www.")
+        val defaultBareHost = descriptor.defaultHost.trim().lowercase(Locale.ROOT).removePrefix("www.")
         for ((name, rawVal) in plainMap) {
             if (name in matchedPlainNames) continue
             if (rawVal.startsWith(HOST_ONLY_PREFIX) || rawVal.startsWith(DOMAIN_PREFIX)) {
@@ -227,7 +232,7 @@ class SiteCookieJar(
             if (raw.startsWith(HOST_ONLY_PREFIX)) {
                 val parts = raw.split('\u0001', limit = 3)
                 if (parts.size < 3) return null
-                val host = parts[1].trim().lowercase()
+                val host = parts[1].trim().lowercase(Locale.ROOT)
                 val header = parts[2]
                 if (!descriptor.matchesHost(host)) return null
                 val url = "https://$host/".toHttpUrlOrNull() ?: return null
@@ -243,7 +248,7 @@ class SiteCookieJar(
                 ?.substringAfter('=', "")
                 ?.trim()
                 ?.removePrefix(".")
-                ?.lowercase()
+                ?.lowercase(Locale.ROOT)
 
             if (domainAttr.isNullOrEmpty()) {
                 if (markedDomain) return null
@@ -252,7 +257,7 @@ class SiteCookieJar(
             }
 
             if (!descriptor.matchesHost(domainAttr)) return null
-            val url = "https://$domainAttr/".toHttpUrl()
+            val url = "https://$domainAttr/".toHttpUrlOrNull() ?: return null
             return Cookie.parse(url, header)
                 ?.takeIf { !it.hostOnly && it.domain.equals(domainAttr, ignoreCase = true) }
         }

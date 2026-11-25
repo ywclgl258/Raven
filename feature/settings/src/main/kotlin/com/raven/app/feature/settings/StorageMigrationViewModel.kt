@@ -98,7 +98,6 @@ class StorageMigrationViewModel(
         StorageMigrationUiState(
             privatePath = storageRootManager.layoutOf(StorageLocation.PRIVATE).root.path,
             sharedSupported = storageRootManager.isSharedSupported(),
-            status = runCatching { storageRootManager.status() }.getOrNull(),
         ),
     )
     val uiState: StateFlow<StorageMigrationUiState> = _uiState.asStateFlow()
@@ -112,9 +111,7 @@ class StorageMigrationViewModel(
     fun refreshStatus() {
         viewModelScope.launch {
             _uiState.update { it.copy(isRefreshing = true) }
-            val refreshed = withContext(dispatchers.io) {
-                storageRootManager.status()
-            }
+            val refreshed = storageRootManager.statusAsync()
             _uiState.update {
                 it.copy(
                     privatePath = storageRootManager.layoutOf(StorageLocation.PRIVATE).root.path,
@@ -168,7 +165,7 @@ class StorageMigrationViewModel(
                         }
                     }
                 }
-                val refreshed = withContext(dispatchers.io) { storageRootManager.status() }
+                val refreshed = storageRootManager.statusAsync()
                 _uiState.update {
                     it.copy(
                         status = refreshed,
@@ -180,7 +177,7 @@ class StorageMigrationViewModel(
                     )
                 }
             } catch (ce: CancellationException) {
-                val refreshed = runCatching { withContext(dispatchers.io) { storageRootManager.status() } }.getOrNull()
+                val refreshed = runCatching { storageRootManager.statusAsync() }.getOrNull()
                 _uiState.update {
                     it.copy(
                         status = refreshed ?: it.status,
@@ -191,7 +188,7 @@ class StorageMigrationViewModel(
                 }
                 throw ce
             } catch (e: Exception) {
-                val refreshed = runCatching { withContext(dispatchers.io) { storageRootManager.status() } }.getOrNull()
+                val refreshed = runCatching { storageRootManager.statusAsync() }.getOrNull()
                 _uiState.update {
                     it.copy(
                         status = refreshed ?: it.status,
@@ -216,7 +213,7 @@ class StorageMigrationViewModel(
                 withContext(dispatchers.io) {
                     storageRootManager.requestDeferredSwitch(StorageLocation.PRIVATE)
                 }
-                val refreshed = withContext(dispatchers.io) { storageRootManager.status() }
+                val refreshed = storageRootManager.statusAsync()
                 _uiState.update {
                     it.copy(
                         status = refreshed,

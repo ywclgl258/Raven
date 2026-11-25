@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="raven_nav_home">Home</string>
+    <string name="raven_nav_explore">Explore</string>
+    <string name="raven_nav_search">Search</string>
+    <string name="raven_nav_library">Library</string>
+    <string name="raven_nav_profile">Profile</string>
+    <string name="raven_retry">Retry</string>
+    <string name="raven_load_failed">Load failed</string>
+    <string name="raven_incognito_banner">Incognito Mode Active · History &amp; search records paused</string>
+    <string name="raven_shelf_picker_title">Add to Shelf</string>
+    <string name="raven_shelf_create_hint">New shelf name</string>
+    <string name="raven_shelf_create_action">Create</string>
+    <string name="raven_lock_title">Enter PIN to unlock Raven</string>
+    <string name="raven_lock_biometric">Use Biometrics</string>
+    <string name="raven_lock_confirm">Unlock</string>
+</resources>

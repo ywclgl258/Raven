@@ -13,6 +13,7 @@ import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import kotlin.io.encoding.Base64
@@ -335,7 +336,8 @@ class JavAndStreamVideoPluginsTest {
                         "mediaDefinitions": [
                             {"defaultQuality": false, "format": "hls", "height": 480, "videoUrl": "https:\/\/ev-h.phncdn.com\/480p.m3u8"},
                             {"defaultQuality": true, "height": 1080, "format": "hls", "videoUrl": "https:\/\/ev-h.phncdn.com\/1080p.m3u8"},
-                            {"defaultQuality": false, "height": 720, "format": "mp4", "videoUrl": "https:\/\/www.pornhub.com\/video\/get_media?s=mp4"}
+                            {"defaultQuality": false, "height": 720, "format": "mp4", "videoUrl": "https:\/\/ev.phncdn.com\/720p.mp4"},
+                            {"defaultQuality": false, "height": 360, "format": "mp4", "videoUrl": "https:\/\/www.pornhub.com\/video\/get_media?s=mp4"}
                         ]
                     };
                 </script>
@@ -362,7 +364,7 @@ class JavAndStreamVideoPluginsTest {
         assertEquals("https://ew.phncdn.com/mprev.webm", mobileFeed.items.single().previewUrl)
 
         val detail = plugin.videoSource.loadVideoDetail("https://pornhub.com/view_video.php?viewkey=ph654321abcd")
-        assertEquals(listOf("1080p", "480p", "原画"), detail.streams.map { it.label })
+        assertEquals(listOf("1080p", "480p", "720p MP4"), detail.streams.map { it.label })
         assertTrue(detail.streams[0].isHls)
         assertTrue(detail.streams[1].isHls)
         assertFalse(detail.streams[2].isHls)
@@ -462,5 +464,54 @@ class JavAndStreamVideoPluginsTest {
         assertEquals(listOf(FeedSort.NEWEST), kbj.searchSource.supportedSearchSorts(SearchScope.ALL))
         val rou = RouvideoSitePlugin(http, rateLimitBackoffMs = 0L)
         assertEquals(listOf(FeedSort.NEWEST), rou.searchSource.supportedSearchSorts(SearchScope.ALL))
+    }
+
+    @Test
+    fun `pornhub missav kbjfree enforce strict viewkey paths, mp4 quality labels, and bounded RSC windows`() = runTest {
+        assertNull(PornhubSitePlugin.extractViewKey("https://www.pornhub.com/categories/japanese-censored"))
+        assertNull(PornhubSitePlugin.extractViewKey("https://www.pornhub.com/pornstar/superlongname"))
+        assertEquals("ph1234567890", PornhubSitePlugin.extractViewKey("https://www.pornhub.com/embed/ph1234567890"))
+        assertEquals("ph1234567890", PornhubSitePlugin.extractViewKey("https://www.pornhub.com/view_video.php?viewkey=ph1234567890"))
+
+        assertNull(MissavSitePlugin.canonicalVideoUrl("https://missav.ws/genres/abc-123"))
+        assertNull(MissavSitePlugin.canonicalVideoUrl("https://missav.ws/search/midv-100"))
+        assertEquals("https://missav.ws/midv-100", MissavSitePlugin.canonicalVideoUrl("https://missav.media/cn/midv-100?ref=1"))
+        assertEquals("https://missav.ws/midv-100", MissavSitePlugin.canonicalVideoUrl("https://missav.ws/dm2/midv-100"))
+
+        val fakeHttp = FakeHttpClientAdapter()
+        fakeHttp.onGet(
+            "https://www.pornhub.com/view_video.php?viewkey=phmp4multi11",
+            body = """
+                <html><body>
+                <h1 class="title"><span>Multi MP4</span></h1>
+                <script>
+                    var flashvars_99 = {
+                        "mediaDefinitions": [
+                            {"format": "mp4", "height": 1080, "videoUrl": "https:\/\/ev.phncdn.com\/1080.mp4"},
+                            {"format": "mp4", "height": 720, "videoUrl": "https:\/\/ev.phncdn.com\/720.mp4"}
+                        ]
+                    };
+                </script>
+                </body></html>
+            """.trimIndent(),
+        )
+        val ph = PornhubSitePlugin(fakeHttp, rateLimitBackoffMs = 0L)
+        val phDetail = ph.videoSource.loadVideoDetail("https://www.pornhub.com/view_video.php?viewkey=phmp4multi11")
+        assertEquals(listOf("1080p MP4", "720p MP4"), phDetail.streams.map { it.label })
+
+        val firstUuid = "11111111-1111-1111-1111-111111111111"
+        val secondUuid = "22222222-2222-2222-2222-222222222222"
+        val kbjHtml = """
+            <script>self.__next_f.push([1,"{\"id\":\"$firstUuid\",\"name\":\"First Clip\",\"categoryId\":\"1\"}{\"id\":\"$secondUuid\",\"name\":\"Second Clip\",\"categoryId\":\"1\",\"mainThumbUrl\":\"https://cdn.kbjfree.com/2.jpg\"}"])</script>
+        """.trimIndent()
+        val cards = KbjfreeSitePlugin.parseCards(kbjHtml)
+        assertEquals(2, cards.size)
+        assertEquals("", cards[0].coverUrl)
+        assertEquals("https://cdn.kbjfree.com/2.jpg", cards[1].coverUrl)
+
+        val hlsDoc = org.jsoup.Jsoup.parse("""<html><body><video src="https://cdn.kbjfree.com/p/stream.m3u8?tok=1"></video></body></html>""")
+        val hlsStreams = KbjfreeSitePlugin.extractPreviewStreams(hlsDoc)
+        assertTrue(hlsStreams.single().isHls)
+        assertEquals("application/vnd.apple.mpegurl", hlsStreams.single().mimeTypeHint)
     }
 }

@@ -101,7 +101,7 @@ abstract class RavenDatabase : RoomDatabase() {
 
     companion object {
         const val DATABASE_NAME: String = "raven.db"
-        const val SCHEMA_VERSION: Int = 2
+        const val SCHEMA_VERSION: Int = 3
         const val DEFAULT_WATCH_LATER_NAME: String = "稍后看"
 
         val MIGRATION_1_2: Migration = object : Migration(1, 2) {
@@ -145,6 +145,17 @@ abstract class RavenDatabase : RoomDatabase() {
             }
         }
 
+        val MIGRATION_2_3: Migration = object : Migration(2, 3) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS `index_shelf_items_site_id_media_id` ON `shelf_items` (`site_id`, `media_id`)",
+                )
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS `index_update_inbox_site_id_discovered_at` ON `update_inbox` (`site_id` ASC, `discovered_at` DESC)",
+                )
+            }
+        }
+
         private val watchLaterSeedCallback = object : Callback() {
             override fun onCreate(db: SupportSQLiteDatabase) {
                 super.onCreate(db)
@@ -166,7 +177,7 @@ abstract class RavenDatabase : RoomDatabase() {
                 RavenDatabase::class.java,
                 DATABASE_NAME,
             )
-                .addMigrations(MIGRATION_1_2)
+                .addMigrations(MIGRATION_1_2, MIGRATION_2_3)
                 .addCallback(watchLaterSeedCallback)
                 .build()
     }

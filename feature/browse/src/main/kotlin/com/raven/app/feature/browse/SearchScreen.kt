@@ -73,6 +73,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.raven.app.core.common.TagSuggestion
+import com.raven.app.core.database.model.ShelfWithSummary
 import com.raven.app.core.designsystem.component.RavenBottomSheet
 import com.raven.app.core.designsystem.component.RavenEmptyState
 import com.raven.app.core.designsystem.component.RavenErrorState
@@ -123,6 +124,8 @@ fun SearchScreen(
     ),
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
+    val shelves by viewModel.shelfPickerShelves.collectAsStateWithLifecycle()
+    val inspectedShelfIds by viewModel.inspectedShelfIds.collectAsStateWithLifecycle()
 
     SearchScreenContent(
         uiState = uiState,
@@ -156,6 +159,11 @@ fun SearchScreen(
         onLoadMoreCrossSite = viewModel::loadMoreCrossSite,
         onLoadMoreSingleSite = viewModel::loadNextSingleSitePage,
         onToggleWatchLater = viewModel::toggleWatchLater,
+        shelves = shelves,
+        selectedShelfIds = inspectedShelfIds,
+        onInspectShelfTarget = viewModel::inspectShelfTarget,
+        onToggleShelfMembership = viewModel::setShelfMembership,
+        onCreateShelfAndAdd = viewModel::createShelfAndAdd,
         modifier = modifier,
     )
 }
@@ -192,6 +200,11 @@ fun SearchScreenContent(
     onLoadMoreSingleSite: () -> Unit,
     onToggleWatchLater: (MediaItem) -> Unit,
     modifier: Modifier = Modifier,
+    shelves: List<ShelfWithSummary> = emptyList(),
+    selectedShelfIds: Set<String> = emptySet(),
+    onInspectShelfTarget: (MediaItem?) -> Unit = {},
+    onToggleShelfMembership: (shelfId: String, item: MediaItem, add: Boolean) -> Unit = { _, _, _ -> },
+    onCreateShelfAndAdd: (name: String, item: MediaItem) -> Unit = { _, _ -> },
 ) {
     val colors = LocalRavenColors.current
     var showSiteSwitcher by rememberSaveable { mutableStateOf(false) }
@@ -333,7 +346,7 @@ fun SearchScreenContent(
                 )
                 IconButton(
                     onClick = onDismissSavedNotice,
-                    modifier = Modifier.size(28.dp),
+                    modifier = Modifier.size(48.dp),
                 ) {
                     Icon(
                         imageVector = Icons.Rounded.Close,
@@ -358,7 +371,7 @@ fun SearchScreenContent(
                 items(uiState.tagSuggestions, key = { it.slug }) { sug ->
                     Row(
                         modifier = Modifier
-                            .heightIn(min = 34.dp)
+                            .heightIn(min = 48.dp)
                             .clip(RavenShapes.PillShape)
                             .background(colors.surface2)
                             .border(0.5.dp, colors.hairline, RavenShapes.PillShape)
@@ -486,6 +499,7 @@ fun SearchScreenContent(
                             onToggleFilterSite = onToggleCrossSiteFilter,
                             onRetrySite = onRetryCrossSite,
                             onLoadMoreSite = onLoadMoreCrossSite,
+                            onRetryAll = onSubmitSearch,
                             onItemLongClick = { actionTargetItem = it },
                         )
                     }
@@ -551,20 +565,22 @@ fun SearchScreenContent(
         )
     }
 
-    val sheetItem = actionTargetItem
-    if (sheetItem != null) {
-        MediaCardActionSheet(
-            item = sheetItem,
-            isInWatchLater = sheetItem.compositeKey in uiState.watchLaterKeys,
-            onDismiss = { actionTargetItem = null },
-            onOpen = { navigator.openSearchResultItem(pluginResolver(sheetItem.siteId), sheetItem) },
-            onToggleWatchLater = { onToggleWatchLater(sheetItem) },
-            onSearchSimilar = { slug ->
-                onQueryChange(slug)
-                onSubmitSearch()
-            },
-        )
-    }
+    MediaCardActionAndShelfHost(
+        targetItem = actionTargetItem,
+        watchLaterKeys = uiState.watchLaterKeys,
+        shelves = shelves,
+        selectedShelfIds = selectedShelfIds,
+        onInspectShelfTarget = onInspectShelfTarget,
+        onDismiss = { actionTargetItem = null },
+        onOpen = { navigator.openSearchResultItem(pluginResolver(it.siteId), it) },
+        onToggleWatchLater = onToggleWatchLater,
+        onToggleShelfMembership = onToggleShelfMembership,
+        onCreateShelfAndAdd = onCreateShelfAndAdd,
+        onSearchSimilar = { slug ->
+            onQueryChange(slug)
+            onSubmitSearch()
+        },
+    )
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -1073,6 +1089,7 @@ private fun CrossSiteResultsBody(
     onToggleFilterSite: (SiteId) -> Unit,
     onRetrySite: (SiteId) -> Unit,
     onLoadMoreSite: (SiteId) -> Unit,
+    onRetryAll: () -> Unit = {},
     onItemLongClick: (MediaItem) -> Unit,
 ) {
     val colors = LocalRavenColors.current
@@ -1110,6 +1127,11 @@ private fun CrossSiteResultsBody(
 
         val allLoading = uiState.crossSiteBuckets.isNotEmpty() &&
             uiState.crossSiteBuckets.all { it.status == CrossSiteStatus.LOADING }
+        val allCrossFailed = uiState.crossSiteBuckets.isNotEmpty() &&
+            uiState.crossSiteBuckets.none { it.status == CrossSiteStatus.LOADING } &&
+            uiState.crossSiteBuckets.all {
+                it.status == CrossSiteStatus.ERROR || it.status == CrossSiteStatus.AUTH_REQUIRED
+            }
         val hasAnyDirectoryJumps = uiState.crossSiteDirectoryBuckets.any {
             it.status == CrossSiteStatus.SUCCESS && it.items.isNotEmpty()
         }
@@ -1117,6 +1139,12 @@ private fun CrossSiteResultsBody(
         when {
             allLoading && uiState.crossSiteMediaItems.isEmpty() -> {
                 RavenLoadingSkeleton(rowCount = 5)
+            }
+            uiState.crossSiteMediaItems.isEmpty() && !hasAnyDirectoryJumps && allCrossFailed -> {
+                RavenErrorState(
+                    message = "所选站点请求失败或需要登录，请点击上方站点胶囊单独重试或登录后再搜",
+                    onRetry = onRetryAll,
+                )
             }
             uiState.crossSiteMediaItems.isEmpty() && !hasAnyDirectoryJumps && !uiState.isCrossSiteSearching -> {
                 RavenEmptyState(
@@ -1265,7 +1293,7 @@ private fun CrossSiteStatusChip(
 
     Row(
         modifier = Modifier
-            .heightIn(min = 38.dp)
+            .heightIn(min = 48.dp)
             .clip(RavenShapes.PillShape)
             .background(containerColor)
             .border(0.5.dp, borderColor, RavenShapes.PillShape)
@@ -1311,14 +1339,19 @@ private fun CrossSiteStatusChip(
                             color = colors.crimson,
                         )
                     } else {
-                        Text(
-                            text = "+更多",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = colors.crimson,
+                        Box(
                             modifier = Modifier
+                                .defaultMinSize(minWidth = 48.dp, minHeight = 48.dp)
                                 .clickable { onLoadMoreClick() }
                                 .testTag("cross_load_more_${bucket.site.id.value}"),
-                        )
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Text(
+                                text = "+更多",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = colors.crimson,
+                            )
+                        }
                     }
                 }
             }

@@ -238,7 +238,7 @@ fun SubscriptionsScreen(
                             }
                             val canUp = posInSite > 0
                             val canDown = posInSite in 0 until siteGroup.lastIndex
-                            val isChecking = uiState.checkingSourceId == sourceId
+                            val isChecking = sourceId in uiState.checkingSourceIds
                             val siteLabel = uiState.siteLabels[sub.siteId] ?: sub.siteId.value
 
                             Row(

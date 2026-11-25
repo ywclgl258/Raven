@@ -22,10 +22,15 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.OpenInNew
+import androidx.compose.material.icons.rounded.AspectRatio
+import androidx.compose.material.icons.rounded.Audiotrack
 import androidx.compose.material.icons.rounded.Bedtime
 import androidx.compose.material.icons.rounded.Block
 import androidx.compose.material.icons.rounded.BookmarkAdd
+import androidx.compose.material.icons.rounded.Cast
 import androidx.compose.material.icons.rounded.Check
+import androidx.compose.material.icons.rounded.Close
+import androidx.compose.material.icons.rounded.CollectionsBookmark
 import androidx.compose.material.icons.rounded.Download
 import androidx.compose.material.icons.rounded.FastForward
 import androidx.compose.material.icons.rounded.Favorite
@@ -35,15 +40,19 @@ import androidx.compose.material.icons.rounded.Hd
 import androidx.compose.material.icons.rounded.Lock
 import androidx.compose.material.icons.rounded.PictureInPictureAlt
 import androidx.compose.material.icons.rounded.PlayArrow
+import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Repeat
 import androidx.compose.material.icons.rounded.RestartAlt
 import androidx.compose.material.icons.rounded.Speed
+import androidx.compose.material.icons.rounded.Subtitles
+import androidx.compose.material.icons.rounded.SubtitlesOff
 import androidx.compose.material.icons.rounded.Swipe
 import androidx.compose.material.icons.rounded.Tag
 import androidx.compose.material.icons.rounded.TouchApp
 import androidx.compose.material.icons.rounded.Translate
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -76,11 +85,14 @@ import com.raven.app.core.designsystem.component.RavenGroupedRow
 import com.raven.app.core.designsystem.component.RavenGroupedSection
 import com.raven.app.core.designsystem.component.RavenGroupedSliderRow
 import com.raven.app.core.designsystem.component.RavenGroupedSwitchRow
+import com.raven.app.core.designsystem.component.RavenShelfOption
+import com.raven.app.core.designsystem.component.RavenShelfPickerSheet
 import com.raven.app.core.designsystem.component.RavenStatusPill
 import com.raven.app.core.designsystem.component.RavenStatusTone
 import com.raven.app.core.designsystem.theme.LocalRavenColors
 import com.raven.app.core.designsystem.theme.RavenShapes
 import com.raven.app.core.designsystem.theme.ravenSpringPress
+import com.raven.app.core.media.cast.LanCastDevice
 import com.raven.app.core.media.playback.PlayerSessionController
 import com.raven.app.core.model.TagRef
 import com.raven.app.core.model.TimeBookmark
@@ -122,13 +134,32 @@ internal fun PlayerSheetHost(
     onUpdateGestureSensitivitySeconds: (Int) -> Unit,
     onUpdateAutoFullscreen: (Boolean) -> Unit,
     onResetSitePreferences: () -> Unit,
+    resizeModeLabel: String = VideoResizeMode.FIT.label,
+    onCycleResizeMode: () -> Unit = {},
+    onSelectAudioTrack: (Int, Int) -> Unit = { _, _ -> },
+    onSelectSubtitleTrack: (Int, Int) -> Unit = { _, _ -> },
+    onDisableSubtitles: () -> Unit = {},
+    onToggleShelfMembership: (String, Boolean) -> Unit = { _, _ -> },
+    onCreateShelfAndAdd: (String) -> Unit = {},
+    onDiscoverCast: () -> Unit = {},
+    onCastToDevice: (LanCastDevice) -> Unit = {},
+    onStopCast: () -> Unit = {},
+    onLaunchSystemExternalPlayer: () -> Boolean = { false },
 ) {
     when (activeSheet) {
         null -> Unit
 
         PlayerSheet.Settings -> PlayerSettingsSheet(
             uiState = uiState,
+            resizeModeLabel = resizeModeLabel,
             onDismiss = onDismiss,
+            onCycleResizeMode = onCycleResizeMode,
+            onOpenTracks = { onSwitchSheet(PlayerSheet.Tracks) },
+            onOpenShelfPicker = { onSwitchSheet(PlayerSheet.ShelfPicker) },
+            onOpenCast = {
+                onDiscoverCast()
+                onSwitchSheet(PlayerSheet.Cast)
+            },
             onOpenAbLoop = { onSwitchSheet(PlayerSheet.AbLoop) },
             onOpenSleepTimer = { onSwitchSheet(PlayerSheet.SleepTimer) },
             onLockScreen = {
@@ -242,6 +273,39 @@ internal fun PlayerSheetHost(
                 onOpenExternalUrl(url)
             },
         )
+
+        PlayerSheet.Tracks -> PlayerTracksSheet(
+            uiState = uiState,
+            onDismiss = onDismiss,
+            onSelectAudioTrack = onSelectAudioTrack,
+            onSelectSubtitleTrack = onSelectSubtitleTrack,
+            onDisableSubtitles = onDisableSubtitles,
+        )
+
+        PlayerSheet.ShelfPicker -> RavenShelfPickerSheet(
+            title = uiState.title,
+            shelves = uiState.shelves.map { summary ->
+                RavenShelfOption(
+                    id = summary.shelf.id,
+                    name = summary.shelf.name,
+                    itemCount = summary.itemCount,
+                    selected = summary.shelf.id in uiState.containingShelfIds,
+                    isSystem = summary.shelf.isSystem,
+                )
+            },
+            onToggleShelf = onToggleShelfMembership,
+            onCreateShelf = onCreateShelfAndAdd,
+            onDismiss = onDismiss,
+        )
+
+        PlayerSheet.Cast -> PlayerCastSheet(
+            uiState = uiState,
+            onDismiss = onDismiss,
+            onScanDevices = onDiscoverCast,
+            onCastToDevice = onCastToDevice,
+            onStopCast = onStopCast,
+            onLaunchSystemExternalPlayer = onLaunchSystemExternalPlayer,
+        )
     }
 }
 
@@ -249,7 +313,12 @@ internal fun PlayerSheetHost(
 @Composable
 private fun PlayerSettingsSheet(
     uiState: PlayerUiState,
+    resizeModeLabel: String,
     onDismiss: () -> Unit,
+    onCycleResizeMode: () -> Unit,
+    onOpenTracks: () -> Unit,
+    onOpenShelfPicker: () -> Unit,
+    onOpenCast: () -> Unit,
     onOpenAbLoop: () -> Unit,
     onOpenSleepTimer: () -> Unit,
     onLockScreen: () -> Unit,
@@ -354,6 +423,40 @@ private fun PlayerSettingsSheet(
                         badge = uiState.activeQualityLabel,
                         enabled = uiState.canChooseQuality,
                         onClick = onOpenQuality,
+                        modifier = Modifier.weight(1f),
+                    )
+                }
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    QuickActionTile(
+                        icon = Icons.Rounded.AspectRatio,
+                        label = "画面比例",
+                        badge = resizeModeLabel,
+                        onClick = onCycleResizeMode,
+                        modifier = Modifier.weight(1f),
+                    )
+                    QuickActionTile(
+                        icon = Icons.Rounded.Subtitles,
+                        label = "音轨字幕",
+                        badge = (uiState.audioTracks.size + uiState.subtitleTracks.size).takeIf { it > 0 }?.toString(),
+                        enabled = uiState.audioTracks.isNotEmpty() || uiState.subtitleTracks.isNotEmpty(),
+                        onClick = onOpenTracks,
+                        modifier = Modifier.weight(1f),
+                    )
+                    QuickActionTile(
+                        icon = Icons.Rounded.CollectionsBookmark,
+                        label = "加入片单",
+                        onClick = onOpenShelfPicker,
+                        modifier = Modifier.weight(1f),
+                    )
+                    QuickActionTile(
+                        icon = Icons.Rounded.Cast,
+                        label = "局域网投屏",
+                        highlighted = uiState.activeCastDevice != null,
+                        onClick = onOpenCast,
                         modifier = Modifier.weight(1f),
                     )
                 }
@@ -1155,6 +1258,191 @@ private fun PlayerExternalPlayersSheet(
                 RavenGroupedRow(
                     title = "当前视频没有可用的外部链接",
                     enabled = false,
+                )
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun PlayerTracksSheet(
+    uiState: PlayerUiState,
+    onDismiss: () -> Unit,
+    onSelectAudioTrack: (Int, Int) -> Unit,
+    onSelectSubtitleTrack: (Int, Int) -> Unit,
+    onDisableSubtitles: () -> Unit,
+) {
+    val colors = LocalRavenColors.current
+    RavenBottomSheet(
+        onDismissRequest = onDismiss,
+        title = "音轨与字幕",
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .verticalScroll(rememberScrollState()),
+            verticalArrangement = Arrangement.spacedBy(14.dp),
+        ) {
+            if (uiState.audioTracks.isNotEmpty()) {
+                RavenGroupedSection(title = "音轨") {
+                    uiState.audioTracks.forEachIndexed { idx, track ->
+                        if (idx > 0) RavenGroupedDivider(insetWithIcon = true)
+                        RavenGroupedRow(
+                            title = track.label,
+                            subtitle = track.language?.takeIf { it.isNotBlank() },
+                            icon = Icons.Rounded.Audiotrack,
+                            iconTint = if (track.selected) colors.crimson else colors.inkPrimary,
+                            trailingContent = if (track.selected) {
+                                {
+                                    Icon(
+                                        imageVector = Icons.Rounded.Check,
+                                        contentDescription = "已选中",
+                                        tint = colors.crimson,
+                                    )
+                                }
+                            } else {
+                                null
+                            },
+                            onClick = {
+                                onSelectAudioTrack(track.groupIndex, track.trackIndex)
+                                onDismiss()
+                            },
+                        )
+                    }
+                }
+            }
+
+            RavenGroupedSection(title = "字幕") {
+                RavenGroupedRow(
+                    title = "关闭字幕",
+                    icon = Icons.Rounded.SubtitlesOff,
+                    iconTint = if (!uiState.subtitlesEnabled) colors.crimson else colors.inkPrimary,
+                    trailingContent = if (!uiState.subtitlesEnabled) {
+                        {
+                            Icon(
+                                imageVector = Icons.Rounded.Check,
+                                contentDescription = "已关闭",
+                                tint = colors.crimson,
+                            )
+                        }
+                    } else {
+                        null
+                    },
+                    onClick = {
+                        onDisableSubtitles()
+                        onDismiss()
+                    },
+                )
+                uiState.subtitleTracks.forEach { track ->
+                    RavenGroupedDivider(insetWithIcon = true)
+                    RavenGroupedRow(
+                        title = track.label,
+                        subtitle = track.language?.takeIf { it.isNotBlank() },
+                        icon = Icons.Rounded.Subtitles,
+                        iconTint = if (track.selected && uiState.subtitlesEnabled) colors.crimson else colors.inkPrimary,
+                        trailingContent = if (track.selected && uiState.subtitlesEnabled) {
+                            {
+                                Icon(
+                                    imageVector = Icons.Rounded.Check,
+                                    contentDescription = "已选中",
+                                    tint = colors.crimson,
+                                )
+                            }
+                        } else {
+                            null
+                        },
+                        onClick = {
+                            onSelectSubtitleTrack(track.groupIndex, track.trackIndex)
+                            onDismiss()
+                        },
+                    )
+                }
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun PlayerCastSheet(
+    uiState: PlayerUiState,
+    onDismiss: () -> Unit,
+    onScanDevices: () -> Unit,
+    onCastToDevice: (LanCastDevice) -> Unit,
+    onStopCast: () -> Unit,
+    onLaunchSystemExternalPlayer: () -> Boolean,
+) {
+    val colors = LocalRavenColors.current
+    RavenBottomSheet(
+        onDismissRequest = onDismiss,
+        title = "局域网投屏与系统播放器",
+        subtitle = "仅扫描局域网私有网段 DLNA 设备，不上传任何播放信息",
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .verticalScroll(rememberScrollState()),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            if (uiState.activeCastDevice != null) {
+                RavenGroupedSection(title = "当前投屏连接") {
+                    RavenGroupedRow(
+                        title = "断开「${uiState.activeCastDevice.friendlyName}」",
+                        subtitle = uiState.activeCastDevice.host,
+                        icon = Icons.Rounded.Close,
+                        destructive = true,
+                        onClick = {
+                            onStopCast()
+                            onDismiss()
+                        },
+                    )
+                }
+            }
+
+            RavenGroupedSection(title = "DLNA 设备列表") {
+                RavenGroupedRow(
+                    title = if (uiState.isScanningCast) "正在扫描局域网设备…" else "重新扫描设备",
+                    icon = Icons.Rounded.Refresh,
+                    enabled = !uiState.isScanningCast,
+                    trailingContent = if (uiState.isScanningCast) {
+                        {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(16.dp),
+                                strokeWidth = 2.dp,
+                                color = colors.crimson,
+                            )
+                        }
+                    } else {
+                        null
+                    },
+                    onClick = onScanDevices,
+                )
+                uiState.castDevices.forEach { device ->
+                    RavenGroupedDivider(insetWithIcon = true)
+                    val active = uiState.activeCastDevice?.locationUrl == device.locationUrl
+                    RavenGroupedRow(
+                        title = device.friendlyName,
+                        subtitle = device.host,
+                        icon = Icons.Rounded.Cast,
+                        iconTint = if (active) colors.crimson else colors.inkPrimary,
+                        onClick = {
+                            onCastToDevice(device)
+                            onDismiss()
+                        },
+                    )
+                }
+            }
+
+            RavenGroupedSection(title = "本地系统播放器") {
+                RavenGroupedRow(
+                    title = "调用系统 / 第三方播放器打开视频流",
+                    icon = Icons.AutoMirrored.Rounded.OpenInNew,
+                    showChevron = true,
+                    onClick = {
+                        onLaunchSystemExternalPlayer()
+                        onDismiss()
+                    },
                 )
             }
         }

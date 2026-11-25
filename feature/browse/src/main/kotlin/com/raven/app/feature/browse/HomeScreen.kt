@@ -43,6 +43,8 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.key
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
@@ -51,6 +53,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.raven.app.core.database.model.ShelfWithSummary
+import kotlinx.coroutines.launch
 import com.raven.app.core.designsystem.component.RavenEmptyState
 import com.raven.app.core.designsystem.component.RavenErrorState
 import com.raven.app.core.designsystem.component.RavenFormatters
@@ -89,6 +93,8 @@ fun HomeScreen(
     viewModel: HomeViewModel = koinViewModel(),
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
+    val shelves by viewModel.shelfPickerShelves.collectAsStateWithLifecycle()
+    val inspectedShelfIds by viewModel.inspectedShelfIds.collectAsStateWithLifecycle()
 
     HomeScreenContent(
         uiState = uiState,
@@ -102,6 +108,11 @@ fun HomeScreen(
         onDismissTutorial = viewModel::dismissSiteSwitchTutorial,
         onSaveBrowsePosition = viewModel::saveBrowsePosition,
         onDismissRestoredPosition = viewModel::dismissRestoredPosition,
+        shelves = shelves,
+        selectedShelfIds = inspectedShelfIds,
+        onInspectShelfTarget = viewModel::inspectShelfTarget,
+        onToggleShelfMembership = viewModel::setShelfMembership,
+        onCreateShelfAndAdd = viewModel::createShelfAndAdd,
         modifier = modifier,
     )
 }
@@ -120,6 +131,11 @@ fun HomeScreenContent(
     onSaveBrowsePosition: (workId: String, throughPage: Int, shelfId: String) -> Unit,
     onDismissRestoredPosition: () -> Unit,
     modifier: Modifier = Modifier,
+    shelves: List<ShelfWithSummary> = emptyList(),
+    selectedShelfIds: Set<String> = emptySet(),
+    onInspectShelfTarget: (MediaItem?) -> Unit = {},
+    onToggleShelfMembership: (shelfId: String, item: MediaItem, add: Boolean) -> Unit = { _, _, _ -> },
+    onCreateShelfAndAdd: (name: String, item: MediaItem) -> Unit = { _, _ -> },
 ) {
     val colors = LocalRavenColors.current
     var showSiteSwitcher by rememberSaveable { mutableStateOf(false) }
@@ -191,19 +207,21 @@ fun HomeScreenContent(
         )
     }
 
-    val sheetItem = actionTargetItem
-    if (sheetItem != null) {
-        MediaCardActionSheet(
-            item = sheetItem,
-            isInWatchLater = sheetItem.compositeKey in uiState.watchLaterKeys,
-            onDismiss = { actionTargetItem = null },
-            onOpen = { navigator.openMedia(sheetItem) },
-            onToggleWatchLater = { onToggleWatchLater(sheetItem) },
-            onSearchSimilar = { tagSlug ->
-                navigator.openSearch(initialQuery = tagSlug, crossSite = false)
-            },
-        )
-    }
+    MediaCardActionAndShelfHost(
+        targetItem = actionTargetItem,
+        watchLaterKeys = uiState.watchLaterKeys,
+        shelves = shelves,
+        selectedShelfIds = selectedShelfIds,
+        onInspectShelfTarget = onInspectShelfTarget,
+        onDismiss = { actionTargetItem = null },
+        onOpen = { navigator.openMedia(it) },
+        onToggleWatchLater = onToggleWatchLater,
+        onToggleShelfMembership = onToggleShelfMembership,
+        onCreateShelfAndAdd = onCreateShelfAndAdd,
+        onSearchSimilar = { tagSlug ->
+            navigator.openSearch(initialQuery = tagSlug, crossSite = false)
+        },
+    )
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -222,7 +240,8 @@ private fun CinemaVideoHome(
     onItemLongClick: (MediaItem) -> Unit,
 ) {
     val colors = LocalRavenColors.current
-    val listState = rememberLazyListState()
+    val listState = key(activeSite.id) { rememberLazyListState() }
+    val coroutineScope = rememberCoroutineScope()
     val pullState = rememberPullToRefreshState()
 
     val isScrolled by remember {
@@ -384,6 +403,24 @@ private fun CinemaVideoHome(
                                 item(key = "cinema_restored_anchor") {
                                     RestoredAnchorBanner(
                                         throughPage = restoredPos.throughPage,
+                                        onJump = {
+                                            val rowIdx = primaryRows.indexOfFirst { row ->
+                                                row.any { it.id == restoredPos.workId }
+                                            }
+                                            if (rowIdx >= 0) {
+                                                val headerCount = 1 +
+                                                    (if (uiState.showSiteSwitchTutorial) 1 else 0) +
+                                                    1 +
+                                                    (if (uiState.continueWatching.isNotEmpty()) 1 else 0) +
+                                                    uiState.sections.size +
+                                                    1
+                                                coroutineScope.launch {
+                                                    listState.animateScrollToItem(headerCount + rowIdx)
+                                                }
+                                            } else {
+                                                coroutineScope.launch { listState.animateScrollToItem(0) }
+                                            }
+                                        },
                                         onDismiss = onDismissRestoredPosition,
                                         modifier = Modifier.padding(horizontal = 16.dp),
                                     )
@@ -594,7 +631,8 @@ private fun GalleryMasonryHome(
     onItemLongClick: (MediaItem) -> Unit,
 ) {
     val colors = LocalRavenColors.current
-    val gridState = rememberLazyStaggeredGridState()
+    val gridState = key(activeSite.id) { rememberLazyStaggeredGridState() }
+    val coroutineScope = rememberCoroutineScope()
     val pullState = rememberPullToRefreshState()
     val aspectRatioCache = remember(activeSite.id) { mutableStateMapOf<String, Float>() }
 
@@ -808,6 +846,15 @@ private fun GalleryMasonryHome(
                                 ) {
                                     RestoredAnchorBanner(
                                         throughPage = restoredPos.throughPage,
+                                        onJump = {
+                                            val itemIdx = uiState.primaryItems.indexOfFirst { it.id == restoredPos.workId }
+                                            if (itemIdx >= 0) {
+                                                val headerCount = (if (uiState.resumeReading != null) 1 else 0) + 1
+                                                coroutineScope.launch {
+                                                    gridState.animateScrollToItem(headerCount + itemIdx)
+                                                }
+                                            }
+                                        },
                                         onDismiss = onDismissRestoredPosition,
                                     )
                                 }

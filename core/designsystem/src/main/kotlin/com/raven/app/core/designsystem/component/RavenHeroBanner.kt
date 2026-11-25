@@ -57,10 +57,12 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -108,6 +110,12 @@ fun RavenHeroBanner(
     val motionReduced = LocalMotionReduced.current
     val reduceTransparency = LocalReduceTransparency.current
     val haptic = LocalHapticFeedback.current
+    val screenHeightDp = LocalConfiguration.current.screenHeightDp
+    val effectiveBannerHeight = if (screenHeightDp in 1..600) {
+        minOf(bannerHeight, (screenHeightDp * 0.60f).dp).coerceAtLeast(240.dp)
+    } else {
+        bannerHeight
+    }
     val pagerState = rememberPagerState(pageCount = { items.size })
     val scope = rememberCoroutineScope()
     var paused by rememberSaveable { mutableStateOf(false) }
@@ -134,7 +142,7 @@ fun RavenHeroBanner(
     Box(
         modifier = modifier
             .fillMaxWidth()
-            .height(bannerHeight)
+            .height(effectiveBannerHeight)
             .background(colors.canvas)
             .testTag("raven_hero_banner"),
     ) {
@@ -202,7 +210,7 @@ fun RavenHeroBanner(
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(bannerHeight * 0.72f)
+                        .height(effectiveBannerHeight * 0.72f)
                         .align(Alignment.BottomCenter)
                         .background(
                             brush = Brush.verticalGradient(
@@ -389,17 +397,29 @@ fun RavenHeroBanner(
                         )
                         Box(
                             modifier = Modifier
-                                .height(6.dp)
-                                .width(dotWidth)
-                                .clip(CircleShape)
-                                .background(dotColor)
-                                .clickable {
-                                    if (!active) {
-                                        haptic.performHapticFeedback(HapticFeedbackType.SegmentTick)
-                                        scope.launch { pagerState.animateScrollToPage(index) }
-                                    }
+                                .defaultMinSize(minWidth = 28.dp, minHeight = 48.dp)
+                                .clickable(
+                                    onClick = {
+                                        if (!active) {
+                                            haptic.performHapticFeedback(HapticFeedbackType.SegmentTick)
+                                            scope.launch { pagerState.animateScrollToPage(index) }
+                                        }
+                                    },
+                                )
+                                .semantics {
+                                    contentDescription = "第 ${index + 1} 张推荐"
+                                    selected = active
                                 },
-                        )
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .height(6.dp)
+                                    .width(dotWidth)
+                                    .clip(CircleShape)
+                                    .background(dotColor),
+                            )
+                        }
                     }
                 }
 

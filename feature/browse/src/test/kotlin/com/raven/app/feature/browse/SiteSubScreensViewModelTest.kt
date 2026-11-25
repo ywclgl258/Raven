@@ -9,7 +9,9 @@ import com.raven.app.core.model.FeedPage
 import com.raven.app.core.model.FeedSort
 import com.raven.app.core.model.MediaKind
 import com.raven.app.core.model.RavenRoute
+import com.raven.app.core.model.ReaderFit
 import com.raven.app.core.model.ReaderMode
+import com.raven.app.core.model.ReaderPreferences
 import com.raven.app.core.model.SearchScope
 import com.raven.app.core.model.SiteCapability
 import com.raven.app.core.model.SiteDescriptor
@@ -17,10 +19,13 @@ import com.raven.app.core.model.SiteId
 import com.raven.app.core.model.SiteSectionSpec
 import com.raven.app.core.sitespi.SiteRegistry
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
@@ -210,5 +215,64 @@ class SiteSubScreensViewModelTest {
 
                 cancelAndIgnoreRemainingEvents()
             }
+        }
+
+    @Test
+    fun `setReaderMode preserves other site reader preference fields`() =
+        runTest(mainDispatcherRule.dispatcher) {
+            val harness = BrowseTestHarness(mainDispatcherRule.dispatcher)
+            harness.preferencesRepository.saveReaderPreferences(
+                ReaderPreferences(
+                    siteId = SiteId.NHENTAI,
+                    mediaId = null,
+                    mode = ReaderMode.STRIP,
+                    fit = ReaderFit.HEIGHT,
+                    keepScreenOn = false,
+                    cropPercent = 7,
+                ),
+            )
+            val plugin = FakeSitePlugin(
+                descriptor = SiteDescriptor(
+                    id = SiteId.NHENTAI,
+                    displayName = "nHentai",
+                    primaryKind = MediaKind.COMIC,
+                    defaultHost = "nhentai.net",
+                ),
+            )
+            val vm = SiteFunctionsViewModel(
+                route = RavenRoute.SiteFunctions(siteId = SiteId.NHENTAI.value),
+                siteRegistry = SiteRegistry(listOf(plugin)),
+                preferencesRepository = harness.preferencesRepository,
+                favoriteRepository = harness.favoriteRepository,
+                downloadStateRepository = harness.downloadStateRepository,
+                subscriptionRepository = harness.subscriptionRepository,
+                blockedTermsRepository = harness.blockedTermsRepository,
+                dispatchers = harness.dispatchers,
+            )
+
+            vm.setReaderMode(ReaderMode.RTL)
+            advanceUntilIdle()
+
+            val saved = harness.preferencesRepository.observeSiteReaderPreferences(SiteId.NHENTAI).first()
+            assertNotNull(saved)
+            assertEquals(ReaderMode.RTL, saved?.mode)
+            assertEquals(ReaderFit.HEIGHT, saved?.fit)
+            assertEquals(false, saved?.keepScreenOn)
+            assertEquals(7, saved?.cropPercent)
+        }
+
+    @Test
+    fun `invalid deep-link siteId does not crash directory view model`() =
+        runTest(mainDispatcherRule.dispatcher) {
+            val harness = BrowseTestHarness(mainDispatcherRule.dispatcher)
+            val vm = SiteDirectoryViewModel(
+                route = RavenRoute.SiteDirectory(siteId = "   ", section = ""),
+                siteRegistry = SiteRegistry(emptyList()),
+                preferencesRepository = harness.preferencesRepository,
+                dispatchers = harness.dispatchers,
+            )
+            advanceUntilIdle()
+            assertNull(vm.siteId)
+            assertNull(vm.plugin)
         }
 }

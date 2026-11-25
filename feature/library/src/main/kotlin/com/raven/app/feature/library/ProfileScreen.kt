@@ -23,6 +23,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.BarChart
 import androidx.compose.material.icons.outlined.BookmarkBorder
 import androidx.compose.material.icons.outlined.Download
 import androidx.compose.material.icons.outlined.FavoriteBorder
@@ -172,7 +173,7 @@ fun ProfileScreenContent(
                     activeDownloadCount = uiState.activeDownloadCount,
                     completedDownloadCount = uiState.completedDownloadCount,
                     onOpenInbox = navigator::openGlobalInbox,
-                    onOpenDownloads = navigator::openDownloads,
+                    onOpenDownloads = { navigator.openDownloads() },
                     modifier = Modifier.padding(horizontal = 16.dp),
                 )
             }
@@ -320,7 +321,15 @@ fun ProfileScreenContent(
                         value = "${uiState.totalFavoriteCount} 项",
                         icon = Icons.Outlined.FavoriteBorder,
                         showChevron = true,
-                        onClick = navigator::openFavorites,
+                        onClick = { navigator.openFavorites() },
+                    )
+                    RavenGroupedDivider(insetWithIcon = true)
+                    RavenGroupedRow(
+                        title = "观看与阅读统计",
+                        subtitle = "时长、页数、站点分布与标签偏好",
+                        icon = Icons.Outlined.BarChart,
+                        showChevron = true,
+                        onClick = navigator::openStats,
                     )
                     RavenGroupedDivider(insetWithIcon = true)
                     RavenGroupedRow(

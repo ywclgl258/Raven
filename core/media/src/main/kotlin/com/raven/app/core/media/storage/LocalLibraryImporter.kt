@@ -112,7 +112,13 @@ class LocalLibraryImporter(
                 it.files.size == 1 &&
                     it.files[0].substringAfterLast('.', "").lowercase(Locale.ROOT) in VIDEO_EXTENSIONS &&
                     File(dir, it.files[0]).isFile &&
-                    (it.thumbFileName.isBlank() || (it.thumbFileName == THUMB_FILE_NAME && StorageRootManager.directChild(dir, File(dir, THUMB_FILE_NAME))))
+                    (
+                        it.thumbFileName.isBlank() ||
+                            (
+                                (it.thumbFileName == THUMB_FILE_NAME || it.thumbFileName == THUMB_JPEG_FILE_NAME) &&
+                                    StorageRootManager.directChild(dir, File(dir, it.thumbFileName))
+                                )
+                        )
             }
             else -> parsed.takeIf {
                 it.thumbFileName.isBlank() &&
@@ -418,8 +424,10 @@ class LocalLibraryImporter(
             getBook(id)?.let { return@withContext it }
 
             onProgress("正在生成首帧缩略图…")
-            val thumbFile = File(staging, THUMB_FILE_NAME)
+            val thumbFileName = if (videoThumbExtractor != null) THUMB_FILE_NAME else THUMB_JPEG_FILE_NAME
+            val thumbFile = File(staging, thumbFileName)
             val savedThumb = extractFirstFrameThumbnail(targetFile, thumbFile)
+            if (!savedThumb) thumbFile.delete()
             val book = LocalBook(
                 id = id,
                 title = title.trim().take(MAX_TITLE_LENGTH).ifBlank { "本地视频" },
@@ -427,11 +435,14 @@ class LocalLibraryImporter(
                 bytes = copied,
                 importedAt = clockMs(),
                 kind = MediaKind.VIDEO,
-                thumbFileName = if (savedThumb) THUMB_FILE_NAME else "",
+                thumbFileName = if (savedThumb) thumbFileName else "",
             )
             File(staging, "book.json").writeText(json.encodeToString(LocalBook.serializer(), book))
             val destination = bookFolder(id)
-            check(!destination.exists()) { "同名本地内容不完整，请先移除后重试" }
+            if (destination.exists() && getBook(id) == null) {
+                safeDeleteDirectory(destination)
+            }
+            check(!destination.exists()) { "同名本地内容已存在" }
             check(staging.renameTo(destination)) { "无法保存本地视频" }
             refreshBooksSnapshot()
             book
@@ -544,7 +555,10 @@ class LocalLibraryImporter(
             )
             File(staging, "book.json").writeText(json.encodeToString(LocalBook.serializer(), book))
             val destination = bookFolder(id)
-            check(!destination.exists()) { "同名本地内容不完整，请先移除后重试" }
+            if (destination.exists() && getBook(id) == null) {
+                safeDeleteDirectory(destination)
+            }
+            check(!destination.exists()) { "同名本地内容已存在" }
             check(staging.renameTo(destination)) { "无法保存本地导入" }
             refreshBooksSnapshot()
             return book
@@ -556,23 +570,36 @@ class LocalLibraryImporter(
     private fun extractFirstFrameThumbnail(videoFile: File, thumbFile: File): Boolean {
         videoThumbExtractor?.let { return runCatching { it(videoFile, thumbFile) }.getOrDefault(false) }
         val retriever = MediaMetadataRetriever()
+        var frame: Bitmap? = null
+        var scaled: Bitmap? = null
         return try {
             retriever.setDataSource(videoFile.absolutePath)
-            val frame = runCatching {
+            frame = runCatching {
                 retriever.getFrameAtTime(0L, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
             }.getOrNull() ?: return false
-            try {
-                thumbFile.outputStream().use { out ->
-                    frame.compress(Bitmap.CompressFormat.PNG, 90, out)
-                }
-            } finally {
-                frame.recycle()
+            val targetBitmap = scaleThumbnailBitmap(frame)
+            if (targetBitmap !== frame) scaled = targetBitmap
+            val saved = thumbFile.outputStream().use { out ->
+                targetBitmap.compress(Bitmap.CompressFormat.JPEG, 85, out)
             }
+            if (!saved) thumbFile.delete()
+            saved
         } catch (_: Throwable) {
+            thumbFile.delete()
             false
         } finally {
+            scaled?.recycle()
+            frame?.recycle()
             runCatching { retriever.release() }
         }
+    }
+
+    private fun scaleThumbnailBitmap(source: Bitmap): Bitmap {
+        val longEdge = maxOf(source.width, source.height)
+        if (longEdge <= MAX_THUMB_EDGE_PX || longEdge <= 0) return source
+        val dstW = (source.width * MAX_THUMB_EDGE_PX.toLong() / longEdge).toInt().coerceAtLeast(1)
+        val dstH = (source.height * MAX_THUMB_EDGE_PX.toLong() / longEdge).toInt().coerceAtLeast(1)
+        return Bitmap.createScaledBitmap(source, dstW, dstH, true)
     }
 
     private fun queryDisplayName(uri: Uri, fallback: String): String {
@@ -600,6 +627,8 @@ class LocalLibraryImporter(
         const val LOCAL_URI_SCHEME: String = "ravenlocal"
         const val LEGACY_LOCAL_URI_SCHEME: String = "r34local"
         const val THUMB_FILE_NAME: String = "thumb.png"
+        const val THUMB_JPEG_FILE_NAME: String = "thumb.jpg"
+        private const val MAX_THUMB_EDGE_PX: Int = 480
 
         const val MAX_ARCHIVE_ENTRIES: Int = 10_000
         const val MAX_PAGES: Int = 2_000

@@ -82,6 +82,7 @@ import com.raven.app.core.designsystem.theme.RavenShapes
 import com.raven.app.core.designsystem.theme.RavenTabularTextStyle
 import com.raven.app.core.designsystem.theme.ravenSpringPress
 import com.raven.app.core.media.playback.VideoLoopRange
+import com.raven.app.core.model.TimeBookmark
 
 /**
  * Full player overlay stack: frosted top/bottom control chrome, A-B marked scrubber, lock mode
@@ -511,6 +512,7 @@ private fun PlayerBottomBar(
             bufferedPositionMs = uiState.bufferedPositionMs,
             durationMs = durationMs,
             loopRange = uiState.loopRange,
+            timeBookmarks = uiState.timeBookmarks,
             onScrubStart = { targetMs ->
                 isScrubbing = true
                 scrubPositionMs = targetMs
@@ -626,6 +628,7 @@ internal fun PlayerAbScrubber(
     onScrubMove: (Long) -> Unit,
     onScrubEnd: (Long) -> Unit,
     modifier: Modifier = Modifier,
+    timeBookmarks: List<TimeBookmark> = emptyList(),
 ) {
     val colors = LocalRavenColors.current
     val durationState by rememberUpdatedState(durationMs)
@@ -755,6 +758,23 @@ internal fun PlayerAbScrubber(
                     end = Offset(startX, centerY + 7.dp.toPx()),
                     strokeWidth = 2.dp.toPx(),
                 )
+            }
+
+            // TimeBookmark tick markers
+            if (durationMs > 0L && timeBookmarks.isNotEmpty()) {
+                val tickHalf = 4.5.dp.toPx()
+                val tickWidth = 2.dp.toPx()
+                for (bm in timeBookmarks) {
+                    if (bm.positionMs in 0L..durationMs) {
+                        val bmX = size.width * (bm.positionMs.toFloat() / durationMs.toFloat()).coerceIn(0f, 1f)
+                        drawLine(
+                            color = colors.inkPrimary.copy(alpha = 0.85f),
+                            start = Offset(bmX, centerY - tickHalf),
+                            end = Offset(bmX, centerY + tickHalf),
+                            strokeWidth = tickWidth,
+                        )
+                    }
+                }
             }
 
             // Scrubber thumb

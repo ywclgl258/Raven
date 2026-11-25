@@ -18,7 +18,10 @@ import com.raven.app.core.model.TagRef
 import com.raven.app.core.model.WatchProgress
 import com.raven.app.core.sitespi.SiteRegistry
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.advanceUntilIdle
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -491,5 +494,69 @@ class HomeViewModelTest {
 
                 cancelAndIgnoreRemainingEvents()
             }
+        }
+
+    @Test
+    fun `browse position writes are debounced and keep only the final anchor`() =
+        runTest(mainDispatcherRule.dispatcher) {
+            val harness = BrowseTestHarness(mainDispatcherRule.dispatcher)
+            val (registry, _, _) = buildRegistry()
+            val vm = HomeViewModel(
+                siteRegistry = registry,
+                preferencesRepository = harness.preferencesRepository,
+                blockedTermsRepository = harness.blockedTermsRepository,
+                historyRepository = harness.historyRepository,
+                favoriteRepository = harness.favoriteRepository,
+                shelfRepository = harness.shelfRepository,
+                browsePositionRepository = harness.browsePositionRepository,
+                dispatchers = harness.dispatchers,
+            )
+
+            vm.uiState.test {
+                advanceUntilIdle()
+                vm.saveBrowsePosition(workId = "v1", throughPage = 1, shelfId = "")
+                advanceTimeBy(200L)
+                runCurrent()
+                assertNull(expectMostRecentItem().restoredPosition)
+
+                vm.saveBrowsePosition(workId = "v2", throughPage = 2, shelfId = "")
+                advanceTimeBy(BROWSE_POSITION_DEBOUNCE_MS + 100L)
+                runCurrent()
+                advanceUntilIdle()
+                val restored = expectMostRecentItem().restoredPosition
+                assertEquals("v2", restored?.workId)
+                assertEquals(2, restored?.throughPage)
+                cancelAndIgnoreRemainingEvents()
+            }
+        }
+
+    @Test
+    fun `custom shelf picker creates shelf and toggles membership`() =
+        runTest(mainDispatcherRule.dispatcher) {
+            val harness = BrowseTestHarness(mainDispatcherRule.dispatcher)
+            val (registry, _, _) = buildRegistry()
+            val vm = HomeViewModel(
+                siteRegistry = registry,
+                preferencesRepository = harness.preferencesRepository,
+                blockedTermsRepository = harness.blockedTermsRepository,
+                historyRepository = harness.historyRepository,
+                favoriteRepository = harness.favoriteRepository,
+                shelfRepository = harness.shelfRepository,
+                browsePositionRepository = harness.browsePositionRepository,
+                dispatchers = harness.dispatchers,
+            )
+            val item = sampleMediaItem(SiteId.R34V, "v9", MediaKind.VIDEO)
+
+            vm.createShelfAndAdd("  我的片单  ", item)
+            advanceUntilIdle()
+            val created = harness.shelfRepository.observeShelvesWithSummary().first()
+                .first { it.shelf.name == "我的片单" }
+            assertEquals(1, created.itemCount)
+
+            vm.setShelfMembership(created.shelf.id, item, add = false)
+            advanceUntilIdle()
+            val afterRemove = harness.shelfRepository.observeShelvesWithSummary().first()
+                .first { it.shelf.id == created.shelf.id }
+            assertEquals(0, afterRemove.itemCount)
         }
 }

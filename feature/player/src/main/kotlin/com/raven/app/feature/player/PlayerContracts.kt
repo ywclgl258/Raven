@@ -121,7 +121,13 @@ interface PlayerNavigator {
 
     fun openExternalUrl(url: String)
 
-    fun openGallery(siteId: SiteId, mediaId: String, url: String)
+    fun openGallery(
+        siteId: SiteId,
+        mediaId: String,
+        url: String,
+        offlineOnly: Boolean = false,
+        queueToken: String? = null,
+    )
 
     fun requestPip(aspectRatio: Pair<Int, Int>?)
 
@@ -263,6 +269,12 @@ interface PlayerPlaybackPort {
 
     fun syncSnapshot(clearError: Boolean = false)
 
+    fun selectAudioTrack(groupIndex: Int, trackIndex: Int)
+
+    fun selectSubtitleTrack(groupIndex: Int, trackIndex: Int)
+
+    fun disableSubtitles()
+
     fun release()
 }
 
@@ -370,6 +382,14 @@ class Media3PlayerPlaybackPort(
     override fun currentPositionMs(): Long = controller.currentPositionMs()
 
     override fun syncSnapshot(clearError: Boolean) = controller.syncSnapshot(clearError)
+
+    override fun selectAudioTrack(groupIndex: Int, trackIndex: Int) =
+        controller.selectAudioTrack(groupIndex, trackIndex)
+
+    override fun selectSubtitleTrack(groupIndex: Int, trackIndex: Int) =
+        controller.selectSubtitleTrack(groupIndex, trackIndex)
+
+    override fun disableSubtitles() = controller.disableSubtitles()
 
     override fun release() = controller.release()
 }

@@ -31,6 +31,7 @@ import com.raven.app.core.model.TimeBookmark
 import com.raven.app.core.model.UpdateInboxItem
 import com.raven.app.core.model.WatchProgress
 import com.raven.app.core.sitespi.SiteRegistry
+import java.util.Locale
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
@@ -102,7 +103,7 @@ internal object LegacyR34vBackupAdapter {
         val settingsOut = LinkedHashMap<String, String>()
 
         for (bucket in legacy.sites) {
-            val rawSite = bucket.site.trim().lowercase()
+            val rawSite = bucket.site.trim().lowercase(Locale.ROOT)
             if (rawSite.isEmpty() || !seenSiteBuckets.add(rawSite)) {
                 throw BackupValidationException("旧版备份包含重复或空的站点段：'${bucket.site}'")
             }
@@ -110,7 +111,7 @@ internal object LegacyR34vBackupAdapter {
 
             // Favorites
             for (fav in bucket.favorites) {
-                val itemSite = fav.site?.trim()?.lowercase()?.takeIf { it.isNotEmpty() } ?: rawSite
+                val itemSite = fav.site?.trim()?.lowercase(Locale.ROOT)?.takeIf { it.isNotEmpty() } ?: rawSite
                 if (itemSite != rawSite) {
                     throw BackupValidationException("旧版收藏记录站点不匹配：$itemSite != $rawSite")
                 }
@@ -137,7 +138,7 @@ internal object LegacyR34vBackupAdapter {
 
             // Watches (R34V stores pos/dur in SECONDS; Raven stores positionMs/durationMs in MILLISECONDS)
             for (watch in bucket.watches) {
-                val itemSite = watch.site?.trim()?.lowercase()?.takeIf { it.isNotEmpty() } ?: rawSite
+                val itemSite = watch.site?.trim()?.lowercase(Locale.ROOT)?.takeIf { it.isNotEmpty() } ?: rawSite
                 if (itemSite != rawSite) {
                     throw BackupValidationException("旧版观看记录站点不匹配：$itemSite != $rawSite")
                 }
@@ -166,7 +167,7 @@ internal object LegacyR34vBackupAdapter {
 
             // Readings
             for (reading in bucket.readings) {
-                val entrySite = reading.entry.site?.trim()?.lowercase()?.takeIf { it.isNotEmpty() } ?: rawSite
+                val entrySite = reading.entry.site?.trim()?.lowercase(Locale.ROOT)?.takeIf { it.isNotEmpty() } ?: rawSite
                 if (entrySite != rawSite) {
                     throw BackupValidationException("旧版阅读记录站点不匹配：$entrySite != $rawSite")
                 }
@@ -187,7 +188,7 @@ internal object LegacyR34vBackupAdapter {
 
             // Subscriptions
             bucket.subscriptions.forEachIndexed { index, sub ->
-                val subSite = sub.site?.trim()?.lowercase()?.takeIf { it.isNotEmpty() } ?: rawSite
+                val subSite = sub.site?.trim()?.lowercase(Locale.ROOT)?.takeIf { it.isNotEmpty() } ?: rawSite
                 if (subSite != rawSite) {
                     throw BackupValidationException("旧版订阅记录站点不匹配：$subSite != $rawSite")
                 }

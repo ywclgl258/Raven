@@ -18,13 +18,13 @@
 
 ### 1.2 自适应启动图标矢量规范
 
-Raven 的启动图标由设计源 `D:\rule34\design\raven\raven-icon.svg`、`raven-foreground.svg`、`raven-monochrome.svg`（只读引用）转换为 Android VectorDrawable，配置在 `app/src/main/res/mipmap-anydpi-v26/ic_launcher.xml`（及 `ic_launcher_round.xml`），同时附带 `mdpi`–`xxxhdpi` 传统 PNG 兼容 API 24–25：
+Raven 的启动图标采用 **02 绯红疾翼** 设计体系（源稿与 Play 商店图标位于 `docs/icon-concepts/02-crimson-wing-android/`），由 `adaptive-background.svg`、`adaptive-foreground.svg`、`adaptive-monochrome.svg` 转换为 Android VectorDrawable，配置在 `app/src/main/res/mipmap-anydpi-v26/ic_launcher.xml`（及 `ic_launcher_round.xml`），同时附带 `mdpi`–`xxxhdpi`（48–192px）传统圆角方形及圆形 PNG 兼容 API 24–25：
 
 | 图层 | 文件路径 | 画布与安全区参数 | 视觉定义 |
 |---|---|---|---|
-| **背景层** | `app/src/main/res/drawable/ic_launcher_background.xml` | `108dp × 108dp`（`viewport 1024×1024`） | 垂直暗黑曜石渐变 `#FF1B1B20 -> #FF07070A` + 径向绯红微光 `#1FFF4D58 -> #00FF4D58`（圆心 `(706.56, 245.76)` ≈ `(69%, 24%)`，半径 `737.28`） |
-| **前景层** | `app/src/main/res/drawable/ic_launcher_foreground.xml` | `108dp × 108dp`；`<group pivotX="512" pivotY="512" scaleX="0.68" scaleY="0.68">` | **安全区缩放 `0.68`**（保障圆形/圆角矩形/水滴等所有系统遮罩不裁切羽翼）；几何银白渡鸦渐变 `#FFFFFFFF -> #FFD8D5D9` + 羽翼切面 `#FFC9C7CC` / `#FFE4E1E4` / `#FFCCC9CE` + 绯红渡鸦之眼 `#FFFF4D58` |
-| **单色层** | `app/src/main/res/drawable/ic_launcher_monochrome.xml` | `108dp × 108dp`；同 `pivot 512`、`scale 0.68` | 纯白 `#FFFFFFFF` + `fillType="evenOdd"` 镂空剪影（眼部与羽缝留空），适配 Android 13+ 主题图标 |
+| **背景层** | `app/src/main/res/drawable/ic_launcher_background.xml` | `108dp × 108dp`（`viewport 1254×1254`） | 纯黑曜石 `#09090B` 背景铺满画布 |
+| **前景层** | `app/src/main/res/drawable/ic_launcher_foreground.xml` | `108dp × 108dp`（`viewport 1254×1254`） | 绯红疾翼渡鸦剪影（**Raven Crimson `#FF4D58`**），居中对齐 Android 自适应图标安全区，保证圆形/圆角矩形/水滴等系统遮罩完整展示 |
+| **单色层** | `app/src/main/res/drawable/ic_launcher_monochrome.xml` | `108dp × 108dp`（`viewport 1254×1254`） | 纯白 `#FFFFFF` 同轮廓剪影，适配 Android 13+ 系统主题图标着色 |
 
 ### 1.3 三大视觉原则：**Dark Obsidian × Apple HIG Precision × Netflix Cinema**
 

@@ -66,6 +66,20 @@ val settingsFeatureModule: Module = module {
         )
     }
 
+    single {
+        val appContext = androidContext()
+        val info = getOrNull<RavenAppInfo>() ?: RavenAppInfo.fromContext(appContext)
+        WebDavSyncClient(
+            apiClient = get(NetworkQualifiers.API),
+            backupDataRepository = get(),
+            backupCodec = get(),
+            backupValidator = get(),
+            preferencesRepository = get(),
+            appInfo = info,
+            dispatchers = get(),
+        )
+    }
+
     single<StorageMigrationExecutor> {
         val coordinator = get<DownloadCoordinator>()
         StorageMigrationExecutor { onProgress ->
@@ -98,6 +112,9 @@ val settingsFeatureModule: Module = module {
             appInfo = info,
             dispatchers = get(),
             tagDictionaryRepository = get(),
+            downloadCaches = getOrNull(),
+            imageLoader = getOrNull(),
+            privacyLockStore = getOrNull(),
         )
     }
 
@@ -139,6 +156,9 @@ val settingsFeatureModule: Module = module {
             safBridge = get(),
             appInfo = info,
             dispatchers = get(),
+            webDavCredentialStore = getOrNull(),
+            webDavSyncClient = getOrNull(),
+            preferencesRepository = getOrNull(),
         )
     }
 

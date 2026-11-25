@@ -16,11 +16,16 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
+import androidx.compose.material.icons.outlined.CloudSync
+import androidx.compose.material.icons.outlined.CloudUpload
+import androidx.compose.material.icons.outlined.DeleteOutline
 import androidx.compose.material.icons.outlined.EnhancedEncryption
 import androidx.compose.material.icons.outlined.FileOpen
 import androidx.compose.material.icons.outlined.FileUpload
 import androidx.compose.material.icons.outlined.LockOpen
+import androidx.compose.material.icons.outlined.NetworkCheck
 import androidx.compose.material.icons.outlined.Restore
+import androidx.compose.material.icons.outlined.Save
 import androidx.compose.material.icons.outlined.Shield
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -80,6 +85,16 @@ fun BackupRestoreScreen(
         onDecryptImport = viewModel::decryptAndPreviewImport,
         onConfirmRestore = viewModel::confirmAndRestoreImport,
         onCancelImport = viewModel::cancelStagedImport,
+        onWebDavEndpointChange = viewModel::updateWebDavEndpointUrl,
+        onWebDavUsernameChange = viewModel::updateWebDavUsername,
+        onWebDavPasswordChange = viewModel::updateWebDavPassword,
+        onWebDavPassphraseChange = viewModel::updateWebDavPassphrase,
+        onWebDavFileNameChange = viewModel::updateWebDavRemoteFileName,
+        onSaveWebDavConfig = viewModel::saveWebDavConfig,
+        onClearWebDavConfig = viewModel::clearWebDavConfig,
+        onTestWebDavConnection = viewModel::testWebDavConnection,
+        onPushWebDavBackup = viewModel::pushWebDavBackup,
+        onPullWebDavBackup = viewModel::pullAndRestoreWebDavBackup,
         modifier = modifier,
     )
 }
@@ -98,11 +113,23 @@ fun BackupRestoreScreenContent(
     onDecryptImport: () -> Unit,
     onConfirmRestore: () -> Unit,
     onCancelImport: () -> Unit,
+    onWebDavEndpointChange: (String) -> Unit = {},
+    onWebDavUsernameChange: (String) -> Unit = {},
+    onWebDavPasswordChange: (String) -> Unit = {},
+    onWebDavPassphraseChange: (String) -> Unit = {},
+    onWebDavFileNameChange: (String) -> Unit = {},
+    onSaveWebDavConfig: () -> Unit = {},
+    onClearWebDavConfig: () -> Unit = {},
+    onTestWebDavConnection: () -> Unit = {},
+    onPushWebDavBackup: () -> Unit = {},
+    onPullWebDavBackup: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val colors = LocalRavenColors.current
     var exportPwdVisible by rememberSaveable { mutableStateOf(false) }
     var importPwdVisible by rememberSaveable { mutableStateOf(false) }
+    var webDavPwdVisible by rememberSaveable { mutableStateOf(false) }
+    var webDavPassphraseVisible by rememberSaveable { mutableStateOf(false) }
 
     // Protect backup passwords against screen capture.
     SecureWindowEffect(enabled = true)
@@ -138,8 +165,9 @@ fun BackupRestoreScreenContent(
                 .fillMaxWidth(),
         ) {
             item(key = "backup_mode_tabs") {
-                Row(
+                FlowRow(
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
                     modifier = Modifier.fillMaxWidth(),
                 ) {
                     RavenFilterChip(
@@ -155,6 +183,13 @@ fun BackupRestoreScreenContent(
                         leadingIcon = Icons.Outlined.Restore,
                         onClick = { onSelectTab(BackupRestoreTab.IMPORT) },
                         modifier = Modifier.testTag("backup_tab_import"),
+                    )
+                    RavenFilterChip(
+                        label = "WebDAV 云同步",
+                        selected = uiState.activeTab == BackupRestoreTab.WEBDAV,
+                        leadingIcon = Icons.Outlined.CloudSync,
+                        onClick = { onSelectTab(BackupRestoreTab.WEBDAV) },
+                        modifier = Modifier.testTag("backup_tab_webdav"),
                     )
                 }
             }
@@ -503,6 +538,165 @@ fun BackupRestoreScreenContent(
                                 message = "合并后合计：收藏 ${summary.favoritesCount} 项 · 历史 ${summary.totalHistoryCount} 项 · 片单 ${summary.shelvesCount} 个（${summary.shelfItemsCount} 项）· 书签 ${summary.totalBookmarksCount} 个 · 订阅 ${summary.tagSubscriptionsCount} 项。已自动释放临时文件读取授权。",
                                 tone = RavenStatusTone.SUCCESS,
                                 modifier = Modifier.testTag("backup_import_success_banner"),
+                            )
+                        }
+                    }
+                }
+
+                BackupRestoreTab.WEBDAV -> {
+                    item(key = "webdav_form_section") {
+                        RavenGroupedSection(
+                            title = "WebDAV 服务器与加密口令",
+                            footer = if (uiState.webDavLastSyncAt > 0L) {
+                                "仅支持 HTTPS WebDAV 地址；凭据与加密口令均经硬件级密钥加密保存于本机，最近同步时间：${SettingsFormatters.formatTimestamp(uiState.webDavLastSyncAt)}。"
+                            } else {
+                                "仅支持 HTTPS WebDAV 地址；上传前在本地先执行 RVNBK01 端到端加密，服务端无法窥探任何数据。"
+                            },
+                        ) {
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(16.dp),
+                                verticalArrangement = Arrangement.spacedBy(12.dp),
+                            ) {
+                                SettingsTextField(
+                                    value = uiState.webDavEndpointUrl,
+                                    onValueChange = onWebDavEndpointChange,
+                                    label = "WebDAV 服务器目录 URL",
+                                    placeholder = "https://dav.example.com/raven",
+                                    enabled = !uiState.isWebDavBusy,
+                                    keyboardOptions = KeyboardOptions(
+                                        keyboardType = KeyboardType.Uri,
+                                        imeAction = ImeAction.Next,
+                                    ),
+                                    modifier = Modifier.testTag("webdav_endpoint_field"),
+                                )
+                                SettingsTextField(
+                                    value = uiState.webDavUsername,
+                                    onValueChange = onWebDavUsernameChange,
+                                    label = "账号 / 用户名",
+                                    placeholder = "your-account",
+                                    enabled = !uiState.isWebDavBusy,
+                                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Next),
+                                    modifier = Modifier.testTag("webdav_username_field"),
+                                )
+                                SettingsTextField(
+                                    value = uiState.webDavPassword,
+                                    onValueChange = onWebDavPasswordChange,
+                                    label = "WebDAV 密码 / 应用专用密码",
+                                    isPassword = true,
+                                    passwordVisible = webDavPwdVisible,
+                                    onTogglePasswordVisibility = { webDavPwdVisible = !webDavPwdVisible },
+                                    enabled = !uiState.isWebDavBusy,
+                                    keyboardOptions = KeyboardOptions(
+                                        keyboardType = KeyboardType.Password,
+                                        imeAction = ImeAction.Next,
+                                    ),
+                                    modifier = Modifier.testTag("webdav_password_field"),
+                                )
+                                SettingsTextField(
+                                    value = uiState.webDavPassphrase,
+                                    onValueChange = onWebDavPassphraseChange,
+                                    label = "备份文件端到端加密口令（至少 ${BackupCodec.MIN_PASSWORD_LENGTH} 位）",
+                                    isPassword = true,
+                                    passwordVisible = webDavPassphraseVisible,
+                                    onTogglePasswordVisibility = { webDavPassphraseVisible = !webDavPassphraseVisible },
+                                    enabled = !uiState.isWebDavBusy,
+                                    keyboardOptions = KeyboardOptions(
+                                        keyboardType = KeyboardType.Password,
+                                        imeAction = ImeAction.Next,
+                                    ),
+                                    modifier = Modifier.testTag("webdav_passphrase_field"),
+                                )
+                                SettingsTextField(
+                                    value = uiState.webDavRemoteFileName,
+                                    onValueChange = onWebDavFileNameChange,
+                                    label = "远端文件名",
+                                    placeholder = "raven-sync.rvnbk",
+                                    enabled = !uiState.isWebDavBusy,
+                                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+                                    modifier = Modifier.testTag("webdav_filename_field"),
+                                )
+
+                                FlowRow(
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                                    modifier = Modifier.fillMaxWidth(),
+                                ) {
+                                    SettingsSecondaryButton(
+                                        text = "保存配置",
+                                        icon = Icons.Outlined.Save,
+                                        enabled = !uiState.isWebDavBusy,
+                                        onClick = onSaveWebDavConfig,
+                                        modifier = Modifier.testTag("webdav_save_button"),
+                                    )
+                                    SettingsSecondaryButton(
+                                        text = "测试连接",
+                                        icon = Icons.Outlined.NetworkCheck,
+                                        enabled = !uiState.isWebDavBusy,
+                                        onClick = onTestWebDavConnection,
+                                        modifier = Modifier.testTag("webdav_test_button"),
+                                    )
+                                    if (uiState.webDavSaved) {
+                                        SettingsSecondaryButton(
+                                            text = "清除配置",
+                                            icon = Icons.Outlined.DeleteOutline,
+                                            destructive = true,
+                                            enabled = !uiState.isWebDavBusy,
+                                            onClick = onClearWebDavConfig,
+                                            modifier = Modifier.testTag("webdav_clear_button"),
+                                        )
+                                    }
+                                }
+
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                                ) {
+                                    SettingsPrimaryButton(
+                                        text = if (uiState.isWebDavBusy) "处理中…" else "上传加密备份",
+                                        icon = Icons.Outlined.CloudUpload,
+                                        loading = uiState.isWebDavBusy,
+                                        enabled = !uiState.isWebDavBusy,
+                                        onClick = onPushWebDavBackup,
+                                        modifier = Modifier
+                                            .weight(1f)
+                                            .testTag("webdav_push_button"),
+                                    )
+                                    SettingsSecondaryButton(
+                                        text = "拉取并合并",
+                                        icon = Icons.Outlined.Restore,
+                                        enabled = !uiState.isWebDavBusy,
+                                        onClick = onPullWebDavBackup,
+                                        modifier = Modifier
+                                            .weight(1f)
+                                            .testTag("webdav_pull_button"),
+                                    )
+                                }
+                            }
+                        }
+                    }
+
+                    val davStatus = uiState.webDavStatusMessage
+                    if (!davStatus.isNullOrBlank()) {
+                        item(key = "webdav_status_banner") {
+                            SettingsNoticeBanner(
+                                title = "WebDAV 同步状态",
+                                message = davStatus,
+                                tone = RavenStatusTone.SUCCESS,
+                                modifier = Modifier.testTag("webdav_status_banner"),
+                            )
+                        }
+                    }
+
+                    val davErr = uiState.webDavError
+                    if (!davErr.isNullOrBlank()) {
+                        item(key = "webdav_error_banner") {
+                            SettingsNoticeBanner(
+                                title = "WebDAV 操作未完成",
+                                message = davErr,
+                                tone = RavenStatusTone.ERROR,
+                                modifier = Modifier.testTag("webdav_error_banner"),
                             )
                         }
                     }

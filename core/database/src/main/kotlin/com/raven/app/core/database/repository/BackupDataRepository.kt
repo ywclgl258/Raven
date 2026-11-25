@@ -1,5 +1,6 @@
 package com.raven.app.core.database.repository
 
+import com.raven.app.core.common.UrlSanitizer
 import com.raven.app.core.database.DatabaseTransactionRunner
 import com.raven.app.core.database.RavenDatabase
 import com.raven.app.core.database.dao.BlockedTermDao
@@ -255,7 +256,7 @@ class BackupDataRepository(
 
     private fun ImageFavorite.stripLocalDiskPath(): ImageFavorite {
         if (!siteId.isLocal) return this
-        val stripped = if (imageUrl.startsWith("/") || imageUrl.startsWith("file://", ignoreCase = true)) {
+        val stripped = if (imageUrl.isNotBlank() && !UrlSanitizer.isHttpsUrl(imageUrl)) {
             ""
         } else {
             imageUrl

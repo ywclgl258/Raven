@@ -35,7 +35,6 @@ object HtmlUrlCleaner {
             .replace("&#39;", "'")
             .replace("&lt;", "<")
             .replace("&gt;", ">")
-            .replace("&amp;", "&")
 
         text = numericEntityRegex.replace(text) { m ->
             val cp = m.groupValues[1].toIntOrNull()
@@ -45,7 +44,7 @@ object HtmlUrlCleaner {
             val cp = m.groupValues[1].toIntOrNull(16)
             if (cp != null && Character.isValidCodePoint(cp)) String(Character.toChars(cp)) else m.value
         }
-        return text
+        return text.replace("&amp;", "&")
     }
 
     /**

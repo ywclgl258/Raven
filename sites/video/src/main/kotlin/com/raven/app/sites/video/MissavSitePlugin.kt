@@ -32,6 +32,8 @@ import com.raven.app.core.sitespi.ResolvedLink
 import com.raven.app.core.sitespi.SearchSource
 import com.raven.app.core.sitespi.SitePlugin
 import com.raven.app.core.sitespi.VideoSource
+import com.raven.app.core.sitespi.suspendRunCatching
+import java.util.Locale
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import org.jsoup.Jsoup
@@ -60,7 +62,7 @@ class MissavSitePlugin(
             val newRequest = FeedRequest(siteId = SiteId.MISSAV, section = "new", sort = FeedSort.NEWEST)
             val popularRequest = FeedRequest(siteId = SiteId.MISSAV, section = "popular", sort = FeedSort.POPULAR)
             val newDeferred = async { loadFeed(newRequest) }
-            val popularDeferred = async { runCatching { loadFeed(popularRequest) }.getOrNull() }
+            val popularDeferred = async { suspendRunCatching { loadFeed(popularRequest) }.getOrNull() }
             val newPage = newDeferred.await()
             val popularPage = popularDeferred.await()
             VideoSiteSupport.buildHomeFeed(
@@ -305,6 +307,12 @@ class MissavSitePlugin(
         private val playlistRegex = Regex("""(https?://[^'"\s]+?/[0-9a-f-]{32,36}/playlist\.m3u8)""")
         private val pageParamRegex = Regex("[?&]page=(\\d+)")
         private val langPrefixRegex = Regex("^[a-z]{2}(?:-[a-z]{2})?$", RegexOption.IGNORE_CASE)
+        private val mirrorSegmentRegex = Regex("^dm\\d+$", RegexOption.IGNORE_CASE)
+        private val NON_VIDEO_ROOT_SEGMENTS: Set<String> = setOf(
+            "search", "genres", "actresses", "new", "release",
+            "uncensored-leak", "chinese-subtitle", "makers",
+            "today-hot", "weekly-hot", "monthly-hot",
+        )
 
         val DESCRIPTOR: SiteDescriptor = SiteDescriptor(
             id = SiteId.MISSAV,
@@ -412,10 +420,16 @@ class MissavSitePlugin(
             if (raw.isBlank()) return null
             val candidate = if (raw.startsWith("/")) "${baseUrl.trimEnd('/')}$raw" else raw.trim()
             val uri = UrlSanitizer.parseUriOrNull(candidate) ?: return null
-            val host = uri.host?.lowercase() ?: return null
+            val host = uri.host?.lowercase(Locale.ROOT) ?: return null
             if (!DESCRIPTOR.matchesHost(host)) return null
-            val segments = VideoSiteSupport.pathSegments(uri)
-            val code = segments.lastOrNull { it.isNotBlank() } ?: return null
+            val segments = VideoSiteSupport.pathSegments(uri).filter { it.isNotBlank() }
+            val code = when {
+                segments.size == 1 && segments[0].lowercase(Locale.ROOT) !in NON_VIDEO_ROOT_SEGMENTS -> segments[0]
+                segments.size == 2 &&
+                    (langPrefixRegex.matches(segments[0]) || mirrorSegmentRegex.matches(segments[0])) &&
+                    segments[1].lowercase(Locale.ROOT) !in NON_VIDEO_ROOT_SEGMENTS -> segments[1]
+                else -> return null
+            }
             if (!videoPathRegex.matches("/$code/")) return null
             return "${baseUrl.trimEnd('/')}/$code"
         }
@@ -524,7 +538,7 @@ class MissavSitePlugin(
             val tags = doc.select("a[href*=/genres/]").mapNotNull { a ->
                 val slug = a.attr("href").substringAfter("/genres/").trimEnd('/').substringBefore('?')
                 if (slug.isBlank() || slug.contains('/')) return@mapNotNull null
-                val label = HtmlUrlCleaner.decodeUrlComponent(slug)
+                val label = HtmlUrlCleaner.cleanText(a.text()).ifBlank { HtmlUrlCleaner.decodeUrlComponent(slug) }
                 TagRef(slug = slug, label = label, url = "$BASE_URL/genres/$slug")
             }.distinctBy { it.slug }
 

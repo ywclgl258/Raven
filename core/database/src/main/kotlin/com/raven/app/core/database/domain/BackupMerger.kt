@@ -6,6 +6,7 @@ import com.raven.app.core.database.RavenDatabase
 import com.raven.app.core.database.dao.ImageFavoriteDao
 import com.raven.app.core.database.dao.ReadingProgressDao
 import com.raven.app.core.database.dao.SearchHistoryDao
+import com.raven.app.core.database.dao.UpdateInboxDao
 import com.raven.app.core.database.dao.WatchProgressDao
 import com.raven.app.core.database.datastore.SettingsDataStore
 import com.raven.app.core.database.mapper.sanitized
@@ -446,18 +447,19 @@ object BackupMerger {
 
         fun accept(fav: ImageFavorite, preferOnTie: Boolean) {
             if (fav.mediaId.isBlank() || fav.pageIndex < 0) return
-            val key = "${fav.siteId.value}:${fav.mediaId}:${fav.pageIndex}"
+            val normalized = if (fav.pageIndex == 0) fav.copy(pageIndex = 1) else fav
+            val key = "${normalized.siteId.value}:${normalized.mediaId}:${normalized.pageIndex}"
             val prev = byComposite[key]
             if (prev == null) {
-                byComposite[key] = fav
+                byComposite[key] = normalized
             } else {
                 val winner = when {
-                    fav.addedAt > prev.addedAt -> fav
-                    prev.addedAt > fav.addedAt -> prev
-                    preferOnTie -> fav
+                    normalized.addedAt > prev.addedAt -> normalized
+                    prev.addedAt > normalized.addedAt -> prev
+                    preferOnTie -> normalized
                     else -> prev
                 }
-                val other = if (winner === fav) prev else fav
+                val other = if (winner === normalized) prev else normalized
                 byComposite[key] = winner.copy(
                     mediaTitle = winner.mediaTitle.ifBlank { other.mediaTitle },
                     pageUrl = winner.pageUrl.ifBlank { other.pageUrl },
@@ -576,6 +578,7 @@ object BackupMerger {
 
         return byComposite.values
             .sortedByDescending { it.discoveredAt }
+            .take(UpdateInboxDao.MAX_INBOX_ITEMS)
             .map { entry ->
                 val safeId = entry.id.takeIf { it.isNotBlank() && usedIds.add(it) }
                     ?: UUID.randomUUID().toString().also(usedIds::add)

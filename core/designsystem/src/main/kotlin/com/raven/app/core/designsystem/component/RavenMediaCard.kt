@@ -404,10 +404,10 @@ fun RavenCompactMediaRow(
         modifier = modifier
             .fillMaxWidth()
             .heightIn(min = 76.dp)
+            .ravenSpringPress(interactionSource = interactionSource)
             .clip(RavenShapes.CardShape)
             .background(colors.surface1)
             .border(0.5.dp, colors.hairline, RavenShapes.CardShape)
-            .ravenSpringPress(interactionSource = interactionSource)
             .combinedClickable(
                 interactionSource = interactionSource,
                 indication = null,
@@ -556,6 +556,7 @@ private fun OverlayMicroBadge(
             ),
             color = colors.inkPrimary,
             maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
         )
     }
 }

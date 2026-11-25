@@ -10,6 +10,7 @@ import com.raven.app.core.common.DefaultAppDispatchers
 import com.raven.app.core.common.TagDictionary
 import com.raven.app.core.database.domain.CompletionPolicy
 import com.raven.app.core.database.model.AppSettings
+import com.raven.app.core.database.model.ShelfWithSummary
 import com.raven.app.core.database.repository.BlockedTermsRepository
 import com.raven.app.core.database.repository.BookmarkRepository
 import com.raven.app.core.database.repository.FavoriteRepository
@@ -19,6 +20,8 @@ import com.raven.app.core.database.repository.PreferencesRepository
 import com.raven.app.core.database.repository.ShelfRepository
 import com.raven.app.core.database.repository.TagDictionaryRepository
 import com.raven.app.core.designsystem.component.RavenFormatters
+import com.raven.app.core.media.cast.LanCastDevice
+import com.raven.app.core.media.cast.LanCastManager
 import com.raven.app.core.media.download.OfflineMediaHandle
 import com.raven.app.core.media.download.PlaybackQueueSession
 import com.raven.app.core.media.download.PlaybackQueueStore
@@ -45,9 +48,11 @@ import com.raven.app.core.model.VideoStream
 import com.raven.app.core.model.WatchProgress
 import com.raven.app.core.sitespi.SiteRegistry
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
@@ -91,11 +96,16 @@ private data class PlayerLocalState(
     val localNotice: String? = null,
     val isRefreshingExpiredStream: Boolean = false,
     val autoFullscreenTriggeredForKey: String? = null,
+    val castDevices: List<LanCastDevice> = emptyList(),
+    val isScanningCast: Boolean = false,
+    val activeCastDevice: LanCastDevice? = null,
 )
 
 private data class PlayerPersonalBindings(
     val playbackPreferences: PlaybackPreferences = PlaybackPreferences(),
     val inWatchLater: Boolean = false,
+    val shelves: List<ShelfWithSummary> = emptyList(),
+    val containingShelfIds: Set<String> = emptySet(),
     val isFavorite: Boolean = false,
     val favoriteTagSlugs: Set<String> = emptySet(),
     val blockedTerms: Set<String> = emptySet(),
@@ -130,11 +140,15 @@ class PlayerViewModel(
     private val elapsedRealtimeMs: () -> Long = { SystemClock.elapsedRealtime() },
     private val mediaTagCacheRepository: MediaTagCacheRepository? = null,
     private val tagDictionaryRepository: TagDictionaryRepository? = null,
+    private val lanCastManager: LanCastManager? = null,
+    private val applicationScope: CoroutineScope? = null,
 ) : ViewModel() {
 
     private val activeTarget = MutableStateFlow<PlayerLaunchArgs?>(null)
     private val localState = MutableStateFlow(PlayerLocalState())
     private val effectivePlaybackPrefs = MutableStateFlow(PlaybackPreferences())
+    private val latestAppSettings = MutableStateFlow(AppSettings())
+    private val fallbackFlushScope by lazy { CoroutineScope(SupervisorJob() + dispatchers.io) }
 
     private val _sideEffects = MutableSharedFlow<PlayerSideEffect>(extraBufferCapacity = 16)
     val sideEffects: SharedFlow<PlayerSideEffect> = _sideEffects.asSharedFlow()
@@ -161,13 +175,13 @@ class PlayerViewModel(
         } else {
             val prefsAndFlags = combine(
                 preferencesRepository.observeEffectivePlaybackPreferences(target.siteId),
-                shelfRepository.observeContainingShelfIds(target.siteId, target.mediaId)
-                    .map { Shelf.WATCH_LATER_ID in it },
+                shelfRepository.observeContainingShelfIds(target.siteId, target.mediaId),
+                shelfRepository.observeShelvesWithSummary(),
                 favoriteRepository.observeIsFavorite(target.siteId, FavoriteKind.VIDEO, target.mediaId),
                 favoriteRepository.observeBySiteAndKind(target.siteId, FavoriteKind.TAG)
                     .map { list -> list.mapTo(linkedSetOf()) { it.targetId.trim().lowercase() } },
-            ) { prefs, watchLater, fav, favTags ->
-                Quad(prefs, watchLater, fav, favTags)
+            ) { prefs, containingIds, allShelves, fav, favTags ->
+                PersonalLeftSlice(prefs, containingIds.toSet(), allShelves, fav, favTags)
             }
             val cachedTagsFlow = mediaTagCacheRepository?.observeTagsBySite(target.siteId) ?: flowOf(emptyMap())
             val termsBookmarksDownloads = combine(
@@ -180,10 +194,12 @@ class PlayerViewModel(
             }
             combine(prefsAndFlags, termsBookmarksDownloads, dictRevisionFlow) { left, right, dictRevision ->
                 PlayerPersonalBindings(
-                    playbackPreferences = left.first,
-                    inWatchLater = left.second,
-                    isFavorite = left.third,
-                    favoriteTagSlugs = left.fourth,
+                    playbackPreferences = left.prefs,
+                    inWatchLater = Shelf.WATCH_LATER_ID in left.containingShelfIds,
+                    shelves = left.shelves,
+                    containingShelfIds = left.containingShelfIds,
+                    isFavorite = left.isFavorite,
+                    favoriteTagSlugs = left.favoriteTagSlugs,
                     blockedTerms = right.first,
                     cachedTagsByKey = right.second,
                     timeBookmarks = right.third,
@@ -216,6 +232,7 @@ class PlayerViewModel(
     )
 
     init {
+        observeAppSettingsSync()
         observeEffectiveSpeedSync()
         observeEngineEvents()
         if (initialArgs != null) {
@@ -255,6 +272,9 @@ class PlayerViewModel(
 
             val normalizedArgs = normalizeArgs(args)
             val siteDisplay = resolveSiteDisplayName(normalizedArgs.siteId)
+            if (previousTarget?.siteId != normalizedArgs.siteId) {
+                effectivePlaybackPrefs.value = PlaybackPreferences(siteId = normalizedArgs.siteId)
+            }
             activeTarget.value = normalizedArgs
             localState.update { state ->
                 state.copy(
@@ -269,6 +289,7 @@ class PlayerViewModel(
                     localNotice = null,
                     isRefreshingExpiredStream = false,
                     autoFullscreenTriggeredForKey = null,
+                    activeCastDevice = null,
                 )
             }
             if (previousTarget != null && previousTarget.compositeKey != normalizedArgs.compositeKey) {
@@ -337,11 +358,12 @@ class PlayerViewModel(
      */
     fun onBackgrounded(isInPipMode: Boolean) {
         val target = activeTarget.value
-        if (!isInPipMode && playback.state.value.isPlaying) {
+        val keepBackgroundAudio = latestAppSettings.value.backgroundAudioPlayback
+        if (!isInPipMode && !keepBackgroundAudio && playback.state.value.isPlaying) {
             playback.pause()
         }
         if (target != null) {
-            viewModelScope.launch {
+            (applicationScope ?: fallbackFlushScope).launch {
                 runCatching { persistWatchProgressInternal(target, force = true) }
             }
         }
@@ -354,7 +376,7 @@ class PlayerViewModel(
     fun pause() {
         playback.pause()
         val target = activeTarget.value ?: return
-        viewModelScope.launch {
+        (applicationScope ?: fallbackFlushScope).launch {
             runCatching { persistWatchProgressInternal(target, force = true) }
         }
     }
@@ -364,7 +386,7 @@ class PlayerViewModel(
         playback.togglePlayPause()
         if (wasPlaying) {
             val target = activeTarget.value ?: return
-            viewModelScope.launch {
+            (applicationScope ?: fallbackFlushScope).launch {
                 runCatching { persistWatchProgressInternal(target, force = true) }
             }
         }
@@ -449,6 +471,21 @@ class PlayerViewModel(
             val qualityKey = stream.quality.ifBlank { stream.label }
             updateSitePlaybackPreferences { it.copy(preferredQuality = qualityKey) }
         }
+    }
+
+    fun selectAudioTrack(groupIndex: Int, trackIndex: Int) {
+        playback.selectAudioTrack(groupIndex, trackIndex)
+        postNotice("已切换音轨")
+    }
+
+    fun selectSubtitleTrack(groupIndex: Int, trackIndex: Int) {
+        playback.selectSubtitleTrack(groupIndex, trackIndex)
+        postNotice("已开启字幕")
+    }
+
+    fun disableSubtitles() {
+        playback.disableSubtitles()
+        postNotice("已关闭字幕")
     }
 
     // ---- A-B Loop ----
@@ -618,6 +655,115 @@ class PlayerViewModel(
                 PlayerSideEffect.ShowMessage(if (added) "已加入稍后看" else "已移出稍后看"),
             )
         }
+    }
+
+    fun setShelfMembership(shelfId: String, add: Boolean) {
+        val item = currentMediaItem() ?: return
+        viewModelScope.launch(dispatchers.io) {
+            if (add) {
+                shelfRepository.addItem(
+                    shelfId = shelfId,
+                    item = ShelfItem(
+                        shelfId = shelfId,
+                        siteId = item.siteId,
+                        mediaId = item.id,
+                        url = item.url,
+                        kind = MediaKind.VIDEO,
+                        title = item.title,
+                        coverUrl = item.coverUrl,
+                        durationSeconds = item.durationSeconds,
+                        addedAt = clockMs(),
+                    ),
+                )
+            } else {
+                shelfRepository.removeItem(shelfId, item.siteId, item.id)
+            }
+        }
+    }
+
+    fun createShelfAndAdd(name: String) {
+        val trimmed = name.trim()
+        val item = currentMediaItem() ?: return
+        if (trimmed.isEmpty()) return
+        viewModelScope.launch(dispatchers.io) {
+            val created = shelfRepository.createShelf(name = trimmed)
+            shelfRepository.addItem(
+                shelfId = created.id,
+                item = ShelfItem(
+                    shelfId = created.id,
+                    siteId = item.siteId,
+                    mediaId = item.id,
+                    url = item.url,
+                    kind = MediaKind.VIDEO,
+                    title = item.title,
+                    coverUrl = item.coverUrl,
+                    durationSeconds = item.durationSeconds,
+                    addedAt = clockMs(),
+                ),
+            )
+            _sideEffects.tryEmit(PlayerSideEffect.ShowMessage("已加入片单「${created.name}」"))
+        }
+    }
+
+    fun discoverCastDevices() {
+        val manager = lanCastManager ?: return
+        if (localState.value.isScanningCast) return
+        viewModelScope.launch {
+            localState.update { it.copy(isScanningCast = true) }
+            try {
+                val found = manager.discoverDevices()
+                localState.update { it.copy(castDevices = found, isScanningCast = false) }
+                if (found.isEmpty()) {
+                    _sideEffects.tryEmit(PlayerSideEffect.ShowMessage("局域网内未发现 DLNA 投屏设备"))
+                }
+            } catch (ce: CancellationException) {
+                throw ce
+            } catch (_: Throwable) {
+                localState.update { it.copy(isScanningCast = false) }
+                _sideEffects.tryEmit(PlayerSideEffect.ShowMessage("扫描投屏设备失败"))
+            }
+        }
+    }
+
+    fun castCurrentVideo(device: LanCastDevice) {
+        val manager = lanCastManager ?: return
+        val streamUrl = playback.state.value.currentStream?.url?.takeIf { it.startsWith("http", ignoreCase = true) }
+            ?: activeTarget.value?.url?.takeIf { it.startsWith("http", ignoreCase = true) }
+        if (streamUrl == null) {
+            _sideEffects.tryEmit(PlayerSideEffect.ShowMessage("当前仅支持对在线直链或局域网视频发起 DLNA 投屏"))
+            return
+        }
+        val title = uiState.value.title.ifBlank { "Raven Video" }
+        viewModelScope.launch {
+            val result = runCatching {
+                manager.castVideo(device = device, streamUrl = streamUrl, title = title)
+            }
+            if (result.isSuccess) {
+                playback.pause()
+                localState.update { it.copy(activeCastDevice = device) }
+                _sideEffects.tryEmit(PlayerSideEffect.ShowMessage("已投屏至 ${device.friendlyName}"))
+            } else {
+                _sideEffects.tryEmit(PlayerSideEffect.ShowMessage("投屏至 ${device.friendlyName} 失败"))
+            }
+        }
+    }
+
+    fun stopCast() {
+        val manager = lanCastManager ?: return
+        val device = localState.value.activeCastDevice ?: return
+        viewModelScope.launch {
+            manager.stopCast(device)
+            localState.update { it.copy(activeCastDevice = null) }
+            _sideEffects.tryEmit(PlayerSideEffect.ShowMessage("已断开投屏"))
+        }
+    }
+
+    fun launchSystemExternalPlayer(): Boolean {
+        val manager = lanCastManager ?: return false
+        val streamUrl = playback.state.value.currentStream?.url?.takeIf { it.startsWith("http", ignoreCase = true) }
+            ?: activeTarget.value?.url?.takeIf { it.isNotBlank() }
+            ?: return false
+        return manager.launchExternalPlayer(streamUrl)
     }
 
     fun toggleFavorite() {
@@ -900,21 +1046,32 @@ class PlayerViewModel(
 
     // ---- Internal Orchestration ----
 
+    private fun observeAppSettingsSync() {
+        viewModelScope.launch {
+            preferencesRepository.settings.collect { settings ->
+                latestAppSettings.value = settings
+            }
+        }
+    }
+
     private fun observeEffectiveSpeedSync() {
         viewModelScope.launch {
             val prefsFlow = activeTarget.flatMapLatest { target ->
                 if (target == null) {
-                    flowOf(PlaybackPreferences())
+                    flowOf<Pair<SiteId?, PlaybackPreferences>>(null to PlaybackPreferences())
                 } else {
                     preferencesRepository.observeEffectivePlaybackPreferences(target.siteId)
+                        .map { prefs -> target.siteId to prefs }
                 }
             }
             val controlFlow = localState.map {
                 Triple(it.sessionUserSpeed, it.isTemporarySpeedActive, it.temporarySpeedValue)
             }.distinctUntilChanged()
 
-            combine(prefsFlow, controlFlow) { prefs, (sessionSpeed, isTemp, tempSpeed) ->
-                effectivePlaybackPrefs.value = prefs
+            combine(prefsFlow, controlFlow) { (siteId, prefs), (sessionSpeed, isTemp, tempSpeed) ->
+                if (siteId == null || siteId == activeTarget.value?.siteId) {
+                    effectivePlaybackPrefs.value = prefs
+                }
                 val raw = when {
                     isTemp -> tempSpeed
                     sessionSpeed != null -> sessionSpeed
@@ -956,7 +1113,8 @@ class PlayerViewModel(
 
                 // 3. One-shot auto-fullscreen matching video aspect ratio (never on autoplay)
                 val local = localState.value
-                if (!target.autoplay &&
+                val startedByAutoplay = target.autoplay && latestAppSettings.value.autoplayVideo
+                if (!startedByAutoplay &&
                     engine.isInitialized &&
                     engine.isPlaying &&
                     engine.videoWidth > 0 &&
@@ -991,6 +1149,8 @@ class PlayerViewModel(
         }
 
         val appSettings = runCatching { preferencesRepository.currentSettings() }.getOrDefault(AppSettings())
+        latestAppSettings.value = appSettings
+        val effectiveArgs = args.copy(autoplay = args.autoplay && appSettings.autoplayVideo)
         val effectivePrefs = runCatching {
             preferencesRepository.observeEffectivePlaybackPreferences(args.siteId).first()
         }.getOrDefault(
@@ -1011,7 +1171,7 @@ class PlayerViewModel(
         val parsedLocalId = LocalLibraryImporter.parseLocalBookId(args.url)
         if (args.siteId.isLocal || parsedLocalId != null) {
             val bookId = parsedLocalId ?: args.mediaId
-            loadLocalVideo(args, bookId, resumePositionMs)
+            loadLocalVideo(effectiveArgs, bookId, resumePositionMs)
             return
         }
 
@@ -1022,11 +1182,11 @@ class PlayerViewModel(
 
         when (offlineHandle) {
             is OfflineMediaHandle.LocalVideo -> {
-                loadLocalVideo(args, offlineHandle.bookId, resumePositionMs, explicitPath = offlineHandle.filePath)
+                loadLocalVideo(effectiveArgs, offlineHandle.bookId, resumePositionMs, explicitPath = offlineHandle.filePath)
                 return
             }
             is OfflineMediaHandle.OfflineVideo -> {
-                loadOfflineVideo(args, offlineHandle, resumePositionMs)
+                loadOfflineVideo(effectiveArgs, offlineHandle, resumePositionMs)
                 return
             }
             else -> {
@@ -1118,7 +1278,7 @@ class PlayerViewModel(
                 streams = detail.streams,
                 preferredQuality = preferredQuality,
                 startPositionMs = resumePositionMs,
-                autoPlay = args.autoplay,
+                autoPlay = effectiveArgs.autoplay,
                 streamCacheEnabled = appSettings.streamCacheEnabled,
                 seekCacheEnabled = appSettings.seekCacheEnabled,
             )
@@ -1278,10 +1438,10 @@ class PlayerViewModel(
         }
     }
 
-    private suspend fun persistWatchProgressInternal(target: PlayerLaunchArgs, force: Boolean) {
+    private fun buildWatchProgressSnapshot(target: PlayerLaunchArgs, force: Boolean): WatchProgress? {
         val engine = playback.state.value
-        if (!engine.isInitialized) return
-        if (engine.siteId != target.siteId || engine.mediaId != target.mediaId) return
+        if (!engine.isInitialized) return null
+        if (engine.siteId != target.siteId || engine.mediaId != target.mediaId) return null
 
         val detail = localState.value.detail
         val rawPos = playback.currentPositionMs().coerceAtLeast(0L)
@@ -1291,14 +1451,14 @@ class PlayerViewModel(
         val completed = engine.isEnded
         val effectivePos = if (completed && durationMs > 0L) durationMs else rawPos
 
-        if (!force && !completed && effectivePos <= 0L) return
+        if (!force && !completed && effectivePos <= 0L) return null
         if (!force &&
             !completed &&
             lastSavedCompositeKey == target.compositeKey &&
             lastSavedCompleted == completed &&
             abs(effectivePos - lastSavedPositionMs) < PROGRESS_SAVE_DELTA_MS
         ) {
-            return
+            return null
         }
 
         val title = detail?.item?.title?.takeIf { it.isNotBlank() }
@@ -1306,23 +1466,32 @@ class PlayerViewModel(
         val coverUrl = detail?.item?.coverUrl?.takeIf { it.isNotBlank() } ?: target.coverUrl
         val url = detail?.item?.url?.takeIf { it.isNotBlank() } ?: target.url
 
-        historyRepository.saveWatchProgress(
-            WatchProgress(
-                siteId = target.siteId,
-                mediaId = target.mediaId,
-                url = url,
-                title = title,
-                coverUrl = coverUrl,
-                positionMs = effectivePos,
-                durationMs = durationMs,
-                updatedAt = clockMs(),
-                completed = completed,
-                quality = engine.currentStream?.quality?.ifBlank { engine.currentStream?.label },
-            ),
+        return WatchProgress(
+            siteId = target.siteId,
+            mediaId = target.mediaId,
+            url = url,
+            title = title,
+            coverUrl = coverUrl,
+            positionMs = effectivePos,
+            durationMs = durationMs,
+            updatedAt = clockMs(),
+            completed = completed,
+            quality = engine.currentStream?.quality?.ifBlank { engine.currentStream?.label },
         )
+    }
+
+    private suspend fun persistWatchProgressInternal(target: PlayerLaunchArgs, force: Boolean) {
+        val incognito = latestAppSettings.value.incognitoMode ||
+            runCatching { preferencesRepository.currentSettings().incognitoMode }.getOrDefault(false)
+        if (incognito) return
+
+        val snapshot = buildWatchProgressSnapshot(target, force) ?: return
+        withContext(NonCancellable) {
+            historyRepository.saveWatchProgress(snapshot)
+        }
         lastSavedCompositeKey = target.compositeKey
-        lastSavedPositionMs = effectivePos
-        lastSavedCompleted = completed
+        lastSavedPositionMs = snapshot.positionMs
+        lastSavedCompleted = snapshot.completed
     }
 
     private fun updateSitePlaybackPreferences(transform: (PlaybackPreferences) -> PlaybackPreferences) {
@@ -1541,6 +1710,15 @@ class PlayerViewModel(
             translateTags = appSettings.translateTags,
             blockTagsGlobally = appSettings.blockTagsGlobally,
             reduceTransparency = appSettings.reduceTransparency,
+            backgroundAudioPlayback = appSettings.backgroundAudioPlayback,
+            audioTracks = engine.audioTracks,
+            subtitleTracks = engine.subtitleTracks,
+            subtitlesEnabled = engine.subtitlesEnabled,
+            shelves = personal.shelves,
+            containingShelfIds = personal.containingShelfIds,
+            castDevices = local.castDevices,
+            isScanningCast = local.isScanningCast,
+            activeCastDevice = local.activeCastDevice,
             loopRange = engine.loopRange,
             sleepTimer = PlayerSleepTimerState(
                 isActive = local.sleepTimerDeadlineElapsedMs != null,
@@ -1569,16 +1747,31 @@ class PlayerViewModel(
     }
 
     override fun onCleared() {
+        val target = activeTarget.value
+        val snapshot = if (target != null && !latestAppSettings.value.incognitoMode) {
+            buildWatchProgressSnapshot(target, force = true)
+        } else {
+            null
+        }
         loadJob?.cancel()
         metadataEnrichJob?.cancel()
         refreshStreamJob?.cancel()
         seekPreviewJob?.cancel()
+        if (snapshot != null) {
+            (applicationScope ?: fallbackFlushScope).launch {
+                withContext(NonCancellable) {
+                    runCatching { historyRepository.saveWatchProgress(snapshot) }
+                }
+            }
+        }
         val decoder = seekPreviewDecoder
         seekPreviewDecoder = null
         if (decoder != null) {
             // Release decoder resources asynchronously via NonCancellable or clean shutdown
-            kotlinx.coroutines.CoroutineScope(dispatchers.io).launch {
-                runCatching { decoder.close() }
+            (applicationScope ?: fallbackFlushScope).launch {
+                withContext(NonCancellable) {
+                    runCatching { decoder.close() }
+                }
             }
         }
         playback.release()
@@ -1597,6 +1790,14 @@ class PlayerViewModel(
         val SPEED_PRESETS: List<Float> = listOf(0.5f, 0.75f, 1.0f, 1.25f, 1.5f, 1.75f, 2.0f, 2.5f, 3.0f)
     }
 }
+
+private data class PersonalLeftSlice(
+    val prefs: PlaybackPreferences,
+    val containingShelfIds: Set<String>,
+    val shelves: List<ShelfWithSummary>,
+    val isFavorite: Boolean,
+    val favoriteTagSlugs: Set<String>,
+)
 
 private data class Quad<A, B, C, D>(
     val first: A,

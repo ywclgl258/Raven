@@ -755,6 +755,11 @@ internal class FakeUpdateInboxDao : UpdateInboxDao {
     override suspend fun deleteAll() {
         rows.value = emptyMap()
     }
+
+    override suspend fun prune(limit: Int) {
+        val sorted = rows.value.values.sortedByDescending(UpdateInboxEntity::discoveredAt)
+        rows.value = sorted.take(limit).associateBy { it.id }
+    }
 }
 
 internal class FakeBlockedTermDao : BlockedTermDao {

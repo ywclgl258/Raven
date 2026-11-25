@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.outlined.CheckBox
@@ -404,11 +405,17 @@ fun LocalLibraryScreen(
             },
         )
 
-        LazyColumn(
-            modifier = Modifier.weight(1f),
-            contentPadding = PaddingValues(top = 10.dp, bottom = 28.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
+        BoxWithConstraints(
+            modifier = Modifier
+                .weight(1f)
+                .fillMaxWidth(),
         ) {
+            val columns = computeLibraryGridColumns(maxWidth.value.toInt())
+            LazyColumn(
+                modifier = Modifier.fillMaxSize(),
+                contentPadding = PaddingValues(top = 10.dp, bottom = 28.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
             if (!uiState.message.isNullOrBlank()) {
                 item(key = "local_msg") {
                     LibraryFeedbackBanner(
@@ -540,51 +547,46 @@ fun LocalLibraryScreen(
                     )
                 }
             } else {
-                item(key = "local_grid") {
-                    BoxWithConstraints(
+                val rows = uiState.books.chunked(columns)
+                itemsIndexed(
+                    items = rows,
+                    key = { idx, row -> "local_row_${idx}_${row.first().id}" },
+                ) { _, rowBooks ->
+                    Row(
                         modifier = Modifier
                             .fillMaxWidth()
                             .padding(horizontal = 16.dp),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
                     ) {
-                        val columns = computeLibraryGridColumns(maxWidth.value.toInt())
-                        val rows = remember(uiState.books, columns) { uiState.books.chunked(columns) }
-                        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                            rows.forEach { rowBooks ->
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.spacedBy(10.dp),
-                                ) {
-                                    rowBooks.forEach { book ->
-                                        val mediaItem = uiState.mediaItems[book.id]
-                                        val isSelected = if (uiState.selectionMode) {
-                                            book.id in uiState.selectedIds
-                                        } else {
-                                            null
-                                        }
-                                        LocalBookGridCard(
-                                            book = book,
-                                            coverUrl = mediaItem?.coverUrl.orEmpty(),
-                                            selected = isSelected,
-                                            onClick = {
-                                                if (uiState.selectionMode) {
-                                                    viewModel.toggleSelectBook(book.id)
-                                                } else if (mediaItem != null) {
-                                                    navigator.openMedia(mediaItem, offlineOnly = true)
-                                                }
-                                            },
-                                            onRemoveClick = { removingBook = book },
-                                            modifier = Modifier.weight(1f),
-                                        )
-                                    }
-                                    repeat(columns - rowBooks.size) {
-                                        Spacer(modifier = Modifier.weight(1f))
-                                    }
-                                }
+                        rowBooks.forEach { book ->
+                            val mediaItem = uiState.mediaItems[book.id]
+                            val isSelected = if (uiState.selectionMode) {
+                                book.id in uiState.selectedIds
+                            } else {
+                                null
                             }
+                            LocalBookGridCard(
+                                book = book,
+                                coverUrl = mediaItem?.coverUrl.orEmpty(),
+                                selected = isSelected,
+                                onClick = {
+                                    if (uiState.selectionMode) {
+                                        viewModel.toggleSelectBook(book.id)
+                                    } else if (mediaItem != null) {
+                                        navigator.openMedia(mediaItem, offlineOnly = true)
+                                    }
+                                },
+                                onRemoveClick = { removingBook = book },
+                                modifier = Modifier.weight(1f),
+                            )
+                        }
+                        repeat(columns - rowBooks.size) {
+                            Spacer(modifier = Modifier.weight(1f))
                         }
                     }
                 }
             }
+        }
         }
 
         if (uiState.selectionMode) {

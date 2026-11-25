@@ -59,6 +59,7 @@ data class ShelfEntity(
     indices = [
         Index(value = ["shelf_id", "position"], orders = [Index.Order.ASC, Index.Order.ASC]),
         Index(value = ["shelf_id", "added_at"], orders = [Index.Order.ASC, Index.Order.DESC]),
+        Index(value = ["site_id", "media_id"]),
     ],
 )
 data class ShelfItemEntity(

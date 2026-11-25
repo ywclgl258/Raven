@@ -36,6 +36,7 @@ import com.raven.app.core.sitespi.SearchSource
 import com.raven.app.core.sitespi.SitePlugin
 import com.raven.app.core.sitespi.SiteSessionStore
 import com.raven.app.core.sitespi.VideoSource
+import com.raven.app.core.sitespi.suspendRunCatching
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import org.jsoup.Jsoup
@@ -58,7 +59,7 @@ class R34vSitePlugin(
             val latestRequest = FeedRequest(siteId = SiteId.R34V, section = "latest", sort = FeedSort.NEWEST)
             val popularRequest = FeedRequest(siteId = SiteId.R34V, section = "popular", sort = FeedSort.VIEWS)
             val latestDeferred = async { loadFeed(latestRequest) }
-            val popularDeferred = async { runCatching { loadFeed(popularRequest) }.getOrNull() }
+            val popularDeferred = async { suspendRunCatching { loadFeed(popularRequest) }.getOrNull() }
             val latestPage = latestDeferred.await()
             val popularPage = popularDeferred.await()
             VideoSiteSupport.buildHomeFeed(
@@ -81,7 +82,10 @@ class R34vSitePlugin(
                 url = url,
                 rateLimitBackoffMs = rateLimitBackoffMs,
             )
-            if (html.contains("id=\"login_username\"")) {
+            if (html.contains("id=\"login_username\"") &&
+                !html.contains("class=\"thumb") &&
+                !html.contains("list-videos")
+            ) {
                 throw SiteException.AuthRequired("此页面需要登录，请在设置中登录", siteId = SiteId.R34V)
             }
             val parsed = parseFeed(html, request, baseUrl = BASE_URL, fromCache = response.fromCache)

@@ -14,6 +14,18 @@ val libraryFeatureModule: Module = module {
         DownloadCoordinatorGateway(coordinator = get())
     }
 
+    single {
+        SubscriptionSyncRunner(
+            subscriptionRepository = get(),
+            blockedTermsRepository = get(),
+            preferencesRepository = get(),
+            siteRegistry = get(),
+            dispatchers = get(),
+            tagDictionary = getOrNull<TagDictionary>() ?: TagDictionary.default,
+            mediaTagCacheRepository = get(),
+        )
+    }
+
     viewModel {
         ProfileViewModel(
             historyRepository = get(),
@@ -23,6 +35,18 @@ val libraryFeatureModule: Module = module {
             downloadGateway = get(),
             siteRegistry = get(),
             dispatchers = get(),
+        )
+    }
+
+    viewModel {
+        StatsViewModel(
+            historyRepository = get(),
+            favoriteRepository = get(),
+            shelfRepository = get(),
+            downloadGateway = get(),
+            mediaTagCacheRepository = get(),
+            siteRegistry = get(),
+            tagDictionary = getOrNull<TagDictionary>() ?: TagDictionary.default,
         )
     }
 
@@ -52,12 +76,14 @@ val libraryFeatureModule: Module = module {
         )
     }
 
-    viewModel {
+    viewModel { params ->
+        val routeParams = params.getOrNull<FavoritesParams>()
         FavoritesViewModel(
             favoriteRepository = get(),
             shelfRepository = get(),
             siteRegistry = get(),
             dispatchers = get(),
+            initialSiteId = routeParams?.initialSiteId,
         )
     }
 
@@ -86,11 +112,13 @@ val libraryFeatureModule: Module = module {
         )
     }
 
-    viewModel {
+    viewModel { params ->
+        val routeParams = params.getOrNull<DownloadsParams>()
         DownloadsViewModel(
             downloadGateway = get(),
             siteRegistry = get(),
             dispatchers = get(),
+            initialSiteId = routeParams?.initialSiteId,
         )
     }
 
@@ -105,6 +133,7 @@ val libraryFeatureModule: Module = module {
             dispatchers = get(),
             tagDictionary = getOrNull<TagDictionary>() ?: TagDictionary.default,
             mediaTagCacheRepository = get(),
+            syncRunner = get(),
         )
     }
 }

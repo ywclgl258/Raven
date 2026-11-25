@@ -109,6 +109,12 @@ class TagDictionaryAndContentFilterTest {
 
         val zhSuggest = dict.suggestions("牛头", limit = 12)
         assertTrue(zhSuggest.any { it.slug == "netorare" && it.localizedName == "牛头人" && it.source == TagTranslationSource.COMMUNITY_EHTAG })
+
+        // Independent custom & community layer updates preserve each other
+        dict.updateCustomLayer(customBare = mapOf("solo custom" to "独立自定义"))
+        assertEquals("独立自定义", dict.translate("solo_custom"))
+        assertEquals("牛头人", dict.translate("netorare"))
+        assertNull(dict.translate("custom_tag"))
     }
 
     @Test

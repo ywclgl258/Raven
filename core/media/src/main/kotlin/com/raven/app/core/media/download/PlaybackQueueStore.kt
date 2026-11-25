@@ -7,9 +7,12 @@ import com.raven.app.core.model.MediaItem
 import com.raven.app.core.model.SiteId
 import java.io.File
 import java.util.UUID
+import java.util.concurrent.atomic.AtomicBoolean
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
@@ -106,18 +109,23 @@ class PlaybackQueueStore(
     private val persistence: PlaybackQueuePersistence = InMemoryPlaybackQueuePersistence(),
     private val dispatchers: AppDispatchers = DefaultAppDispatchers(),
     private val tokenGenerator: () -> String = { UUID.randomUUID().toString() },
+    private val applicationScope: CoroutineScope? = null,
 ) {
     constructor(
         context: Context,
         dispatchers: AppDispatchers = DefaultAppDispatchers(),
+        applicationScope: CoroutineScope? = null,
     ) : this(
         persistence = AtomicFilePlaybackQueuePersistence(
             File(context.applicationContext.filesDir, "playback-queue.json"),
         ),
         dispatchers = dispatchers,
+        applicationScope = applicationScope,
     )
 
     private val lock = Any()
+    private val persistDirty = AtomicBoolean(false)
+    private val persistRunning = AtomicBoolean(false)
     private val _currentSession = MutableStateFlow(persistence.load())
     val currentSession: StateFlow<PlaybackQueueSession?> = _currentSession.asStateFlow()
 
@@ -191,8 +199,8 @@ class PlaybackQueueStore(
     fun end(token: String) {
         synchronized(lock) {
             if (_currentSession.value?.token != token) return
-            persistence.save(null)
             _currentSession.value = null
+            persistLatestLocked(null)
         }
     }
 
@@ -218,9 +226,36 @@ class PlaybackQueueStore(
     }
 
     private fun writeLocked(session: PlaybackQueueSession): PlaybackQueueSession = synchronized(lock) {
-        persistence.save(session)
         _currentSession.value = session
+        persistLatestLocked(session)
         session
+    }
+
+    private fun persistLatestLocked(session: PlaybackQueueSession?) {
+        val scope = applicationScope
+        if (scope != null) {
+            persistDirty.set(true)
+            scheduleAsyncPersist(scope)
+        } else {
+            persistence.save(session)
+        }
+    }
+
+    private fun scheduleAsyncPersist(scope: CoroutineScope) {
+        if (!persistRunning.compareAndSet(false, true)) return
+        scope.launch(dispatchers.io) {
+            try {
+                while (persistDirty.getAndSet(false)) {
+                    val snapshotToSave = synchronized(lock) { _currentSession.value }
+                    runCatching { persistence.save(snapshotToSave) }
+                }
+            } finally {
+                persistRunning.set(false)
+                if (persistDirty.get()) {
+                    scheduleAsyncPersist(scope)
+                }
+            }
+        }
     }
 
     companion object {

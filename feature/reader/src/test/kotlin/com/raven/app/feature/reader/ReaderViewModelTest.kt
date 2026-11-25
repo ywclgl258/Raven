@@ -515,4 +515,78 @@ class ReaderViewModelTest {
             cancelAndIgnoreRemainingEvents()
         }
     }
+
+    @Test
+    fun `invalid siteId, incognito skip, settings sync and auto-page lifecycle pause work cleanly`() = runTest(mainDispatcherRule.dispatcher) {
+        val harness = ReaderTestHarness(mainDispatcherRule.dispatcher, tempFolder.newFolder())
+        val registry = SiteRegistry(emptyList())
+
+        val invalidVm = ReaderViewModel(
+            route = RavenRoute.Reader("invalid site!", "id-1", "https://example.com/1"),
+            siteRegistry = registry,
+            pageLoader = FakeReaderPageLoader(
+                detailLoader = { _, _, _, _ -> error("should not load") },
+            ),
+            exportGateway = harness.exportGateway,
+            historyRepository = harness.historyRepository,
+            bookmarkRepository = harness.bookmarkRepository,
+            preferencesRepository = harness.preferencesRepository,
+            shelfRepository = harness.shelfRepository,
+            playbackQueueStore = harness.playbackQueueStore,
+            dispatchers = harness.dispatchers,
+            persistenceScope = backgroundScope,
+            clock = harness.clock,
+        )
+        advanceUntilIdle()
+        assertFalse(invalidVm.uiState.value.isLoading)
+        assertNotNull(invalidVm.uiState.value.errorMessage)
+
+        val detail = sampleGalleryDetail(SiteId.NHENTAI, mediaId = "incog-1", pageCount = 4)
+        harness.preferencesRepository.setIncognitoMode(true)
+        val validRegistry = SiteRegistry(
+            listOf(FakeGallerySitePlugin(sampleSiteDescriptor(SiteId.NHENTAI), detailHandler = { detail })),
+        )
+        val validVm = ReaderViewModel(
+            route = RavenRoute.Reader(SiteId.NHENTAI.value, "incog-1", detail.item.url),
+            siteRegistry = validRegistry,
+            pageLoader = FakeReaderPageLoader(
+                detailLoader = { _, _, _, _ -> OfflineGallerySnapshot(detail, emptyList(), emptyList(), "", false) },
+            ),
+            exportGateway = harness.exportGateway,
+            historyRepository = harness.historyRepository,
+            bookmarkRepository = harness.bookmarkRepository,
+            preferencesRepository = harness.preferencesRepository,
+            shelfRepository = harness.shelfRepository,
+            playbackQueueStore = harness.playbackQueueStore,
+            dispatchers = harness.dispatchers,
+            persistenceScope = backgroundScope,
+            clock = harness.clock,
+        )
+        advanceUntilIdle()
+
+        validVm.onVisiblePagesChanged(anchorPage = 3, visiblePages = setOf(3))
+        validVm.flushProgressNow()
+        advanceUntilIdle()
+        assertNull(harness.historyRepository.getReadingProgress(SiteId.NHENTAI, "incog-1"))
+
+        validVm.setShowStatusBar(true)
+        validVm.setTapZonesEnabled(false)
+        validVm.setAutoSplitWidePages(true)
+        advanceUntilIdle()
+        val settings = harness.preferencesRepository.currentSettings()
+        assertTrue(settings.readerShowStatusBar)
+        assertFalse(settings.readerTapZonesEnabled)
+        assertTrue(settings.readerAutoSplitWidePages)
+
+        // Ensure lifecycle pause suspends auto-page without resetting the user interval
+        validVm.onVisiblePagesChanged(anchorPage = 1, visiblePages = setOf(1))
+        validVm.setAutoPageInterval(3)
+        validVm.setAutoPagePausedByLifecycle(true)
+        advanceTimeBy(6_000L)
+        runCurrent()
+        assertEquals(3, validVm.uiState.value.autoPageIntervalSeconds)
+        assertEquals(1, validVm.uiState.value.currentPage)
+        validVm.setAutoPagePausedByLifecycle(false)
+        validVm.setAutoPageInterval(0)
+    }
 }

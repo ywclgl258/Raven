@@ -7,6 +7,7 @@ import com.raven.app.core.common.ContentFilter
 import com.raven.app.core.common.TagDictionary
 import com.raven.app.core.database.model.BrowsePosition
 import com.raven.app.core.database.model.ExploreFilterState
+import com.raven.app.core.database.model.ShelfWithSummary
 import com.raven.app.core.database.repository.BlockedTermsRepository
 import com.raven.app.core.database.repository.BrowsePositionRepository
 import com.raven.app.core.database.repository.HistoryRepository
@@ -31,6 +32,7 @@ import com.raven.app.core.sitespi.SiteRegistry
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -154,6 +156,15 @@ class ExploreViewModel(
 
     private var loadJob: Job? = null
     private var paginateJob: Job? = null
+    private var browsePositionJob: Job? = null
+    private val shelfController = BrowseShelfController(
+        shelfRepository = shelfRepository,
+        scope = viewModelScope,
+        ioDispatcher = dispatchers.io,
+    )
+
+    val shelfPickerShelves: StateFlow<List<ShelfWithSummary>> get() = shelfController.shelves
+    val inspectedShelfIds: StateFlow<Set<String>> get() = shelfController.inspectedShelfIds
 
     private val dictRevisionFlow = tagDictionaryRepository?.observeRevision() ?: flowOf(0L)
 
@@ -410,17 +421,23 @@ class ExploreViewModel(
         }
     }
 
-    fun toggleWatchLater(item: MediaItem) {
-        viewModelScope.launch {
-            shelfRepository.toggleItem(Shelf.WATCH_LATER_ID, item.toShelfItem())
-        }
-    }
+    fun inspectShelfTarget(item: MediaItem?) = shelfController.inspectItem(item)
+
+    fun toggleWatchLater(item: MediaItem) = shelfController.toggleWatchLater(item)
+
+    fun setShelfMembership(shelfId: String, item: MediaItem, add: Boolean) =
+        shelfController.setMembership(shelfId, item, add)
+
+    fun createShelfAndAdd(name: String, item: MediaItem) =
+        shelfController.createShelfAndAdd(name, item)
 
     fun saveBrowsePosition(workId: String, throughPage: Int = uiState.value.currentPage) {
         val cleanWorkId = workId.trim()
         if (cleanWorkId.isEmpty()) return
         val siteId = uiState.value.activeSite?.id ?: return
-        viewModelScope.launch {
+        browsePositionJob?.cancel()
+        browsePositionJob = viewModelScope.launch {
+            delay(BROWSE_POSITION_DEBOUNCE_MS)
             browsePositionRepository.save(
                 BrowsePosition(
                     positionKey = "explore:${siteId.value}",

@@ -374,6 +374,109 @@ class DownloadCoordinationTest {
     }
 
     @Test
+    fun `gallery page repository triggers reloadUrlOnError on corrupt image bytes and separates preferOriginal cache keys`() =
+        runBlocking {
+            val appDispatchers = DefaultAppDispatchers()
+            val server = MockWebServer()
+            val samplePng = TestMediaFixtures.validPng("sample")
+            val originalPng = TestMediaFixtures.validPng("original")
+            server.start()
+            try {
+                val badImgUrl = server.url("/corrupt.png").toString()
+                val freshImgUrl = server.url("/fresh-sample.png").toString()
+                val origUrl = server.url("/original.png").toString()
+                // 1st attempt (preferOriginal=false) returns corrupt body with HTTP 200 -> reloadUrlOnError -> freshImgUrl
+                server.enqueue(MockResponse().setBody(Buffer().write(TestMediaFixtures.truncatedPng())))
+                server.enqueue(MockResponse().setBody(Buffer().write(samplePng)))
+                // 2nd call with preferOriginal=true should NOT hit the preferOriginal=false cache entry!
+                server.enqueue(MockResponse().setBody(Buffer().write(originalPng)))
+
+                val item = MediaItem(
+                    siteId = SiteId.EHENTAI,
+                    id = "778",
+                    url = "https://e-hentai.org/g/778/token/",
+                    kind = MediaKind.COMIC,
+                    title = "EH Corrupt + Original Test",
+                    pageCount = 1,
+                )
+                val ehPlugin = object : SitePlugin {
+                    override val descriptor = SiteDescriptor(
+                        id = SiteId.EHENTAI,
+                        displayName = "E-Hentai",
+                        primaryKind = MediaKind.COMIC,
+                        defaultHost = "e-hentai.org",
+                    )
+                    override val gallerySource = object : GallerySource {
+                        override suspend fun loadGalleryDetail(url: String): GalleryDetail = GalleryDetail(
+                            item = item,
+                            pageCount = 1,
+                            pages = listOf(GalleryPage(index = 1, pageUrl = "https://e-hentai.org/s/xyz/778-1")),
+                        )
+
+                        override suspend fun loadGalleryPage(detail: GalleryDetail, pageIndex: Int, forceReload: Boolean): GalleryPage =
+                            resolvePageImage("https://e-hentai.org/s/xyz/778-1", false, forceReload)
+
+                        override suspend fun resolvePageImage(pageUrl: String, preferOriginal: Boolean, forceReload: Boolean): GalleryPage {
+                            val isReload = pageUrl.contains("nl=hath2")
+                            return GalleryPage(
+                                index = 1,
+                                pageUrl = pageUrl,
+                                imageUrl = if (isReload) freshImgUrl else badImgUrl,
+                                originalImageUrl = origUrl,
+                                reloadToken = "hath2",
+                            )
+                        }
+
+                        override fun reloadUrlOnError(cause: SiteException, page: GalleryPage): String? =
+                            if (cause is SiteException.Network && !page.reloadToken.isNullOrBlank()) {
+                                "${page.pageUrl}?nl=${page.reloadToken}"
+                            } else {
+                                null
+                            }
+                    }
+                }
+
+                val storage = StorageRootManager(
+                    context = null,
+                    settingsDataStore = null,
+                    privateRootOverride = tempFolder.newFolder("eh2-priv"),
+                    sharedRootOverride = null,
+                    dispatchers = appDispatchers,
+                )
+                val localImporter = LocalLibraryImporter(
+                    context = null,
+                    rootDir = tempFolder.newFolder("eh2-local"),
+                    dispatchers = appDispatchers,
+                    requireAndroidImageDecoder = false,
+                )
+                val repo = GalleryPageRepository(
+                    context = null,
+                    imageClient = OkHttpClient(),
+                    storageRootManager = storage,
+                    localLibraryImporter = localImporter,
+                    siteRegistryProvider = { SiteRegistry(listOf(ehPlugin)) },
+                    dispatchers = appDispatchers,
+                    cacheRootOverride = tempFolder.newFolder("eh2-cache"),
+                    requireAndroidImageDecoder = false,
+                )
+
+                val detail = ehPlugin.gallerySource.loadGalleryDetail(item.url)
+                val sampleLoaded = repo.loadOriginalPage(detail, pageIndex = 1, preferOriginal = false)
+                assertArrayEquals(samplePng, sampleLoaded.bytes)
+
+                // Wait - consume the accidental extra mock response? Wait: we only should enqueue 3 responses! Let's fix enqueue above!
+                val origLoaded = repo.loadOriginalPage(detail, pageIndex = 1, preferOriginal = true)
+                assertFalse(origLoaded.fromCache)
+                assertArrayEquals(originalPng, origLoaded.bytes)
+                assertTrue(repo.readingCacheBytes() > 0L)
+                repo.clearAllReadingCaches()
+                assertEquals(0L, repo.readingCacheBytes())
+            } finally {
+                server.shutdown()
+            }
+        }
+
+    @Test
     fun `gallery download engine transitions to RETRY_WAIT on long Retry-After and respects manual pause`() =
         runBlocking {
             val appDispatchers = DefaultAppDispatchers()

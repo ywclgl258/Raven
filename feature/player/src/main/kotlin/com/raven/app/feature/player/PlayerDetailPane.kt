@@ -32,7 +32,9 @@ import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.Block
 import androidx.compose.material.icons.rounded.Bookmark
+import androidx.compose.material.icons.rounded.Cast
 import androidx.compose.material.icons.rounded.CheckCircle
+import androidx.compose.material.icons.rounded.CollectionsBookmark
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.Download
 import androidx.compose.material.icons.rounded.ExpandLess
@@ -181,6 +183,8 @@ internal fun PlayerDetailPane(
     onDeleteBookmark: (TimeBookmark) -> Unit,
     onRelatedClick: (MediaItem) -> Unit,
     modifier: Modifier = Modifier,
+    onOpenShelfPicker: () -> Unit = {},
+    onOpenCast: () -> Unit = {},
 ) {
     val colors = LocalRavenColors.current
     var descriptionExpanded by remember(uiState.mediaId) { mutableStateOf(false) }
@@ -282,6 +286,8 @@ internal fun PlayerDetailPane(
                 onOpenAddBookmark = onOpenAddBookmark,
                 onShareClick = onShareClick,
                 onOpenExternalPlayers = onOpenExternalPlayers,
+                onOpenShelfPicker = onOpenShelfPicker,
+                onOpenCast = onOpenCast,
                 modifier = Modifier.padding(horizontal = 16.dp),
             )
         }
@@ -718,6 +724,8 @@ private fun PlayerActionStrip(
     onOpenAddBookmark: () -> Unit,
     onShareClick: () -> Unit,
     onOpenExternalPlayers: () -> Unit,
+    onOpenShelfPicker: () -> Unit = {},
+    onOpenCast: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val colors = LocalRavenColors.current
@@ -785,6 +793,20 @@ private fun PlayerActionStrip(
             modifier = Modifier
                 .weight(1f)
                 .testTag(PlayerTestTags.PLAYER_ACTION_SHARE),
+        )
+        DetailActionButton(
+            icon = Icons.Rounded.CollectionsBookmark,
+            label = "片单",
+            active = uiState.containingShelfIds.any { it != com.raven.app.core.model.Shelf.WATCH_LATER_ID },
+            onClick = onOpenShelfPicker,
+            modifier = Modifier.weight(1f),
+        )
+        DetailActionButton(
+            icon = Icons.Rounded.Cast,
+            label = if (uiState.activeCastDevice != null) "投屏中" else "投屏",
+            active = uiState.activeCastDevice != null,
+            onClick = onOpenCast,
+            modifier = Modifier.weight(1f),
         )
         DetailActionButton(
             icon = Icons.AutoMirrored.Rounded.OpenInNew,

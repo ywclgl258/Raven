@@ -138,14 +138,16 @@ class BookmarkRepository(
     suspend fun saveImageFavorite(favorite: ImageFavorite): ImageFavorite {
         require(favorite.mediaId.isNotBlank()) { "ImageFavorite.mediaId must not be blank" }
         require(favorite.pageIndex >= 0) { "ImageFavorite.pageIndex must be >= 0" }
+        val normalizedPage = favorite.pageIndex.coerceAtLeast(1)
         return transactionRunner {
             val existing = imageFavoriteDao.getByMediaAndPage(
                 favorite.siteId.value,
                 favorite.mediaId,
-                favorite.pageIndex,
+                normalizedPage,
             )
             val prepared = favorite.copy(
                 id = existing?.id ?: favorite.id.trim().ifBlank { UUID.randomUUID().toString() },
+                pageIndex = normalizedPage,
                 addedAt = favorite.addedAt.takeIf { it > 0L } ?: clock(),
             )
             imageFavoriteDao.upsert(prepared.toEntity())
@@ -161,11 +163,12 @@ class BookmarkRepository(
     suspend fun toggleImageFavorite(favorite: ImageFavorite): Boolean {
         require(favorite.mediaId.isNotBlank()) { "ImageFavorite.mediaId must not be blank" }
         require(favorite.pageIndex >= 0) { "ImageFavorite.pageIndex must be >= 0" }
+        val normalizedPage = favorite.pageIndex.coerceAtLeast(1)
         return transactionRunner {
             val existing = imageFavoriteDao.getByMediaAndPage(
                 favorite.siteId.value,
                 favorite.mediaId,
-                favorite.pageIndex,
+                normalizedPage,
             )
             if (existing != null) {
                 imageFavoriteDao.deleteById(existing.id)
@@ -173,6 +176,7 @@ class BookmarkRepository(
             } else {
                 val prepared = favorite.copy(
                     id = favorite.id.trim().ifBlank { UUID.randomUUID().toString() },
+                    pageIndex = normalizedPage,
                     addedAt = favorite.addedAt.takeIf { it > 0L } ?: clock(),
                 )
                 imageFavoriteDao.upsert(prepared.toEntity())

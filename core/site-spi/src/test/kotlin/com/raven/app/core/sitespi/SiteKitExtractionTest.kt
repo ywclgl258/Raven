@@ -59,6 +59,8 @@ class SiteKitExtractionTest {
     fun `html url cleaner normalizes whitespace entities encoding extensions and fragments`() {
         assertEquals("Hello World", HtmlUrlCleaner.cleanText("  Hello\u200b\u00a0  World \n "))
         assertEquals("Tom & Jerry's <Show> \"1\" A", HtmlUrlCleaner.decodeBasicHtmlEntities("Tom &amp; Jerry&#39;s &lt;Show&gt; &quot;1&quot; &#x41;"))
+        // Prevent double-decoding &amp;#60; -> &#60; -> <
+        assertEquals("&#60;script>", HtmlUrlCleaner.decodeBasicHtmlEntities("&amp;#60;script&gt;"))
         assertEquals("hello%20world", HtmlUrlCleaner.encodePathSegment("hello world"))
         assertEquals("https://i.nhentai.net/galleries/123/1.webp?v=1", HtmlUrlCleaner.deduplicateImageExtension("https://i.nhentai.net/galleries/123/1.webp.webp?v=1"))
         assertEquals("https://hitomi.la/reader/123.html", HtmlUrlCleaner.stripFragment("https://hitomi.la/reader/123.html#5"))

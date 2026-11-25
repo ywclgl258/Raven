@@ -145,6 +145,22 @@ interface UpdateInboxDao {
 
     @Query("DELETE FROM update_inbox")
     suspend fun deleteAll()
+
+    @Query(
+        """
+        DELETE FROM update_inbox
+        WHERE id NOT IN (
+            SELECT id FROM update_inbox
+            ORDER BY discovered_at DESC
+            LIMIT :limit
+        )
+        """,
+    )
+    suspend fun prune(limit: Int = MAX_INBOX_ITEMS)
+
+    companion object {
+        const val MAX_INBOX_ITEMS: Int = 10_000
+    }
 }
 
 @Dao

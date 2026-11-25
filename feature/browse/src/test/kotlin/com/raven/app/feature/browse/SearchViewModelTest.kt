@@ -19,6 +19,7 @@ import com.raven.app.core.sitespi.SiteRegistry
 import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
@@ -743,5 +744,38 @@ class SearchViewModelTest {
                 assertTrue(afterDictUpdate.tagSuggestions.any { it.slug == "elven archer" && it.localizedName == "精灵弓箭手" })
                 cancelAndIgnoreRemainingEvents()
             }
+        }
+
+    @Test
+    fun `incognito mode skips recording search history`() =
+        runTest(mainDispatcherRule.dispatcher) {
+            val harness = BrowseTestHarness(mainDispatcherRule.dispatcher)
+            val plugin = FakeSitePlugin(
+                descriptor = SiteDescriptor(SiteId.R34V, "Rule34Video", primaryKind = MediaKind.VIDEO, defaultHost = "r34.example"),
+                searchHandler = { FeedPage(items = listOf(sampleMediaItem(SiteId.R34V, "r1", MediaKind.VIDEO))) },
+            )
+            harness.preferencesRepository.setIncognitoMode(true)
+            val vm = SearchViewModel(
+                siteRegistry = SiteRegistry(listOf(plugin)),
+                preferencesRepository = harness.preferencesRepository,
+                searchHistoryRepository = harness.searchHistoryRepository,
+                subscriptionRepository = harness.subscriptionRepository,
+                blockedTermsRepository = harness.blockedTermsRepository,
+                historyRepository = harness.historyRepository,
+                shelfRepository = harness.shelfRepository,
+                dispatchers = harness.dispatchers,
+            )
+
+            vm.updateQuery("secret query")
+            vm.submitSearch()
+            advanceUntilIdle()
+            assertTrue(harness.searchHistoryRepository.observeBySite(SiteId.R34V, limit = 20).first().isEmpty())
+
+            harness.preferencesRepository.setIncognitoMode(false)
+            vm.updateQuery("public query")
+            vm.submitSearch()
+            advanceUntilIdle()
+            val history = harness.searchHistoryRepository.observeBySite(SiteId.R34V, limit = 20).first()
+            assertEquals(1, history.size)
         }
 }

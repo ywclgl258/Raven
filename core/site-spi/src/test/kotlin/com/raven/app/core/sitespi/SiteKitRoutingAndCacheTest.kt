@@ -1,11 +1,13 @@
 package com.raven.app.core.sitespi
 
 import com.raven.app.core.model.SiteException
+import kotlin.coroutines.cancellation.CancellationException
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
+import org.junit.Assert.fail
 import org.junit.Test
 
 class SiteKitRoutingAndCacheTest {
@@ -106,6 +108,27 @@ class SiteKitRoutingAndCacheTest {
             "https://jmcomic-zzz.org/album/12345?o=mr",
             router.rewriteUrl("https://jmcomic-zzz.one/album/12345?o=mr", "jmcomic-zzz.org"),
         )
+
+        val diag = router.diagnostics()
+        assertEquals("jmcomic-zzz.org", diag.activeHost)
+        assertTrue("18comic.ink" in diag.coolingDownHosts)
+        router.resetLease()
+        assertNull(router.diagnostics().activeHost)
+    }
+
+    @Test
+    fun `mirror lease router rethrows cancellation without cooling healthy mirrors`() = runTest {
+        val router = MirrorLeaseRouter(
+            hosts = listOf("a.example", "b.example"),
+            probeHost = { throw CancellationException("cancelled") },
+        )
+        try {
+            router.activeHost("r1")
+            fail("Expected CancellationException")
+        } catch (_: CancellationException) {
+            // expected
+        }
+        assertTrue(router.diagnostics().coolingDownHosts.isEmpty())
     }
 
     @Test

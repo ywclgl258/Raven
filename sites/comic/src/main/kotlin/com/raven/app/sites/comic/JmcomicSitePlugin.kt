@@ -693,12 +693,14 @@ class JmcomicSitePlugin(
                 FeedRequest(siteId = SiteId.JMCOMIC, query = query, sort = sort, page = page)
             }
             url.encodedPath == CATALOGUE_PATH -> {
-                val sort = parseSortQueryParam(url.queryParameter("o")) ?: return null
+                val oParam = url.queryParameter("o")
+                val sort = if (oParam == null) FeedSort.NEWEST else parseSortQueryParam(oParam) ?: return null
                 FeedRequest(siteId = SiteId.JMCOMIC, section = "latest", sort = sort, page = page)
             }
             url.encodedPath.startsWith("$CATALOGUE_PATH/") -> {
                 val slug = url.pathSegments.getOrNull(1)?.lowercase()
-                val sort = parseSortQueryParam(url.queryParameter("o"))
+                val oParam = url.queryParameter("o")
+                val sort = if (oParam == null) FeedSort.NEWEST else parseSortQueryParam(oParam)
                 if (url.pathSegments.size == 2 && slug in CATEGORY_SLUGS && sort != null) {
                     FeedRequest(siteId = SiteId.JMCOMIC, category = slug, sort = sort, page = page)
                 } else {
@@ -760,7 +762,9 @@ class JmcomicSitePlugin(
     private fun validateMediaUrl(base: ComicUrl, raw: String): ComicUrl? {
         val trimmed = raw.trim().takeIf { it.isNotEmpty() } ?: return null
         val resolved = base.resolve(trimmed)?.takeIf { it.isDefaultHttpsPort && it.fragment == null } ?: return null
-        val allowed = resolved.host in CDN_HOSTS || isSiteUrl(resolved)
+        val allowed = resolved.host in CDN_HOSTS ||
+            CDN_HOST_REGEX.matches(resolved.host) ||
+            isSiteUrl(resolved)
         return if (allowed) resolved else null
     }
 
@@ -823,6 +827,10 @@ class JmcomicSitePlugin(
             "cdn-msp.jmcomic-zzz.one",
             "cdn-msp2.jmcomic-zzz.one",
             "cdn-msp3.jmcomic-zzz.one",
+        )
+        private val CDN_HOST_REGEX = Regex(
+            """^cdn-msp\d*\.(?:18comic\.(?:ink|vip)|jmcomic-zzz\.(?:one|org))$""",
+            RegexOption.IGNORE_CASE,
         )
 
         val CATEGORIES: LinkedHashMap<String, String> = linkedMapOf(

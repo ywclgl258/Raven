@@ -39,6 +39,7 @@ import com.raven.app.core.sitespi.SiteHttpRequest
 import com.raven.app.core.sitespi.SitePlugin
 import com.raven.app.core.sitespi.SiteSessionStore
 import com.raven.app.core.sitespi.VideoSource
+import com.raven.app.core.sitespi.suspendRunCatching
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
@@ -165,7 +166,7 @@ class IwaraSitePlugin(
             val latestRequest = FeedRequest(siteId = SiteId.IWARA, section = "latest", sort = FeedSort.NEWEST, mediaKind = MediaKind.VIDEO)
             val trendingRequest = FeedRequest(siteId = SiteId.IWARA, section = "trending", sort = FeedSort.TRENDING, mediaKind = MediaKind.VIDEO)
             val latestDeferred = async { loadFeed(latestRequest) }
-            val trendingDeferred = async { runCatching { loadFeed(trendingRequest) }.getOrNull() }
+            val trendingDeferred = async { suspendRunCatching { loadFeed(trendingRequest) }.getOrNull() }
             val latestPage = latestDeferred.await()
             val trendingPage = trendingDeferred.await()
             VideoSiteSupport.buildHomeFeed(
@@ -191,7 +192,7 @@ class IwaraSitePlugin(
             val rawQuery = request.query?.trim().orEmpty()
             if (request.scope == SearchScope.AUTHOR && rawQuery.isNotEmpty() && !isUserId(rawQuery)) {
                 val profileUrl = "$API_BASE/profile/${HtmlUrlCleaner.encodePathSegment(rawQuery)}"
-                val profileObj = fetchApiJson(profileUrl).jsonObject
+                val profileObj = requireJsonObject(fetchApiJson(profileUrl))
                 val resolvedUserId = profileObj.obj("user")?.str("id").orEmpty()
                 if (resolvedUserId.isBlank()) {
                     throw SiteException.NotFound("没有找到该作者，请输入准确的用户名", siteId = SiteId.IWARA)
@@ -282,7 +283,7 @@ class IwaraSitePlugin(
             val id = extractVideoId(url)
                 ?: throw SiteException.ParseError("无法识别 Iwara 视频地址", siteId = SiteId.IWARA)
             val endpoint = "$API_BASE/video/$id"
-            val metadata = fetchApiJson(endpoint).jsonObject
+            val metadata = requireJsonObject(fetchApiJson(endpoint))
             if (metadata.str("embedUrl").isNotBlank()) {
                 throw SiteException.Unsupported("该视频为外站嵌入，暂不支持在应用内播放", siteId = SiteId.IWARA)
             }
@@ -295,10 +296,10 @@ class IwaraSitePlugin(
             }
 
             val relatedDeferred = async {
-                optionalArray { fetchApiJson("$endpoint/related").jsonObject.arr("results") }
+                optionalArray { requireJsonObject(fetchApiJson("$endpoint/related")).arr("results") }
             }
             val commentsDeferred = async {
-                optionalArray { fetchApiJson("$endpoint/comments?limit=12&page=0").jsonObject.arr("results") }
+                optionalArray { requireJsonObject(fetchApiJson("$endpoint/comments?limit=12&page=0")).arr("results") }
             }
             val sources = fetchSignedSources(fileUrl)
             parseVideoDetail(
@@ -485,7 +486,7 @@ class IwaraSitePlugin(
             galleryCache.get(id)?.let { return it }
         }
         val endpoint = "$API_BASE/image/$id"
-        val obj = fetchApiJson(endpoint).jsonObject
+        val obj = requireJsonObject(fetchApiJson(endpoint))
         galleryCache.put(id, obj)
         return obj
     }
@@ -550,7 +551,7 @@ class IwaraSitePlugin(
     private suspend fun fetchSignedSources(fileUrl: String): JsonArray {
         val usedSalt = currentSalt
         val firstHeaders = buildSignatureHeaders(fileUrl, usedSalt)
-        val first = fetchApiJson(fileUrl, extraHeaders = firstHeaders).jsonArray
+        val first = requireJsonArray(fetchApiJson(fileUrl, extraHeaders = firstHeaders, allowCache = false))
         if (first.isEmpty() || hasSourceStream(first)) return first
 
         val replacement = saltMutex.withLock {
@@ -564,6 +565,7 @@ class IwaraSitePlugin(
                         http = http,
                         siteId = SiteId.IWARA,
                         url = BASE_URL,
+                        allowCache = false,
                         rateLimitBackoffMs = rateLimitBackoffMs,
                     )
                     val scriptPath = extractMainScriptPath(homeHtml) ?: return@withTimeoutOrNull null
@@ -573,6 +575,7 @@ class IwaraSitePlugin(
                         http = http,
                         siteId = SiteId.IWARA,
                         url = scriptUrl,
+                        allowCache = false,
                         rateLimitBackoffMs = rateLimitBackoffMs,
                     )
                     extractSaltFromScript(scriptText)?.takeIf { it != usedSalt }
@@ -585,7 +588,13 @@ class IwaraSitePlugin(
         } ?: return first
 
         val retried = try {
-            fetchApiJson(fileUrl, extraHeaders = buildSignatureHeaders(fileUrl, replacement)).jsonArray
+            requireJsonArray(
+                fetchApiJson(
+                    fileUrl,
+                    extraHeaders = buildSignatureHeaders(fileUrl, replacement),
+                    allowCache = false,
+                ),
+            )
         } catch (ce: CancellationException) {
             throw ce
         } catch (_: Exception) {
@@ -1131,4 +1140,10 @@ class IwaraSitePlugin(
     } catch (e: Exception) {
         throw SiteException.ParseError("站点返回了无效的 JSON 对象", siteId = SiteId.IWARA, cause = e)
     }
+
+    private fun requireJsonObject(el: JsonElement): JsonObject =
+        el as? JsonObject ?: throw SiteException.ParseError("站点返回了非 JSON 对象结构", siteId = SiteId.IWARA)
+
+    private fun requireJsonArray(el: JsonElement): JsonArray =
+        el as? JsonArray ?: throw SiteException.ParseError("站点返回了非 JSON 数组结构", siteId = SiteId.IWARA)
 }

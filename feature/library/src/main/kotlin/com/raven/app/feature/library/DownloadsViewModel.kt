@@ -12,6 +12,7 @@ import com.raven.app.core.model.DownloadStatus
 import com.raven.app.core.model.SiteId
 import com.raven.app.core.sitespi.SiteRegistry
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -103,13 +104,22 @@ private data class DownloadsControls(
     val message: String? = null,
 )
 
+/**
+ * Wrapper passed through Koin `parametersOf(...)` to avoid `@JvmInline value class` boxing issues.
+ */
+data class DownloadsParams(
+    val initialSiteId: SiteId? = null,
+)
+
 class DownloadsViewModel(
     private val downloadGateway: LibraryDownloadGateway,
     private val siteRegistry: SiteRegistry,
     private val dispatchers: AppDispatchers,
+    initialSiteId: SiteId? = null,
 ) : ViewModel() {
 
-    private val controls = MutableStateFlow(DownloadsControls())
+    private val controls = MutableStateFlow(DownloadsControls(siteFilter = initialSiteId))
+    private var inspectJob: Job? = null
 
     val uiState: StateFlow<DownloadsUiState> = combine(
         downloadGateway.downloads,
@@ -347,7 +357,8 @@ class DownloadsViewModel(
             controls.update { it.copy(message = "完整性逐页校验仅适用于漫画与写真任务") }
             return
         }
-        viewModelScope.launch(dispatchers.io) {
+        inspectJob?.cancel()
+        inspectJob = viewModelScope.launch(dispatchers.io) {
             controls.update {
                 it.copy(
                     integrityState = IntegrityAuditDialogState(

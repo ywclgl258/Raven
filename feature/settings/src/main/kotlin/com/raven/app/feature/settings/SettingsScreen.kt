@@ -5,6 +5,8 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -14,8 +16,10 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.outlined.ChromeReaderMode
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.outlined.AutoStories
 import androidx.compose.material.icons.outlined.Backup
@@ -24,19 +28,27 @@ import androidx.compose.material.icons.outlined.Cached
 import androidx.compose.material.icons.outlined.CleaningServices
 import androidx.compose.material.icons.outlined.CloudDownload
 import androidx.compose.material.icons.outlined.Contrast
+import androidx.compose.material.icons.outlined.DeleteSweep
 import androidx.compose.material.icons.outlined.Description
 import androidx.compose.material.icons.outlined.FileCopy
 import androidx.compose.material.icons.outlined.Folder
 import androidx.compose.material.icons.outlined.Fullscreen
+import androidx.compose.material.icons.outlined.Headphones
 import androidx.compose.material.icons.outlined.HighQuality
 import androidx.compose.material.icons.outlined.Info
+import androidx.compose.material.icons.outlined.Lock
 import androidx.compose.material.icons.outlined.ManageAccounts
 import androidx.compose.material.icons.outlined.Memory
 import androidx.compose.material.icons.outlined.NetworkCheck
+import androidx.compose.material.icons.outlined.PlayCircle
+import androidx.compose.material.icons.outlined.PrivacyTip
 import androidx.compose.material.icons.outlined.Security
 import androidx.compose.material.icons.outlined.Speed
+import androidx.compose.material.icons.outlined.Sync
 import androidx.compose.material.icons.outlined.SystemUpdate
+import androidx.compose.material.icons.outlined.TouchApp
 import androidx.compose.material.icons.outlined.Translate
+import androidx.compose.material.icons.outlined.VisibilityOff
 import androidx.compose.material.icons.outlined.Wifi
 import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.ExpandLess
@@ -53,6 +65,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -61,11 +74,14 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.raven.app.core.designsystem.component.RavenBottomSheet
+import com.raven.app.core.designsystem.component.RavenFilterChip
 import com.raven.app.core.designsystem.component.RavenFilterChipRow
 import com.raven.app.core.designsystem.component.RavenFormatters
 import com.raven.app.core.designsystem.component.RavenGroupedDivider
@@ -82,7 +98,9 @@ import com.raven.app.core.designsystem.theme.tabular
 import com.raven.app.core.model.SiteDescriptor
 import com.raven.app.core.model.SiteId
 import com.raven.app.core.model.StorageLocation
+import com.raven.app.core.security.PrivacyLockStore
 import java.io.File
+import kotlin.math.roundToInt
 import org.koin.androidx.compose.koinViewModel
 
 private enum class SettingsSheetKind {
@@ -90,6 +108,7 @@ private enum class SettingsSheetKind {
     QUALITY,
     DIAGNOSTICS,
     LICENSES,
+    PIN_SETUP,
 }
 
 @Composable
@@ -115,9 +134,29 @@ fun SettingsScreen(
         onToggleStreamCache = viewModel::setStreamCacheEnabled,
         onToggleSeekCache = viewModel::setSeekCacheEnabled,
         onClearReadingCache = viewModel::clearAllReadingCaches,
+        onClearStreamingCache = viewModel::clearStreamingCache,
+        onClearSeekCache = viewModel::clearSeekCaches,
+        onClearImageCache = viewModel::clearImageCache,
+        onClearAllCaches = viewModel::clearAllCaches,
         onToggleDownloadUnmeteredOnly = viewModel::setDownloadUnmeteredOnly,
+        onToggleBackgroundSync = viewModel::setBackgroundSubscriptionSync,
+        onToggleBlockTagsGlobally = viewModel::setBlockTagsGlobally,
+        onToggleAutoplayVideo = viewModel::setAutoplayVideo,
+        onToggleBackgroundAudio = viewModel::setBackgroundAudioPlayback,
+        onToggleReaderTapZones = viewModel::setReaderTapZonesEnabled,
+        onToggleReaderShowStatusBar = viewModel::setReaderShowStatusBar,
+        onToggleReaderAutoSplit = viewModel::setReaderAutoSplitWidePages,
+        onChangeReaderPrefetch = viewModel::setReaderPrefetchPages,
+        onChangeReaderMemoryBudget = viewModel::setReaderMemoryBudgetMb,
+        onToggleIncognitoMode = viewModel::setIncognitoMode,
+        onTogglePrivacyScreenSecure = viewModel::setPrivacyScreenSecure,
+        onToggleAppLock = viewModel::setAppLockEnabled,
+        onSelectAppLockTimeout = viewModel::setAppLockTimeoutSeconds,
+        onConfigureAppPin = viewModel::configureAppPin,
+        onClearAppPin = viewModel::clearAppPin,
         onOpenDiagnostics = viewModel::prepareDiagnosticsSnapshot,
         onRunLiveDiagnostics = viewModel::runLiveNetworkDiagnostics,
+        onResetMirrorLease = viewModel::resetMirrorLease,
         onToggleAutoUpdateCheck = viewModel::setAutoUpdateCheck,
         onManualCheckUpdate = { viewModel.checkForUpdates(manual = true) },
         onDownloadUpdate = viewModel::downloadAvailableUpdate,
@@ -128,7 +167,7 @@ fun SettingsScreen(
     )
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 fun SettingsScreenContent(
     uiState: SettingsUiState,
@@ -150,6 +189,26 @@ fun SettingsScreenContent(
     onInstallUpdate: (File) -> Unit,
     onDismissUpdateSheet: () -> Unit,
     onDismissFeedback: () -> Unit,
+    onClearStreamingCache: () -> Unit = {},
+    onClearSeekCache: () -> Unit = {},
+    onClearImageCache: () -> Unit = {},
+    onClearAllCaches: () -> Unit = {},
+    onToggleBackgroundSync: (Boolean) -> Unit = {},
+    onToggleBlockTagsGlobally: (Boolean) -> Unit = {},
+    onToggleAutoplayVideo: (Boolean) -> Unit = {},
+    onToggleBackgroundAudio: (Boolean) -> Unit = {},
+    onToggleReaderTapZones: (Boolean) -> Unit = {},
+    onToggleReaderShowStatusBar: (Boolean) -> Unit = {},
+    onToggleReaderAutoSplit: (Boolean) -> Unit = {},
+    onChangeReaderPrefetch: (Int) -> Unit = {},
+    onChangeReaderMemoryBudget: (Int) -> Unit = {},
+    onToggleIncognitoMode: (Boolean) -> Unit = {},
+    onTogglePrivacyScreenSecure: (Boolean) -> Unit = {},
+    onToggleAppLock: (Boolean) -> Unit = {},
+    onSelectAppLockTimeout: (Int) -> Unit = {},
+    onConfigureAppPin: (String) -> Boolean = { false },
+    onClearAppPin: () -> Unit = {},
+    onResetMirrorLease: (SiteId) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val colors = LocalRavenColors.current
@@ -158,6 +217,12 @@ fun SettingsScreenContent(
 
     var sliderSpeed by remember(uiState.settings.defaultPlaybackSpeed) {
         mutableFloatStateOf(uiState.settings.defaultPlaybackSpeed)
+    }
+    var sliderPrefetch by remember(uiState.settings.readerPrefetchPages) {
+        mutableIntStateOf(uiState.settings.readerPrefetchPages)
+    }
+    var sliderMemoryMb by remember(uiState.settings.readerMemoryBudgetMb) {
+        mutableIntStateOf(uiState.settings.readerMemoryBudgetMb)
     }
 
     val activeSite = uiState.activeSite
@@ -270,11 +335,82 @@ fun SettingsScreenContent(
                     RavenGroupedDivider(insetWithIcon = true)
                     RavenGroupedSwitchRow(
                         title = "视频自动全屏",
-                        subtitle = "手动点击播放时按视频方向自动进入全屏（自动播放不自动全屏）",
+                        subtitle = "仅手动点击全屏或横屏时进入全屏（自动播放绝不自动全屏）",
                         icon = Icons.Outlined.Fullscreen,
                         checked = uiState.settings.autoFullscreen,
                         onCheckedChange = onToggleAutoFullscreen,
                         modifier = Modifier.testTag("settings_auto_fullscreen"),
+                    )
+                    RavenGroupedDivider(insetWithIcon = true)
+                    RavenGroupedSwitchRow(
+                        title = "自动播放详情页视频",
+                        subtitle = "进入播放器详情时自动开始播放（保持小窗内嵌不自动全屏）",
+                        icon = Icons.Outlined.PlayCircle,
+                        checked = uiState.settings.autoplayVideo,
+                        onCheckedChange = onToggleAutoplayVideo,
+                        modifier = Modifier.testTag("settings_autoplay_video"),
+                    )
+                    RavenGroupedDivider(insetWithIcon = true)
+                    RavenGroupedSwitchRow(
+                        title = "后台音频继续播放",
+                        subtitle = "切出播放器或锁屏时保持音频轨道在后台继续播放",
+                        icon = Icons.Outlined.Headphones,
+                        checked = uiState.settings.backgroundAudioPlayback,
+                        onCheckedChange = onToggleBackgroundAudio,
+                        modifier = Modifier.testTag("settings_background_audio"),
+                    )
+                    RavenGroupedDivider(insetWithIcon = true)
+                    RavenGroupedSwitchRow(
+                        title = "阅读器三段点击翻页",
+                        subtitle = "左右边缘点击翻页，中间点击显隐阅读 HUD 工具栏",
+                        icon = Icons.Outlined.TouchApp,
+                        checked = uiState.settings.readerTapZonesEnabled,
+                        onCheckedChange = onToggleReaderTapZones,
+                        modifier = Modifier.testTag("settings_reader_tap_zones"),
+                    )
+                    RavenGroupedDivider(insetWithIcon = true)
+                    RavenGroupedSwitchRow(
+                        title = "阅读器底部状态栏进度",
+                        subtitle = "沉浸隐藏 HUD 时保留精简页码与时间指示",
+                        icon = Icons.AutoMirrored.Outlined.ChromeReaderMode,
+                        checked = uiState.settings.readerShowStatusBar,
+                        onCheckedChange = onToggleReaderShowStatusBar,
+                        modifier = Modifier.testTag("settings_reader_status_bar"),
+                    )
+                    RavenGroupedDivider(insetWithIcon = true)
+                    RavenGroupedSwitchRow(
+                        title = "双页宽图自动分割",
+                        subtitle = "纵屏阅读日漫跨页图时按阅读方向自动拆分为两页",
+                        icon = Icons.Outlined.AutoStories,
+                        checked = uiState.settings.readerAutoSplitWidePages,
+                        onCheckedChange = onToggleReaderAutoSplit,
+                        modifier = Modifier.testTag("settings_reader_auto_split"),
+                    )
+                    RavenGroupedDivider(insetWithIcon = true)
+                    RavenGroupedSliderRow(
+                        title = "阅读预加载页数",
+                        subtitle = "提前缓冲后续页面以减少翻页白屏等待",
+                        icon = Icons.Outlined.CloudDownload,
+                        value = sliderPrefetch.toFloat(),
+                        valueRange = 1f..6f,
+                        steps = 4,
+                        valueLabel = "$sliderPrefetch 页",
+                        onValueChange = { sliderPrefetch = it.roundToInt().coerceIn(1, 6) },
+                        onValueChangeFinished = { onChangeReaderPrefetch(sliderPrefetch) },
+                        modifier = Modifier.testTag("settings_reader_prefetch_slider"),
+                    )
+                    RavenGroupedDivider(insetWithIcon = true)
+                    RavenGroupedSliderRow(
+                        title = "阅读内存解码上限",
+                        subtitle = "超出当前锚点范围与上限的图片缓存将自动回收",
+                        icon = Icons.Outlined.Memory,
+                        value = sliderMemoryMb.toFloat(),
+                        valueRange = 16f..96f,
+                        steps = 4,
+                        valueLabel = "$sliderMemoryMb MiB",
+                        onValueChange = { sliderMemoryMb = it.roundToInt().coerceIn(16, 96) },
+                        onValueChangeFinished = { onChangeReaderMemoryBudget(sliderMemoryMb) },
+                        modifier = Modifier.testTag("settings_reader_memory_slider"),
                     )
                 }
             }
@@ -345,7 +481,7 @@ fun SettingsScreenContent(
                                     modifier = Modifier.testTag("settings_clear_reading_cache"),
                                 ) {
                                     Text(
-                                        text = "一键清理",
+                                        text = "清理",
                                         color = colors.crimson,
                                         style = MaterialTheme.typography.labelLarge,
                                     )
@@ -353,6 +489,66 @@ fun SettingsScreenContent(
                             }
                         },
                         modifier = Modifier.testTag("settings_reading_cache_row"),
+                    )
+                    RavenGroupedDivider(insetWithIcon = true)
+                    RavenGroupedRow(
+                        title = "流媒体与 Seek 缓存",
+                        subtitle = "视频分段 + 快进回看缓存，可随时安全释放",
+                        value = RavenFormatters.formatByteSize(uiState.mediaCache.streamBytes + uiState.mediaCache.seekBytes),
+                        icon = Icons.Outlined.Cached,
+                        enabled = !uiState.mediaCache.isClearing,
+                        trailingContent = {
+                            if (uiState.mediaCache.streamBytes + uiState.mediaCache.seekBytes > 0L) {
+                                TextButton(
+                                    onClick = {
+                                        onClearStreamingCache()
+                                        onClearSeekCache()
+                                    },
+                                    enabled = !uiState.mediaCache.isClearing,
+                                    modifier = Modifier.testTag("settings_clear_media_cache"),
+                                ) {
+                                    Text("清理", color = colors.crimson, style = MaterialTheme.typography.labelLarge)
+                                }
+                            }
+                        },
+                    )
+                    RavenGroupedDivider(insetWithIcon = true)
+                    RavenGroupedRow(
+                        title = "封面与缩略图缓存",
+                        subtitle = "Coil 站点分区磁盘图片缓存（最高 64 MiB）",
+                        value = RavenFormatters.formatByteSize(uiState.mediaCache.imageBytes),
+                        icon = Icons.Outlined.CleaningServices,
+                        enabled = !uiState.mediaCache.isClearing,
+                        trailingContent = {
+                            if (uiState.mediaCache.imageBytes > 0L) {
+                                TextButton(
+                                    onClick = onClearImageCache,
+                                    enabled = !uiState.mediaCache.isClearing,
+                                    modifier = Modifier.testTag("settings_clear_image_cache"),
+                                ) {
+                                    Text("清理", color = colors.crimson, style = MaterialTheme.typography.labelLarge)
+                                }
+                            }
+                        },
+                    )
+                    RavenGroupedDivider(insetWithIcon = true)
+                    RavenGroupedRow(
+                        title = "统一缓存仪表盘",
+                        subtitle = "全部临时缓存合计（绝不删除离线片库或收藏数据）",
+                        value = RavenFormatters.formatByteSize(uiState.totalCacheBytes),
+                        icon = Icons.Outlined.DeleteSweep,
+                        enabled = !uiState.readingCache.isClearing && !uiState.mediaCache.isClearing,
+                        trailingContent = {
+                            if (uiState.totalCacheBytes > 0L) {
+                                TextButton(
+                                    onClick = onClearAllCaches,
+                                    enabled = !uiState.readingCache.isClearing && !uiState.mediaCache.isClearing,
+                                    modifier = Modifier.testTag("settings_clear_all_caches"),
+                                ) {
+                                    Text("一键全部清理", color = colors.crimson, style = MaterialTheme.typography.labelLarge)
+                                }
+                            }
+                        },
                     )
                 }
             }
@@ -394,6 +590,15 @@ fun SettingsScreenContent(
                         showChevron = true,
                         onClick = navigator::openDuplicateScanner,
                         modifier = Modifier.testTag("settings_duplicate_scanner_row"),
+                    )
+                    RavenGroupedDivider(insetWithIcon = true)
+                    RavenGroupedSwitchRow(
+                        title = "后台检查订阅更新",
+                        subtitle = "每 12 小时通过 WorkManager 低功耗拉取已订阅标签与作者上新",
+                        icon = Icons.Outlined.Sync,
+                        checked = uiState.settings.backgroundSubscriptionSync,
+                        onCheckedChange = onToggleBackgroundSync,
+                        modifier = Modifier.testTag("settings_background_sync_switch"),
                     )
                 }
             }
@@ -480,9 +685,18 @@ fun SettingsScreenContent(
                         modifier = Modifier.testTag("settings_blocked_terms_row"),
                     )
                     RavenGroupedDivider(insetWithIcon = true)
+                    RavenGroupedSwitchRow(
+                        title = "全局启用屏蔽词过滤",
+                        subtitle = "关闭后可临时查看全部条目，保留规则列表不丢失",
+                        icon = Icons.Outlined.VisibilityOff,
+                        checked = uiState.settings.blockTagsGlobally,
+                        onCheckedChange = onToggleBlockTagsGlobally,
+                        modifier = Modifier.testTag("settings_block_tags_globally_switch"),
+                    )
+                    RavenGroupedDivider(insetWithIcon = true)
                     RavenGroupedRow(
-                        title = "网络诊断",
-                        subtitle = "查看系统代理、路由纪元 #${uiState.routeEpoch} 与 DNS/TLS 实测连通性",
+                        title = "网络诊断与镜像状态",
+                        subtitle = "查看系统代理、路由纪元 #${uiState.routeEpoch}、站点镜像租约与 DNS/TLS 实测",
                         value = if (uiState.isConnectedNetwork) "在线" else "离线",
                         icon = Icons.Outlined.NetworkCheck,
                         showChevron = true,
@@ -492,6 +706,79 @@ fun SettingsScreenContent(
                         },
                         modifier = Modifier.testTag("settings_network_diagnostics_row"),
                     )
+                }
+            }
+
+            // 4.5 隐私与应用锁
+            item(key = "section_privacy_app_lock") {
+                RavenGroupedSection(
+                    title = "隐私与应用锁",
+                    footer = "无痕模式会停止写入新的搜索、观影与阅读历史；PIN 锁使用加盐 PBKDF2 + AndroidKeyStore 加密校验，不纳入导出备份。",
+                ) {
+                    RavenGroupedSwitchRow(
+                        title = "无痕模式",
+                        subtitle = "暂停写入新历史记录与搜索联想痕迹",
+                        icon = Icons.Outlined.VisibilityOff,
+                        checked = uiState.settings.incognitoMode,
+                        onCheckedChange = onToggleIncognitoMode,
+                        modifier = Modifier.testTag("settings_incognito_switch"),
+                    )
+                    RavenGroupedDivider(insetWithIcon = true)
+                    RavenGroupedSwitchRow(
+                        title = "全局防截屏保护 (FLAG_SECURE)",
+                        subtitle = "禁止系统截屏、录屏及多任务最近列表缩略图预览",
+                        icon = Icons.Outlined.PrivacyTip,
+                        checked = uiState.settings.privacyScreenSecure,
+                        onCheckedChange = onTogglePrivacyScreenSecure,
+                        modifier = Modifier.testTag("settings_screen_secure_switch"),
+                    )
+                    RavenGroupedDivider(insetWithIcon = true)
+                    RavenGroupedSwitchRow(
+                        title = "应用启动 PIN 锁",
+                        subtitle = if (uiState.hasAppPin) "已配置 4–8 位数字解锁码（支持生物识别）" else "需先点击下方设置解锁 PIN",
+                        icon = Icons.Outlined.Lock,
+                        checked = uiState.settings.appLockEnabled,
+                        onCheckedChange = onToggleAppLock,
+                        modifier = Modifier.testTag("settings_app_lock_switch"),
+                    )
+                    RavenGroupedDivider(insetWithIcon = true)
+                    RavenGroupedRow(
+                        title = if (uiState.hasAppPin) "修改或清除解锁 PIN" else "设置应用锁 PIN",
+                        subtitle = if (uiState.hasAppPin) "修改数字解锁码或清除并关闭应用锁" else "设置 4 至 8 位数字密码保护本地片库与浏览记录",
+                        value = if (uiState.hasAppPin) "已配置" else "未设置",
+                        icon = Icons.Outlined.Security,
+                        showChevron = true,
+                        onClick = { activeSheet = SettingsSheetKind.PIN_SETUP },
+                        modifier = Modifier.testTag("settings_pin_setup_row"),
+                    )
+                    if (uiState.hasAppPin) {
+                        RavenGroupedDivider(insetWithIcon = true)
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 16.dp, vertical = 12.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            Text(
+                                text = "后台自动锁定超时",
+                                style = MaterialTheme.typography.titleSmall,
+                                color = colors.inkPrimary,
+                            )
+                            val timeoutChoices = listOf(0 to "立即", 30 to "30 秒", 60 to "1 分钟", 300 to "5 分钟")
+                            FlowRow(
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                verticalArrangement = Arrangement.spacedBy(8.dp),
+                            ) {
+                                timeoutChoices.forEach { (sec, label) ->
+                                    RavenFilterChip(
+                                        label = label,
+                                        selected = uiState.settings.appLockTimeoutSeconds == sec,
+                                        onClick = { onSelectAppLockTimeout(sec) },
+                                    )
+                                }
+                            }
+                        }
+                    }
                 }
             }
 
@@ -612,6 +899,7 @@ fun SettingsScreenContent(
                 fallbackSiteId = activeSiteId,
                 onSelectSite = { siteId -> onOpenDiagnostics(siteId) },
                 onRunProbe = { siteId -> onRunLiveDiagnostics(siteId) },
+                onResetMirrorLease = onResetMirrorLease,
                 onDismiss = { activeSheet = SettingsSheetKind.NONE },
             )
         }
@@ -619,6 +907,22 @@ fun SettingsScreenContent(
         SettingsSheetKind.LICENSES -> {
             LicensesAndDisclaimerSheet(
                 appInfo = uiState.appInfo,
+                onDismiss = { activeSheet = SettingsSheetKind.NONE },
+            )
+        }
+
+        SettingsSheetKind.PIN_SETUP -> {
+            PrivacyPinSetupSheet(
+                hasExistingPin = uiState.hasAppPin,
+                onSavePin = { pin ->
+                    if (onConfigureAppPin(pin)) {
+                        activeSheet = SettingsSheetKind.NONE
+                    }
+                },
+                onClearPin = {
+                    onClearAppPin()
+                    activeSheet = SettingsSheetKind.NONE
+                },
                 onDismiss = { activeSheet = SettingsSheetKind.NONE },
             )
         }
@@ -646,6 +950,7 @@ private fun NetworkDiagnosticsSheet(
     fallbackSiteId: SiteId,
     onSelectSite: (SiteId) -> Unit,
     onRunProbe: (SiteId) -> Unit,
+    onResetMirrorLease: (SiteId) -> Unit,
     onDismiss: () -> Unit,
 ) {
     val colors = LocalRavenColors.current
@@ -759,15 +1064,155 @@ private fun NetworkDiagnosticsSheet(
                 }
             }
 
-            SettingsPrimaryButton(
-                text = if (state.isProbing) "正在执行 DNS / TLS 实测…" else "运行实时连通探针",
-                icon = Icons.Rounded.Refresh,
-                loading = state.isProbing,
-                onClick = { onRunProbe(selectedId) },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .testTag("settings_diagnostics_run_button"),
+            val hostDiag = state.hostDiagnostics
+            if (hostDiag != null) {
+                RavenGroupedSection(title = "站点镜像路由与租约状态") {
+                    RavenGroupedRow(
+                        title = "当前租约域名",
+                        subtitle = "候选：${hostDiag.candidateHosts.joinToString(" · ")}",
+                        value = hostDiag.activeHost ?: "默认直连",
+                    )
+                    if (hostDiag.leaseRemainingMs > 0L) {
+                        RavenGroupedDivider()
+                        RavenGroupedRow(
+                            title = "租约剩余时间",
+                            value = "${(hostDiag.leaseRemainingMs / 1000L)} 秒",
+                        )
+                    }
+                    if (hostDiag.coolingDownHosts.isNotEmpty()) {
+                        RavenGroupedDivider()
+                        RavenGroupedRow(
+                            title = "故障冷却域名",
+                            subtitle = hostDiag.coolingDownHosts.entries.joinToString(" · ") { (host, remMs) ->
+                                "$host (${remMs / 1000L}s)"
+                            },
+                            value = "${hostDiag.coolingDownHosts.size} 个",
+                        )
+                    }
+                }
+            }
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                if (hostDiag != null && hostDiag.candidateHosts.size > 1) {
+                    SettingsSecondaryButton(
+                        text = "重置镜像租约",
+                        onClick = { onResetMirrorLease(selectedId) },
+                        modifier = Modifier
+                            .weight(1f)
+                            .testTag("settings_diagnostics_reset_lease_button"),
+                    )
+                }
+                SettingsPrimaryButton(
+                    text = if (state.isProbing) "正在实测…" else "运行连通探针",
+                    icon = Icons.Rounded.Refresh,
+                    loading = state.isProbing,
+                    onClick = { onRunProbe(selectedId) },
+                    modifier = Modifier
+                        .weight(1f)
+                        .testTag("settings_diagnostics_run_button"),
+                )
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun PrivacyPinSetupSheet(
+    hasExistingPin: Boolean,
+    onSavePin: (String) -> Unit,
+    onClearPin: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    var pinInput by rememberSaveable { mutableStateOf("") }
+    var pinConfirm by rememberSaveable { mutableStateOf("") }
+    var localError by rememberSaveable { mutableStateOf<String?>(null) }
+
+    SecureWindowEffect(enabled = true)
+
+    RavenBottomSheet(
+        onDismissRequest = onDismiss,
+        title = if (hasExistingPin) "管理应用解锁 PIN" else "设置应用解锁 PIN",
+        subtitle = "4 至 8 位数字，经加盐 PBKDF2 与 AndroidKeyStore 加密保存",
+        modifier = Modifier.testTag("settings_pin_setup_sheet"),
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .verticalScroll(rememberScrollState()),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            SettingsTextField(
+                value = pinInput,
+                onValueChange = { next ->
+                    if (next.length <= 8 && next.all(Char::isDigit)) {
+                        pinInput = next
+                        localError = null
+                    }
+                },
+                label = "输入新 PIN (4–8 位数字)",
+                isPassword = true,
+                keyboardOptions = KeyboardOptions(
+                    keyboardType = KeyboardType.NumberPassword,
+                    imeAction = ImeAction.Next,
+                ),
             )
+            SettingsTextField(
+                value = pinConfirm,
+                onValueChange = { next ->
+                    if (next.length <= 8 && next.all(Char::isDigit)) {
+                        pinConfirm = next
+                        localError = null
+                    }
+                },
+                label = "再次确认 PIN",
+                isPassword = true,
+                keyboardOptions = KeyboardOptions(
+                    keyboardType = KeyboardType.NumberPassword,
+                    imeAction = ImeAction.Done,
+                ),
+            )
+
+            val err = localError
+            if (!err.isNullOrBlank()) {
+                SettingsNoticeBanner(message = err, tone = RavenStatusTone.ERROR)
+            }
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                if (hasExistingPin) {
+                    SettingsSecondaryButton(
+                        text = "清除并关闭",
+                        destructive = true,
+                        onClick = onClearPin,
+                        modifier = Modifier.weight(1f),
+                    )
+                } else {
+                    SettingsSecondaryButton(
+                        text = "取消",
+                        onClick = onDismiss,
+                        modifier = Modifier.weight(1f),
+                    )
+                }
+                SettingsPrimaryButton(
+                    text = "保存并启用",
+                    onClick = {
+                        when {
+                            !PrivacyLockStore.isValidPinFormat(pinInput) ->
+                                localError = "PIN 必须为 4 到 8 位纯数字"
+                            pinInput != pinConfirm ->
+                                localError = "两次输入的 PIN 不一致"
+                            else -> onSavePin(pinInput)
+                        }
+                    },
+                    modifier = Modifier.weight(1f),
+                )
+            }
         }
     }
 }

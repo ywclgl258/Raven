@@ -56,6 +56,21 @@ data class AppSettings(
     val tagDictReleaseTag: String = "",
     val tagDictUpdatedAt: Long = 0L,
     val blockTagsGlobally: Boolean = true,
+    // Phase B / C playback, reader & background sync settings
+    val autoplayVideo: Boolean = true,
+    val backgroundAudioPlayback: Boolean = false,
+    val readerTapZonesEnabled: Boolean = true,
+    val readerShowStatusBar: Boolean = false,
+    val readerPrefetchPages: Int = DEFAULT_READER_PREFETCH_PAGES,
+    val readerMemoryBudgetMb: Int = DEFAULT_READER_MEMORY_BUDGET_MB,
+    val readerAutoSplitWidePages: Boolean = false,
+    val backgroundSubscriptionSync: Boolean = true,
+    // Phase D privacy, app lock, incognito & WebDAV sync metadata
+    val privacyScreenSecure: Boolean = false,
+    val appLockEnabled: Boolean = false,
+    val appLockTimeoutSeconds: Int = 0,
+    val incognitoMode: Boolean = false,
+    val webDavLastSyncAt: Long = 0L,
 ) {
     fun languageFor(siteId: SiteId): ComicLanguage = siteLanguages[siteId] ?: ComicLanguage.ALL
 
@@ -67,6 +82,12 @@ data class AppSettings(
         const val DEFAULT_PLAYBACK_SPEED: Float = 1.0f
         const val MIN_PLAYBACK_SPEED: Float = 0.25f
         const val MAX_PLAYBACK_SPEED: Float = 3.0f
+        const val DEFAULT_READER_PREFETCH_PAGES: Int = 3
+        const val MIN_READER_PREFETCH_PAGES: Int = 1
+        const val MAX_READER_PREFETCH_PAGES: Int = 6
+        const val DEFAULT_READER_MEMORY_BUDGET_MB: Int = 24
+        const val MIN_READER_MEMORY_BUDGET_MB: Int = 16
+        const val MAX_READER_MEMORY_BUDGET_MB: Int = 96
     }
 }
 

@@ -39,6 +39,7 @@ import com.raven.app.core.common.AppDispatchers
 import com.raven.app.core.common.ContentFilter
 import com.raven.app.core.common.TagDictionary
 import com.raven.app.core.database.model.BrowsePosition
+import com.raven.app.core.database.model.ShelfWithSummary
 import com.raven.app.core.database.repository.BlockedTermsRepository
 import com.raven.app.core.database.repository.BrowsePositionRepository
 import com.raven.app.core.database.repository.HistoryRepository
@@ -75,6 +76,7 @@ import com.raven.app.core.sitespi.SitePlugin
 import com.raven.app.core.sitespi.SiteRegistry
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -144,8 +146,8 @@ class SiteFeedViewModel(
     private val tagDictionaryRepository: TagDictionaryRepository? = null,
 ) : ViewModel() {
 
-    val siteId: SiteId = SiteId.of(route.siteId)
-    val plugin: SitePlugin? = siteRegistry.get(siteId)
+    val siteId: SiteId? = runCatching { SiteId.of(route.siteId) }.getOrNull()
+    val plugin: SitePlugin? = siteId?.let(siteRegistry::get)
     private val scope: SearchScope = SearchScope.entries.firstOrNull {
         it.name.equals(route.scope, ignoreCase = true)
     } ?: SearchScope.ALL
@@ -158,29 +160,38 @@ class SiteFeedViewModel(
 
     private var loadJob: Job? = null
     private var paginateJob: Job? = null
+    private var browsePositionJob: Job? = null
+    private val shelfController = BrowseShelfController(
+        shelfRepository = shelfRepository,
+        scope = viewModelScope,
+        ioDispatcher = dispatchers.io,
+    )
+
+    val shelfPickerShelves: StateFlow<List<ShelfWithSummary>> get() = shelfController.shelves
+    val inspectedShelfIds: StateFlow<Set<String>> get() = shelfController.inspectedShelfIds
 
     private val supportsLanguage: Boolean =
         plugin?.descriptor?.hasCapability(SiteCapability.LANGUAGE_FILTER) == true
 
     private val languageFlow = preferencesRepository.settings
-        .map { if (supportsLanguage) it.languageFor(siteId) else ComicLanguage.ALL }
+        .map { if (supportsLanguage && siteId != null) it.languageFor(siteId) else ComicLanguage.ALL }
         .distinctUntilChanged()
 
-    private val isSubscribedFlow = if (canSubscribe && querySlug != null) {
+    private val isSubscribedFlow = if (canSubscribe && querySlug != null && siteId != null) {
         subscriptionRepository.observeIsSubscribed(siteId, querySlug, scope)
     } else {
         flowOf(false)
     }
 
-    private val cachedTagsFlow = mediaTagCacheRepository?.observeTagsBySite(siteId) ?: flowOf(emptyMap())
+    private val cachedTagsFlow = siteId?.let { mediaTagCacheRepository?.observeTagsBySite(it) } ?: flowOf(emptyMap())
     private val dictRevisionFlow = tagDictionaryRepository?.observeRevision() ?: flowOf(0L)
 
     private val localDataFlow = combine(
         combine(
-            blockedTermsRepository.observeEffectiveTermsBySite(siteId),
+            siteId?.let { blockedTermsRepository.observeEffectiveTermsBySite(it) } ?: flowOf(emptyList()),
             cachedTagsFlow,
-            historyRepository.observeWatchProgressBySite(siteId),
-            historyRepository.observeReadingProgressBySite(siteId),
+            siteId?.let { historyRepository.observeWatchProgressBySite(it) } ?: flowOf(emptyList()),
+            siteId?.let { historyRepository.observeReadingProgressBySite(it) } ?: flowOf(emptyList()),
             shelfRepository.observeShelfItemKeys(Shelf.WATCH_LATER_ID),
         ) { blocked, cachedTags, watches, readings, watchLater ->
             SiteFeedLocalData(
@@ -205,7 +216,7 @@ class SiteFeedViewModel(
         networkState,
     ) { settings, sort, local, net ->
         val descriptor = plugin?.descriptor
-        val effectiveLanguage = if (supportsLanguage) settings.languageFor(siteId) else ComicLanguage.ALL
+        val effectiveLanguage = if (supportsLanguage && siteId != null) settings.languageFor(siteId) else ComicLanguage.ALL
         val baseRequest = buildRequest(sort = sort, language = effectiveLanguage, page = 1, cursor = null)
         val availableSorts = plugin?.feedSource?.supportedSorts(baseRequest)
             ?.takeIf { it.isNotEmpty() }
@@ -234,7 +245,7 @@ class SiteFeedViewModel(
             serverTitle = net.serverTitle,
             sectionTitle = matchedSection?.title,
             translateTags = settings.translateTags,
-            siteName = descriptor?.displayName ?: siteId.value,
+            siteName = descriptor?.displayName ?: siteId?.value ?: route.siteId,
         )
         val resolvedSubtitle = buildList {
             descriptor?.shortName?.let { add(it) }
@@ -292,12 +303,14 @@ class SiteFeedViewModel(
     }
 
     fun selectLanguage(language: ComicLanguage) {
+        val targetId = siteId ?: return
         viewModelScope.launch {
-            preferencesRepository.setSiteLanguage(siteId, language)
+            preferencesRepository.setSiteLanguage(targetId, language)
         }
     }
 
     fun toggleSubscription() {
+        val targetId = siteId ?: return
         val slug = querySlug ?: return
         if (!canSubscribe) return
         val label = route.title?.takeIf { it.isNotBlank() }
@@ -306,7 +319,7 @@ class SiteFeedViewModel(
         viewModelScope.launch {
             subscriptionRepository.toggleSubscription(
                 TagSubscription(
-                    siteId = siteId,
+                    siteId = targetId,
                     slug = slug,
                     label = label,
                     url = fallbackUrl,
@@ -317,9 +330,10 @@ class SiteFeedViewModel(
     }
 
     fun refresh() {
+        val targetId = siteId ?: return
         viewModelScope.launch {
             val lang = if (supportsLanguage) {
-                preferencesRepository.currentSettings().languageFor(siteId)
+                preferencesRepository.currentSettings().languageFor(targetId)
             } else {
                 ComicLanguage.ALL
             }
@@ -334,6 +348,7 @@ class SiteFeedViewModel(
     fun loadNextPage() {
         val snap = networkState.value
         if (snap.isLoading || snap.isLoadingMore || snap.authGateRequired || !snap.hasMore) return
+        val targetId = siteId ?: return
         val targetPlugin = plugin ?: return
 
         paginateJob?.cancel()
@@ -341,7 +356,7 @@ class SiteFeedViewModel(
             networkState.update { it.copy(isLoadingMore = true, paginationErrorMessage = null) }
             val nextPageNumber = snap.nextPage ?: (snap.currentPage + 1)
             val lang = if (supportsLanguage) {
-                preferencesRepository.currentSettings().languageFor(siteId)
+                preferencesRepository.currentSettings().languageFor(targetId)
             } else {
                 ComicLanguage.ALL
             }
@@ -380,21 +395,28 @@ class SiteFeedViewModel(
         }
     }
 
-    fun toggleWatchLater(item: MediaItem) {
-        viewModelScope.launch {
-            shelfRepository.toggleItem(Shelf.WATCH_LATER_ID, item.toShelfItem())
-        }
-    }
+    fun inspectShelfTarget(item: MediaItem?) = shelfController.inspectItem(item)
+
+    fun toggleWatchLater(item: MediaItem) = shelfController.toggleWatchLater(item)
+
+    fun setShelfMembership(shelfId: String, item: MediaItem, add: Boolean) =
+        shelfController.setMembership(shelfId, item, add)
+
+    fun createShelfAndAdd(name: String, item: MediaItem) =
+        shelfController.createShelfAndAdd(name, item)
 
     fun saveBrowsePosition(workId: String, throughPage: Int = uiState.value.currentPage) {
+        val targetId = siteId ?: return
         val cleanId = workId.trim()
         if (cleanId.isEmpty()) return
-        val key = "feed:${siteId.value}:${route.section.orEmpty()}:${route.category.orEmpty()}:${querySlug.orEmpty()}"
-        viewModelScope.launch {
+        val key = "feed:${targetId.value}:${route.section.orEmpty()}:${route.category.orEmpty()}:${querySlug.orEmpty()}"
+        browsePositionJob?.cancel()
+        browsePositionJob = viewModelScope.launch {
+            delay(BROWSE_POSITION_DEBOUNCE_MS)
             browsePositionRepository.save(
                 BrowsePosition(
                     positionKey = key,
-                    siteId = siteId,
+                    siteId = targetId,
                     workId = cleanId,
                     throughPage = throughPage.coerceAtLeast(1),
                     updatedAt = 0L,
@@ -493,7 +515,7 @@ class SiteFeedViewModel(
                 (!route.category.isNullOrBlank() && spec.category == route.category)
         }
         return FeedRequest(
-            siteId = siteId,
+            siteId = siteId ?: SiteId.of("unknown"),
             section = route.section,
             category = route.category,
             sort = sort,
@@ -556,6 +578,8 @@ fun SiteFeedScreen(
     ),
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
+    val shelves by viewModel.shelfPickerShelves.collectAsStateWithLifecycle()
+    val inspectedShelfIds by viewModel.inspectedShelfIds.collectAsStateWithLifecycle()
 
     SiteFeedScreenContent(
         uiState = uiState,
@@ -568,6 +592,11 @@ fun SiteFeedScreen(
         onLoadNextPage = viewModel::loadNextPage,
         onToggleWatchLater = viewModel::toggleWatchLater,
         onSaveBrowsePosition = viewModel::saveBrowsePosition,
+        shelves = shelves,
+        selectedShelfIds = inspectedShelfIds,
+        onInspectShelfTarget = viewModel::inspectShelfTarget,
+        onToggleShelfMembership = viewModel::setShelfMembership,
+        onCreateShelfAndAdd = viewModel::createShelfAndAdd,
         modifier = modifier,
     )
 }
@@ -586,6 +615,11 @@ fun SiteFeedScreenContent(
     onToggleWatchLater: (MediaItem) -> Unit,
     onSaveBrowsePosition: (workId: String, throughPage: Int) -> Unit,
     modifier: Modifier = Modifier,
+    shelves: List<ShelfWithSummary> = emptyList(),
+    selectedShelfIds: Set<String> = emptySet(),
+    onInspectShelfTarget: (MediaItem?) -> Unit = {},
+    onToggleShelfMembership: (shelfId: String, item: MediaItem, add: Boolean) -> Unit = { _, _, _ -> },
+    onCreateShelfAndAdd: (name: String, item: MediaItem) -> Unit = { _, _ -> },
 ) {
     val colors = LocalRavenColors.current
     val pullState = rememberPullToRefreshState()
@@ -794,15 +828,17 @@ fun SiteFeedScreenContent(
         }
     }
 
-    val sheetItem = actionTargetItem
-    if (sheetItem != null) {
-        MediaCardActionSheet(
-            item = sheetItem,
-            isInWatchLater = sheetItem.compositeKey in uiState.watchLaterKeys,
-            onDismiss = { actionTargetItem = null },
-            onOpen = { navigator.openSearchResultItem(plugin, sheetItem) },
-            onToggleWatchLater = { onToggleWatchLater(sheetItem) },
-            onSearchSimilar = { slug -> navigator.openSearch(initialQuery = slug, crossSite = false) },
-        )
-    }
+    MediaCardActionAndShelfHost(
+        targetItem = actionTargetItem,
+        watchLaterKeys = uiState.watchLaterKeys,
+        shelves = shelves,
+        selectedShelfIds = selectedShelfIds,
+        onInspectShelfTarget = onInspectShelfTarget,
+        onDismiss = { actionTargetItem = null },
+        onOpen = { navigator.openSearchResultItem(plugin, it) },
+        onToggleWatchLater = onToggleWatchLater,
+        onToggleShelfMembership = onToggleShelfMembership,
+        onCreateShelfAndAdd = onCreateShelfAndAdd,
+        onSearchSimilar = { slug -> navigator.openSearch(initialQuery = slug, crossSite = false) },
+    )
 }

@@ -36,6 +36,10 @@ kotlin {
     }
 }
 
+composeCompiler {
+    stabilityConfigurationFiles.add(rootProject.layout.projectDirectory.file("compose_stability.conf"))
+}
+
 dependencies {
     implementation(project(":core:model"))
     implementation(project(":core:common"))

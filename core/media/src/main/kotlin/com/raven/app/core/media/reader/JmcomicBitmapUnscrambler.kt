@@ -85,10 +85,10 @@ class JmcomicBitmapUnscrambler {
                         region.recycle()
                     }
                 }
-                val isJpeg = bytes.size >= 2 && bytes[0] == 0xFF.toByte() && bytes[1] == 0xD8.toByte()
-                val format = if (isJpeg) Bitmap.CompressFormat.JPEG else Bitmap.CompressFormat.PNG
+                val format = chooseEncodeFormat(bytes, rendered)
+                val quality = if (format == Bitmap.CompressFormat.PNG) 100 else 92
                 val out = ByteArrayOutputStream(bytes.size)
-                check(rendered.compress(format, 96, out) && out.size() <= JmcomicStripMath.MAX_GALLERY_IMAGE_BYTES) {
+                check(rendered.compress(format, quality, out) && out.size() <= JmcomicStripMath.MAX_GALLERY_IMAGE_BYTES) {
                     "无法保存还原后的分条图页"
                 }
                 return out.toByteArray()
@@ -161,5 +161,28 @@ class JmcomicBitmapUnscrambler {
             BitmapRegionDecoder.newInstance(bytes, 0, bytes.size, false)
         }
         return decoder ?: error("无法初始化分条图页解码器")
+    }
+
+    @Suppress("DEPRECATION")
+    private fun chooseEncodeFormat(rawBytes: ByteArray, rendered: Bitmap): Bitmap.CompressFormat {
+        val isJpeg = rawBytes.size >= 2 && rawBytes[0] == 0xFF.toByte() && rawBytes[1] == 0xD8.toByte()
+        if (isJpeg) return Bitmap.CompressFormat.JPEG
+        val isWebp = rawBytes.size >= 12 &&
+            rawBytes[0] == 'R'.code.toByte() &&
+            rawBytes[1] == 'I'.code.toByte() &&
+            rawBytes[2] == 'F'.code.toByte() &&
+            rawBytes[3] == 'F'.code.toByte() &&
+            rawBytes[8] == 'W'.code.toByte() &&
+            rawBytes[9] == 'E'.code.toByte() &&
+            rawBytes[10] == 'B'.code.toByte() &&
+            rawBytes[11] == 'P'.code.toByte()
+        if (isWebp) {
+            return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                Bitmap.CompressFormat.WEBP_LOSSY
+            } else {
+                Bitmap.CompressFormat.WEBP
+            }
+        }
+        return if (!rendered.hasAlpha()) Bitmap.CompressFormat.JPEG else Bitmap.CompressFormat.PNG
     }
 }

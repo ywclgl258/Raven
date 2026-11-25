@@ -797,6 +797,9 @@ internal class InMemoryUpdateInboxDao : UpdateInboxDao {
     override suspend fun deleteById(id: String) { rows.update { it.filterNot { e -> e.id == id } } }
     override suspend fun deleteBySource(sourceKind: InboxSourceKind, sourceId: String) = Unit
     override suspend fun deleteAll() { rows.value = emptyList() }
+    override suspend fun prune(limit: Int) {
+        rows.update { list -> list.sortedByDescending { it.discoveredAt }.take(limit) }
+    }
 }
 
 internal class InMemoryTagTranslationDao : TagTranslationDao {

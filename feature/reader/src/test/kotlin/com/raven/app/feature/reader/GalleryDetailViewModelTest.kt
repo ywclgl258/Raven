@@ -507,4 +507,71 @@ class GalleryDetailViewModelTest {
             assertTrue(harness.blockedTermDao.getAll().any { it.siteId == SiteId.GLOBAL.value && it.term == "stockings" })
             assertEquals(listOf("rel-safe"), viewModel.uiState.value.filteredRelated.map { it.id })
         }
+
+    @Test
+    fun `invalid siteId guard and custom shelf picker membership work cleanly`() = runTest(mainDispatcherRule.dispatcher) {
+        val harness = ReaderTestHarness(mainDispatcherRule.dispatcher, tempFolder.newFolder())
+        val invalidVm = GalleryDetailViewModel(
+            route = RavenRoute.GalleryDetail("bad site!", "g-0", "https://example.com/g-0"),
+            siteRegistry = SiteRegistry(emptyList()),
+            pageLoader = FakeReaderPageLoader(detailLoader = { _, _, _, _ -> error("should not load") }),
+            localLibraryImporter = harness.localLibraryImporter,
+            downloadGateway = FakeGalleryDownloadGateway(),
+            exportGateway = harness.exportGateway,
+            historyRepository = harness.historyRepository,
+            favoriteRepository = harness.favoriteRepository,
+            shelfRepository = harness.shelfRepository,
+            bookmarkRepository = harness.bookmarkRepository,
+            blockedTermsRepository = harness.blockedTermsRepository,
+            subscriptionRepository = harness.subscriptionRepository,
+            preferencesRepository = harness.preferencesRepository,
+            dispatchers = harness.dispatchers,
+            tagDictionary = harness.runtimeDictionary,
+            clock = harness.clock,
+        )
+        advanceUntilIdle()
+        assertFalse(invalidVm.uiState.value.isLoading)
+        assertNotNull(invalidVm.uiState.value.errorMessage)
+
+        val detail = sampleGalleryDetail(SiteId.NHENTAI, mediaId = "nh-shelf", pageCount = 8)
+        val registry = SiteRegistry(
+            listOf(FakeGallerySitePlugin(sampleSiteDescriptor(SiteId.NHENTAI), detailHandler = { detail })),
+        )
+        val vm = GalleryDetailViewModel(
+            route = RavenRoute.GalleryDetail(SiteId.NHENTAI.value, "nh-shelf", detail.item.url),
+            siteRegistry = registry,
+            pageLoader = FakeReaderPageLoader(
+                detailLoader = { _, _, _, _ -> OfflineGallerySnapshot(detail, emptyList(), emptyList(), "", false) },
+            ),
+            localLibraryImporter = harness.localLibraryImporter,
+            downloadGateway = FakeGalleryDownloadGateway(),
+            exportGateway = harness.exportGateway,
+            historyRepository = harness.historyRepository,
+            favoriteRepository = harness.favoriteRepository,
+            shelfRepository = harness.shelfRepository,
+            bookmarkRepository = harness.bookmarkRepository,
+            blockedTermsRepository = harness.blockedTermsRepository,
+            subscriptionRepository = harness.subscriptionRepository,
+            preferencesRepository = harness.preferencesRepository,
+            dispatchers = harness.dispatchers,
+            tagDictionary = harness.runtimeDictionary,
+            clock = harness.clock,
+        )
+        advanceUntilIdle()
+
+        vm.openShelfPicker()
+        assertTrue(vm.uiState.value.showShelfPicker)
+        vm.createShelfAndAdd("本子精选")
+        advanceUntilIdle()
+
+        val createdShelf = vm.uiState.value.shelves.firstOrNull { it.shelf.name == "本子精选" }
+        assertNotNull(createdShelf)
+        assertTrue(createdShelf!!.shelf.id in vm.uiState.value.containingShelfIds)
+
+        vm.setShelfMembership(createdShelf.shelf.id, add = false)
+        advanceUntilIdle()
+        assertFalse(createdShelf.shelf.id in vm.uiState.value.containingShelfIds)
+        vm.dismissShelfPicker()
+        assertFalse(vm.uiState.value.showShelfPicker)
+    }
 }

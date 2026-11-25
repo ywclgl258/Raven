@@ -7,6 +7,7 @@ import com.raven.app.core.model.SiteId
 import java.io.File
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.StandardTestDispatcher
+import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -113,6 +114,32 @@ class PlaybackQueueStoreTest {
         assertEquals(result.session, reloaded.snapshot())
 
         reloaded.end(result.session.token)
+        assertFalse(queueFile.exists())
+    }
+
+    @Test
+    fun `queue store persists asynchronously via applicationScope without blocking caller`() = runTest {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        val queueFile = File(tempFolder.newFolder("queue-async"), "playback-queue.json")
+        val store = PlaybackQueueStore(
+            persistence = AtomicFilePlaybackQueuePersistence(queueFile),
+            dispatchers = CustomAppDispatchers(dispatcher),
+            applicationScope = this,
+        )
+
+        val started = store.start(
+            title = "Async Shelf",
+            shelfId = "async-1",
+            items = listOf(sampleItem("x"), sampleItem("y")),
+        )
+        // Not flushed to disk yet on caller thread before dispatcher runs.
+        assertFalse(queueFile.exists())
+        advanceUntilIdle()
+        assertTrue(queueFile.isFile)
+        assertEquals(started, AtomicFilePlaybackQueuePersistence(queueFile).load())
+
+        store.end(started.token)
+        advanceUntilIdle()
         assertFalse(queueFile.exists())
     }
 }

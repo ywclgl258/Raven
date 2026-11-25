@@ -21,6 +21,8 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -43,15 +45,21 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.State
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawWithCache
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.drawscope.translate
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.TextStyle
@@ -217,6 +225,7 @@ fun RavenEmptyState(
  * Centered Obsidian error state with high-contrast Retry CTA and optional secondary action
  * (e.g., sign-in / mirror switch).
  */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun RavenErrorState(
     message: String,
@@ -269,9 +278,9 @@ fun RavenErrorState(
 
         Spacer(modifier = Modifier.height(4.dp))
 
-        Row(
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
-            verticalAlignment = Alignment.CenterVertically,
+        FlowRow(
+            horizontalArrangement = Arrangement.spacedBy(10.dp, Alignment.CenterHorizontally),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
             Button(
                 onClick = onRetry,
@@ -295,6 +304,8 @@ fun RavenErrorState(
                 Text(
                     text = retryLabel,
                     style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.SemiBold),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
                 )
             }
 
@@ -315,11 +326,31 @@ fun RavenErrorState(
                     Text(
                         text = secondaryActionLabel,
                         style = MaterialTheme.typography.labelLarge,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
                     )
                 }
             }
         }
     }
+}
+
+@Composable
+fun rememberRavenShimmerProgress(): State<Float> {
+    val motionReduced = LocalMotionReduced.current
+    if (motionReduced) {
+        return remember { mutableFloatStateOf(0f) }
+    }
+    val transition = rememberInfiniteTransition(label = "ravenShimmerProgress")
+    return transition.animateFloat(
+        initialValue = 0f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis = 1_250, easing = LinearEasing),
+            repeatMode = RepeatMode.Restart,
+        ),
+        label = "ravenShimmerFraction",
+    )
 }
 
 /**
@@ -357,18 +388,47 @@ fun rememberRavenShimmerBrush(): Brush {
 }
 
 /**
- * Single shimmer placeholder block with customizable [shape].
+ * Single shimmer placeholder block with customizable [shape], powered by `drawWithCache` to avoid
+ * per-frame gradient allocations and skipped recompositions.
  */
 @Composable
 fun RavenSkeletonBox(
     modifier: Modifier = Modifier,
     shape: Shape = RavenShapes.ControlShape,
-    brush: Brush = rememberRavenShimmerBrush(),
+    @Suppress("UNUSED_PARAMETER") brush: Brush? = null,
+    progress: State<Float> = rememberRavenShimmerProgress(),
 ) {
+    val colors = LocalRavenColors.current
+    val motionReduced = LocalMotionReduced.current
     Box(
         modifier = modifier
             .clip(shape)
-            .background(brush),
+            .drawWithCache {
+                val bandWidth = 280f
+                val highlightBrush = Brush.linearGradient(
+                    colors = listOf(
+                        colors.shimmerBase,
+                        colors.shimmerHighlight,
+                        colors.shimmerBase,
+                    ),
+                    start = Offset.Zero,
+                    end = Offset(bandWidth, size.height.coerceAtLeast(160f)),
+                )
+                onDrawBehind {
+                    drawRect(color = colors.shimmerBase)
+                    if (!motionReduced) {
+                        val travel = size.width + bandWidth * 2f
+                        val tx = progress.value * travel - bandWidth
+                        translate(left = tx) {
+                            drawRect(
+                                brush = highlightBrush,
+                                topLeft = Offset.Zero,
+                                size = Size(bandWidth, size.height),
+                            )
+                        }
+                    }
+                }
+            },
     )
 }
 
@@ -378,7 +438,8 @@ fun RavenSkeletonBox(
 @Composable
 fun RavenVideoCardSkeleton(
     modifier: Modifier = Modifier,
-    brush: Brush = rememberRavenShimmerBrush(),
+    brush: Brush? = null,
+    progress: State<Float> = rememberRavenShimmerProgress(),
 ) {
     Column(
         modifier = modifier,
@@ -387,18 +448,21 @@ fun RavenVideoCardSkeleton(
         RavenSkeletonBox(
             shape = RavenShapes.CardShape,
             brush = brush,
+            progress = progress,
             modifier = Modifier
                 .fillMaxWidth()
                 .aspectRatio(RavenFormatters.VIDEO_ASPECT_RATIO),
         )
         RavenSkeletonBox(
             brush = brush,
+            progress = progress,
             modifier = Modifier
                 .fillMaxWidth(0.86f)
                 .height(14.dp),
         )
         RavenSkeletonBox(
             brush = brush,
+            progress = progress,
             modifier = Modifier
                 .fillMaxWidth(0.52f)
                 .height(11.dp),
@@ -413,7 +477,8 @@ fun RavenVideoCardSkeleton(
 fun RavenGalleryCardSkeleton(
     modifier: Modifier = Modifier,
     aspectRatio: Float = RavenFormatters.DEFAULT_GALLERY_ASPECT_RATIO,
-    brush: Brush = rememberRavenShimmerBrush(),
+    brush: Brush? = null,
+    progress: State<Float> = rememberRavenShimmerProgress(),
 ) {
     Column(
         modifier = modifier,
@@ -422,12 +487,14 @@ fun RavenGalleryCardSkeleton(
         RavenSkeletonBox(
             shape = RavenShapes.CardShape,
             brush = brush,
+            progress = progress,
             modifier = Modifier
                 .fillMaxWidth()
                 .aspectRatio(RavenFormatters.clampAspectRatio(aspectRatio)),
         )
         RavenSkeletonBox(
             brush = brush,
+            progress = progress,
             modifier = Modifier
                 .fillMaxWidth(0.8f)
                 .height(13.dp),
@@ -441,7 +508,8 @@ fun RavenGalleryCardSkeleton(
 @Composable
 fun RavenCompactRowSkeleton(
     modifier: Modifier = Modifier,
-    brush: Brush = rememberRavenShimmerBrush(),
+    brush: Brush? = null,
+    progress: State<Float> = rememberRavenShimmerProgress(),
 ) {
     val colors = LocalRavenColors.current
     Row(
@@ -457,6 +525,7 @@ fun RavenCompactRowSkeleton(
         RavenSkeletonBox(
             shape = RavenShapes.ControlShape,
             brush = brush,
+            progress = progress,
             modifier = Modifier
                 .width(112.dp)
                 .height(64.dp),
@@ -467,12 +536,14 @@ fun RavenCompactRowSkeleton(
         ) {
             RavenSkeletonBox(
                 brush = brush,
+                progress = progress,
                 modifier = Modifier
                     .fillMaxWidth(0.9f)
                     .height(14.dp),
             )
             RavenSkeletonBox(
                 brush = brush,
+                progress = progress,
                 modifier = Modifier
                     .fillMaxWidth(0.55f)
                     .height(11.dp),
@@ -540,7 +611,7 @@ fun RavenLoadingSkeleton(
     rowCount: Int = 5,
     itemSpacing: Dp = 10.dp,
 ) {
-    val brush = rememberRavenShimmerBrush()
+    val progress = rememberRavenShimmerProgress()
     Column(
         modifier = modifier
             .fillMaxWidth()
@@ -549,7 +620,7 @@ fun RavenLoadingSkeleton(
         verticalArrangement = Arrangement.spacedBy(itemSpacing),
     ) {
         repeat(rowCount.coerceAtLeast(1)) {
-            RavenCompactRowSkeleton(brush = brush)
+            RavenCompactRowSkeleton(progress = progress)
         }
     }
 }
