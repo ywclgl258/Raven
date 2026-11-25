@@ -96,6 +96,15 @@ class SettingsDataStoreTest {
             settingsStore.setDownloadUnmeteredOnly(true)
             assertTrue(awaitItem().downloadUnmeteredOnly)
 
+            settingsStore.setDownloadSort("TITLE")
+            assertEquals("TITLE", awaitItem().downloadView.sort)
+
+            settingsStore.setDownloadGroupMode("TAG")
+            assertEquals("TAG", awaitItem().downloadView.groupMode)
+
+            settingsStore.setDownloadTagMatchAll(true)
+            assertTrue(awaitItem().downloadView.tagMatchAll)
+
             settingsStore.setReduceTransparency(true)
             assertTrue(awaitItem().reduceTransparency)
 
@@ -144,12 +153,16 @@ class SettingsDataStoreTest {
         settingsStore.setUiSoundEffectsEnabled(false)
         settingsStore.setTagDictAutoSync(false)
         settingsStore.setBlockTagsGlobally(false)
+        settingsStore.setDownloadSort("TITLE")
+        settingsStore.setDownloadGroupMode("CUSTOM")
         settingsStore.setTagDictSyncState(etag = "etag-1", releaseTag = "r1", updatedAt = 1234L)
         val exported = settingsStore.exportPortableSettings()
         assertEquals("720p", exported[SettingsDataStore.KEY_PREFERRED_QUALITY])
         assertEquals("false", exported[SettingsDataStore.KEY_UI_SOUND_EFFECTS_ENABLED])
         assertEquals("false", exported[SettingsDataStore.KEY_TAG_DICT_AUTO_SYNC])
         assertEquals("false", exported[SettingsDataStore.KEY_BLOCK_TAGS_GLOBALLY])
+        assertTrue(exported[SettingsDataStore.KEY_DOWNLOAD_VIEW]?.contains("\"sort\":\"TITLE\"") == true)
+        assertTrue(exported[SettingsDataStore.KEY_DOWNLOAD_VIEW]?.contains("\"groupMode\":\"CUSTOM\"") == true)
         assertFalse(SettingsDataStore.KEY_TAG_DICT_ETAG in exported)
         assertFalse(SettingsDataStore.KEY_TAG_DICT_RELEASE_TAG in exported)
         assertFalse(SettingsDataStore.KEY_TAG_DICT_UPDATED_AT in exported)
@@ -162,6 +175,8 @@ class SettingsDataStoreTest {
             settingsMap = mapOf(
                 SettingsDataStore.KEY_PREFERRED_QUALITY to "4k",
                 SettingsDataStore.KEY_UI_SOUND_EFFECTS_ENABLED to "true",
+                SettingsDataStore.KEY_DOWNLOAD_VIEW to
+                    "{\"sort\":\"SIZE\",\"groupMode\":\"TAG\",\"tagMatchAll\":true}",
                 SettingsDataStore.KEY_STORAGE_LOCATION to "PRIVATE",
                 SettingsDataStore.KEY_SITE_SWITCH_TUTORIAL_SEEN to "false",
             ),
@@ -170,6 +185,9 @@ class SettingsDataStoreTest {
         val afterRestore = settingsStore.currentSettings()
         assertEquals("4k", afterRestore.preferredQuality)
         assertTrue(afterRestore.uiSoundEffectsEnabled)
+        assertEquals("SIZE", afterRestore.downloadView.sort)
+        assertEquals("TAG", afterRestore.downloadView.groupMode)
+        assertTrue(afterRestore.downloadView.tagMatchAll)
         assertEquals(StorageLocation.SHARED, afterRestore.storageLocation)
         assertTrue(afterRestore.siteSwitchTutorialSeen)
         assertEquals(ComicLanguage.CHINESE, afterRestore.languageFor(SiteId.WNACG))

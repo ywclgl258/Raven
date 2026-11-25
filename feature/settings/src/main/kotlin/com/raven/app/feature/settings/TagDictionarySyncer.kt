@@ -151,6 +151,7 @@ class EhTagTranslationSyncer(
                 }
 
                 var metadataEtag = ""
+                var fallbackDirectAsset = false
                 val releaseDto: GitHubReleaseDto? = executeCancellable(
                     apiClient.newCall(metadataRequestBuilder.build()),
                 ).use { response ->
@@ -162,6 +163,12 @@ class EhTagTranslationSyncer(
                         )
                     }
                     val body = response.body?.string().orEmpty()
+                    if ((response.code == 403 || response.code == 404 || response.code == 429) &&
+                        releasesApiBaseUrlOverride == null
+                    ) {
+                        fallbackDirectAsset = true
+                        return@use null
+                    }
                     if (response.code == 403 || response.code == 429) {
                         val msg = if (body.contains("rate limit", ignoreCase = true)) {
                             "GitHub 请求过于频繁，请稍后重试"
@@ -177,28 +184,38 @@ class EhTagTranslationSyncer(
                     json.decodeFromString(GitHubReleaseDto.serializer(), body)
                 }
 
-                val release = releaseDto
-                    ?: return@withContext TagSyncResult.Error("未获取到有效的词库发布元数据")
-                val remoteTag = release.tagName.trim().ifBlank { release.name.trim() }
+                val remoteTag: String
+                val assetName: String
+                val downloadUrl: String
+                if (fallbackDirectAsset) {
+                    remoteTag = "latest"
+                    assetName = ASSET_GZIP_NAME
+                    downloadUrl = FALLBACK_LATEST_GZIP_URL
+                } else {
+                    val release = releaseDto
+                        ?: return@withContext TagSyncResult.Error("未获取到有效的词库发布元数据")
+                    remoteTag = release.tagName.trim().ifBlank { release.name.trim() }
 
-                if (existingCommunityCount > 0 && remoteTag.isNotEmpty() && remoteTag == storedReleaseTag) {
-                    val effectiveEtag = metadataEtag.ifBlank { storedEtag }
-                    preferencesRepository.setTagDictSyncState(
-                        etag = effectiveEtag,
-                        releaseTag = remoteTag,
-                        updatedAt = nowMs,
-                    )
-                    return@withContext TagSyncResult.NotModified(
-                        releaseTag = remoteTag,
-                        entryCount = existingCommunityCount,
-                    )
-                }
+                    if (existingCommunityCount > 0 && remoteTag.isNotEmpty() && remoteTag == storedReleaseTag) {
+                        val effectiveEtag = metadataEtag.ifBlank { storedEtag }
+                        preferencesRepository.setTagDictSyncState(
+                            etag = effectiveEtag,
+                            releaseTag = remoteTag,
+                            updatedAt = nowMs,
+                        )
+                        return@withContext TagSyncResult.NotModified(
+                            releaseTag = remoteTag,
+                            entryCount = existingCommunityCount,
+                        )
+                    }
 
-                val selectedAsset = selectDatabaseAsset(release.assets)
-                    ?: return@withContext TagSyncResult.Error("当前发布未包含 db.text.json.gz 或 db.text.json 词库文件")
+                    val selectedAsset = selectDatabaseAsset(release.assets)
+                        ?: return@withContext TagSyncResult.Error("当前发布未包含 db.text.json.gz 或 db.text.json 词库文件")
 
-                val downloadUrl = selectedAsset.browserDownloadUrl.trim().ifBlank {
-                    if (selectedAsset.id > 0L) "$releasesBaseUrl/assets/${selectedAsset.id}" else ""
+                    assetName = selectedAsset.name
+                    downloadUrl = selectedAsset.browserDownloadUrl.trim().ifBlank {
+                        if (selectedAsset.id > 0L) "$releasesBaseUrl/assets/${selectedAsset.id}" else ""
+                    }
                 }
                 if (downloadUrl.isBlank()) {
                     return@withContext TagSyncResult.Error("社区词库下载地址无效")
@@ -232,7 +249,7 @@ class EhTagTranslationSyncer(
                 }
 
                 val jsonText = decodePayloadText(
-                    assetName = selectedAsset.name,
+                    assetName = assetName,
                     rawBytes = rawBytes,
                 )
                 val entries = parseEhTagJson(
@@ -317,7 +334,9 @@ class EhTagTranslationSyncer(
 
     companion object {
         const val DEFAULT_RELEASES_API_BASE_URL: String =
-            "https://api.github.com/repos/EhTagTranslation/DatabaseReleases/releases"
+            "https://api.github.com/repos/EhTagTranslation/Database/releases"
+        const val FALLBACK_LATEST_GZIP_URL: String =
+            "https://github.com/EhTagTranslation/Database/releases/latest/download/db.text.json.gz"
         const val AUTO_SYNC_INTERVAL_MS: Long = 7L * 24L * 60L * 60L * 1_000L
 
         private const val ASSET_GZIP_NAME: String = "db.text.json.gz"

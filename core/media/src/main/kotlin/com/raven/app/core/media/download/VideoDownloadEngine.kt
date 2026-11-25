@@ -3,15 +3,13 @@
 package com.raven.app.core.media.download
 
 import android.app.Notification
-import android.app.PendingIntent
 import android.content.Context
-import android.content.Intent
+import androidx.core.app.NotificationCompat
 import androidx.core.net.toUri
 import androidx.media3.common.MimeTypes
 import androidx.media3.exoplayer.offline.DefaultDownloadIndex
 import androidx.media3.exoplayer.offline.Download
 import androidx.media3.exoplayer.offline.DownloadManager
-import androidx.media3.exoplayer.offline.DownloadNotificationHelper
 import androidx.media3.exoplayer.offline.DownloadRequest
 import androidx.media3.exoplayer.offline.DownloadService
 import androidx.media3.exoplayer.scheduler.PlatformScheduler
@@ -38,10 +36,12 @@ import com.raven.app.core.sitespi.MediaTransportHook
 import com.raven.app.core.sitespi.SiteRegistry
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executors
+import kotlin.math.roundToInt
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -136,11 +136,20 @@ class VideoDownloadEngine(
         encodeDefaults = true
     }
 
+    private data class ProjectedProgressSnapshot(
+        val state: Int,
+        val bytesDownloaded: Long,
+        val contentLength: Long,
+        val percentDeci: Int,
+    )
+
     val generationGuard: DeletionGenerationGuard = DeletionGenerationGuard()
     private val refreshedOnce = ConcurrentHashMap.newKeySet<String>()
     private val refreshJobs = ConcurrentHashMap<String, Job>()
     private val submittedIds = ConcurrentHashMap.newKeySet<String>()
+    private val lastProjectedSnapshots = ConcurrentHashMap<String, ProjectedProgressSnapshot>()
     private val projectionMutex = Mutex()
+    private var progressPollJob: Job? = null
 
     private val _changes = MutableStateFlow(0L)
     val changes: StateFlow<Long> = _changes.asStateFlow()
@@ -172,11 +181,15 @@ class VideoDownloadEngine(
                 override fun onInitialized(downloadManager: DownloadManager) {
                     _changes.update { it + 1 }
                     applicationScope.launch(dispatchers.io) { projectAllToRepository() }
+                    if (downloadManager.currentDownloads.isNotEmpty()) {
+                        applicationScope.launch(dispatchers.main) { ensureProgressPolling() }
+                    }
                 }
 
                 override fun onDownloadRemoved(downloadManager: DownloadManager, download: Download) {
                     val id = download.request.id
                     submittedIds.remove(id)
+                    lastProjectedSnapshots.remove(id)
                     val removal = generationGuard.removalDeferred(id) ?: generationGuard.beginRemoval(id)
                     if (removal != null) {
                         cleanupRemoved(id, removal)
@@ -192,34 +205,81 @@ class VideoDownloadEngine(
                     val id = download.request.id
                     submittedIds.remove(id)
                     val meta = decodeMeta(download)
-                    if (download.state == Download.STATE_FAILED &&
-                        !generationGuard.isRemoving(id) &&
-                        refreshedOnce.add(id)
-                    ) {
-                        val generation = generationGuard.currentGeneration(id)
-                        val job = applicationScope.launch(dispatchers.io) {
-                            try {
-                                val resolvedMeta = meta ?: return@launch
-                                val freshStream = refreshStream(resolvedMeta) ?: return@launch
-                                ensureActive()
-                                enqueueInternal(resolvedMeta, freshStream, expectedGeneration = generation)
-                            } catch (ce: CancellationException) {
-                                throw ce
-                            } catch (_: Exception) {
-                                // Leave failed state intact in repository.
-                            } finally {
-                                refreshJobs.remove(id, coroutineContext[Job])
+                    val failureDetail = finalException?.let {
+                        DownloadErrorClassifier.classify(it, DownloadStage.DOWNLOADING_PAGE, clockMs()).message
+                    } ?: "视频下载失败"
+
+                    if (download.state == Download.STATE_FAILED) {
+                        lastProjectedSnapshots.remove(id)
+                        if (!generationGuard.isRemoving(id) && refreshedOnce.add(id)) {
+                            val generation = generationGuard.currentGeneration(id)
+                            val job = applicationScope.launch(dispatchers.io) {
+                                var refreshQueued = false
+                                try {
+                                    val resolvedMeta = meta
+                                    val freshStream = resolvedMeta?.let { refreshStream(it) }
+                                    ensureActive()
+                                    if (resolvedMeta != null && freshStream != null) {
+                                        enqueueInternal(resolvedMeta, freshStream, expectedGeneration = generation)
+                                        refreshQueued = true
+                                    }
+                                } catch (ce: CancellationException) {
+                                    throw ce
+                                } catch (_: Exception) {
+                                    // Leave failed state intact in repository.
+                                } finally {
+                                    refreshJobs.remove(id, coroutineContext[Job])
+                                    if (!refreshQueued && !generationGuard.isRemoving(id)) {
+                                        DownloadNotifications.notifyDownloadFailed(
+                                            context = appContext,
+                                            downloadId = id,
+                                            title = meta?.title.orEmpty(),
+                                            isVideo = true,
+                                            errorDetail = failureDetail,
+                                        )
+                                    }
+                                }
                             }
+                            refreshJobs[id] = job
+                        } else if (!generationGuard.isRemoving(id)) {
+                            DownloadNotifications.notifyDownloadFailed(
+                                context = appContext,
+                                downloadId = id,
+                                title = meta?.title.orEmpty(),
+                                isVideo = true,
+                                errorDetail = failureDetail,
+                            )
                         }
-                        refreshJobs[id] = job
                     } else if (download.state == Download.STATE_COMPLETED) {
+                        lastProjectedSnapshots.remove(id)
                         refreshedOnce.remove(id)
                         refreshJobs.remove(id)?.cancel()
                         if (meta != null) {
+                            val sizeText = download.bytesDownloaded.takeIf { it > 0L }
+                                ?.let(DownloadNotifications::formatBytes)
+                            val detail = listOfNotNull(
+                                meta.quality.takeIf { it.isNotBlank() },
+                                sizeText,
+                            ).joinToString(" · ")
+                            DownloadNotifications.notifyDownloadCompleted(
+                                context = appContext,
+                                downloadId = id,
+                                title = meta.title,
+                                isVideo = true,
+                                detail = detail.ifBlank { null },
+                            )
                             applicationScope.launch(dispatchers.io) {
                                 runCatching { writeCompletedSidecar(download, meta) }
                             }
                         }
+                    } else if (download.state == Download.STATE_STOPPED || download.state == Download.STATE_REMOVING) {
+                        lastProjectedSnapshots.remove(id)
+                    } else if (
+                        download.state == Download.STATE_DOWNLOADING ||
+                        download.state == Download.STATE_QUEUED ||
+                        download.state == Download.STATE_RESTARTING
+                    ) {
+                        applicationScope.launch(dispatchers.main) { ensureProgressPolling() }
                     }
 
                     applicationScope.launch(dispatchers.io) {
@@ -230,6 +290,49 @@ class VideoDownloadEngine(
             })
             if (storageRootManager.canWriteDownloads) {
                 resumeDownloads()
+            }
+        }
+    }
+
+    private fun ensureProgressPolling() {
+        if (progressPollJob?.isActive == true) return
+        progressPollJob = applicationScope.launch(dispatchers.main) {
+            try {
+                while (true) {
+                    val currentDownloads = manager.currentDownloads.toList()
+                    if (currentDownloads.isEmpty()) break
+                    val changed = currentDownloads.filter { dl ->
+                        val percentDeci = if (dl.percentDownloaded >= 0f && dl.percentDownloaded.isFinite()) {
+                            (dl.percentDownloaded * 10f).roundToInt()
+                        } else {
+                            -1
+                        }
+                        val snap = ProjectedProgressSnapshot(
+                            state = dl.state,
+                            bytesDownloaded = dl.bytesDownloaded,
+                            contentLength = dl.contentLength,
+                            percentDeci = percentDeci,
+                        )
+                        lastProjectedSnapshots.put(dl.request.id, snap) != snap
+                    }
+                    if (changed.isNotEmpty()) {
+                        withContext(dispatchers.io) {
+                            for (dl in changed) {
+                                projectDownloadToRepository(dl, finalException = null)
+                            }
+                        }
+                        _changes.update { it + 1 }
+                    }
+                    val hasActive = currentDownloads.any { dl ->
+                        dl.state == Download.STATE_DOWNLOADING ||
+                            dl.state == Download.STATE_QUEUED ||
+                            dl.state == Download.STATE_RESTARTING
+                    }
+                    if (!hasActive) break
+                    delay(PROGRESS_POLL_INTERVAL_MS)
+                }
+            } finally {
+                progressPollJob = null
             }
         }
     }
@@ -431,11 +534,17 @@ class VideoDownloadEngine(
             } else {
                 null
             }
-            val fraction = when {
-                status == DownloadStatus.COMPLETED -> 1f
-                download.percentDownloaded >= 0f -> (download.percentDownloaded / 100f).coerceIn(0f, 1f)
-                else -> existing?.progressFraction ?: 0f
-            }
+            val fraction = DownloadNotifications.computeVideoProgressFraction(
+                percentDownloaded = download.percentDownloaded,
+                bytesDownloaded = download.bytesDownloaded,
+                contentLength = download.contentLength,
+                isCompleted = status == DownloadStatus.COMPLETED,
+                fallback = if (status == DownloadStatus.DOWNLOADING || status == DownloadStatus.PAUSED) {
+                    existing?.progressFraction ?: 0f
+                } else {
+                    0f
+                },
+            )
             val totalBytes = download.contentLength.takeIf { it > 0L } ?: existing?.totalBytes
             downloadStateRepository.upsert(
                 DownloadItem(
@@ -528,6 +637,7 @@ class VideoDownloadEngine(
         const val MAX_PARALLEL_DOWNLOADS: Int = 2
         const val MIN_RETRY_COUNT: Int = 3
         const val STOP_REASON_MANUAL_PAUSE: Int = 1
+        const val PROGRESS_POLL_INTERVAL_MS: Long = 500L
 
         fun mapMedia3State(download: Download): DownloadStatus = when (download.state) {
             Download.STATE_COMPLETED -> DownloadStatus.COMPLETED
@@ -556,10 +666,6 @@ class VideoDownloadService : DownloadService(
     private val engine: VideoDownloadEngine
         get() = GlobalContext.get().get()
 
-    private val notificationHelper by lazy {
-        DownloadNotificationHelper(this, NOTIFICATION_CHANNEL_ID)
-    }
-
     override fun getDownloadManager(): DownloadManager = engine.manager
 
     override fun getScheduler(): Scheduler = PlatformScheduler(this, PLATFORM_SCHEDULER_JOB_ID)
@@ -568,26 +674,54 @@ class VideoDownloadService : DownloadService(
         downloads: MutableList<Download>,
         notMetRequirements: Int,
     ): Notification {
-        val launchIntent = packageManager.getLaunchIntentForPackage(packageName)?.apply {
-            putExtra(EXTRA_OPEN_DOWNLOADS, true)
-            addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+        DownloadNotifications.ensureChannels(this)
+        val primary = downloads.firstOrNull { it.state == Download.STATE_DOWNLOADING }
+            ?: downloads.firstOrNull()
+        val activeCount = downloads.count {
+            it.state == Download.STATE_DOWNLOADING ||
+                it.state == Download.STATE_QUEUED ||
+                it.state == Download.STATE_RESTARTING
         }
-        val contentIntent = launchIntent?.let { intent ->
-            PendingIntent.getActivity(
-                this,
-                FOREGROUND_NOTIFICATION_ID,
-                intent,
-                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        val title = primary?.let { engine.decodeMeta(it)?.title }.orEmpty()
+        val waitingForNetwork = notMetRequirements != 0
+        val fraction = primary?.let {
+            DownloadNotifications.computeVideoProgressFraction(
+                percentDownloaded = it.percentDownloaded,
+                bytesDownloaded = it.bytesDownloaded,
+                contentLength = it.contentLength,
+                isCompleted = it.state == Download.STATE_COMPLETED,
             )
+        } ?: 0f
+        val statusText = primary?.let {
+            DownloadNotifications.formatVideoProgressText(
+                title = title,
+                percentDownloaded = it.percentDownloaded,
+                bytesDownloaded = it.bytesDownloaded,
+                contentLength = it.contentLength,
+                waitingForNetwork = waitingForNetwork,
+            )
+        } ?: "正在准备视频下载任务"
+        val channelTitle = if (activeCount > 1) {
+            "${getString(R.string.raven_video_download_channel)}（$activeCount 个任务）"
+        } else {
+            getString(R.string.raven_video_download_channel)
         }
-        return notificationHelper.buildProgressNotification(
-            this,
-            android.R.drawable.stat_sys_download,
-            contentIntent,
-            getString(R.string.raven_video_download_channel),
-            downloads,
-            notMetRequirements,
+        val contentIntent = DownloadNotifications.buildOpenDownloadsPendingIntent(
+            context = this,
+            requestCode = FOREGROUND_NOTIFICATION_ID,
         )
+        val determinate = !waitingForNetwork && fraction > 0f
+        val progressPercent = (fraction * 100f).roundToInt().coerceIn(0, 100)
+        return NotificationCompat.Builder(this, NOTIFICATION_CHANNEL_ID)
+            .setSmallIcon(android.R.drawable.stat_sys_download)
+            .setContentTitle(channelTitle)
+            .setContentText(statusText)
+            .setContentIntent(contentIntent)
+            .setOnlyAlertOnce(true)
+            .setOngoing(true)
+            .setSilent(true)
+            .setProgress(if (determinate) 100 else 0, if (determinate) progressPercent else 0, !determinate)
+            .build()
     }
 
     override fun onTimeout(startId: Int, fgsType: Int) {

@@ -483,7 +483,7 @@ class GalleryDownloadEngine(
             if (audit.isComplete) {
                 runCatching { writeCompletedSidecar(task, audit, layout) }
             }
-            updateIf(task.id, predicate = { it.status == DownloadStatus.DOWNLOADING }) { current ->
+            val didComplete = updateIf(task.id, predicate = { it.status == DownloadStatus.DOWNLOADING }) { current ->
                 current.copy(
                     status = DownloadStatus.COMPLETED,
                     progressFraction = if (audit.isComplete) 1f else {
@@ -497,6 +497,21 @@ class GalleryDownloadEngine(
                     errorMessage = null,
                     retryAtEpochMs = null,
                     updatedAt = clockMs(),
+                )
+            }
+            if (didComplete) {
+                val pageSummary = "${audit.validPages.size.coerceAtLeast(audit.totalPages)} 页"
+                val detail = if (audit.totalBytes > 0L) {
+                    "$pageSummary · ${DownloadNotifications.formatBytes(audit.totalBytes)}"
+                } else {
+                    pageSummary
+                }
+                DownloadNotifications.notifyDownloadCompleted(
+                    context = context,
+                    downloadId = task.id,
+                    title = task.title,
+                    isVideo = false,
+                    detail = detail,
                 )
             }
         } catch (waitSignal: RetryWaitSignal) {
@@ -521,13 +536,22 @@ class GalleryDownloadEngine(
             throw ce
         } catch (error: Throwable) {
             val classified = DownloadErrorClassifier.classify(error, stage, clockMs())
-            updateIf(task.id, predicate = { it.status == DownloadStatus.DOWNLOADING }) { current ->
+            val didFail = updateIf(task.id, predicate = { it.status == DownloadStatus.DOWNLOADING }) { current ->
                 current.copy(
                     status = DownloadStatus.FAILED,
                     errorCategory = classified.category,
                     errorMessage = classified.message,
                     retryAtEpochMs = null,
                     updatedAt = clockMs(),
+                )
+            }
+            if (didFail) {
+                DownloadNotifications.notifyDownloadFailed(
+                    context = context,
+                    downloadId = task.id,
+                    title = task.title,
+                    isVideo = false,
+                    errorDetail = classified.message,
                 )
             }
         }
@@ -759,17 +783,8 @@ class GalleryDownloadService : Service() {
     }
 
     private fun enterForeground() {
-        val nm = getSystemService(NotificationManager::class.java)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            nm?.createNotificationChannel(
-                NotificationChannel(
-                    NOTIFICATION_CHANNEL_ID,
-                    getString(R.string.raven_gallery_download_channel),
-                    NotificationManager.IMPORTANCE_LOW,
-                ),
-            )
-        }
-        val initial = buildNotification(null)
+        DownloadNotifications.ensureChannels(this)
+        val initial = buildNotification(null, activeCount = 1)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             startForeground(FOREGROUND_NOTIFICATION_ID, initial, ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
         } else {
@@ -780,12 +795,16 @@ class GalleryDownloadService : Service() {
             progressJob = serviceScope.launch {
                 engine.changes.collectLatest {
                     delay(200L)
-                    val activeTask = runCatching {
+                    val snapshot = runCatching {
                         val all = engine.allTasks()
-                        all.firstOrNull { it.status == DownloadStatus.DOWNLOADING }
+                        val primary = all.firstOrNull { it.status == DownloadStatus.DOWNLOADING }
                             ?: all.firstOrNull { it.errorCategory == DownloadErrorCategory.STORAGE }
+                        val activeCount = all.count {
+                            it.status == DownloadStatus.DOWNLOADING || it.status == DownloadStatus.QUEUED
+                        }
+                        primary to activeCount
                     }.getOrNull()
-                    val notification = buildNotification(activeTask)
+                    val notification = buildNotification(snapshot?.first, snapshot?.second ?: 0)
                     withContext(dispatchers.main) {
                         getSystemService(NotificationManager::class.java)
                             ?.notify(FOREGROUND_NOTIFICATION_ID, notification)
@@ -815,35 +834,41 @@ class GalleryDownloadService : Service() {
         }
     }
 
-    private fun buildNotification(task: DownloadItem?): Notification {
+    private fun buildNotification(task: DownloadItem?, activeCount: Int): Notification {
         val statusText = when {
             task == null -> "正在准备图集下载任务"
-            task.errorCategory == DownloadErrorCategory.STORAGE ->
-                "存储写入失败：${task.errorMessage.orEmpty()}"
-            else -> "${task.title} · ${task.completedUnits} / ${task.totalUnits} 页"
-        }
-        val launchIntent = packageManager.getLaunchIntentForPackage(packageName)?.apply {
-            putExtra(VideoDownloadService.EXTRA_OPEN_DOWNLOADS, true)
-            addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
-        }
-        val pendingIntent = launchIntent?.let { intent ->
-            PendingIntent.getActivity(
-                this,
-                FOREGROUND_NOTIFICATION_ID,
-                intent,
-                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+            else -> DownloadNotifications.formatGalleryProgressText(
+                title = task.title,
+                completedUnits = task.completedUnits,
+                totalUnits = task.totalUnits,
+                downloadedBytes = task.downloadedBytes,
+                storageError = if (task.errorCategory == DownloadErrorCategory.STORAGE) {
+                    task.errorMessage.orEmpty()
+                } else {
+                    null
+                },
             )
         }
+        val titleText = if (activeCount > 1) {
+            "${getString(R.string.raven_gallery_download_channel)}（$activeCount 个任务）"
+        } else {
+            getString(R.string.raven_gallery_download_channel)
+        }
+        val pendingIntent = DownloadNotifications.buildOpenDownloadsPendingIntent(
+            context = this,
+            requestCode = FOREGROUND_NOTIFICATION_ID,
+        )
         val indeterminate = task == null ||
             task.totalUnits <= 0 ||
             task.errorCategory == DownloadErrorCategory.STORAGE
         return NotificationCompat.Builder(this, NOTIFICATION_CHANNEL_ID)
             .setSmallIcon(android.R.drawable.stat_sys_download)
-            .setContentTitle(getString(R.string.raven_gallery_download_channel))
+            .setContentTitle(titleText)
             .setContentText(statusText)
             .setContentIntent(pendingIntent)
             .setOnlyAlertOnce(true)
             .setOngoing(true)
+            .setSilent(true)
             .setProgress(task?.totalUnits ?: 0, task?.completedUnits ?: 0, indeterminate)
             .build()
     }

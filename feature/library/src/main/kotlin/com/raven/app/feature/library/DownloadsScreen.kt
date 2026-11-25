@@ -25,6 +25,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
+import androidx.compose.material.icons.automirrored.rounded.Sort
 import androidx.compose.material.icons.outlined.Build
 import androidx.compose.material.icons.outlined.DeleteOutline
 import androidx.compose.material.icons.outlined.Download
@@ -112,6 +113,11 @@ fun DownloadsScreen(
     var activeMenuTarget by remember { mutableStateOf<DownloadItem?>(null) }
     var groupEditTarget by remember { mutableStateOf<DownloadItem?>(null) }
     var deleteConfirmTarget by remember { mutableStateOf<DownloadItem?>(null) }
+    var showLayoutSheet by rememberSaveable { mutableStateOf(false) }
+    var showGroupManager by rememberSaveable { mutableStateOf(false) }
+    var showGroupCreator by rememberSaveable { mutableStateOf(false) }
+    var renameGroupTarget by remember { mutableStateOf<DownloadGroupSummary?>(null) }
+    var clearGroupTarget by remember { mutableStateOf<DownloadGroupSummary?>(null) }
 
     Column(
         modifier = modifier
@@ -150,20 +156,6 @@ fun DownloadsScreen(
                             tint = colors.inkPrimary,
                         )
                     }
-                }
-                IconButton(
-                    onClick = viewModel::toggleFiltersExpanded,
-                    modifier = Modifier.testTag("downloads_filter_toggle_button"),
-                ) {
-                    Icon(
-                        imageVector = Icons.Outlined.FilterList,
-                        contentDescription = "展开筛选",
-                        tint = if (uiState.filtersExpanded || uiState.activeExtraFilterCount > 0) {
-                            colors.crimson
-                        } else {
-                            colors.inkPrimary
-                        },
-                    )
                 }
             },
         )
@@ -256,6 +248,64 @@ fun DownloadsScreen(
                 }
             }
 
+            // Always-visible search plus dedicated filter and presentation controls.
+            item(key = "dl_search_and_view") {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    RavenSearchField(
+                        query = uiState.searchQuery,
+                        onQueryChange = viewModel::updateSearchQuery,
+                        placeholder = "搜索标题、标签、站点或分组…",
+                        modifier = Modifier.weight(1f),
+                    )
+                    IconButton(
+                        onClick = viewModel::toggleFiltersExpanded,
+                        modifier = Modifier
+                            .size(48.dp)
+                            .clip(CircleShape)
+                            .background(
+                                if (uiState.filtersExpanded || uiState.activeExtraFilterCount > 0) {
+                                    colors.crimson.copy(alpha = 0.16f)
+                                } else {
+                                    colors.surface2
+                                },
+                            )
+                            .border(0.5.dp, colors.hairline, CircleShape)
+                            .testTag("downloads_filter_toggle_button"),
+                    ) {
+                        Icon(
+                            imageVector = Icons.Outlined.FilterList,
+                            contentDescription = "筛选，已启用 ${uiState.activeExtraFilterCount} 项",
+                            tint = if (uiState.activeExtraFilterCount > 0) colors.crimson else colors.inkPrimary,
+                        )
+                    }
+                    IconButton(
+                        onClick = { showLayoutSheet = true },
+                        modifier = Modifier
+                            .size(48.dp)
+                            .clip(CircleShape)
+                            .background(colors.surface2)
+                            .border(0.5.dp, colors.hairline, CircleShape)
+                            .testTag("downloads_layout_button"),
+                    ) {
+                        Icon(
+                            imageVector = Icons.AutoMirrored.Rounded.Sort,
+                            contentDescription = "排列与分组",
+                            tint = if (uiState.sort != DownloadSort.RECENT || uiState.groupMode != DownloadGroupMode.NONE) {
+                                colors.crimson
+                            } else {
+                                colors.inkPrimary
+                            },
+                        )
+                    }
+                }
+            }
+
             // Status filter tabs: 全部 / 进行中 / 已完成 / 需处理
             item(key = "dl_status_tabs") {
                 RavenFilterChipRow(
@@ -339,12 +389,6 @@ fun DownloadsScreen(
                         verticalArrangement = Arrangement.spacedBy(8.dp),
                         modifier = Modifier.testTag("downloads_extra_filters"),
                     ) {
-                        RavenSearchField(
-                            query = uiState.searchQuery,
-                            onQueryChange = viewModel::updateSearchQuery,
-                            placeholder = "搜索下载标题、站点或分组…",
-                            modifier = Modifier.padding(horizontal = 16.dp),
-                        )
                         RavenFilterChipRow(
                             items = DownloadKindFilter.entries,
                             selectedItem = uiState.kindFilter,
@@ -357,6 +401,25 @@ fun DownloadsScreen(
                             selectedSiteId = uiState.siteFilter,
                             onSelectSite = viewModel::selectSiteFilter,
                         )
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 16.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text(
+                                text = "自定义分组",
+                                style = MaterialTheme.typography.labelLarge,
+                                color = colors.inkPrimary,
+                            )
+                            Spacer(modifier = Modifier.weight(1f))
+                            TextButton(
+                                onClick = { showGroupManager = true },
+                                modifier = Modifier.testTag("downloads_open_group_manager"),
+                            ) {
+                                Text("管理 ${uiState.availableGroups.size}", color = colors.crimson)
+                            }
+                        }
                         if (uiState.availableGroups.isNotEmpty()) {
                             val groupOptions: List<String?> = remember(uiState.availableGroups) {
                                 listOf(null) + uiState.availableGroups
@@ -368,7 +431,27 @@ fun DownloadsScreen(
                                 onItemSelected = viewModel::selectGroupFilter,
                                 keyProvider = { it ?: "_all_groups" },
                             )
+                        } else {
+                            Text(
+                                text = "可从单项菜单设置分组，或在管理中批量创建。",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = colors.inkTertiary,
+                                modifier = Modifier.padding(horizontal = 16.dp),
+                            )
                         }
+                        DownloadsTagPanel(
+                            availableTagCount = uiState.availableTags.size,
+                            visibleTags = uiState.visibleTags,
+                            namespaces = uiState.tagNamespaces,
+                            selectedNamespace = uiState.selectedTagNamespace,
+                            selectedTagKeys = uiState.selectedTagKeys,
+                            selectedTags = uiState.availableTags.filter { it.key in uiState.selectedTagKeys },
+                            matchAll = uiState.tagMatchAll,
+                            onToggleTag = viewModel::toggleTag,
+                            onSelectNamespace = viewModel::selectTagNamespace,
+                            onToggleMatchAll = viewModel::toggleTagMatchAll,
+                            onClearTags = viewModel::clearTagFilters,
+                        )
                         if (uiState.activeExtraFilterCount > 0 || uiState.searchQuery.isNotBlank()) {
                             Row(
                                 modifier = Modifier
@@ -398,30 +481,104 @@ fun DownloadsScreen(
                     )
                 }
             } else {
-                items(
-                    items = uiState.items,
-                    key = { it.id },
-                ) { item ->
-                    DownloadItemCard(
-                        item = item,
-                        siteLabel = uiState.siteLabels[item.siteId] ?: item.siteId.value,
-                        onPrimaryClick = {
-                            when (item.status) {
-                                DownloadStatus.COMPLETED -> openDownloadedItem(navigator, item)
-                                DownloadStatus.DOWNLOADING,
-                                DownloadStatus.QUEUED,
-                                DownloadStatus.RETRY_WAIT -> viewModel.pause(item.id)
-                                DownloadStatus.PAUSED -> viewModel.resume(item.id)
-                                DownloadStatus.FAILED,
-                                DownloadStatus.CANCELLED -> viewModel.retry(item.id)
-                            }
-                        },
-                        onMenuClick = { activeMenuTarget = item },
-                        modifier = Modifier.padding(horizontal = 16.dp),
-                    )
+                uiState.sections.forEach { section ->
+                    if (uiState.groupMode != DownloadGroupMode.NONE) {
+                        item(key = "dl_section_header_${section.key}") {
+                            DownloadSectionHeader(
+                                section = section,
+                                onToggle = { viewModel.toggleSection(section.key) },
+                            )
+                        }
+                    }
+                    if (!section.isCollapsed) {
+                        items(
+                            items = section.items,
+                            key = { "${section.key}:${it.id}" },
+                        ) { item ->
+                            DownloadItemCard(
+                                item = item,
+                                siteLabel = uiState.siteLabels[item.siteId] ?: item.siteId.value,
+                                onPrimaryClick = {
+                                    when (item.status) {
+                                        DownloadStatus.COMPLETED -> openDownloadedItem(navigator, item)
+                                        DownloadStatus.DOWNLOADING,
+                                        DownloadStatus.QUEUED,
+                                        DownloadStatus.RETRY_WAIT -> viewModel.pause(item.id)
+                                        DownloadStatus.PAUSED -> viewModel.resume(item.id)
+                                        DownloadStatus.FAILED,
+                                        DownloadStatus.CANCELLED -> viewModel.retry(item.id)
+                                    }
+                                },
+                                onMenuClick = { activeMenuTarget = item },
+                                modifier = Modifier.padding(horizontal = 16.dp),
+                            )
+                        }
+                    }
                 }
             }
         }
+    }
+
+    if (showLayoutSheet) {
+        DownloadLayoutSheet(
+            selectedSort = uiState.sort,
+            selectedGroupMode = uiState.groupMode,
+            customGroupCount = uiState.groupSummaries.size,
+            onSelectSort = viewModel::selectSort,
+            onSelectGroupMode = viewModel::selectGroupMode,
+            onManageGroups = {
+                showLayoutSheet = false
+                showGroupManager = true
+            },
+            onDismiss = { showLayoutSheet = false },
+        )
+    }
+
+    if (showGroupManager) {
+        DownloadGroupManagerSheet(
+            groups = uiState.groupSummaries,
+            onCreate = {
+                showGroupManager = false
+                showGroupCreator = true
+            },
+            onRename = {
+                showGroupManager = false
+                renameGroupTarget = it
+            },
+            onClear = {
+                showGroupManager = false
+                clearGroupTarget = it
+            },
+            onDismiss = { showGroupManager = false },
+        )
+    }
+
+    if (showGroupCreator) {
+        DownloadGroupCreateSheet(
+            items = uiState.allItems,
+            siteLabels = uiState.siteLabels,
+            onSave = viewModel::createGroup,
+            onDismiss = { showGroupCreator = false },
+        )
+    }
+
+    renameGroupTarget?.let { group ->
+        DownloadGroupRenameSheet(
+            group = group,
+            onSave = { viewModel.renameGroup(group.name, it) },
+            onDismiss = { renameGroupTarget = null },
+        )
+    }
+
+    clearGroupTarget?.let { group ->
+        LibraryConfirmBottomSheet(
+            title = "移除分组「${group.name}」？",
+            message = "${group.itemCount} 个下载项将变为未分组，已有下载记录和缓存文件都会保留。",
+            confirmLabel = "移除分组",
+            destructive = false,
+            onConfirm = { viewModel.clearGroup(group.name) },
+            onDismiss = { clearGroupTarget = null },
+        )
     }
 
     // Per-Item Action Bottom Sheet
@@ -581,13 +738,31 @@ private fun DownloadItemCard(
 
                 val detailLine = buildList {
                     if (item.kind != DownloadKind.VIDEO && item.totalUnits > 0) {
-                        add("${item.completedUnits} / ${item.totalUnits} 页")
-                    } else if (item.status != DownloadStatus.COMPLETED && item.progressFraction > 0f) {
-                        add("${(item.progressFraction * 100f).roundToInt()}%")
+                        val pagePct = ((item.completedUnits.toFloat() / item.totalUnits.toFloat()) * 100f)
+                            .roundToInt()
+                            .coerceIn(0, 100)
+                        if (item.status != DownloadStatus.COMPLETED) {
+                            add("${item.completedUnits} / ${item.totalUnits} 页 ($pagePct%)")
+                        } else {
+                            add("${item.completedUnits} / ${item.totalUnits} 页")
+                        }
+                    } else if (item.status != DownloadStatus.COMPLETED) {
+                        if (item.progressFraction > 0f) {
+                            add("${(item.progressFraction * 100f).roundToInt().coerceIn(0, 100)}%")
+                        } else if (item.status == DownloadStatus.DOWNLOADING) {
+                            add("正在连接…")
+                        }
                     }
                     item.quality?.takeIf { it.isNotBlank() }?.let { add(it) }
-                    val sizeBytes = item.totalBytes ?: item.downloadedBytes
-                    if (sizeBytes > 0L) add(RavenFormatters.formatByteSize(sizeBytes))
+                    val totalBytes = item.totalBytes?.takeIf { it > 0L }
+                    if (item.status != DownloadStatus.COMPLETED && item.downloadedBytes > 0L && totalBytes != null) {
+                        add("${RavenFormatters.formatByteSize(item.downloadedBytes)} / ${RavenFormatters.formatByteSize(totalBytes)}")
+                    } else if (item.status != DownloadStatus.COMPLETED && item.downloadedBytes > 0L) {
+                        add("已下载 ${RavenFormatters.formatByteSize(item.downloadedBytes)}")
+                    } else {
+                        val sizeBytes = totalBytes ?: item.downloadedBytes
+                        if (sizeBytes > 0L) add(RavenFormatters.formatByteSize(sizeBytes))
+                    }
                 }.joinToString(" · ")
 
                 if (detailLine.isNotEmpty()) {
@@ -661,14 +836,25 @@ private fun DownloadItemCard(
             }
         }
 
-        if (item.status != DownloadStatus.COMPLETED && item.progressFraction > 0f) {
-            RavenCrimsonProgressBar(
-                fraction = item.progressFraction,
-                trackHeight = 2.5.dp,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clip(RavenShapes.PillShape),
-            )
+        if (item.status != DownloadStatus.COMPLETED) {
+            if (item.progressFraction > 0f) {
+                RavenCrimsonProgressBar(
+                    fraction = item.progressFraction,
+                    trackHeight = 3.dp,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RavenShapes.PillShape),
+                )
+            } else if (item.status == DownloadStatus.DOWNLOADING) {
+                LinearProgressIndicator(
+                    color = colors.crimson,
+                    trackColor = colors.inkPrimary.copy(alpha = 0.22f),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(3.dp)
+                        .clip(RavenShapes.PillShape),
+                )
+            }
         }
     }
 }

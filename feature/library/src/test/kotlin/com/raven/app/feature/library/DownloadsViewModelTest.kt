@@ -7,7 +7,9 @@ import com.raven.app.core.model.DownloadErrorCategory
 import com.raven.app.core.model.DownloadKind
 import com.raven.app.core.model.DownloadStatus
 import com.raven.app.core.model.SiteId
+import com.raven.app.core.model.TagRef
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
@@ -71,6 +73,9 @@ class DownloadsViewModelTest {
             downloadGateway = harness.downloadGateway,
             siteRegistry = harness.siteRegistry,
             dispatchers = harness.dispatchers,
+            mediaTagCacheRepository = harness.mediaTagCacheRepository,
+            preferencesRepository = harness.preferencesRepository,
+            tagDictionary = harness.runtimeDictionary,
         )
 
         vm.uiState.test {
@@ -155,6 +160,9 @@ class DownloadsViewModelTest {
             downloadGateway = harness.downloadGateway,
             siteRegistry = harness.siteRegistry,
             dispatchers = harness.dispatchers,
+            mediaTagCacheRepository = harness.mediaTagCacheRepository,
+            preferencesRepository = harness.preferencesRepository,
+            tagDictionary = harness.runtimeDictionary,
         )
 
         vm.uiState.test {
@@ -190,6 +198,178 @@ class DownloadsViewModelTest {
             vm.delete(updated)
             advanceUntilIdle()
             assertNull(harness.downloadStateRepository.getById("c-audit"))
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    @Test
+    fun `cached tags support translated search multi tag matching grouped sections and collapse`() = runTest {
+        val harness = LibraryTestHarness(mainRule.dispatcher, tempFolder.newFolder("dl-tags"))
+        harness.downloadStateRepository.upsertAll(
+            listOf(
+                sampleDownload(id = "a", mediaId = "media-a", title = "Beta"),
+                sampleDownload(id = "b", mediaId = "media-b", title = "Alpha"),
+                sampleDownload(id = "c", mediaId = "media-c", title = "Gamma"),
+            ),
+        )
+        harness.mediaTagCacheRepository.upsertTags(
+            SiteId.NHENTAI,
+            "media-a",
+            listOf(
+                TagRef(slug = "artist:alice", label = "Alice"),
+                TagRef(slug = "tentacles", label = "tentacles"),
+            ),
+        )
+        harness.mediaTagCacheRepository.upsertTags(
+            SiteId.NHENTAI,
+            "media-b",
+            listOf(TagRef(slug = "artist:alice", label = "Alice")),
+        )
+        harness.mediaTagCacheRepository.upsertTags(
+            SiteId.NHENTAI,
+            "media-c",
+            listOf(TagRef(slug = "tentacles", label = "tentacles")),
+        )
+        val vm = DownloadsViewModel(
+            downloadGateway = harness.downloadGateway,
+            siteRegistry = harness.siteRegistry,
+            dispatchers = harness.dispatchers,
+            mediaTagCacheRepository = harness.mediaTagCacheRepository,
+            preferencesRepository = harness.preferencesRepository,
+            tagDictionary = harness.runtimeDictionary,
+        )
+
+        vm.uiState.test {
+            awaitItem()
+            advanceUntilIdle()
+            val initial = expectMostRecentItem()
+            assertEquals(2, initial.availableTags.size)
+            assertEquals(setOf("artist", ""), initial.tagNamespaces.map { it.key }.toSet())
+            assertEquals("触手", initial.availableTags.first { it.key == ":tentacles" }.label)
+
+            vm.updateSearchQuery("触手")
+            advanceUntilIdle()
+            assertEquals(listOf("a", "c"), expectMostRecentItem().items.map { it.id }.sorted())
+
+            vm.resetExtraFilters()
+            vm.toggleTag("artist:alice")
+            advanceUntilIdle()
+            assertEquals(listOf("a", "b"), expectMostRecentItem().items.map { it.id }.sorted())
+
+            vm.toggleTag(":tentacles")
+            advanceUntilIdle()
+            assertEquals(listOf("a", "b", "c"), expectMostRecentItem().items.map { it.id }.sorted())
+
+            vm.toggleTagMatchAll()
+            advanceUntilIdle()
+            val allMatching = expectMostRecentItem()
+            assertEquals(listOf("a"), allMatching.items.map { it.id })
+            assertTrue(allMatching.tagMatchAll)
+
+            vm.selectGroupMode(DownloadGroupMode.TAG)
+            advanceUntilIdle()
+            val grouped = expectMostRecentItem()
+            assertEquals(DownloadGroupMode.TAG, grouped.groupMode)
+            assertEquals(setOf("artist:alice", ":tentacles"), grouped.sections.map {
+                it.key.removePrefix("TAG:named:")
+            }.toSet())
+            assertTrue(grouped.sections.all { section -> section.items.map { it.id } == listOf("a") })
+
+            vm.toggleSection(grouped.sections.first().key)
+            advanceUntilIdle()
+            assertTrue(expectMostRecentItem().sections.first { it.key == grouped.sections.first().key }.isCollapsed)
+
+            assertEquals("TAG", harness.settingsDataStore.currentSettings().downloadView.groupMode)
+            assertTrue(harness.settingsDataStore.currentSettings().downloadView.tagMatchAll)
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    @Test
+    fun `sort preference persists and custom groups support batch create rename merge and clear`() = runTest {
+        val harness = LibraryTestHarness(mainRule.dispatcher, tempFolder.newFolder("dl-groups"))
+        harness.downloadStateRepository.upsertAll(
+            listOf(
+                sampleDownload(id = "1", title = "Charlie", createdAt = 10L),
+                sampleDownload(id = "2", title = "Alpha", createdAt = 30L),
+                sampleDownload(id = "3", title = "Bravo", createdAt = 20L, groupName = "已有"),
+            ),
+        )
+        val vm = DownloadsViewModel(
+            downloadGateway = harness.downloadGateway,
+            siteRegistry = harness.siteRegistry,
+            dispatchers = harness.dispatchers,
+            mediaTagCacheRepository = harness.mediaTagCacheRepository,
+            preferencesRepository = harness.preferencesRepository,
+            tagDictionary = harness.runtimeDictionary,
+        )
+
+        vm.uiState.test {
+            awaitItem()
+            advanceUntilIdle()
+            expectMostRecentItem()
+
+            vm.selectSort(DownloadSort.TITLE)
+            advanceUntilIdle()
+            assertEquals(listOf("2", "3", "1"), expectMostRecentItem().items.map { it.id })
+            assertEquals("TITLE", harness.settingsDataStore.currentSettings().downloadView.sort)
+
+            vm.createGroup("长途", setOf("1", "2"))
+            advanceUntilIdle()
+            assertEquals("长途", harness.downloadStateRepository.getById("1")?.groupName)
+            assertEquals("长途", harness.downloadStateRepository.getById("2")?.groupName)
+            assertEquals(listOf("已有", "长途"), expectMostRecentItem().availableGroups)
+
+            vm.selectGroupMode(DownloadGroupMode.CUSTOM)
+            advanceUntilIdle()
+            val grouped = expectMostRecentItem()
+            assertEquals(listOf("已有", "长途"), grouped.sections.map { it.title })
+            assertEquals(listOf("2", "1"), grouped.sections.first { it.title == "长途" }.items.map { it.id })
+
+            vm.renameGroup("长途", "已有")
+            advanceUntilIdle()
+            val merged = expectMostRecentItem()
+            assertEquals(listOf("已有"), merged.availableGroups)
+            assertEquals("已有", harness.downloadStateRepository.getById("1")?.groupName)
+            assertEquals(3, merged.groupSummaries.single().itemCount)
+
+            vm.clearGroup("已有")
+            advanceUntilIdle()
+            assertTrue(expectMostRecentItem().availableGroups.isEmpty())
+            assertEquals(3, harness.downloadStateRepository.observeAll().first().size)
+            assertTrue(harness.downloadStateRepository.observeAll().first().all { it.groupName.isEmpty() })
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    @Test
+    fun `reserved looking custom group name does not collide with synthetic ungrouped section`() = runTest {
+        val harness = LibraryTestHarness(mainRule.dispatcher, tempFolder.newFolder("dl-reserved-group"))
+        harness.downloadStateRepository.upsertAll(
+            listOf(
+                sampleDownload(id = "named", title = "Named", groupName = "__ungrouped__"),
+                sampleDownload(id = "plain", title = "Plain", groupName = ""),
+            ),
+        )
+        val vm = DownloadsViewModel(
+            downloadGateway = harness.downloadGateway,
+            siteRegistry = harness.siteRegistry,
+            dispatchers = harness.dispatchers,
+            mediaTagCacheRepository = harness.mediaTagCacheRepository,
+            preferencesRepository = harness.preferencesRepository,
+            tagDictionary = harness.runtimeDictionary,
+        )
+
+        vm.uiState.test {
+            awaitItem()
+            advanceUntilIdle()
+            vm.selectGroupMode(DownloadGroupMode.CUSTOM)
+            advanceUntilIdle()
+            val sections = expectMostRecentItem().sections
+            assertEquals(listOf("__ungrouped__", "未分组"), sections.map { it.title })
+            assertEquals(2, sections.map { it.key }.distinct().size)
+            assertEquals(listOf("named"), sections[0].items.map { it.id })
+            assertEquals(listOf("plain"), sections[1].items.map { it.id })
             cancelAndIgnoreRemainingEvents()
         }
     }

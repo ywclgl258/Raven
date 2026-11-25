@@ -34,6 +34,7 @@ interface LibraryDownloadGateway {
     suspend fun movePriority(id: String, delta: Int)
     suspend fun prioritize(id: String)
     suspend fun setGroup(id: String, groupName: String)
+    suspend fun setGroupForItems(ids: Collection<String>, groupName: String)
     suspend fun inspectIntegrity(id: String): GalleryAudit?
     suspend fun repair(id: String): DownloadItem?
     suspend fun syncFromDisk(): List<DownloadItem>
@@ -77,6 +78,9 @@ class DownloadCoordinatorGateway(
     override suspend fun prioritize(id: String) = coordinator.prioritize(id)
 
     override suspend fun setGroup(id: String, groupName: String) = coordinator.setGroup(id, groupName)
+
+    override suspend fun setGroupForItems(ids: Collection<String>, groupName: String) =
+        coordinator.setGroupForItems(ids, groupName)
 
     override suspend fun inspectIntegrity(id: String): GalleryAudit? = coordinator.inspectIntegrity(id)
 

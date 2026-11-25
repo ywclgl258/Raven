@@ -220,6 +220,63 @@ class DownloadCoordinationTest {
             }
         }
 
+    @Test
+    fun `download notifications compute video progress, format details, and use collision-free IDs`() {
+        assertEquals(1f, DownloadNotifications.computeVideoProgressFraction(-1f, 0L, -1L, isCompleted = true), 0.0001f)
+        assertEquals(0.45f, DownloadNotifications.computeVideoProgressFraction(45f, 450L, 1_000L, isCompleted = false), 0.0001f)
+        assertEquals(0.5f, DownloadNotifications.computeVideoProgressFraction(-1f, 500L, 1_000L, isCompleted = false), 0.0001f)
+        assertEquals(0.25f, DownloadNotifications.computeVideoProgressFraction(-1f, 0L, -1L, isCompleted = false, fallback = 0.25f), 0.0001f)
+
+        val knownVideoText = DownloadNotifications.formatVideoProgressText(
+            title = "测试视频",
+            percentDownloaded = 42.4f,
+            bytesDownloaded = 20L * 1_024L * 1_024L,
+            contentLength = 50L * 1_024L * 1_024L,
+            waitingForNetwork = false,
+        )
+        assertTrue(knownVideoText.contains("42%"))
+        assertTrue(knownVideoText.contains("20.0 MB / 50.0 MB"))
+
+        val streamBytesOnlyText = DownloadNotifications.formatVideoProgressText(
+            title = "HLS 视频",
+            percentDownloaded = -1f,
+            bytesDownloaded = 5L * 1_024L * 1_024L,
+            contentLength = -1L,
+            waitingForNetwork = false,
+        )
+        assertTrue(streamBytesOnlyText.contains("已下载 5.0 MB"))
+
+        assertTrue(
+            DownloadNotifications.formatVideoProgressText("A", 0f, 0L, -1L, waitingForNetwork = true)
+                .startsWith("等待网络条件"),
+        )
+        assertTrue(
+            DownloadNotifications.formatVideoProgressText("A", -1f, 0L, -1L, waitingForNetwork = false)
+                .contains("正在连接"),
+        )
+
+        val galleryText = DownloadNotifications.formatGalleryProgressText(
+            title = "图集作品",
+            completedUnits = 3,
+            totalUnits = 10,
+            downloadedBytes = 2L * 1_024L * 1_024L,
+            storageError = null,
+        )
+        assertTrue(galleryText.contains("3 / 10 页 (30%)"))
+        assertTrue(galleryText.contains("2.0 MB"))
+        assertTrue(
+            DownloadNotifications.formatGalleryProgressText("图集", 0, 10, 0L, "磁盘已满")
+                .startsWith("存储写入失败"),
+        )
+
+        val idA = DownloadNotifications.stableEventNotificationId("r34v:100:720p")
+        val idB = DownloadNotifications.stableEventNotificationId("r34v:100:720p")
+        assertEquals(idA, idB)
+        assertTrue(idA >= 10_000)
+        assertTrue(idA != VideoDownloadService.FOREGROUND_NOTIFICATION_ID)
+        assertTrue(idA != GalleryDownloadService.FOREGROUND_NOTIFICATION_ID)
+    }
+
     // ---- Deletion Generation Guard ----
 
     @Test

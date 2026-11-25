@@ -287,6 +287,10 @@ class DownloadCoordinator(
         downloadStateRepository.updateGroupName(id, groupName.trim())
     }
 
+    suspend fun setGroupForItems(ids: Collection<String>, groupName: String) = withContext(dispatchers.io) {
+        downloadStateRepository.updateGroupNames(ids, groupName.trim())
+    }
+
     suspend fun inspectIntegrity(id: String): GalleryAudit? = withContext(dispatchers.io) {
         val item = downloadStateRepository.getById(id) ?: return@withContext null
         if (item.kind == DownloadKind.VIDEO) null else galleryDownloadEngine.inspect(id)

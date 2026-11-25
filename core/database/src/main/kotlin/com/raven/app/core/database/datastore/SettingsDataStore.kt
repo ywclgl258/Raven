@@ -16,6 +16,7 @@ import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStoreFile
 import com.raven.app.core.database.converter.RavenTypeConverters
 import com.raven.app.core.database.model.AppSettings
+import com.raven.app.core.database.model.DownloadViewPreferences
 import com.raven.app.core.database.model.ExploreFilterState
 import com.raven.app.core.model.ComicLanguage
 import com.raven.app.core.model.SiteId
@@ -124,6 +125,36 @@ class SettingsDataStore(
 
     suspend fun setDownloadUnmeteredOnly(enabled: Boolean) {
         dataStore.edit { prefs -> prefs[Keys.DOWNLOAD_UNMETERED_ONLY] = enabled }
+    }
+
+    suspend fun setDownloadSort(sort: String) {
+        dataStore.edit { prefs ->
+            val current = decodeDownloadView(prefs[Keys.DOWNLOAD_VIEW])
+            prefs[Keys.DOWNLOAD_VIEW] = json.encodeToString(
+                DownloadViewPreferences.serializer(),
+                current.copy(sort = sort),
+            )
+        }
+    }
+
+    suspend fun setDownloadGroupMode(groupMode: String) {
+        dataStore.edit { prefs ->
+            val current = decodeDownloadView(prefs[Keys.DOWNLOAD_VIEW])
+            prefs[Keys.DOWNLOAD_VIEW] = json.encodeToString(
+                DownloadViewPreferences.serializer(),
+                current.copy(groupMode = groupMode),
+            )
+        }
+    }
+
+    suspend fun setDownloadTagMatchAll(matchAll: Boolean) {
+        dataStore.edit { prefs ->
+            val current = decodeDownloadView(prefs[Keys.DOWNLOAD_VIEW])
+            prefs[Keys.DOWNLOAD_VIEW] = json.encodeToString(
+                DownloadViewPreferences.serializer(),
+                current.copy(tagMatchAll = matchAll),
+            )
+        }
     }
 
     suspend fun setStorageLocation(location: StorageLocation) {
@@ -293,6 +324,7 @@ class SettingsDataStore(
             put(KEY_STREAM_CACHE_ENABLED, current.streamCacheEnabled.toString())
             put(KEY_SEEK_CACHE_ENABLED, current.seekCacheEnabled.toString())
             put(KEY_DOWNLOAD_UNMETERED_ONLY, current.downloadUnmeteredOnly.toString())
+            put(KEY_DOWNLOAD_VIEW, json.encodeToString(DownloadViewPreferences.serializer(), current.downloadView))
             put(KEY_REDUCE_TRANSPARENCY, current.reduceTransparency.toString())
             put(KEY_UI_SOUND_EFFECTS_ENABLED, current.uiSoundEffectsEnabled.toString())
             put(KEY_AUTO_UPDATE_CHECK, current.autoUpdateCheck.toString())
@@ -355,6 +387,12 @@ class SettingsDataStore(
         }
         settingsMap[KEY_DOWNLOAD_UNMETERED_ONLY]?.toBooleanStrictOrNull()?.let {
             prefs[Keys.DOWNLOAD_UNMETERED_ONLY] = it
+        }
+        settingsMap[KEY_DOWNLOAD_VIEW]?.let { raw ->
+            prefs[Keys.DOWNLOAD_VIEW] = json.encodeToString(
+                DownloadViewPreferences.serializer(),
+                decodeDownloadView(raw),
+            )
         }
         settingsMap[KEY_REDUCE_TRANSPARENCY]?.toBooleanStrictOrNull()?.let {
             prefs[Keys.REDUCE_TRANSPARENCY] = it
@@ -433,6 +471,7 @@ class SettingsDataStore(
             streamCacheEnabled = prefs[Keys.STREAM_CACHE_ENABLED] ?: false,
             seekCacheEnabled = prefs[Keys.SEEK_CACHE_ENABLED] ?: true,
             downloadUnmeteredOnly = prefs[Keys.DOWNLOAD_UNMETERED_ONLY] ?: false,
+            downloadView = decodeDownloadView(prefs[Keys.DOWNLOAD_VIEW]),
             storageLocation = storage,
             pendingStorageLocation = pendingStorage,
             reduceTransparency = prefs[Keys.REDUCE_TRANSPARENCY] ?: false,
@@ -475,6 +514,7 @@ class SettingsDataStore(
         val STREAM_CACHE_ENABLED = booleanPreferencesKey(KEY_STREAM_CACHE_ENABLED)
         val SEEK_CACHE_ENABLED = booleanPreferencesKey(KEY_SEEK_CACHE_ENABLED)
         val DOWNLOAD_UNMETERED_ONLY = booleanPreferencesKey(KEY_DOWNLOAD_UNMETERED_ONLY)
+        val DOWNLOAD_VIEW = stringPreferencesKey(KEY_DOWNLOAD_VIEW)
         val STORAGE_LOCATION = stringPreferencesKey(KEY_STORAGE_LOCATION)
         val PENDING_STORAGE_LOCATION = stringPreferencesKey(KEY_PENDING_STORAGE_LOCATION)
         val REDUCE_TRANSPARENCY = booleanPreferencesKey(KEY_REDUCE_TRANSPARENCY)
@@ -524,6 +564,7 @@ class SettingsDataStore(
         const val KEY_STREAM_CACHE_ENABLED: String = "stream_cache_enabled"
         const val KEY_SEEK_CACHE_ENABLED: String = "seek_cache_enabled"
         const val KEY_DOWNLOAD_UNMETERED_ONLY: String = "download_unmetered_only"
+        const val KEY_DOWNLOAD_VIEW: String = "download_view"
         const val KEY_STORAGE_LOCATION: String = "storage_location"
         const val KEY_PENDING_STORAGE_LOCATION: String = "pending_storage_location"
         const val KEY_REDUCE_TRANSPARENCY: String = "reduce_transparency"
@@ -562,6 +603,7 @@ class SettingsDataStore(
             KEY_STREAM_CACHE_ENABLED,
             KEY_SEEK_CACHE_ENABLED,
             KEY_DOWNLOAD_UNMETERED_ONLY,
+            KEY_DOWNLOAD_VIEW,
             KEY_REDUCE_TRANSPARENCY,
             KEY_UI_SOUND_EFFECTS_ENABLED,
             KEY_AUTO_UPDATE_CHECK,
@@ -577,6 +619,13 @@ class SettingsDataStore(
                 corruptionHandler = ReplaceFileCorruptionHandler { emptyPreferences() },
                 produceFile = { context.applicationContext.preferencesDataStoreFile(FILE_NAME) },
             )
+
+        private fun decodeDownloadView(raw: String?): DownloadViewPreferences {
+            if (raw.isNullOrBlank()) return DownloadViewPreferences()
+            return runCatching {
+                json.decodeFromString(DownloadViewPreferences.serializer(), raw)
+            }.getOrDefault(DownloadViewPreferences())
+        }
 
         internal fun encodeSiteIdList(siteIds: List<SiteId>): String =
             if (siteIds.isEmpty()) "[]"

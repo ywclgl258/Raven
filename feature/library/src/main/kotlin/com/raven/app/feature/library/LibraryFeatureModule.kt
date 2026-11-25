@@ -118,6 +118,9 @@ val libraryFeatureModule: Module = module {
             downloadGateway = get(),
             siteRegistry = get(),
             dispatchers = get(),
+            mediaTagCacheRepository = get(),
+            preferencesRepository = get(),
+            tagDictionary = getOrNull<TagDictionary>() ?: TagDictionary.default,
             initialSiteId = routeParams?.initialSiteId,
         )
     }

@@ -30,6 +30,17 @@ data class ExploreFilterState(
 }
 
 /**
+ * Persisted presentation preferences for the downloads center. Enum names are stored as strings so
+ * older clients can safely fall back to defaults when a newer client introduces another option.
+ */
+@Serializable
+data class DownloadViewPreferences(
+    val sort: String = "RECENT",
+    val groupMode: String = "NONE",
+    val tagMatchAll: Boolean = false,
+)
+
+/**
  * Complete reactive snapshot of Preferences DataStore (`raven_settings.preferences_pb`).
  */
 @Serializable
@@ -46,6 +57,7 @@ data class AppSettings(
     val streamCacheEnabled: Boolean = false,
     val seekCacheEnabled: Boolean = true,
     val downloadUnmeteredOnly: Boolean = false,
+    val downloadView: DownloadViewPreferences = DownloadViewPreferences(),
     val storageLocation: StorageLocation = StorageLocation.PRIVATE,
     val pendingStorageLocation: StorageLocation? = null,
     val reduceTransparency: Boolean = false,

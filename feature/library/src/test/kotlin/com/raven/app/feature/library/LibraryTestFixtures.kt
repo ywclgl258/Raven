@@ -241,6 +241,10 @@ internal class FakeLibraryDownloadGateway(
         downloadStateRepository.updateGroupName(id, groupName)
     }
 
+    override suspend fun setGroupForItems(ids: Collection<String>, groupName: String) {
+        downloadStateRepository.updateGroupNames(ids, groupName)
+    }
+
     override suspend fun inspectIntegrity(id: String): GalleryAudit? {
         inspectedIds += id
         return auditResults[id]
@@ -478,6 +482,8 @@ internal fun sampleDownload(
     totalBytes: Long? = 2_097_152L,
     errorCategory: DownloadErrorCategory? = null,
     errorMessage: String? = null,
+    createdAt: Long = 0L,
+    updatedAt: Long = createdAt,
 ): DownloadItem = DownloadItem(
     id = id,
     siteId = siteId,
@@ -496,6 +502,8 @@ internal fun sampleDownload(
     priority = priority,
     errorCategory = errorCategory,
     errorMessage = errorMessage,
+    createdAt = createdAt,
+    updatedAt = updatedAt,
 )
 
 /**

@@ -523,6 +523,7 @@ class BackupValidator(
             "quality",
             "default_playback_speed",
             "native_speed",
+            "download_view",
         )
 
         val ALLOWED_SETTINGS_KEYS: Set<String> = BOOLEAN_SETTINGS_KEYS + STRING_SETTINGS_KEYS
