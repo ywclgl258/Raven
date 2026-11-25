@@ -99,6 +99,21 @@ class SerialComicSitesPluginTest {
         assertEquals("https://www.guazimanhua.com/comic.php?id=18741#chapters", detail.chaptersUrl)
         assertEquals("954976", detail.item.extra["chapterId"])
 
+        // 分类维度：/category.php?cid=25&sort=hits
+        http.onUrlText("https://www.guazimanhua.com/category.php?cid=25&sort=hits", guaziUpdateHtml)
+        val categoryFeed = plugin.feedSource.loadFeed(
+            FeedRequest(
+                siteId = SiteId.GUAZIMANHUA,
+                section = "cid_25",
+                sort = com.raven.app.core.model.FeedSort.POPULAR,
+            ),
+        )
+        assertEquals(2, categoryFeed.items.size)
+        assertTrue(http.recordedRequests.last().url.endsWith("/category.php?cid=25&sort=hits"))
+        assertTrue(
+            plugin.descriptor.sections.any { it.id == "cid_25" && it.title == "玄幻" },
+        )
+
         val chapterFeed = plugin.feedSource.loadFeed(
             FeedRequest(siteId = SiteId.GUAZIMANHUA, section = "chapters", category = "18741"),
         )
@@ -170,6 +185,15 @@ class SerialComicSitesPluginTest {
         val feed = plugin.feedSource.loadFeed(FeedRequest(siteId = SiteId.HDOUJIN, section = "doujinshi"))
         assertEquals("Doujin Book", feed.items.single().title)
 
+        http.onUrlText(
+            "https://api.hdoujin.org/books?q=test",
+            """{"entries":[{"id":245982,"key":"67290554d85b","title":"Search Hit","pages":30,
+               "thumbnail":{"path":"https://erocdn.net/books/thumb/1/s.webp"}}],"limit":25,"page":1,"total":1}""",
+        )
+        val search = plugin.searchSource.search(FeedRequest(siteId = SiteId.HDOUJIN, query = "test"))
+        assertEquals("Search Hit", search.items.single().title)
+        assertEquals("245982/67290554d85b", search.items.single().id)
+
         val detail = plugin.gallerySource.loadGalleryDetail("https://hdoujin.org/book/245209/abcdef123456")
         assertEquals("Popular Book", detail.item.title)
         assertEquals("副标题", detail.description)
@@ -223,10 +247,10 @@ class SerialComicSitesPluginTest {
     @Test
     fun `mangacopy parses newest feed and search results`() = runTest {
         val http = FakeHttpClientAdapter()
-        http.onMatch({ req -> req.url.startsWith("https://www.mangacopy.com/api/v3/update/newest") }) { req ->
+        http.onMatch({ req -> req.url.startsWith("https://api.mangacopy.com/api/v3/update/newest") }) { req ->
             FakeHttpClientAdapter.htmlResponse(req.url, mangacopyNewestJson)
         }
-        http.onMatch({ req -> req.url.startsWith("https://www.mangacopy.com/api/v3/search/comic") }) { req ->
+        http.onMatch({ req -> req.url.startsWith("https://api.mangacopy.com/api/v3/search/comic") }) { req ->
             FakeHttpClientAdapter.htmlResponse(req.url, mangacopySearchJson)
         }
 
@@ -249,17 +273,40 @@ class SerialComicSitesPluginTest {
     // 嬉皮漫畫
     // -------------------------------------------------------------------------
 
-    private val hipmhHomeHtml = """
-        <html><body>
-          <main>
-            <a href="/works/bTo3MjQ0-deng-lu-wu-lin-xi-tong-7236" title="登录武林系统">
-              <img src="/kk/vertical/deng-lu-wu-lin-xi-tong-7236.webp">
-            </a>
-            <a href="/works/bToxNDE1Nw-shi-shi-ji-ling-di-she-ji-shi-14149" title="七十世纪灵地射击师">
-              <img src="/kk/vertical/shi-shi-ji.webp">
-            </a>
-          </main>
-        </body></html>
+    private val hipmhListJson = """
+        {
+          "code": 200,
+          "message": "ok",
+          "data": {
+            "page": 1,
+            "per_page": 18,
+            "total": 2,
+            "total_pages": 1,
+            "items": [
+              {"mid": "bTo3MjQ0-deng-lu-wu-lin-xi-tong-7236", "title": "登录武林系统",
+               "vertical_image_url": "/kk/vertical/deng-lu-wu-lin-xi-tong-7236.webp"},
+              {"mid": "bToxNDE1Nw-shi-shi-ji-ling-di-she-ji-shi-14149", "title": "七十世纪灵地射击师",
+               "vertical_image_url": "/kk/vertical/shi-shi-ji.webp"}
+            ]
+          }
+        }
+    """.trimIndent()
+
+    private val hipmhChaptersJson = """
+        {
+          "code": 200,
+          "message": "ok",
+          "data": {
+            "items": [
+              {"hid": "bTo3MjQ0LWM6MTM3MjE-NzI0NDoxLjAw", "title": "第1话 祝您武运昌隆"},
+              {"hid": "bTo3MjQ0LWM6MjQwNzM-NzI0NDoyNTYuMDA", "title": "第三季 完结话"}
+            ],
+            "page": 1,
+            "per_page": 200,
+            "total": 2,
+            "total_pages": 1
+          }
+        }
     """.trimIndent()
 
     private val hipmhWorkHtml = """
@@ -268,14 +315,18 @@ class SerialComicSitesPluginTest {
           <meta property="og:image" content="/kk/vertical/deng-lu-wu-lin-xi-tong-7236.webp">
         </head><body>
           <h1>登录武林系统</h1>
-          <a href="/chapter/go?hid=bTo3MjQ0LWM6MTM3MjE&m=7244">第1话 祝您武运昌隆</a>
         </body></html>
     """.trimIndent()
 
     @Test
-    fun `hipmh parses works list and work detail`() = runTest {
+    fun `hipmh parses api list and work detail`() = runTest {
         val http = FakeHttpClientAdapter()
-        http.onUrlText("https://m.hipmh.com/", hipmhHomeHtml)
+        http.onMatch({ req -> req.url.startsWith("https://hipapi1.s3file.top/v1/mangas") }) { req ->
+            FakeHttpClientAdapter.htmlResponse(req.url, hipmhListJson)
+        }
+        http.onMatch({ req -> req.url.startsWith("https://hipapi1.s3file.top/v1/manga/chapters") }) { req ->
+            FakeHttpClientAdapter.htmlResponse(req.url, hipmhChaptersJson)
+        }
         http.onUrlText(
             "https://m.hipmh.com/works/bTo3MjQ0-deng-lu-wu-lin-xi-tong-7236",
             hipmhWorkHtml,
@@ -286,6 +337,10 @@ class SerialComicSitesPluginTest {
         assertEquals(2, feed.items.size)
         assertEquals("bTo3MjQ0-deng-lu-wu-lin-xi-tong-7236", feed.items.first().id)
         assertEquals("登录武林系统", feed.items.first().title)
+        assertEquals(
+            "https://m.hipmh.com/kk/vertical/deng-lu-wu-lin-xi-tong-7236.webp",
+            feed.items.first().coverUrl,
+        )
 
         val detail = plugin.gallerySource.loadGalleryDetail(
             "https://m.hipmh.com/works/bTo3MjQ0-deng-lu-wu-lin-xi-tong-7236",
@@ -295,7 +350,16 @@ class SerialComicSitesPluginTest {
             "https://m.hipmh.com/kk/vertical/deng-lu-wu-lin-xi-tong-7236.webp",
             detail.item.coverUrl,
         )
-        assertTrue(detail.item.extra["chapterHref"].orEmpty().startsWith("/chapter/go?"))
+        assertEquals(2, detail.pageCount)
+        assertEquals("bTo3MjQ0LWM6MTM3MjE-NzI0NDoxLjAw", detail.item.extra["chapterHid"])
+        assertTrue(detail.chaptersUrl.orEmpty().endsWith("#chapters"))
+
+        try {
+            plugin.gallerySource.loadGalleryPage(detail, 1, forceReload = false)
+            fail("Expected Unsupported for encrypted reader images")
+        } catch (expected: SiteException.Unsupported) {
+            assertTrue(expected.message.orEmpty().contains("reader.hipmh.top"))
+        }
 
         val resolved = plugin.linkResolver.resolve("https://m.hipmh.com/works/bTo3MjQ0-deng-lu-wu-lin-xi-tong-7236?x=1")
         assertTrue(resolved is ResolvedLink.Gallery)

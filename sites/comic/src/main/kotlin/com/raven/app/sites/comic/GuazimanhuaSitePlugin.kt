@@ -67,11 +67,7 @@ class GuazimanhuaSitePlugin(
             }
             val page = request.page.coerceAtLeast(1)
             val query = request.query?.trim().orEmpty()
-            val url = when {
-                query.isNotEmpty() -> "${descriptor.baseUrl}/search.php?q=${HtmlUrlCleaner.encodeQueryParam(query)}&page=$page"
-                page <= 1 -> "${descriptor.baseUrl}/update.php"
-                else -> "${descriptor.baseUrl}/update.php?page=$page"
-            }
+            val url = resolveFeedUrl(request, page, query)
             val html = fetchHtml(url)
             val doc = Jsoup.parse(html, url)
             val items = parseComicCards(doc)
@@ -84,11 +80,11 @@ class GuazimanhuaSitePlugin(
                 items = items,
                 nextPage = if (hasMore) page + 1 else null,
                 hasMore = hasMore,
-                title = query.ifEmpty { "最近更新" },
+                title = query.ifEmpty { sectionTitle(request.section) },
             )
         }
 
-        override fun supportedSorts(request: FeedRequest): List<FeedSort> = listOf(FeedSort.NEWEST)
+        override fun supportedSorts(request: FeedRequest): List<FeedSort> = FEED_SORTS
     }
 
     override val searchSource: SearchSource = object : SearchSource {
@@ -184,6 +180,50 @@ class GuazimanhuaSitePlugin(
             return ResolvedLink.Gallery(SiteId.GUAZIMANHUA, id, "${descriptor.baseUrl}/comic.php?id=$id")
         }
     }
+
+    // -------------------------------------------------------------------------
+    // Feed URL & Sections
+    // -------------------------------------------------------------------------
+
+    private fun resolveFeedUrl(request: FeedRequest, page: Int, query: String): String {
+        if (query.isNotEmpty()) {
+            return "${descriptor.baseUrl}/search.php?q=${HtmlUrlCleaner.encodeQueryParam(query)}&page=$page"
+        }
+        val section = request.section?.trim()?.lowercase().orEmpty()
+        val params = mutableListOf<String>()
+        when {
+            section.startsWith("cid_") && section.removePrefix("cid_").all(Char::isDigit) ->
+                params += "cid=${section.removePrefix("cid_")}"
+            section.startsWith("city_") && section.removePrefix("city_").all(Char::isDigit) ->
+                params += "city=${section.removePrefix("city_")}"
+            section.startsWith("aud_") && section.removePrefix("aud_").all(Char::isDigit) ->
+                params += "audience=${section.removePrefix("aud_")}"
+            section.startsWith("end_") && section.removePrefix("end_").all(Char::isDigit) ->
+                params += "is_end=${section.removePrefix("end_")}"
+        }
+        request.category?.trim()?.takeIf { it.all(Char::isDigit) }?.let { params += "cid=$it" }
+        sortParam(request.sort)?.let { params += "sort=$it" }
+        if (params.isEmpty()) {
+            return if (page <= 1) {
+                "${descriptor.baseUrl}/update.php"
+            } else {
+                "${descriptor.baseUrl}/update.php?page=$page"
+            }
+        }
+        if (page > 1) params += "page=$page"
+        return "${descriptor.baseUrl}/category.php?" + params.joinToString("&")
+    }
+
+    private fun sortParam(sort: FeedSort): String? = when (sort) {
+        FeedSort.NEWEST -> "update"
+        FeedSort.POPULAR -> "hits"
+        FeedSort.TRENDING -> "daily"
+        FeedSort.RATING -> "score"
+        else -> null
+    }
+
+    private fun sectionTitle(section: String?): String =
+        SECTIONS.firstOrNull { it.id.equals(section, ignoreCase = true) }?.title ?: "最近更新"
 
     // -------------------------------------------------------------------------
     // Parsing
@@ -356,6 +396,38 @@ class GuazimanhuaSitePlugin(
         private val CHAPTER_IMAGE_REGEX =
             Regex("""https://img\.guazicdn\.com/th/comics/chapters/[^\s"'<>\\]+""")
 
+        private val FEED_SORTS = listOf(
+            FeedSort.NEWEST,
+            FeedSort.POPULAR,
+            FeedSort.TRENDING,
+            FeedSort.RATING,
+        )
+
+        /**
+         * 站点 `/category.php` 暴露的完整筛选维度（题材 / 地区 / 受众 / 连载状态）。
+         * section id 编码为 `cid_<id>` / `city_<id>` / `aud_<id>` / `end_<id>`，
+         * 由 `resolveFeedUrl` 还原为对应查询参数。
+         */
+        internal val SECTIONS: List<SiteSectionSpec> = buildList {
+            add(SiteSectionSpec("latest", "最近更新", defaultSort = FeedSort.NEWEST))
+            listOf(
+                "cid_41" to "耽美", "cid_9" to "恋爱", "cid_29" to "校园", "cid_5" to "霸总",
+                "cid_42" to "都市", "cid_8" to "穿越", "cid_23" to "古风", "cid_25" to "玄幻",
+                "cid_31" to "奇幻", "cid_22" to "科幻", "cid_21" to "灵异", "cid_54" to "动作",
+                "cid_11" to "悬疑", "cid_30" to "冒险", "cid_15" to "搞笑", "cid_13" to "热血",
+                "cid_14" to "恐怖", "cid_148" to "系统", "cid_97" to "逆袭", "cid_55" to "脑洞",
+                "cid_61" to "复仇", "cid_17" to "真人", "cid_27" to "其它",
+            ).forEach { (id, title) -> add(SiteSectionSpec(id, title, category = id)) }
+            listOf(
+                "city_42" to "大陆", "city_43" to "欧美", "city_77" to "港台",
+                "city_78" to "日韩", "city_338" to "国漫",
+            ).forEach { (id, title) -> add(SiteSectionSpec(id, title, category = id)) }
+            listOf("aud_1" to "男频", "aud_2" to "女频")
+                .forEach { (id, title) -> add(SiteSectionSpec(id, title, category = id)) }
+            listOf("end_2" to "连载中", "end_1" to "已完结")
+                .forEach { (id, title) -> add(SiteSectionSpec(id, title, category = id)) }
+        }
+
         val DESCRIPTOR: SiteDescriptor = SiteDescriptor(
             id = SITE_ID,
             displayName = "瓜子漫画",
@@ -365,8 +437,8 @@ class GuazimanhuaSitePlugin(
             defaultHost = "www.guazimanhua.com",
             accessNote = "连载国漫站点，详情页自动打开第一章",
             capabilities = setOf(SiteCapability.FEED, SiteCapability.SEARCH),
-            feedSorts = listOf(FeedSort.NEWEST),
-            sections = listOf(SiteSectionSpec("latest", "最近更新", defaultSort = FeedSort.NEWEST)),
+            feedSorts = FEED_SORTS,
+            sections = SECTIONS,
             searchScopes = listOf(SearchScope.ALL),
             networkProfile = SiteNetworkProfile(
                 userAgent = SiteNetworkProfile.DEFAULT_MOBILE_UA,

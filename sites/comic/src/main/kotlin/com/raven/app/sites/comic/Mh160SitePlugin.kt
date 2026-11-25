@@ -189,6 +189,19 @@ class Mh160SitePlugin(
                 cause = e,
             )
         }
+        if (response.code == 404) {
+            throw SiteException.NotFound(
+                message = "漫画160 站点返回 404，域名可能已更换或暂时下线",
+                siteId = SiteId.MH160,
+            )
+        }
+        if (response.code == 403) {
+            throw SiteException.Forbidden(
+                isChallenge = true,
+                message = "漫画160 触发浏览器验证或网络拦截，站点可能已更换域名",
+                siteId = SiteId.MH160,
+            )
+        }
         response.throwIfNotSuccessful(SiteId.MH160, descriptor.displayName)
         return response.bodyText()
     }
@@ -204,7 +217,7 @@ class Mh160SitePlugin(
             primaryKind = MediaKind.SERIAL_COMIC,
             supportedKinds = setOf(MediaKind.SERIAL_COMIC),
             defaultHost = "mh160mh.com",
-            accessNote = "站点当前对默认网络返回 404，可能已更换域名",
+            accessNote = "站点域名当前返回 404/403，可能已更换域名",
             capabilities = setOf(SiteCapability.FEED, SiteCapability.SEARCH),
             feedSorts = listOf(FeedSort.NEWEST),
             sections = listOf(SiteSectionSpec("latest", "最近更新", defaultSort = FeedSort.NEWEST)),

@@ -232,7 +232,12 @@ class HdoujinSitePlugin(
         val root = runCatching { json.parseToJsonElement(body) }.getOrNull()
         val items = when (root) {
             is JsonArray -> root.mapNotNull { (it as? JsonObject)?.let(::parseBookSummary) }
-            is JsonObject -> (root["list"] as? JsonArray)?.mapNotNull { (it as? JsonObject)?.let(::parseBookSummary) }.orEmpty()
+            is JsonObject -> {
+                val array = (root["entries"] as? JsonArray)
+                    ?: (root["list"] as? JsonArray)
+                    ?: (root["results"] as? JsonArray)
+                array?.mapNotNull { (it as? JsonObject)?.let(::parseBookSummary) }.orEmpty()
+            }
             else -> emptyList()
         }
         return FeedPage(items = items, title = query, hasMore = items.isNotEmpty())
@@ -246,6 +251,9 @@ class HdoujinSitePlugin(
                 kind = SiteRequestKind.API,
                 headers = mapOf(
                     "Accept" to "application/json",
+                    // api.hdoujin.org 强制校验 Origin；缺失会直接返回 HTTP 400。
+                    "Origin" to descriptor.baseUrl,
+                    // Referer 必须停留在站点根路径，/browse 等子路径同样会触发 400。
                     "Referer" to "${descriptor.baseUrl}/",
                 ),
             )

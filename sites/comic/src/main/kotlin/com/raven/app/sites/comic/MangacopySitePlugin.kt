@@ -46,7 +46,7 @@ class MangacopySitePlugin(
         }
 
         override suspend fun loadFeed(request: FeedRequest): FeedPage {
-            val url = "${descriptor.baseUrl}/api/v3/update/newest?limit=21&offset=${(request.page - 1) * 21}&platform=3"
+            val url = "${descriptor.networkProfile.apiBase}/api/v3/update/newest?limit=21&offset=${(request.page - 1) * 21}&platform=3"
             val body = fetchText(url)
             val root = json.parseToJsonElement(body).jsonObject
             val results = root["results"]?.jsonObject
@@ -81,7 +81,7 @@ class MangacopySitePlugin(
     override val searchSource: SearchSource = object : SearchSource {
         override suspend fun search(request: FeedRequest): FeedPage {
             val q = HtmlUrlCleaner.encodeQueryParam(request.query?.trim().orEmpty())
-            val url = "${descriptor.baseUrl}/api/v3/search/comic?limit=21&offset=${(request.page - 1) * 21}&platform=3&q=$q"
+            val url = "${descriptor.networkProfile.apiBase}/api/v3/search/comic?limit=21&offset=${(request.page - 1) * 21}&platform=3&q=$q"
             val body = fetchText(url)
             val root = json.parseToJsonElement(body).jsonObject
             val results = root["results"]?.jsonObject

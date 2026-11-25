@@ -31,9 +31,14 @@ import org.jsoup.Jsoup
 /**
  * MyComic (`SiteId.MYCOMIC`) 连载漫画插件。
  *
- * mycomic.com 通过 Cloudflare 托管质询拦截非浏览器流量（HTTP 403 + challenge 页面），
- * 因此插件在检测到质询时抛出 [SiteException.Forbidden]（`isChallenge = true`），
- * 由 UI 提示用户切换网络或代理；若通过验证，则按标准目录式漫画站解析列表与详情。
+ * 站点路由：
+ * - 列表：`/comics?sort=-update&page=N`，筛选 `filter[audience|country|end]`
+ * - 搜索：`/comics?keyword=<q>&page=N`
+ * - 详情：`/comics/<id>`，章节 `/chapters/<id>`
+ * - 排行榜：`/rank?sort=-week|-views`
+ *
+ * 章节阅读页由前端懒加载图片，插件按 `data-src` / `src` 等属性提取图页；
+ * 若站点返回 Cloudflare 质询则抛出 [SiteException.Forbidden]（`isChallenge = true`）。
  */
 class MycomicSitePlugin(
     private val httpClient: HttpClientAdapter,
@@ -50,21 +55,24 @@ class MycomicSitePlugin(
         override suspend fun loadFeed(request: FeedRequest): FeedPage {
             val page = request.page.coerceAtLeast(1)
             val query = request.query?.trim().orEmpty()
-            val url = when {
-                query.isNotEmpty() -> "${descriptor.baseUrl}/search?q=${HtmlUrlCleaner.encodeQueryParam(query)}"
-                page <= 1 -> "${descriptor.baseUrl}/"
-                else -> "${descriptor.baseUrl}/?page=$page"
-            }
+            val url = resolveFeedUrl(request.section, page, query)
             val html = fetchHtml(url)
             val doc = Jsoup.parse(html, url)
             val items = parseComicCards(doc)
             if (items.isEmpty()) {
                 throw SiteException.ParseError("MyComic 列表结构不可识别", siteId = SiteId.MYCOMIC)
             }
-            return FeedPage(items = items, title = query.ifEmpty { "最近更新" })
+            val hasMore = doc.selectFirst("a[href*='page=${page + 1}']") != null
+            return FeedPage(
+                items = items,
+                nextPage = if (hasMore) page + 1 else null,
+                hasMore = hasMore,
+                title = query.ifEmpty { sectionTitle(request.section) },
+            )
         }
 
-        override fun supportedSorts(request: FeedRequest): List<FeedSort> = listOf(FeedSort.NEWEST)
+        override fun supportedSorts(request: FeedRequest): List<FeedSort> =
+            listOf(FeedSort.NEWEST, FeedSort.POPULAR)
     }
 
     override val searchSource: SearchSource = object : SearchSource {
@@ -74,24 +82,43 @@ class MycomicSitePlugin(
 
     override val gallerySource: GallerySource = object : GallerySource {
         override suspend fun loadGalleryDetail(url: String): GalleryDetail {
-            val slug = extractSlug(url)
+            val comicId = extractComicId(url)
                 ?: throw SiteException.ParseError("无法识别 MyComic 地址：$url", siteId = SiteId.MYCOMIC)
-            val canonical = "${descriptor.baseUrl}/comic/$slug"
+            val canonical = "${descriptor.baseUrl}/comics/$comicId"
             val html = fetchHtml(canonical)
             val doc = Jsoup.parse(html, canonical)
-            val title = HtmlUrlCleaner.cleanText(doc.selectFirst("h1")?.text().orEmpty()).ifBlank { "Comic $slug" }
-            val cover = doc.selectFirst("meta[property=og:image]")?.attr("content").orEmpty()
+            val title = doc.selectFirst("meta[property=og:title]")?.attr("content")
+                ?.takeIf { it.isNotBlank() }
+                ?: doc.selectFirst("h1")?.text()?.takeIf { it.isNotBlank() }
+                ?: HtmlUrlCleaner.cleanText(doc.title().substringBefore(" - ")).ifBlank { "Comic $comicId" }
+            val cover = doc.selectFirst("meta[property=og:image]")?.attr("content")
+                ?.takeIf { it.isNotBlank() }
+                ?: doc.selectFirst("img[src*=cover], img[data-src*=cover]")
+                    ?.let { it.attr("data-src").ifBlank { it.attr("src") } }
+                    .orEmpty()
+            val chapters = parseChapterIds(doc)
+            val firstChapterId = chapters.firstOrNull()
+            val pages = if (firstChapterId != null) {
+                loadChapterPages(firstChapterId)
+            } else {
+                emptyList()
+            }
             return GalleryDetail(
                 item = MediaItem(
                     siteId = SiteId.MYCOMIC,
-                    id = slug,
+                    id = comicId,
                     url = canonical,
                     kind = MediaKind.SERIAL_COMIC,
                     title = title,
                     coverUrl = cover,
+                    pageCount = pages.size,
+                    extra = buildMap {
+                        put("chapterId", firstChapterId.orEmpty())
+                    },
                 ),
-                pageCount = 1,
-                pages = emptyList(),
+                pageCount = pages.size.coerceAtLeast(1),
+                pages = pages,
+                chaptersUrl = if (chapters.size > 1) "$canonical#chapters" else null,
             )
         }
 
@@ -99,19 +126,36 @@ class MycomicSitePlugin(
             detail: GalleryDetail,
             pageIndex: Int,
             forceReload: Boolean,
-        ): GalleryPage = throw SiteException.Unsupported(
-            message = "MyComic 章节图页结构尚未适配",
-            siteId = SiteId.MYCOMIC,
-        )
+        ): GalleryPage {
+            if (pageIndex !in 1..detail.pageCount) {
+                throw SiteException.NotFound("页码超出范围：$pageIndex / ${detail.pageCount}", siteId = SiteId.MYCOMIC)
+            }
+            if (!forceReload) {
+                detail.pages.firstOrNull { it.index == pageIndex && it.imageUrl.isNotBlank() }?.let { return it }
+            }
+            val chapterId = detail.item.extra["chapterId"].orEmpty()
+            if (chapterId.isBlank()) {
+                throw SiteException.ParseError("MyComic 章节信息缺失", siteId = SiteId.MYCOMIC)
+            }
+            val pages = loadChapterPages(chapterId)
+            return pages.firstOrNull { it.index == pageIndex }
+                ?: throw SiteException.NotFound("页码超出范围：$pageIndex / ${pages.size}", siteId = SiteId.MYCOMIC)
+        }
 
         override suspend fun resolvePageImage(
             pageUrl: String,
             preferOriginal: Boolean,
             forceReload: Boolean,
-        ): GalleryPage = throw SiteException.Unsupported(
-            message = "MyComic 章节图页结构尚未适配",
-            siteId = SiteId.MYCOMIC,
-        )
+        ): GalleryPage {
+            val parsed = ComicUrl.parse(pageUrl)
+                ?: throw SiteException.ParseError("无法识别 MyComic 图页地址", siteId = SiteId.MYCOMIC)
+            val chapterId = parsed.pathSegments.lastOrNull { it.all(Char::isDigit) }
+                ?: throw SiteException.ParseError("无法识别 MyComic 章节编号", siteId = SiteId.MYCOMIC)
+            val pageIndex = parsed.fragment?.toIntOrNull()?.takeIf { it > 0 } ?: 1
+            val pages = loadChapterPages(chapterId)
+            return pages.firstOrNull { it.index == pageIndex }
+                ?: throw SiteException.NotFound("页码超出范围：$pageIndex / ${pages.size}", siteId = SiteId.MYCOMIC)
+        }
     }
 
     override val linkResolver: LinkResolver = object : LinkResolver {
@@ -122,52 +166,132 @@ class MycomicSitePlugin(
 
         override fun canonicalize(url: String): String? {
             val parsed = ComicUrl.parse(url)?.takeIf { descriptor.matchesHost(it.host) } ?: return null
-            val slug = extractSlug(parsed.toString()) ?: return null
-            return "${descriptor.baseUrl}/comic/$slug"
+            val id = extractComicId(parsed.toString()) ?: return null
+            return "${descriptor.baseUrl}/comics/$id"
         }
 
         override fun resolve(url: String): ResolvedLink? {
             val parsed = ComicUrl.parse(url)?.takeIf { descriptor.matchesHost(it.host) } ?: return null
-            val slug = extractSlug(parsed.toString()) ?: return null
-            return ResolvedLink.Gallery(SiteId.MYCOMIC, slug, "${descriptor.baseUrl}/comic/$slug")
+            val id = extractComicId(parsed.toString()) ?: return null
+            return ResolvedLink.Gallery(SiteId.MYCOMIC, id, "${descriptor.baseUrl}/comics/$id")
         }
     }
+
+    // -------------------------------------------------------------------------
+    // Feed / Detail Parsing
+    // -------------------------------------------------------------------------
+
+    private fun resolveFeedUrl(section: String?, page: Int, query: String): String {
+        if (query.isNotEmpty()) {
+            return "${descriptor.baseUrl}/comics?keyword=${HtmlUrlCleaner.encodeQueryParam(query)}&page=$page"
+        }
+        val path = when (section?.trim()?.lowercase()) {
+            "rank_week" -> "/rank?sort=-week"
+            "rank_views" -> "/rank?sort=-views"
+            "new" -> "/comics?sort=-id"
+            "completed" -> "/comics?filter%5Bend%5D=1"
+            "ongoing" -> "/comics?filter%5Bend%5D=0"
+            "cn" -> "/comics?filter%5Bcountry%5D=china"
+            "jp" -> "/comics?filter%5Bcountry%5D=japan"
+            "kr" -> "/comics?filter%5Bcountry%5D=korea"
+            "hk" -> "/comics?filter%5Bcountry%5D=hongkong"
+            else -> "/comics?sort=-update"
+        }
+        val base = "${descriptor.baseUrl}$path"
+        return if (page <= 1) base else "$base&page=$page"
+    }
+
+    private fun sectionTitle(section: String?): String =
+        SECTIONS.firstOrNull { it.id.equals(section, ignoreCase = true) }?.title ?: "最近更新"
 
     private fun parseComicCards(doc: org.jsoup.nodes.Document): List<MediaItem> {
-        val seen = LinkedHashMap<String, MediaItem>()
-        doc.select("a[href*=/comic/], a[href*=/manga/]").forEach { anchor ->
+        val byId = LinkedHashMap<String, MutableList<org.jsoup.nodes.Element>>()
+        doc.select("a[href*='/comics/']").forEach { anchor ->
             val href = anchor.attr("href")
-            val slug = href.substringAfterLast("/").substringBefore("?").substringBefore("#")
-            if (slug.isBlank()) return@forEach
-            val container = anchor.closest("li, article, .item, .card") ?: anchor
+            if (href.contains("?") || href.contains("#")) return@forEach
+            val id = href.substringAfterLast("/").takeIf { it.all(Char::isDigit) } ?: return@forEach
+            byId.getOrPut(id) { mutableListOf() }.add(anchor)
+        }
+        return byId.mapNotNull { (id, anchors) ->
+            // 列表里同一部作品通常有两个链接：章节号与标题；取文本最长的一个作为标题。
+            val titleAnchor = anchors.maxByOrNull { HtmlUrlCleaner.cleanText(it.text()).length }
+                ?: return@mapNotNull null
             val title = HtmlUrlCleaner.cleanText(
-                container.selectFirst("h3, h4, .title")?.text() ?: anchor.attr("title").ifBlank { anchor.text() },
+                titleAnchor.attr("title").ifBlank { titleAnchor.text() },
             )
-            if (title.isBlank()) return@forEach
+            if (title.isBlank() || title.all { it.isDigit() }) return@mapNotNull null
+            val container = titleAnchor.closest("li, article, .card, .comic-item, div") ?: titleAnchor
             val cover = container.selectFirst("img")?.let { img ->
-                img.attr("data-src").ifBlank { img.attr("data-original") }.ifBlank { img.attr("src") }
+                img.attr("data-src").ifBlank { img.attr("data-original") }
+                    .ifBlank { img.attr("src") }
             }.orEmpty()
-            seen.putIfAbsent(
-                slug,
-                MediaItem(
-                    siteId = SiteId.MYCOMIC,
-                    id = slug,
-                    url = if (href.startsWith("http")) href else "${descriptor.baseUrl}$href",
-                    kind = MediaKind.SERIAL_COMIC,
-                    title = title,
-                    coverUrl = if (cover.startsWith("/")) "${descriptor.baseUrl}$cover" else cover,
-                ),
+            MediaItem(
+                siteId = SiteId.MYCOMIC,
+                id = id,
+                url = "${descriptor.baseUrl}/comics/$id",
+                kind = MediaKind.SERIAL_COMIC,
+                title = title,
+                coverUrl = if (cover.startsWith("/")) "${descriptor.baseUrl}$cover" else cover,
             )
         }
-        return seen.values.toList()
     }
 
-    private fun extractSlug(url: String): String? {
+    private fun parseChapterIds(doc: org.jsoup.nodes.Document): List<String> {
+        val seen = LinkedHashSet<String>()
+        doc.select("a[href*='/chapters/']").forEach { anchor ->
+            val href = anchor.attr("href")
+            val id = href.substringAfterLast("/").substringBefore("#").substringBefore("?")
+            if (id.isNotBlank() && id.all(Char::isDigit)) seen.add(id)
+        }
+        return seen.toList()
+    }
+
+    private suspend fun loadChapterPages(chapterId: String): List<GalleryPage> {
+        val url = "${descriptor.baseUrl}/chapters/$chapterId"
+        val html = fetchHtml(url)
+        val images = extractChapterImages(html)
+        if (images.isEmpty()) {
+            throw SiteException.Unsupported(
+                message = "MyComic 章节图页由前端动态加载，当前响应中未找到图片地址",
+                siteId = SiteId.MYCOMIC,
+            )
+        }
+        return images.mapIndexed { index, imageUrl ->
+            GalleryPage(index = index + 1, pageUrl = "$url#${index + 1}", imageUrl = imageUrl)
+        }
+    }
+
+    private fun extractChapterImages(html: String): List<String> {
+        val ordered = LinkedHashMap<String, Unit>()
+        IMAGE_ATTRIBUTE_REGEX.findAll(html).forEach { match ->
+            val raw = match.groupValues[1].replace("&amp;", "&").trim()
+            if (isPageImage(raw)) ordered.putIfAbsent(raw, Unit)
+        }
+        if (ordered.isEmpty()) {
+            // 兜底：脚本内数组/JSON 中的绝对图片地址
+            IMAGE_URL_REGEX.findAll(html).forEach { match ->
+                val raw = match.value.replace("&amp;", "&")
+                if (isPageImage(raw)) ordered.putIfAbsent(raw, Unit)
+            }
+        }
+        return ordered.keys.toList()
+    }
+
+    private fun isPageImage(url: String): Boolean {
+        if (!url.startsWith("http")) return false
+        if (!IMAGE_EXTENSION_REGEX.containsMatchIn(url)) return false
+        val lower = url.lowercase()
+        return BAD_IMAGE_KEYWORDS.none { it in lower }
+    }
+
+    private fun extractComicId(url: String): String? {
         val parsed = ComicUrl.parse(url) ?: return null
         val segments = parsed.pathSegments
-        val idx = segments.indexOfFirst { it == "comic" || it == "manga" }
-        if (idx >= 0 && idx + 1 < segments.size) return segments[idx + 1].takeIf { it.isNotBlank() }
-        return segments.lastOrNull()?.takeIf { it.isNotBlank() }
+        val idx = segments.indexOf("comics")
+        if (idx >= 0 && idx + 1 < segments.size) {
+            return segments[idx + 1].takeIf { it.all(Char::isDigit) }
+        }
+        return null
     }
 
     private suspend fun fetchHtml(url: String): String {
@@ -200,6 +324,35 @@ class MycomicSitePlugin(
         val SITE_ID: SiteId = SiteId.MYCOMIC
         const val BASE_URL: String = "https://mycomic.com"
 
+        private val IMAGE_ATTRIBUTE_REGEX = Regex(
+            """(?:data-src|data-original|data-lazy-src|data-echo|data-url|src)\s*=\s*["'](https?://[^"']+)["']""",
+            RegexOption.IGNORE_CASE,
+        )
+        private val IMAGE_URL_REGEX = Regex(
+            """https?://[^\s"'<>\\]+\.(?:jpe?g|png|webp|avif)(?:\?[^\s"'<>\\]*)?""",
+            RegexOption.IGNORE_CASE,
+        )
+        private val IMAGE_EXTENSION_REGEX = Regex(
+            """\.(?:jpe?g|png|webp|avif)(?:\?|$)""",
+            RegexOption.IGNORE_CASE,
+        )
+        private val BAD_IMAGE_KEYWORDS = listOf(
+            "logo", "favicon", "avatar", "icon", "banner", "ads/", "/ad.", "placeholder", "cover",
+        )
+
+        internal val SECTIONS: List<SiteSectionSpec> = listOf(
+            SiteSectionSpec("latest", "最近更新", defaultSort = FeedSort.NEWEST),
+            SiteSectionSpec("new", "最新上架", defaultSort = FeedSort.NEWEST),
+            SiteSectionSpec("rank_week", "周榜", defaultSort = FeedSort.POPULAR),
+            SiteSectionSpec("rank_views", "人气榜", defaultSort = FeedSort.POPULAR),
+            SiteSectionSpec("ongoing", "连载中"),
+            SiteSectionSpec("completed", "已完结"),
+            SiteSectionSpec("cn", "国漫"),
+            SiteSectionSpec("jp", "日漫"),
+            SiteSectionSpec("kr", "韩漫"),
+            SiteSectionSpec("hk", "港漫"),
+        )
+
         val DESCRIPTOR: SiteDescriptor = SiteDescriptor(
             id = SITE_ID,
             displayName = "MyComic",
@@ -209,8 +362,8 @@ class MycomicSitePlugin(
             defaultHost = "mycomic.com",
             accessNote = "站点启用 Cloudflare 质询，可能需要代理",
             capabilities = setOf(SiteCapability.FEED, SiteCapability.SEARCH),
-            feedSorts = listOf(FeedSort.NEWEST),
-            sections = listOf(SiteSectionSpec("latest", "最近更新", defaultSort = FeedSort.NEWEST)),
+            feedSorts = listOf(FeedSort.NEWEST, FeedSort.POPULAR),
+            sections = SECTIONS,
             searchScopes = listOf(SearchScope.ALL),
             networkProfile = SiteNetworkProfile(
                 userAgent = SiteNetworkProfile.DESKTOP_WINDOWS_UA,

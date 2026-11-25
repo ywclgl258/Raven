@@ -18,7 +18,6 @@ import com.raven.app.core.model.SiteNetworkProfile
 import com.raven.app.core.model.SiteSectionSpec
 import com.raven.app.core.sitespi.FeedSource
 import com.raven.app.core.sitespi.GallerySource
-import com.raven.app.core.sitespi.HtmlUrlCleaner
 import com.raven.app.core.sitespi.HttpClientAdapter
 import com.raven.app.core.sitespi.LinkResolver
 import com.raven.app.core.sitespi.ResolvedLink
@@ -26,21 +25,31 @@ import com.raven.app.core.sitespi.SearchSource
 import com.raven.app.core.sitespi.SitePlugin
 import com.raven.app.core.sitespi.SiteRequestKind
 import kotlinx.coroutines.CancellationException
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.intOrNull
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import org.jsoup.Jsoup
 
 /**
  * 嬉皮漫畫 (`SiteId.HIPMH`) 连载漫画插件。
  *
- * 移动端站点 `m.hipmh.com` 为 Astro 服务端渲染：
- * - 首页 / 分类 / 排行榜直接输出 `/works/<slug>` 卡片
- * - 作品页包含 `<title>`、`og:image` 与 `/chapter/go?hid=...` 章节入口
+ * 移动端为 Astro 站点，列表由公开 JSON API 提供：
+ * - 列表/搜索：`GET https://hipapi1.s3file.top/v1/mangas`
+ *   （`sort=updated|popular|latest`、`genre`、`category`、`status`、`keyword`、`page`、`per_page`）
+ * - 章节列表：`GET /v1/manga/chapters?mid=<mid 前缀>`
+ * - 作品页：`https://m.hipmh.com/works/<mid>`（标题/封面服务端渲染）
  *
- * 章节阅读页会通过 JavaScript 跳转到独立的 `reader.hipmh.top` 域名并动态拼装图页，
- * 服务端 HTML 不含图片地址，因此阅读接口返回 [SiteException.Unsupported]。
+ * 阅读器的图页由 `reader.hipmh.top` 的混淆脚本解码，服务端不直接暴露图片地址，
+ * 因此章节图页接口返回 [SiteException.Unsupported]。
  */
 class HipmhSitePlugin(
     private val httpClient: HttpClientAdapter,
 ) : SitePlugin {
+
+    private val json = Json { ignoreUnknownKeys = true; isLenient = true }
 
     override val descriptor: SiteDescriptor = DESCRIPTOR
 
@@ -53,27 +62,31 @@ class HipmhSitePlugin(
         override suspend fun loadFeed(request: FeedRequest): FeedPage {
             val page = request.page.coerceAtLeast(1)
             val query = request.query?.trim().orEmpty()
-            val url = when {
-                query.isNotEmpty() -> "${descriptor.baseUrl}/search?q=${HtmlUrlCleaner.encodeQueryParam(query)}"
-                page <= 1 -> "${descriptor.baseUrl}/"
-                else -> "${descriptor.baseUrl}/popularity?page=$page"
+            val url = buildListUrl(request.section, page, query)
+            val body = fetchApi(url)
+            val root = runCatching { json.parseToJsonElement(body).jsonObject }.getOrNull()
+                ?: throw SiteException.ParseError("嬉皮漫畫列表数据格式异常", siteId = SiteId.HIPMH)
+            val data = root["data"]?.jsonObject
+                ?: throw SiteException.ParseError("嬉皮漫畫列表数据为空", siteId = SiteId.HIPMH)
+            val items = (data["items"] as? JsonArray).orEmpty().mapNotNull { element ->
+                (element as? JsonObject)?.let(::parseMangaSummary)
             }
-            val html = fetchHtml(url)
-            val doc = Jsoup.parse(html, url)
-            val items = parseWorks(doc)
             if (items.isEmpty()) {
                 throw SiteException.ParseError("嬉皮漫畫列表结构不可识别", siteId = SiteId.HIPMH)
             }
-            val hasMore = doc.selectFirst("a[href*='page=${page + 1}']") != null
+            val totalPages = data.int("total_pages") ?: page
             return FeedPage(
                 items = items,
-                nextPage = if (hasMore) page + 1 else null,
-                hasMore = hasMore,
-                title = query.ifEmpty { "最近更新" },
+                nextPage = if (page < totalPages) page + 1 else null,
+                hasMore = page < totalPages,
+                totalCount = data.int("total"),
+                totalPages = totalPages,
+                title = query.ifEmpty { sectionTitle(request.section) },
             )
         }
 
-        override fun supportedSorts(request: FeedRequest): List<FeedSort> = listOf(FeedSort.NEWEST, FeedSort.POPULAR)
+        override fun supportedSorts(request: FeedRequest): List<FeedSort> =
+            listOf(FeedSort.NEWEST, FeedSort.POPULAR, FeedSort.TRENDING)
     }
 
     override val searchSource: SearchSource = object : SearchSource {
@@ -83,30 +96,33 @@ class HipmhSitePlugin(
 
     override val gallerySource: GallerySource = object : GallerySource {
         override suspend fun loadGalleryDetail(url: String): GalleryDetail {
-            val slug = extractWorkSlug(url)
+            val mid = extractWorkSlug(url)
                 ?: throw SiteException.ParseError("无法识别嬉皮漫畫地址：$url", siteId = SiteId.HIPMH)
-            val canonical = "${descriptor.baseUrl}/works/$slug"
+            val canonical = "${descriptor.baseUrl}/works/$mid"
             val html = fetchHtml(canonical)
             val doc = Jsoup.parse(html, canonical)
-            val title = HtmlUrlCleaner.cleanText(doc.title().substringBefore(" - "))
-                .ifBlank { doc.selectFirst("h1")?.text().orEmpty() }
-                .ifBlank { "作品 $slug" }
+            val title = doc.selectFirst("meta[property=og:title]")?.attr("content")
+                ?.takeIf { it.isNotBlank() }
+                ?: doc.selectFirst("h1")?.text()?.takeIf { it.isNotBlank() }
+                ?: doc.title().substringBefore(" - ").ifBlank { "作品 $mid" }
             val cover = doc.selectFirst("meta[property=og:image]")?.attr("content").orEmpty()
-            val chapterHref = doc.selectFirst("a[href*=/chapter/go?]")?.attr("href").orEmpty()
+            val chapters = loadChapters(mid)
             return GalleryDetail(
                 item = MediaItem(
                     siteId = SiteId.HIPMH,
-                    id = slug,
+                    id = mid,
                     url = canonical,
                     kind = MediaKind.SERIAL_COMIC,
                     title = title,
                     coverUrl = if (cover.startsWith("/")) "${descriptor.baseUrl}$cover" else cover,
+                    pageCount = chapters.size,
                     extra = buildMap {
-                        put("chapterHref", chapterHref)
+                        put("chapterHid", chapters.firstOrNull().orEmpty())
                     },
                 ),
-                pageCount = 1,
+                pageCount = chapters.size.coerceAtLeast(1),
                 pages = emptyList(),
+                chaptersUrl = if (chapters.size > 1) "$canonical#chapters" else null,
             )
         }
 
@@ -114,23 +130,13 @@ class HipmhSitePlugin(
             detail: GalleryDetail,
             pageIndex: Int,
             forceReload: Boolean,
-        ): GalleryPage {
-            throw SiteException.Unsupported(
-                message = "嬉皮漫畫阅读页由 reader.hipmh.top 动态渲染，服务端不返回图页地址",
-                siteId = SiteId.HIPMH,
-            )
-        }
+        ): GalleryPage = throw readingUnsupported()
 
         override suspend fun resolvePageImage(
             pageUrl: String,
             preferOriginal: Boolean,
             forceReload: Boolean,
-        ): GalleryPage {
-            throw SiteException.Unsupported(
-                message = "嬉皮漫畫阅读页由 reader.hipmh.top 动态渲染，服务端不返回图页地址",
-                siteId = SiteId.HIPMH,
-            )
-        }
+        ): GalleryPage = throw readingUnsupported()
     }
 
     override val linkResolver: LinkResolver = object : LinkResolver {
@@ -152,42 +158,93 @@ class HipmhSitePlugin(
         }
     }
 
-    private fun parseWorks(doc: org.jsoup.nodes.Document): List<MediaItem> {
-        val seen = LinkedHashMap<String, MediaItem>()
-        doc.select("a[href*=/works/]").forEach { anchor ->
-            val href = anchor.attr("href")
-            val slug = href.substringAfter("/works/", "").substringBefore("?").substringBefore("/")
-            if (slug.isBlank()) return@forEach
-            val container = anchor.closest("article, li, .work-card, .card") ?: anchor
-            val title = HtmlUrlCleaner.cleanText(anchor.attr("title").ifBlank { anchor.text() })
-                .ifBlank { container.selectFirst("h3, h4, .title")?.text().orEmpty() }
-            if (title.isBlank()) return@forEach
-            val cover = container.selectFirst("img")?.let { img ->
-                img.attr("data-src").ifBlank { img.attr("src") }
-            }.orEmpty()
-            val normalizedSlug = slug.removePrefix("zh/")
-            seen.putIfAbsent(
-                normalizedSlug,
-                MediaItem(
-                    siteId = SiteId.HIPMH,
-                    id = normalizedSlug,
-                    url = "${descriptor.baseUrl}/works/$normalizedSlug",
-                    kind = MediaKind.SERIAL_COMIC,
-                    title = title,
-                    coverUrl = if (cover.startsWith("/")) "${descriptor.baseUrl}$cover" else cover,
-                ),
-            )
+    // -------------------------------------------------------------------------
+    // API
+    // -------------------------------------------------------------------------
+
+    private fun buildListUrl(section: String?, page: Int, query: String): String {
+        val params = mutableListOf<String>()
+        if (query.isNotEmpty()) {
+            params += "keyword=${encode(query)}"
+        } else {
+            when (val id = section?.trim()?.lowercase().orEmpty()) {
+                "popular" -> params += "sort=popular"
+                "weekly" -> params += "sort=popular"
+                "new" -> params += "sort=latest"
+                "completed" -> {
+                    params += "status=completed"
+                    params += "sort=updated"
+                }
+                "cat_cn" -> params += "category=2"
+                "cat_ko" -> params += "category=1"
+                else -> {
+                    GENRE_IDS[id]?.let { params += "genre=$it" }
+                        ?: params.let { if (it.isEmpty()) it += "sort=updated" }
+                }
+            }
         }
-        return seen.values.toList()
+        params += "page=$page"
+        params += "per_page=$PAGE_SIZE"
+        return "$API_BASE/v1/mangas?" + params.joinToString("&")
     }
 
-    private fun extractWorkSlug(url: String): String? {
-        val parsed = ComicUrl.parse(url) ?: return null
-        val idx = parsed.pathSegments.indexOf("works")
-        if (idx >= 0 && idx + 1 < parsed.pathSegments.size) {
-            return parsed.pathSegments[idx + 1].takeIf { it.isNotBlank() }
+    private fun parseMangaSummary(obj: JsonObject): MediaItem? {
+        val mid = obj.string("mid").takeIf { it.isNotBlank() } ?: return null
+        val title = obj.string("title").takeIf { it.isNotBlank() } ?: return null
+        val coverPath = obj.string("vertical_image_url").ifBlank { obj.string("cover_image_url") }
+        val cover = when {
+            coverPath.isBlank() -> ""
+            coverPath.startsWith("http") -> coverPath
+            else -> "${descriptor.baseUrl}$coverPath"
         }
-        return null
+        return MediaItem(
+            siteId = SiteId.HIPMH,
+            id = mid,
+            url = "${descriptor.baseUrl}/works/$mid",
+            kind = MediaKind.SERIAL_COMIC,
+            title = title,
+            coverUrl = cover,
+        )
+    }
+
+    private suspend fun loadChapters(mid: String): List<String> {
+        // 章节 API 只接受 mid 的短前缀（`bTo3MjQ0-...` → `bTo3MjQ0`）。
+        val shortMid = mid.substringBefore('-')
+        val body = runCatching { fetchApi("$API_BASE/v1/manga/chapters?mid=${encode(shortMid)}&per_page=200") }
+            .getOrNull()
+            .orEmpty()
+        if (body.isBlank()) return emptyList()
+        val root = runCatching { json.parseToJsonElement(body).jsonObject }.getOrNull() ?: return emptyList()
+        val data = root["data"] as? JsonObject ?: return emptyList()
+        return (data["items"] as? JsonArray).orEmpty().mapNotNull { element ->
+            (element as? JsonObject)?.string("hid")?.takeIf { it.isNotBlank() }
+        }
+    }
+
+    private suspend fun fetchApi(url: String): String {
+        val response = try {
+            httpClient.getText(
+                url = url,
+                siteId = SiteId.HIPMH,
+                kind = SiteRequestKind.API,
+                headers = mapOf(
+                    "Accept" to "application/json",
+                    "Referer" to "${descriptor.baseUrl}/",
+                ),
+            )
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: SiteException) {
+            throw e
+        } catch (e: Exception) {
+            throw SiteException.Network(
+                message = "嬉皮漫畫接口请求失败：${e.message ?: "未知错误"}",
+                siteId = SiteId.HIPMH,
+                cause = e,
+            )
+        }
+        response.throwIfNotSuccessful(SiteId.HIPMH, descriptor.displayName)
+        return response.bodyText()
     }
 
     private suspend fun fetchHtml(url: String): String {
@@ -217,9 +274,64 @@ class HipmhSitePlugin(
         return response.bodyText()
     }
 
+    private fun readingUnsupported(): SiteException.Unsupported = SiteException.Unsupported(
+        message = "嬉皮漫畫阅读页图页由 reader.hipmh.top 混淆脚本解码，服务端不返回图片地址",
+        siteId = SiteId.HIPMH,
+    )
+
+    private fun extractWorkSlug(url: String): String? {
+        val parsed = ComicUrl.parse(url) ?: return null
+        val segments = parsed.pathSegments
+        val idx = segments.indexOf("works")
+        if (idx >= 0 && idx + 1 < segments.size) {
+            return segments[idx + 1].takeIf { it.isNotBlank() }
+        }
+        return null
+    }
+
+    private fun sectionTitle(section: String?): String =
+        SECTIONS.firstOrNull { it.id.equals(section, ignoreCase = true) }?.title ?: "最近更新"
+
+    private fun encode(raw: String): String = com.raven.app.core.sitespi.HtmlUrlCleaner.encodeQueryParam(raw)
+
+    private fun JsonObject.string(name: String): String =
+        this[name]?.jsonPrimitive?.content?.trim().orEmpty()
+
+    private fun JsonObject.int(name: String): Int? =
+        this[name]?.jsonPrimitive?.intOrNull
+
     companion object {
         val SITE_ID: SiteId = SiteId.HIPMH
         const val BASE_URL: String = "https://m.hipmh.com"
+        const val API_BASE: String = "https://hipapi1.s3file.top"
+        private const val PAGE_SIZE = 18
+
+        internal val SECTIONS: List<SiteSectionSpec> = listOf(
+            SiteSectionSpec("latest", "最近更新", defaultSort = FeedSort.NEWEST),
+            SiteSectionSpec("popular", "人氣", defaultSort = FeedSort.POPULAR),
+            SiteSectionSpec("weekly", "本週熱門", defaultSort = FeedSort.TRENDING),
+            SiteSectionSpec("new", "最新上架", defaultSort = FeedSort.NEWEST),
+            SiteSectionSpec("completed", "已完結"),
+            SiteSectionSpec("cat_cn", "國漫"),
+            SiteSectionSpec("cat_ko", "韓漫"),
+            SiteSectionSpec("genre_wu-xia", "武俠"),
+            SiteSectionSpec("genre_xi-tong", "系統"),
+            SiteSectionSpec("genre_mao-xian", "冒險"),
+            SiteSectionSpec("genre_yi-neng", "異能"),
+            SiteSectionSpec("genre_ju-qing", "劇情"),
+            SiteSectionSpec("genre_gong-dou", "宮鬥"),
+            SiteSectionSpec("genre_ni-xi", "逆襲"),
+        )
+
+        private val GENRE_IDS: Map<String, Int> = mapOf(
+            "genre_wu-xia" to 39,
+            "genre_xi-tong" to 67,
+            "genre_mao-xian" to 38,
+            "genre_yi-neng" to 51,
+            "genre_ju-qing" to 3,
+            "genre_gong-dou" to 44,
+            "genre_ni-xi" to 32,
+        )
 
         val DESCRIPTOR: SiteDescriptor = SiteDescriptor(
             id = SITE_ID,
@@ -229,16 +341,18 @@ class HipmhSitePlugin(
             supportedKinds = setOf(MediaKind.SERIAL_COMIC),
             defaultHost = "m.hipmh.com",
             mirrorHosts = listOf("hipmh.com", "www.hipmh.com"),
-            accessNote = "阅读页由独立阅读器动态渲染",
+            accessNote = "阅读页由独立阅读器动态解码",
             capabilities = setOf(SiteCapability.FEED, SiteCapability.SEARCH),
-            feedSorts = listOf(FeedSort.NEWEST, FeedSort.POPULAR),
-            sections = listOf(SiteSectionSpec("latest", "最近更新", defaultSort = FeedSort.NEWEST)),
+            feedSorts = listOf(FeedSort.NEWEST, FeedSort.POPULAR, FeedSort.TRENDING),
+            sections = SECTIONS,
             searchScopes = listOf(SearchScope.ALL),
             networkProfile = SiteNetworkProfile(
                 userAgent = SiteNetworkProfile.DEFAULT_MOBILE_UA,
                 referer = "$BASE_URL/",
                 mediaReferer = "$BASE_URL/",
-                mediaDomains = setOf("hipmh.com", "hipmh.top"),
+                apiBase = API_BASE,
+                apiHosts = setOf("hipapi1.s3file.top"),
+                mediaDomains = setOf("hipmh.com", "hipmh.top", "s3imgs.top", "s3file.top"),
             ),
         )
     }
