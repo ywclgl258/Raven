@@ -111,8 +111,8 @@ class Mh160SitePlugin(
             val cover = doc.selectFirst("meta[property=og:image]")?.attr("content").orEmpty()
             val description = doc.selectFirst("meta[name=description]")?.attr("content").orEmpty()
             val chapters = parseChapters(doc)
-            // 章节列表通常按最新倒序排列，取最后一条作为起始章节（最早）。
-            val first = chapters.lastOrNull()
+            // parseChapters 已按阅读顺序（最早 → 最新）返回。
+            val first = chapters.firstOrNull()
             val pages = if (first != null) loadChapterPages(first.url) else emptyList()
             return GalleryDetail(
                 item = MediaItem(
@@ -325,7 +325,7 @@ class Mh160SitePlugin(
             val name = HtmlUrlCleaner.cleanText(link.selectFirst("p")?.text() ?: link.text())
             seen.putIfAbsent(href, ChapterEntry(href, name))
         }
-        return seen.values.toList()
+        return seen.values.toList().reversed()
     }
 
     private suspend fun loadChapterPages(chapterUrl: String): List<GalleryPage> {

@@ -303,6 +303,7 @@ class MycomicSitePlugin(
             }
         }
         return seen.map { (id, title) -> ChapterEntry(id, title) }
+            .sortedBy { it.id.toLongOrNull() ?: Long.MAX_VALUE }
     }
 
     private suspend fun loadChapterFeed(comicId: String): FeedPage {

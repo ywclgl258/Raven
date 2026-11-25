@@ -404,6 +404,7 @@ class SerialComicSitesPluginTest {
         http.onUrlText("https://m.mh160ba.com/kanmanhua/zaixian_recent.html", mh160ListHtml)
         http.onUrlText("https://www.mh160ba.com/kanmanhua/26001/", mh160DetailHtml)
         http.onUrlText("https://www.mh160ba.com/kanmanhua/26001/583501.html", mh160ChapterHtml)
+        http.onUrlText("https://www.mh160ba.com/kanmanhua/26001/590566.html", mh160ChapterHtml)
 
         val plugin = Mh160SitePlugin(http)
         val feed = plugin.feedSource.loadFeed(FeedRequest(siteId = SiteId.MH160))
@@ -424,8 +425,8 @@ class SerialComicSitesPluginTest {
             FeedRequest(siteId = SiteId.MH160, section = "chapters", category = "26001"),
         )
         assertEquals(2, chapterFeed.items.size)
-        assertEquals("第65话", chapterFeed.items.first().title)
-        val chapterDetail = plugin.gallerySource.loadGalleryDetail(chapterFeed.items.last().url)
+        assertEquals("第1话", chapterFeed.items.first().title)
+        val chapterDetail = plugin.gallerySource.loadGalleryDetail(chapterFeed.items.first().url)
         assertEquals(2, chapterDetail.pageCount)
 
         val page = plugin.gallerySource.resolvePageImage(
@@ -486,6 +487,7 @@ class SerialComicSitesPluginTest {
         http.onUrlText("https://mycomic.com/comics?sort=-update", mycomicListHtml)
         http.onUrlText("https://mycomic.com/comics/1128", mycomicDetailHtml)
         http.onUrlText("https://mycomic.com/chapters/817597", mycomicChapterHtml)
+        http.onUrlText("https://mycomic.com/chapters/794527", mycomicChapterHtml)
 
         val plugin = MycomicSitePlugin(http)
         val feed = plugin.feedSource.loadFeed(FeedRequest(siteId = SiteId.MYCOMIC))
@@ -497,7 +499,7 @@ class SerialComicSitesPluginTest {
         val detail = plugin.gallerySource.loadGalleryDetail("https://mycomic.com/comics/1128")
         assertEquals("ONE PIECE航海王", detail.item.title)
         assertEquals(2, detail.pageCount)
-        assertEquals("817597", detail.item.extra["chapterId"])
+        assertEquals("794527", detail.item.extra["chapterId"])
         assertEquals(
             listOf(
                 "https://cdn.mycomic.com/manga/1128/1.jpg",
@@ -511,7 +513,7 @@ class SerialComicSitesPluginTest {
             FeedRequest(siteId = SiteId.MYCOMIC, section = "chapters", category = "1128"),
         )
         assertEquals(2, chapterFeed.items.size)
-        val chapterDetail = plugin.gallerySource.loadGalleryDetail(chapterFeed.items.first().url)
+        val chapterDetail = plugin.gallerySource.loadGalleryDetail(chapterFeed.items.last().url)
         assertEquals(2, chapterDetail.pageCount)
         assertEquals("https://cdn.mycomic.com/manga/1128/1.jpg", chapterDetail.pages.first().imageUrl)
 

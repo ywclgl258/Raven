@@ -248,7 +248,7 @@ class HipmhSitePlugin(
     private suspend fun loadChapters(mid: String): List<ChapterEntry> {
         // 章节 API 只接受 mid 的短前缀（`bTo3MjQ0-...` → `bTo3MjQ0`）。
         val shortMid = mid.substringBefore('-')
-        val body = runCatching { fetchApi("$API_BASE/v1/manga/chapters?mid=${encode(shortMid)}&per_page=200") }
+        val body = runCatching { fetchApi("$API_BASE/v1/manga/chapters?mid=${encode(shortMid)}&per_page=200&order=asc") }
             .getOrNull()
             .orEmpty()
         if (body.isBlank()) return emptyList()
