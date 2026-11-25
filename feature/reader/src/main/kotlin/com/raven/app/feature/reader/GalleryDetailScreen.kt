@@ -30,6 +30,10 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.items as gridItems
+import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.text.KeyboardActions
@@ -37,6 +41,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.automirrored.rounded.MenuBook
+import androidx.compose.material.icons.automirrored.rounded.Sort
 import androidx.compose.material.icons.filled.Bookmark
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.WatchLater
@@ -1803,33 +1808,91 @@ private fun GalleryChapterPickerSheet(
                     color = colors.inkSecondary,
                 )
             }
-            else -> LazyColumn(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .heightIn(max = 540.dp),
-            ) {
-                items(chapters, key = { it.id }) { chapter ->
-                    val selected = chapter.id == currentChapterId ||
-                        currentChapterHints.any { hint -> hint.isNotBlank() && chapter.id.endsWith(hint) }
-                    RavenGroupedRow(
-                        title = chapter.title,
-                        subtitle = if (selected) "阅读中" else null,
-                        showChevron = true,
-                        trailingContent = if (selected) {
-                            {
-                                Icon(
-                                    imageVector = Icons.Rounded.Check,
-                                    contentDescription = "当前章节",
-                                    tint = colors.crimson,
-                                )
-                            }
-                        } else {
-                            null
-                        },
-                        onClick = { onSelect(chapter) },
+            else -> {
+                var ascending by rememberSaveable { mutableStateOf(true) }
+                val ordered = remember(chapters, ascending) {
+                    if (ascending) chapters else chapters.asReversed()
+                }
+                val currentIndex = remember(ordered, currentChapterId, currentChapterHints) {
+                    ordered.indexOfFirst { chapter ->
+                        chapter.id == currentChapterId ||
+                            currentChapterHints.any { hint -> hint.isNotBlank() && chapter.id.endsWith(hint) }
+                    }.coerceAtLeast(0)
+                }
+                val gridState = rememberLazyGridState(initialFirstVisibleItemIndex = currentIndex)
+
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(bottom = 10.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        text = "${chapters.size} 章",
+                        style = MaterialTheme.typography.labelMedium.tabular(),
+                        color = colors.inkSecondary,
                     )
+                    RavenFilterChip(
+                        label = if (ascending) "正序" else "倒序",
+                        selected = false,
+                        leadingIcon = Icons.AutoMirrored.Rounded.Sort,
+                        onClick = { ascending = !ascending },
+                        modifier = Modifier.testTag("chapter_sort_chip"),
+                    )
+                }
+
+                LazyVerticalGrid(
+                    columns = GridCells.Adaptive(minSize = 96.dp),
+                    state = gridState,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = 520.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    gridItems(ordered, key = { it.id }) { chapter ->
+                        val selected = chapter.id == currentChapterId ||
+                            currentChapterHints.any { hint -> hint.isNotBlank() && chapter.id.endsWith(hint) }
+                        GalleryChapterTile(
+                            title = chapter.title,
+                            selected = selected,
+                            onClick = { onSelect(chapter) },
+                        )
+                    }
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun GalleryChapterTile(
+    title: String,
+    selected: Boolean,
+    onClick: () -> Unit,
+) {
+    val colors = LocalRavenColors.current
+    val container = if (selected) colors.crimson.copy(alpha = 0.16f) else colors.surface1
+    val borderColor = if (selected) colors.crimson else colors.hairline
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .heightIn(min = 56.dp)
+            .clip(RavenShapes.SmallShape)
+            .background(container)
+            .border(if (selected) 1.dp else 0.5.dp, borderColor, RavenShapes.SmallShape)
+            .clickable(role = Role.Button, onClick = onClick)
+            .padding(horizontal = 8.dp, vertical = 10.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            text = title,
+            style = MaterialTheme.typography.labelMedium,
+            color = if (selected) colors.crimson else colors.inkPrimary,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis,
+            textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+        )
     }
 }
