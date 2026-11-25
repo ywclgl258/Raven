@@ -116,6 +116,7 @@ class BackupValidatorTest {
                 "translate_tags" to "true",
                 "default_playback_speed" to "1.5",
                 "cross_search_site_ids" to "r34v,kbj",
+                "download_view" to "{\"sort\":\"TITLE\",\"groupMode\":\"TAG\",\"tagMatchAll\":true}",
             ),
         )
 

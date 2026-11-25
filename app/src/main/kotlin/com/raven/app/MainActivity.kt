@@ -1,9 +1,11 @@
 package com.raven.app
 
+import android.Manifest
 import android.app.Activity
 import android.app.ActivityOptions
 import android.content.ClipData
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.graphics.Color as AndroidColor
 import android.hardware.biometrics.BiometricManager
 import android.hardware.biometrics.BiometricPrompt
@@ -32,6 +34,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.core.content.ContextCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
@@ -121,6 +124,10 @@ class MainActivity : ComponentActivity(), MainActivityHostActions {
         }
     }
 
+    private val notificationPermissionLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestPermission(),
+    ) { /* Permission status is checked directly before posting notifications */ }
+
     override val fileProviderAuthority: String
         get() = "$packageName.fileprovider"
 
@@ -133,6 +140,7 @@ class MainActivity : ComponentActivity(), MainActivityHostActions {
 
         if (savedInstanceState == null) {
             handleIncomingIntent(intent)
+            requestNotificationPermissionIfNeeded()
         }
 
         setContent {
@@ -482,6 +490,17 @@ class MainActivity : ComponentActivity(), MainActivityHostActions {
             startActivity(RavenUpdateInstaller.createInstallIntent(this, apkFile))
         }.onFailure {
             Toast.makeText(this, "无法启动系统安装程序", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    private fun requestNotificationPermissionIfNeeded() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return
+        val granted = ContextCompat.checkSelfPermission(
+            this,
+            Manifest.permission.POST_NOTIFICATIONS,
+        ) == PackageManager.PERMISSION_GRANTED
+        if (!granted) {
+            runCatching { notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS) }
         }
     }
 

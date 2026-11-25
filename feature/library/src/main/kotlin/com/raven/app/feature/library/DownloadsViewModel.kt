@@ -3,6 +3,10 @@ package com.raven.app.feature.library
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.raven.app.core.common.AppDispatchers
+import com.raven.app.core.common.NaturalSortComparator
+import com.raven.app.core.common.TagDictionary
+import com.raven.app.core.database.repository.MediaTagCacheRepository
+import com.raven.app.core.database.repository.PreferencesRepository
 import com.raven.app.core.media.download.BatchEnqueueProgress
 import com.raven.app.core.media.download.DownloadNetworkPolicy
 import com.raven.app.core.media.reader.GalleryAudit
@@ -11,6 +15,7 @@ import com.raven.app.core.model.DownloadKind
 import com.raven.app.core.model.DownloadStatus
 import com.raven.app.core.model.SiteId
 import com.raven.app.core.sitespi.SiteRegistry
+import java.util.Locale
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -20,6 +25,7 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+
 
 enum class DownloadStatusTab(val label: String) {
     ALL("全部"),
@@ -42,6 +48,61 @@ enum class DownloadKindFilter(val label: String, val kind: DownloadKind?) {
     PHOTO("写真", DownloadKind.PHOTO),
 }
 
+enum class DownloadSort(val label: String) {
+    RECENT("最近更新"),
+    NEWEST("最近加入"),
+    OLDEST("最早加入"),
+    TITLE("标题 A–Z"),
+    SIZE("大小 · 从大到小"),
+    PROGRESS("进度 · 从高到低"),
+    QUEUE("下载队列优先级");
+
+    companion object {
+        fun fromPreference(raw: String): DownloadSort = entries.firstOrNull { it.name == raw } ?: RECENT
+    }
+}
+
+enum class DownloadGroupMode(val label: String) {
+    NONE("不分组"),
+    CUSTOM("自定义分组"),
+    TAG("按标签分组"),
+    SITE("按站点分组"),
+    KIND("按类型分组");
+
+    companion object {
+        fun fromPreference(raw: String): DownloadGroupMode = entries.firstOrNull { it.name == raw } ?: NONE
+    }
+}
+
+data class DownloadTagOption(
+    val key: String,
+    val slug: String,
+    val label: String,
+    val namespace: String,
+    val count: Int,
+)
+
+data class DownloadTagNamespace(
+    val key: String,
+    val label: String,
+    val tagCount: Int,
+)
+
+data class DownloadGroupSummary(
+    val name: String,
+    val itemCount: Int,
+    val completedCount: Int,
+    val totalBytes: Long,
+)
+
+data class DownloadSection(
+    val key: String,
+    val title: String,
+    val subtitle: String? = null,
+    val items: List<DownloadItem>,
+    val isCollapsed: Boolean = false,
+)
+
 data class IntegrityAuditDialogState(
     val item: DownloadItem,
     val isChecking: Boolean = false,
@@ -57,6 +118,17 @@ data class DownloadsUiState(
     val siteFilter: SiteId? = null,
     val groupFilter: String? = null,
     val filtersExpanded: Boolean = false,
+    val sort: DownloadSort = DownloadSort.RECENT,
+    val groupMode: DownloadGroupMode = DownloadGroupMode.NONE,
+    val tagMatchAll: Boolean = false,
+    val selectedTagKeys: Set<String> = emptySet(),
+    val selectedTagNamespace: String? = null,
+    val availableTags: List<DownloadTagOption> = emptyList(),
+    val visibleTags: List<DownloadTagOption> = emptyList(),
+    val tagNamespaces: List<DownloadTagNamespace> = emptyList(),
+    val sections: List<DownloadSection> = emptyList(),
+    val groupSummaries: List<DownloadGroupSummary> = emptyList(),
+    val allItems: List<DownloadItem> = emptyList(),
     val allCount: Int = 0,
     val inProgressCount: Int = 0,
     val completedCount: Int = 0,
@@ -81,6 +153,7 @@ data class DownloadsUiState(
             if (kindFilter != DownloadKindFilter.ALL) count++
             if (siteFilter != null) count++
             if (!groupFilter.isNullOrBlank()) count++
+            if (selectedTagKeys.isNotEmpty()) count++
             return count
         }
 
@@ -99,9 +172,22 @@ private data class DownloadsControls(
     val siteFilter: SiteId? = null,
     val groupFilter: String? = null,
     val filtersExpanded: Boolean = false,
+    val sort: DownloadSort? = null,
+    val groupMode: DownloadGroupMode? = null,
+    val tagMatchAll: Boolean? = null,
+    val selectedTagKeys: Set<String> = emptySet(),
+    val selectedTagNamespace: String? = null,
+    val collapsedSectionKeys: Set<String> = emptySet(),
     val integrityState: IntegrityAuditDialogState? = null,
     val isSyncingDisk: Boolean = false,
     val message: String? = null,
+)
+
+private data class DownloadsSources(
+    val downloads: List<DownloadItem>,
+    val networkPolicy: DownloadNetworkPolicy,
+    val batchProgress: BatchEnqueueProgress,
+    val controls: DownloadsControls,
 )
 
 /**
@@ -115,39 +201,111 @@ class DownloadsViewModel(
     private val downloadGateway: LibraryDownloadGateway,
     private val siteRegistry: SiteRegistry,
     private val dispatchers: AppDispatchers,
+    private val mediaTagCacheRepository: MediaTagCacheRepository,
+    private val preferencesRepository: PreferencesRepository,
+    private val tagDictionary: TagDictionary = TagDictionary.default,
     initialSiteId: SiteId? = null,
 ) : ViewModel() {
 
     private val controls = MutableStateFlow(DownloadsControls(siteFilter = initialSiteId))
     private var inspectJob: Job? = null
 
-    val uiState: StateFlow<DownloadsUiState> = combine(
+    private val sources = combine(
         downloadGateway.downloads,
         downloadGateway.networkPolicy,
         downloadGateway.batchProgress,
         controls,
-    ) { allDownloads, policy, batchProgress, ctrl ->
-        val query = ctrl.searchQuery.trim().lowercase()
+    ) { downloads, policy, batchProgress, ctrl ->
+        DownloadsSources(downloads, policy, batchProgress, ctrl)
+    }
+
+    val uiState: StateFlow<DownloadsUiState> = combine(
+        sources,
+        mediaTagCacheRepository.observeAllTags(),
+        preferencesRepository.settings,
+    ) { source, cachedTags, settings ->
+        val ctrl = source.controls
+        val allDownloads = source.downloads
+        val queryTerms = ctrl.searchQuery.trim().lowercase(Locale.ROOT)
+            .split(Regex("\\s+"))
+            .filter(String::isNotEmpty)
         val groups = allDownloads
             .mapNotNull { it.groupName.trim().takeIf(String::isNotEmpty) }
             .distinct()
-            .sorted()
+            .sortedWith(NaturalSortComparator)
+        val sort = ctrl.sort ?: DownloadSort.fromPreference(settings.downloadView.sort)
+        val groupMode = ctrl.groupMode ?: DownloadGroupMode.fromPreference(settings.downloadView.groupMode)
+        val tagMatchAll = ctrl.tagMatchAll ?: settings.downloadView.tagMatchAll
 
+        val tagIndex = buildTagIndex(allDownloads, cachedTags)
+        val availableTags = tagIndex.options
+        val optionsByKey = availableTags.associateBy(DownloadTagOption::key)
+        val activeTagKeys = ctrl.selectedTagKeys.filterTo(linkedSetOf()) { it in optionsByKey }
         val activeGroup = ctrl.groupFilter?.takeIf { it in groups }
+        val tagNamespaces = availableTags
+            .groupBy { it.namespace }
+            .map { (namespace, options) ->
+                DownloadTagNamespace(
+                    key = namespace,
+                    label = downloadTagNamespaceLabel(namespace),
+                    tagCount = options.size,
+                )
+            }
+            .sortedWith(compareByDescending<DownloadTagNamespace> { it.tagCount }.thenBy { it.label })
+        val activeTagNamespace = ctrl.selectedTagNamespace?.takeIf { namespace ->
+            tagNamespaces.any { it.key == namespace }
+        }
+        val tagQuery = ctrl.searchQuery.trim().lowercase(Locale.ROOT)
+        val visibleTags = availableTags.filter { tag ->
+            (activeTagNamespace == null || tag.namespace == activeTagNamespace) &&
+                (tagQuery.isEmpty() || tag.label.lowercase(Locale.ROOT).contains(tagQuery) ||
+                    tag.slug.contains(tagQuery) || tag.namespace.contains(tagQuery))
+        }.take(24)
 
         val filtered = allDownloads.filter { item ->
             val siteLabel = siteRegistry.displayNameFor(item.siteId)
+            val itemTags = tagIndex.tagsByItemId[item.id].orEmpty()
             val matchesTab = ctrl.selectedTab.matches(item.status)
             val matchesKind = ctrl.kindFilter.kind == null || item.kind == ctrl.kindFilter.kind
             val matchesSite = ctrl.siteFilter == null || item.siteId == ctrl.siteFilter
             val matchesGroup = activeGroup == null || item.groupName.trim() == activeGroup
-            val matchesQuery = query.isEmpty() ||
-                item.title.lowercase().contains(query) ||
-                item.groupName.lowercase().contains(query) ||
-                siteLabel.lowercase().contains(query) ||
-                item.siteId.value.lowercase().contains(query)
+            val matchesTags = activeTagKeys.isEmpty() || if (tagMatchAll) {
+                itemTags.mapTo(HashSet()) { it.key }.containsAll(activeTagKeys)
+            } else {
+                itemTags.any { it.key in activeTagKeys }
+            }
+            val searchableText = buildString {
+                append(item.title.lowercase(Locale.ROOT))
+                append(' ').append(item.groupName.lowercase(Locale.ROOT))
+                append(' ').append(siteLabel.lowercase(Locale.ROOT))
+                append(' ').append(item.siteId.value.lowercase(Locale.ROOT))
+                item.quality?.let { append(' ').append(it.lowercase(Locale.ROOT)) }
+                itemTags.forEach { tag ->
+                    append(' ').append(tag.label.lowercase(Locale.ROOT))
+                    append(' ').append(tag.slug)
+                    append(' ').append(tag.namespace)
+                }
+            }
+            val matchesQuery = queryTerms.all(searchableText::contains)
 
-            matchesTab && matchesKind && matchesSite && matchesGroup && matchesQuery
+            matchesTab && matchesKind && matchesSite && matchesGroup && matchesTags && matchesQuery
+        }
+        val sorted = sortDownloads(filtered, sort)
+        val sections = buildDownloadSections(
+            sortedItems = sorted,
+            groupMode = groupMode,
+            selectedTagKeys = activeTagKeys,
+            tagIndex = tagIndex,
+            collapsedSectionKeys = ctrl.collapsedSectionKeys,
+        )
+        val groupSummaries = groups.map { name ->
+            val members = allDownloads.filter { it.groupName.trim() == name }
+            DownloadGroupSummary(
+                name = name,
+                itemCount = members.size,
+                completedCount = members.count { it.status == DownloadStatus.COMPLETED },
+                totalBytes = members.sumOf { downloadBytes(it) },
+            )
         }
 
         DownloadsUiState(
@@ -157,6 +315,17 @@ class DownloadsViewModel(
             siteFilter = ctrl.siteFilter,
             groupFilter = activeGroup,
             filtersExpanded = ctrl.filtersExpanded,
+            sort = sort,
+            groupMode = groupMode,
+            tagMatchAll = tagMatchAll,
+            selectedTagKeys = activeTagKeys,
+            selectedTagNamespace = activeTagNamespace,
+            availableTags = availableTags,
+            visibleTags = visibleTags,
+            tagNamespaces = tagNamespaces,
+            sections = sections,
+            groupSummaries = groupSummaries,
+            allItems = sortDownloads(allDownloads, DownloadSort.RECENT),
             allCount = allDownloads.size,
             inProgressCount = allDownloads.count { it.status.isInProgressBucket() },
             completedCount = allDownloads.count { it.status == DownloadStatus.COMPLETED },
@@ -167,12 +336,12 @@ class DownloadsViewModel(
             totalCompletedBytes = allDownloads
                 .filter { it.status == DownloadStatus.COMPLETED }
                 .sumOf { it.totalBytes ?: it.downloadedBytes },
-            items = filtered,
+            items = sorted,
             siteOptions = siteRegistry.buildSiteFilterOptions(allDownloads.map { it.siteId }),
             siteLabels = allDownloads.associate { it.siteId to siteRegistry.displayNameFor(it.siteId) },
             availableGroups = groups,
-            networkPolicy = policy,
-            batchProgress = batchProgress,
+            networkPolicy = source.networkPolicy,
+            batchProgress = source.batchProgress,
             integrityState = ctrl.integrityState,
             isSyncingDisk = ctrl.isSyncingDisk,
             message = ctrl.message,
@@ -183,7 +352,7 @@ class DownloadsViewModel(
         initialValue = DownloadsUiState(),
     )
 
-    // ---- Filters & Tabs ----
+    // ---- Filters, tags, presentation & tabs ----
 
     fun selectTab(tab: DownloadStatusTab) {
         controls.update { it.copy(selectedTab = tab) }
@@ -209,12 +378,65 @@ class DownloadsViewModel(
         controls.update { it.copy(groupFilter = group?.trim()?.takeIf(String::isNotEmpty)) }
     }
 
+    fun toggleTag(tagKey: String) {
+        controls.update {
+            val selected = if (tagKey in it.selectedTagKeys) it.selectedTagKeys - tagKey else it.selectedTagKeys + tagKey
+            it.copy(selectedTagKeys = selected)
+        }
+    }
+
+    fun selectTagNamespace(namespace: String?) {
+        controls.update { it.copy(selectedTagNamespace = namespace) }
+    }
+
+    fun toggleTagMatchAll() {
+        val next = !(controls.value.tagMatchAll ?: uiState.value.tagMatchAll)
+        controls.update { it.copy(tagMatchAll = next) }
+        viewModelScope.launch(dispatchers.io) {
+            runCatching { preferencesRepository.setDownloadTagMatchAll(next) }
+                .onFailure { error -> showPersistenceError(error) }
+        }
+    }
+
+    fun clearTagFilters() {
+        controls.update { it.copy(selectedTagKeys = emptySet(), selectedTagNamespace = null) }
+    }
+
+    fun selectSort(sort: DownloadSort) {
+        controls.update { it.copy(sort = sort) }
+        viewModelScope.launch(dispatchers.io) {
+            runCatching { preferencesRepository.setDownloadSort(sort.name) }
+                .onFailure { error -> showPersistenceError(error) }
+        }
+    }
+
+    fun selectGroupMode(mode: DownloadGroupMode) {
+        controls.update { it.copy(groupMode = mode) }
+        viewModelScope.launch(dispatchers.io) {
+            runCatching { preferencesRepository.setDownloadGroupMode(mode.name) }
+                .onFailure { error -> showPersistenceError(error) }
+        }
+    }
+
+    fun toggleSection(sectionKey: String) {
+        controls.update {
+            val collapsed = if (sectionKey in it.collapsedSectionKeys) {
+                it.collapsedSectionKeys - sectionKey
+            } else {
+                it.collapsedSectionKeys + sectionKey
+            }
+            it.copy(collapsedSectionKeys = collapsed)
+        }
+    }
+
     fun resetExtraFilters() {
         controls.update {
             it.copy(
                 kindFilter = DownloadKindFilter.ALL,
                 siteFilter = null,
                 groupFilter = null,
+                selectedTagKeys = emptySet(),
+                selectedTagNamespace = null,
                 searchQuery = "",
             )
         }
@@ -342,6 +564,76 @@ class DownloadsViewModel(
         }
     }
 
+    fun createGroup(groupName: String, itemIds: Set<String>) {
+        val normalized = groupName.trim()
+        val targets = uiState.value.allItems.filter { it.id in itemIds }
+        if (normalized.isEmpty() || targets.isEmpty()) {
+            controls.update { it.copy(message = "创建分组需要填写名称并至少选择一个下载项") }
+            return
+        }
+        updateGroupMembers(targets.map { it.id }, normalized, "已创建分组「$normalized」，归入 ${targets.size} 项")
+    }
+
+    fun renameGroup(oldName: String, newName: String) {
+        val normalized = newName.trim()
+        val targets = uiState.value.allItems.filter { it.groupName.trim() == oldName }
+        if (normalized.isEmpty() || targets.isEmpty()) {
+            controls.update { it.copy(message = "请输入新的分组名称") }
+            return
+        }
+        if (normalized == oldName) return
+        val merges = uiState.value.availableGroups.any { it == normalized }
+        updateGroupMembers(
+            ids = targets.map { it.id },
+            groupName = normalized,
+            successMessage = if (merges) {
+                "已将「$oldName」合并至「$normalized」"
+            } else {
+                "已将「$oldName」重命名为「$normalized」"
+            },
+            onCommitted = {
+                controls.update {
+                    it.copy(groupFilter = if (it.groupFilter == oldName) normalized else it.groupFilter)
+                }
+            },
+        )
+    }
+
+    fun clearGroup(groupName: String) {
+        val targets = uiState.value.allItems.filter { it.groupName.trim() == groupName }
+        if (targets.isEmpty()) return
+        updateGroupMembers(
+            ids = targets.map { it.id },
+            groupName = "",
+            successMessage = "已移除分组「$groupName」，保留下载与缓存文件",
+            onCommitted = {
+                controls.update { it.copy(groupFilter = if (it.groupFilter == groupName) null else it.groupFilter) }
+            },
+        )
+    }
+
+    private fun updateGroupMembers(
+        ids: List<String>,
+        groupName: String,
+        successMessage: String,
+        onCommitted: () -> Unit = {},
+    ) {
+        viewModelScope.launch(dispatchers.io) {
+            runCatching { downloadGateway.setGroupForItems(ids, groupName) }
+                .onSuccess {
+                    onCommitted()
+                    controls.update { it.copy(message = successMessage) }
+                }
+                .onFailure { error ->
+                    controls.update { it.copy(message = error.message ?: "批量更新分组失败") }
+                }
+        }
+    }
+
+    private fun showPersistenceError(error: Throwable) {
+        controls.update { it.copy(message = "当前页面已生效，但保存排列偏好失败：${error.message ?: "未知错误"}") }
+    }
+
     fun delete(item: DownloadItem) {
         viewModelScope.launch(dispatchers.io) {
             runCatching { downloadGateway.delete(item.id, item.localPath.orEmpty()) }
@@ -436,4 +728,207 @@ class DownloadsViewModel(
     fun clearMessage() {
         controls.update { it.copy(message = null) }
     }
+
+    private fun buildTagIndex(
+        downloads: List<DownloadItem>,
+        cachedTags: Map<String, List<com.raven.app.core.model.TagRef>>,
+    ): DownloadTagIndex {
+        val tagsByItemId = HashMap<String, List<DownloadTagOption>>(downloads.size)
+        val metadata = LinkedHashMap<String, DownloadTagOption>()
+        val counts = HashMap<String, Int>()
+        for (item in downloads) {
+            val refs = cachedTags["${item.siteId.value}:${item.mediaId}"].orEmpty()
+            val itemTags = refs.mapNotNull { ref ->
+                val (embeddedNamespace, rawBare) = TagDictionary.splitNamespace(ref.slug)
+                val namespace = ref.namespace.trim().ifEmpty { embeddedNamespace }.lowercase(Locale.ROOT)
+                val bare = TagDictionary.normalizeBareSlug(rawBare)
+                if (bare.isEmpty()) return@mapNotNull null
+                val key = "$namespace:$bare"
+                DownloadTagOption(
+                    key = key,
+                    slug = bare,
+                    label = tagDictionary.displayLabel(
+                        rawSlug = ref.slug,
+                        fallbackLabel = ref.label.ifBlank { rawBare },
+                        namespace = namespace,
+                    ),
+                    namespace = namespace,
+                    count = 0,
+                )
+            }.distinctBy(DownloadTagOption::key)
+            tagsByItemId[item.id] = itemTags
+            itemTags.forEach { tag ->
+                metadata.putIfAbsent(tag.key, tag)
+                counts[tag.key] = (counts[tag.key] ?: 0) + 1
+            }
+        }
+        val options = metadata.values.map { tag -> tag.copy(count = counts[tag.key] ?: 0) }
+            .sortedWith(compareByDescending<DownloadTagOption> { it.count }.thenBy { it.label })
+        return DownloadTagIndex(options = options, tagsByItemId = tagsByItemId)
+    }
+
+    private fun buildDownloadSections(
+        sortedItems: List<DownloadItem>,
+        groupMode: DownloadGroupMode,
+        selectedTagKeys: Set<String>,
+        tagIndex: DownloadTagIndex,
+        collapsedSectionKeys: Set<String>,
+    ): List<DownloadSection> {
+        val sections = when (groupMode) {
+            DownloadGroupMode.NONE -> listOf(
+                DownloadSection(key = "NONE:all", title = "全部下载", items = sortedItems),
+            )
+
+            DownloadGroupMode.CUSTOM -> {
+                val byGroup = sortedItems.groupBy { it.groupName.trim() }
+                val named = byGroup.keys.filter(String::isNotEmpty).sortedWith(NaturalSortComparator).map { name ->
+                    DownloadSection(
+                        key = "CUSTOM:named:$name",
+                        title = name,
+                        subtitle = "自定义分组",
+                        items = byGroup[name].orEmpty(),
+                    )
+                }
+                val ungrouped = byGroup[""].orEmpty()
+                if (ungrouped.isEmpty()) {
+                    named
+                } else {
+                    named + DownloadSection(
+                        key = "CUSTOM:special:ungrouped",
+                        title = "未分组",
+                        subtitle = "尚未归入手动分组",
+                        items = ungrouped,
+                    )
+                }
+            }
+
+            DownloadGroupMode.TAG -> {
+                val itemsByTag = LinkedHashMap<String, MutableList<DownloadItem>>()
+                val untagged = mutableListOf<DownloadItem>()
+                sortedItems.forEach { item ->
+                    val itemTags = tagIndex.tagsByItemId[item.id].orEmpty()
+                    val includedTags = if (selectedTagKeys.isEmpty()) {
+                        itemTags
+                    } else {
+                        itemTags.filter { it.key in selectedTagKeys }
+                    }
+                    if (includedTags.isEmpty()) {
+                        untagged += item
+                    } else {
+                        includedTags.forEach { tag -> itemsByTag.getOrPut(tag.key) { mutableListOf() } += item }
+                    }
+                }
+                val tagOrder = tagIndex.options.mapIndexed { index, tag -> tag.key to index }.toMap()
+                val taggedSections = itemsByTag.entries.sortedBy { (key, _) ->
+                    tagOrder[key] ?: Int.MAX_VALUE
+                }.map { (key, items) ->
+                    val tag = tagIndex.options.first { it.key == key }
+                    DownloadSection(
+                        key = "TAG:named:$key",
+                        title = tag.label,
+                        subtitle = "${downloadTagNamespaceLabel(tag.namespace)} · 同一作品可出现在多个标签下",
+                        items = items,
+                    )
+                }
+                if (untagged.isEmpty()) {
+                    taggedSections
+                } else {
+                    taggedSections + DownloadSection(
+                        key = "TAG:special:untagged",
+                        title = "未标记",
+                        subtitle = "这些下载项还没有可用的标签缓存",
+                        items = untagged,
+                    )
+                }
+            }
+
+            DownloadGroupMode.SITE -> sortedItems.groupBy { it.siteId }.entries
+                .sortedWith { left, right ->
+                    NaturalSortComparator.compare(
+                        siteRegistry.displayNameFor(left.key),
+                        siteRegistry.displayNameFor(right.key),
+                    )
+                }
+                .map { (siteId, items) ->
+                    DownloadSection(
+                        key = "SITE:${siteId.value}",
+                        title = siteRegistry.displayNameFor(siteId),
+                        subtitle = "站点",
+                        items = items,
+                    )
+                }
+
+            DownloadGroupMode.KIND -> DownloadKind.entries.mapNotNull { kind ->
+                val items = sortedItems.filter { it.kind == kind }
+                if (items.isEmpty()) {
+                    null
+                } else {
+                    DownloadSection(
+                        key = "KIND:${kind.name}",
+                        title = kind.displayLabel(),
+                        subtitle = "内容类型",
+                        items = items,
+                    )
+                }
+            }
+        }
+        return sections.map { it.copy(isCollapsed = it.key in collapsedSectionKeys) }
+    }
+}
+
+private data class DownloadTagIndex(
+    val options: List<DownloadTagOption>,
+    val tagsByItemId: Map<String, List<DownloadTagOption>>,
+)
+
+private fun sortDownloads(items: List<DownloadItem>, sort: DownloadSort): List<DownloadItem> {
+    val byTitle = Comparator<DownloadItem> { left, right -> NaturalSortComparator.compare(left.title, right.title) }
+    return when (sort) {
+        DownloadSort.RECENT -> items.sortedWith(
+            compareByDescending<DownloadItem> { it.updatedAt }.then(byTitle).thenBy { it.id },
+        )
+        DownloadSort.NEWEST -> items.sortedWith(
+            compareByDescending<DownloadItem> { it.createdAt }.then(byTitle).thenBy { it.id },
+        )
+        DownloadSort.OLDEST -> items.sortedWith(
+            compareBy<DownloadItem> { it.createdAt }.then(byTitle).thenBy { it.id },
+        )
+        DownloadSort.TITLE -> items.sortedWith(byTitle.thenByDescending { it.updatedAt }.thenBy { it.id })
+        DownloadSort.SIZE -> items.sortedWith(
+            compareByDescending<DownloadItem> { downloadBytes(it) }.then(byTitle).thenBy { it.id },
+        )
+        DownloadSort.PROGRESS -> items.sortedWith(
+            compareByDescending<DownloadItem> { downloadProgress(it) }.then(byTitle).thenBy { it.id },
+        )
+        DownloadSort.QUEUE -> items.sortedWith(
+            compareByDescending<DownloadItem> { it.priority }
+                .thenByDescending { it.updatedAt }
+                .then(byTitle)
+                .thenBy { it.id },
+        )
+    }
+}
+
+private fun downloadBytes(item: DownloadItem): Long = (item.totalBytes ?: item.downloadedBytes).coerceAtLeast(0L)
+
+private fun downloadProgress(item: DownloadItem): Float = when {
+    item.status == DownloadStatus.COMPLETED -> 1f
+    item.totalUnits > 0 -> (item.completedUnits.toFloat() / item.totalUnits).coerceIn(0f, 1f)
+    else -> item.progressFraction.coerceIn(0f, 1f)
+}
+
+internal fun downloadTagNamespaceLabel(namespace: String): String = when (namespace.trim().lowercase(Locale.ROOT)) {
+    "artist" -> "作者"
+    "parody", "series" -> "原作"
+    "character" -> "角色"
+    "group" -> "社团"
+    "language" -> "语言"
+    "category" -> "分类"
+    "female" -> "女性标签"
+    "male" -> "男性标签"
+    "mixed" -> "混合标签"
+    "reclass" -> "重分类"
+    "other" -> "其他"
+    "" -> "通用"
+    else -> namespace
 }

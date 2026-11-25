@@ -117,6 +117,11 @@ class DownloadStateRepository(
         downloadItemDao.updateGroupName(id = id, groupName = groupName.trim(), updatedAt = clock())
     }
 
+    suspend fun updateGroupNames(ids: Collection<String>, groupName: String) {
+        if (ids.isEmpty()) return
+        downloadItemDao.updateGroupNames(ids = ids, groupName = groupName.trim(), updatedAt = clock())
+    }
+
     suspend fun updateLocalPath(
         id: String,
         storageLocation: StorageLocation,

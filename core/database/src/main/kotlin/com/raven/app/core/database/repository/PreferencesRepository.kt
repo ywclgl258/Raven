@@ -68,6 +68,12 @@ class PreferencesRepository(
     suspend fun setDownloadUnmeteredOnly(enabled: Boolean) =
         settingsDataStore.setDownloadUnmeteredOnly(enabled)
 
+    suspend fun setDownloadSort(sort: String) = settingsDataStore.setDownloadSort(sort)
+
+    suspend fun setDownloadGroupMode(groupMode: String) = settingsDataStore.setDownloadGroupMode(groupMode)
+
+    suspend fun setDownloadTagMatchAll(matchAll: Boolean) = settingsDataStore.setDownloadTagMatchAll(matchAll)
+
     suspend fun setStorageLocation(location: StorageLocation) =
         settingsDataStore.setStorageLocation(location)
 

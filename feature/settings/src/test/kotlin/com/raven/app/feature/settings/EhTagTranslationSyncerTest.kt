@@ -115,7 +115,7 @@ class EhTagTranslationSyncerTest {
                     preferencesRepository = db.preferencesRepository,
                     dispatchers = mainDispatcherRule.appDispatchers,
                     clockMs = { now },
-                    releasesApiBaseUrlOverride = server.url("/repos/EhTagTranslation/DatabaseReleases/releases").toString(),
+                    releasesApiBaseUrlOverride = server.url("/repos/EhTagTranslation/Database/releases").toString(),
                 )
 
                 val result = syncer.syncNow()
@@ -140,7 +140,7 @@ class EhTagTranslationSyncerTest {
                 // Verify zero credentials attached to both GitHub requests
                 val req1 = server.takeRequest()
                 val req2 = server.takeRequest()
-                assertEquals("/repos/EhTagTranslation/DatabaseReleases/releases/latest", req1.path)
+                assertEquals("/repos/EhTagTranslation/Database/releases/latest", req1.path)
                 assertEquals("/download/db.text.json.gz", req2.path)
                 assertNull(req1.getHeader("Authorization"))
                 assertNull(req1.getHeader("Cookie"))
@@ -173,7 +173,7 @@ class EhTagTranslationSyncerTest {
                     preferencesRepository = db.preferencesRepository,
                     dispatchers = mainDispatcherRule.appDispatchers,
                     clockMs = { nextNow },
-                    releasesApiBaseUrlOverride = server.url("/repos/EhTagTranslation/DatabaseReleases/releases").toString(),
+                    releasesApiBaseUrlOverride = server.url("/repos/EhTagTranslation/Database/releases").toString(),
                 )
 
                 val result = syncer.syncNow()
@@ -229,7 +229,7 @@ class EhTagTranslationSyncerTest {
                 preferencesRepository = db.preferencesRepository,
                 dispatchers = mainDispatcherRule.appDispatchers,
                 clockMs = { now },
-                releasesApiBaseUrlOverride = server.url("/repos/EhTagTranslation/DatabaseReleases/releases").toString(),
+                releasesApiBaseUrlOverride = server.url("/repos/EhTagTranslation/Database/releases").toString(),
             )
 
             // Disabled auto-sync -> skips without network call
@@ -251,5 +251,17 @@ class EhTagTranslationSyncerTest {
         } finally {
             server.shutdown()
         }
+    }
+
+    @Test
+    fun `default endpoints point to active EhTagTranslation Database repository and fallback asset`() {
+        assertEquals(
+            "https://api.github.com/repos/EhTagTranslation/Database/releases",
+            EhTagTranslationSyncer.DEFAULT_RELEASES_API_BASE_URL,
+        )
+        assertEquals(
+            "https://github.com/EhTagTranslation/Database/releases/latest/download/db.text.json.gz",
+            EhTagTranslationSyncer.FALLBACK_LATEST_GZIP_URL,
+        )
     }
 }

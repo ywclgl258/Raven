@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="raven_video_download_channel">Video Downloads</string>
-    <string name="raven_gallery_download_channel">Gallery Downloads</string>
+    <string name="raven_video_download_channel">视频离线下载</string>
+    <string name="raven_gallery_download_channel">图集离线下载</string>
+    <string name="raven_download_events_channel">离线下载结果通知</string>
 </resources>

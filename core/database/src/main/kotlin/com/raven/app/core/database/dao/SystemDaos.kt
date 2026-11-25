@@ -2,6 +2,7 @@ package com.raven.app.core.database.dao
 
 import androidx.room.Dao
 import androidx.room.Query
+import androidx.room.Transaction
 import androidx.room.Upsert
 import com.raven.app.core.database.entity.BrowsePositionEntity
 import com.raven.app.core.database.entity.DownloadItemEntity
@@ -97,6 +98,11 @@ interface DownloadItemDao {
 
     @Query("UPDATE download_items SET group_name = :groupName, updated_at = :updatedAt WHERE id = :id")
     suspend fun updateGroupName(id: String, groupName: String, updatedAt: Long)
+
+    @Transaction
+    suspend fun updateGroupNames(ids: Collection<String>, groupName: String, updatedAt: Long) {
+        ids.distinct().forEach { id -> updateGroupName(id, groupName, updatedAt) }
+    }
 
     @Query(
         """
