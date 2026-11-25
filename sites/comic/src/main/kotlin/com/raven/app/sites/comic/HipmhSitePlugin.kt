@@ -108,7 +108,8 @@ class HipmhSitePlugin(
                 ?.takeIf { it.isNotBlank() }
                 ?: doc.selectFirst("h1")?.text()?.takeIf { it.isNotBlank() }
                 ?: doc.title().substringBefore(" - ").ifBlank { "作品 $mid" }
-            val cover = doc.selectFirst("meta[property=og:image]")?.attr("content").orEmpty()
+            val rawCover = doc.selectFirst("meta[property=og:image]")?.attr("content").orEmpty()
+            val cover = if (rawCover.startsWith("http")) rawCover else "$COVER_BASE$rawCover"
             val chapters = loadChapters(mid)
             val firstHid = chapters.firstOrNull()
             val pages = if (firstHid != null) loadChapterPages(firstHid) else emptyList()
@@ -222,7 +223,7 @@ class HipmhSitePlugin(
         val cover = when {
             coverPath.isBlank() -> ""
             coverPath.startsWith("http") -> coverPath
-            else -> "${descriptor.baseUrl}$coverPath"
+            else -> "$COVER_BASE$coverPath"
         }
         return MediaItem(
             siteId = SiteId.HIPMH,
@@ -421,6 +422,7 @@ class HipmhSitePlugin(
         val SITE_ID: SiteId = SiteId.HIPMH
         const val BASE_URL: String = "https://m.hipmh.com"
         const val API_BASE: String = "https://hipapi1.s3file.top"
+        const val COVER_BASE: String = "https://cover.s3imgs.top"
         private const val PAGE_SIZE = 18
 
         internal val SECTIONS: List<SiteSectionSpec> = listOf(

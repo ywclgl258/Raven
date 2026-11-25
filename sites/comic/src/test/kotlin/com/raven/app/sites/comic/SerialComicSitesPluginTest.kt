@@ -585,7 +585,7 @@ class SerialComicSitesPluginTest {
         assertEquals("bTo3MjQ0-deng-lu-wu-lin-xi-tong-7236", feed.items.first().id)
         assertEquals("登录武林系统", feed.items.first().title)
         assertEquals(
-            "https://m.hipmh.com/kk/vertical/deng-lu-wu-lin-xi-tong-7236.webp",
+            "https://cover.s3imgs.top/kk/vertical/deng-lu-wu-lin-xi-tong-7236.webp",
             feed.items.first().coverUrl,
         )
 
@@ -594,7 +594,7 @@ class SerialComicSitesPluginTest {
         )
         assertEquals("登录武林系统", detail.item.title)
         assertEquals(
-            "https://m.hipmh.com/kk/vertical/deng-lu-wu-lin-xi-tong-7236.webp",
+            "https://cover.s3imgs.top/kk/vertical/deng-lu-wu-lin-xi-tong-7236.webp",
             detail.item.coverUrl,
         )
         assertEquals(2, detail.pageCount)
