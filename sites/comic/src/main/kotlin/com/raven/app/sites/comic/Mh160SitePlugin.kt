@@ -25,17 +25,23 @@ import com.raven.app.core.sitespi.ResolvedLink
 import com.raven.app.core.sitespi.SearchSource
 import com.raven.app.core.sitespi.SitePlugin
 import com.raven.app.core.sitespi.SiteRequestKind
+import java.net.URLEncoder
+import java.util.Base64
 import kotlinx.coroutines.CancellationException
 import org.jsoup.Jsoup
+import org.jsoup.nodes.Document
+import org.jsoup.nodes.Element
 
 /**
  * 漫画160 (`SiteId.MH160`) 连载漫画插件。
  *
- * 站点当前对默认网络返回 HTTP 404 的通用错误页（域名可能在更换或限制地区），
- * 插件按标准目录式漫画站解析：
- * - 列表：首页 / 分类页的 `/comic/<slug>` 或 `/manga/<slug>` 卡片
- * - 详情：`<h1>` 标题 + 封面
- * - 阅读：章节页图页
+ * 站点为晴天 CMS（qTcms）双模板：
+ * - 列表：移动端 `https://m.mh160ba.com/kanmanhua/zaixian_recent.html`（`.itemBox`）
+ *   与分类页 `/kanmanhua/<slug>`（`#listbody li`）
+ * - 搜索：`https://m.mh160ba.com/statics/search.aspx?key=<q>`（`#listbody li`）
+ * - 详情：`https://www.mh160ba.com/kanmanhua/<id>/`（`ul[id^=chapterList_ul] li a`）
+ * - 阅读：章节页内嵌 `qTcms_S_m_murl_e`（Base64），以 `$qingtiandy$` 分隔图页路径；
+ *   图片主机按 `qTcms_S_p_id` 选择 `*.kingwar.cn` 或旧版 `mhpic6.kingwar.cn`。
  */
 class Mh160SitePlugin(
     private val httpClient: HttpClientAdapter,
@@ -52,51 +58,70 @@ class Mh160SitePlugin(
         override suspend fun loadFeed(request: FeedRequest): FeedPage {
             val page = request.page.coerceAtLeast(1)
             val query = request.query?.trim().orEmpty()
-            val url = when {
-                query.isNotEmpty() -> "${descriptor.baseUrl}/search?q=${HtmlUrlCleaner.encodeQueryParam(query)}"
-                page <= 1 -> "${descriptor.baseUrl}/"
-                else -> "${descriptor.baseUrl}/?page=$page"
+            if (query.isNotEmpty()) {
+                return searchComics(query, page)
             }
-            val html = fetchHtml(url)
-            val doc = Jsoup.parse(html, url)
-            val items = parseComicCards(doc)
+            val section = request.section?.trim()?.lowercase().orEmpty()
+            val path = SECTION_PATHS[section] ?: "zaixian_recent.html"
+            val url = "${MOBILE_BASE}/kanmanhua/$path"
+            val doc = Jsoup.parse(fetchHtml(url), url)
+            val items = parseMobileList(doc)
             if (items.isEmpty()) {
-                throw SiteException.ParseError(
-                    "漫画160 列表结构不可识别（站点可能已更换域名或限制访问）",
-                    siteId = SiteId.MH160,
-                )
+                throw SiteException.ParseError("漫画160 列表结构不可识别", siteId = SiteId.MH160)
             }
-            return FeedPage(items = items, title = query.ifEmpty { "最近更新" })
+            return FeedPage(
+                items = items,
+                hasMore = false,
+                title = sectionTitle(section),
+            )
         }
 
-        override fun supportedSorts(request: FeedRequest): List<FeedSort> = listOf(FeedSort.NEWEST)
+        override fun supportedSorts(request: FeedRequest): List<FeedSort> =
+            listOf(FeedSort.NEWEST, FeedSort.POPULAR)
     }
 
     override val searchSource: SearchSource = object : SearchSource {
-        override suspend fun search(request: FeedRequest): FeedPage = feedSource.loadFeed(request)
+        override suspend fun search(request: FeedRequest): FeedPage {
+            val query = request.query?.trim().orEmpty()
+            if (query.isEmpty()) {
+                throw SiteException.ParseError("漫画160 搜索关键词不能为空", siteId = SiteId.MH160)
+            }
+            return searchComics(query, request.page.coerceAtLeast(1))
+        }
+
         override val supportedScopes: Set<SearchScope> = setOf(SearchScope.ALL)
     }
 
     override val gallerySource: GallerySource = object : GallerySource {
         override suspend fun loadGalleryDetail(url: String): GalleryDetail {
-            val slug = extractSlug(url)
+            val comicId = extractComicId(url)
                 ?: throw SiteException.ParseError("无法识别漫画160地址：$url", siteId = SiteId.MH160)
-            val canonical = "${descriptor.baseUrl}/comic/$slug"
-            val html = fetchHtml(canonical)
-            val doc = Jsoup.parse(html, canonical)
-            val title = HtmlUrlCleaner.cleanText(doc.selectFirst("h1")?.text().orEmpty()).ifBlank { "漫画 $slug" }
+            val canonical = "${descriptor.baseUrl}/kanmanhua/$comicId/"
+            val doc = Jsoup.parse(fetchHtml(canonical), canonical)
+            val title = parseTitle(doc)
             val cover = doc.selectFirst("meta[property=og:image]")?.attr("content").orEmpty()
+            val description = doc.selectFirst("meta[name=description]")?.attr("content").orEmpty()
+            val chapters = parseChapters(doc)
+            // 章节列表通常按最新倒序排列，取最后一条作为起始章节（最早）。
+            val first = chapters.lastOrNull()
+            val pages = if (first != null) loadChapterPages(first.url) else emptyList()
             return GalleryDetail(
                 item = MediaItem(
                     siteId = SiteId.MH160,
-                    id = slug,
+                    id = comicId,
                     url = canonical,
                     kind = MediaKind.SERIAL_COMIC,
                     title = title,
                     coverUrl = cover,
+                    pageCount = pages.size,
+                    extra = buildMap {
+                        put("chapterUrl", first?.url.orEmpty())
+                    },
                 ),
-                pageCount = 1,
-                pages = emptyList(),
+                description = description,
+                pageCount = pages.size.coerceAtLeast(1),
+                pages = pages,
+                chaptersUrl = if (chapters.size > 1) "$canonical#chapters" else null,
             )
         }
 
@@ -104,19 +129,35 @@ class Mh160SitePlugin(
             detail: GalleryDetail,
             pageIndex: Int,
             forceReload: Boolean,
-        ): GalleryPage = throw SiteException.Unsupported(
-            message = "漫画160 章节图页结构尚未适配",
-            siteId = SiteId.MH160,
-        )
+        ): GalleryPage {
+            if (pageIndex !in 1..detail.pageCount) {
+                throw SiteException.NotFound("页码超出范围：$pageIndex / ${detail.pageCount}", siteId = SiteId.MH160)
+            }
+            if (!forceReload) {
+                detail.pages.firstOrNull { it.index == pageIndex && it.imageUrl.isNotBlank() }?.let { return it }
+            }
+            val chapterUrl = detail.item.extra["chapterUrl"].orEmpty()
+            if (chapterUrl.isBlank()) {
+                throw SiteException.ParseError("漫画160 章节信息缺失", siteId = SiteId.MH160)
+            }
+            val pages = loadChapterPages(chapterUrl)
+            return pages.firstOrNull { it.index == pageIndex }
+                ?: throw SiteException.NotFound("页码超出范围：$pageIndex / ${pages.size}", siteId = SiteId.MH160)
+        }
 
         override suspend fun resolvePageImage(
             pageUrl: String,
             preferOriginal: Boolean,
             forceReload: Boolean,
-        ): GalleryPage = throw SiteException.Unsupported(
-            message = "漫画160 章节图页结构尚未适配",
-            siteId = SiteId.MH160,
-        )
+        ): GalleryPage {
+            val parsed = ComicUrl.parse(pageUrl)
+                ?: throw SiteException.ParseError("无法识别漫画160图页地址", siteId = SiteId.MH160)
+            val pageIndex = parsed.fragment?.toIntOrNull()?.takeIf { it > 0 } ?: 1
+            val chapterUrl = parsed.withFragment(null).toString()
+            val pages = loadChapterPages(chapterUrl)
+            return pages.firstOrNull { it.index == pageIndex }
+                ?: throw SiteException.NotFound("页码超出范围：$pageIndex / ${pages.size}", siteId = SiteId.MH160)
+        }
     }
 
     override val linkResolver: LinkResolver = object : LinkResolver {
@@ -127,57 +168,155 @@ class Mh160SitePlugin(
 
         override fun canonicalize(url: String): String? {
             val parsed = ComicUrl.parse(url)?.takeIf { descriptor.matchesHost(it.host) } ?: return null
-            val slug = extractSlug(parsed.toString()) ?: return null
-            return "${descriptor.baseUrl}/comic/$slug"
+            val id = extractComicId(parsed.toString()) ?: return null
+            return "${descriptor.baseUrl}/kanmanhua/$id/"
         }
 
         override fun resolve(url: String): ResolvedLink? {
             val parsed = ComicUrl.parse(url)?.takeIf { descriptor.matchesHost(it.host) } ?: return null
-            val slug = extractSlug(parsed.toString()) ?: return null
-            return ResolvedLink.Gallery(SiteId.MH160, slug, "${descriptor.baseUrl}/comic/$slug")
+            val id = extractComicId(parsed.toString()) ?: return null
+            return ResolvedLink.Gallery(SiteId.MH160, id, "${descriptor.baseUrl}/kanmanhua/$id/")
         }
     }
 
-    private fun parseComicCards(doc: org.jsoup.nodes.Document): List<MediaItem> {
+    // -------------------------------------------------------------------------
+    // List & Search
+    // -------------------------------------------------------------------------
+
+    private suspend fun searchComics(query: String, page: Int): FeedPage {
+        val url = "${MOBILE_BASE}/statics/search.aspx?key=${HtmlUrlCleaner.encodeQueryParam(query)}&page=$page"
+        val doc = Jsoup.parse(fetchHtml(url), url)
+        val items = parseSearchList(doc)
+        if (items.isEmpty()) {
+            return FeedPage(items = emptyList(), title = query, hasMore = false)
+        }
+        return FeedPage(items = items, title = query, hasMore = false)
+    }
+
+    private fun parseMobileList(doc: Document): List<MediaItem> {
         val seen = LinkedHashMap<String, MediaItem>()
-        doc.select("a[href*=/comic/], a[href*=/manga/]").forEach { anchor ->
-            val href = anchor.attr("href")
-            val slug = href.substringAfterLast("/").substringBefore("?").substringBefore("#")
-            if (slug.isBlank()) return@forEach
-            val container = anchor.closest("li, article, .item, .card") ?: anchor
-            val title = HtmlUrlCleaner.cleanText(
-                container.selectFirst("h3, h4, .title")?.text() ?: anchor.attr("title").ifBlank { anchor.text() },
-            )
+        doc.select(".itemBox").forEach { box ->
+            val link = box.selectFirst(".itemTxt a.title") ?: return@forEach
+            val href = link.absUrl("href").ifBlank { link.attr("href") }
+            val id = extractComicId(href) ?: return@forEach
+            val title = HtmlUrlCleaner.cleanText(link.text())
             if (title.isBlank()) return@forEach
-            val cover = container.selectFirst("img")?.let { img ->
-                img.attr("data-src").ifBlank { img.attr("data-original") }.ifBlank { img.attr("src") }
-            }.orEmpty()
             seen.putIfAbsent(
-                slug,
+                id,
                 MediaItem(
                     siteId = SiteId.MH160,
-                    id = slug,
-                    url = if (href.startsWith("http")) href else "${descriptor.baseUrl}$href",
+                    id = id,
+                    url = "${descriptor.baseUrl}/kanmanhua/$id/",
                     kind = MediaKind.SERIAL_COMIC,
                     title = title,
-                    coverUrl = if (cover.startsWith("/")) "${descriptor.baseUrl}$cover" else cover,
+                    coverUrl = box.selectFirst(".itemImg img")?.absUrl("src").orEmpty(),
                 ),
             )
         }
         return seen.values.toList()
     }
 
-    private fun extractSlug(url: String): String? {
-        val parsed = ComicUrl.parse(url) ?: return null
-        val segments = parsed.pathSegments
-        val idx = segments.indexOfFirst { it == "comic" || it == "manga" }
-        if (idx >= 0 && idx + 1 < segments.size) return segments[idx + 1].takeIf { it.isNotBlank() }
-        return segments.lastOrNull()?.takeIf { it.isNotBlank() }
+    private fun parseSearchList(doc: Document): List<MediaItem> {
+        val seen = LinkedHashMap<String, MediaItem>()
+        doc.select("#listbody li").forEach { li ->
+            val link = li.selectFirst("a.ImgA") ?: return@forEach
+            val href = link.absUrl("href").ifBlank { link.attr("href") }
+            val id = extractComicId(href) ?: return@forEach
+            val title = HtmlUrlCleaner.cleanText(li.selectFirst("a.txtA")?.text().orEmpty())
+                .ifBlank { href.trim('/').substringAfterLast('/') }
+            if (title.isBlank()) return@forEach
+            seen.putIfAbsent(
+                id,
+                MediaItem(
+                    siteId = SiteId.MH160,
+                    id = id,
+                    url = "${descriptor.baseUrl}/kanmanhua/$id/",
+                    kind = MediaKind.SERIAL_COMIC,
+                    title = title,
+                    coverUrl = link.selectFirst("img")?.absUrl("src").orEmpty(),
+                ),
+            )
+        }
+        return seen.values.toList()
     }
+
+    // -------------------------------------------------------------------------
+    // Detail & Reader
+    // -------------------------------------------------------------------------
+
+    private fun parseTitle(doc: Document): String {
+        val raw = doc.title()
+        val byComma = raw.substringBefore("漫画,").trim()
+        if (byComma.isNotBlank() && byComma != raw) return byComma.removeSuffix("漫画").trim()
+        return raw.substringBefore("-").trim().ifBlank { "漫画160" }
+    }
+
+    private fun parseChapters(doc: Document): List<ChapterEntry> {
+        val seen = LinkedHashMap<String, ChapterEntry>()
+        doc.select("ul[id^=chapterList_ul] li a, ul[id^=mh-chapter-list-ol] li a").forEach { link ->
+            val href = link.absUrl("href").ifBlank { link.attr("href") }
+            if (href.isBlank()) return@forEach
+            val name = HtmlUrlCleaner.cleanText(link.selectFirst("p")?.text() ?: link.text())
+            seen.putIfAbsent(href, ChapterEntry(href, name))
+        }
+        return seen.values.toList()
+    }
+
+    private suspend fun loadChapterPages(chapterUrl: String): List<GalleryPage> {
+        val html = fetchHtml(chapterUrl)
+        val encoded = MURL_REGEX.find(html)?.groupValues?.get(1)
+            ?: throw SiteException.ParseError("漫画160 找不到图片列表，页面结构可能已更改", siteId = SiteId.MH160)
+        val decoded = runCatching {
+            String(Base64.getDecoder().decode(encoded), Charsets.UTF_8)
+        }.getOrNull() ?: throw SiteException.ParseError("漫画160 图片列表解码失败", siteId = SiteId.MH160)
+        if (decoded.contains("+http://") || decoded.contains("+https://")) {
+            throw SiteException.Unsupported("漫画160 该章节已下架", siteId = SiteId.MH160)
+        }
+        val chapterId = PID_REGEX.find(html)?.groupValues?.get(1)?.toLongOrNull() ?: 0L
+        val host = if (chapterId > NEW_HOST_THRESHOLD) {
+            IMAGE_HOSTS[(chapterId % IMAGE_HOSTS.size).toInt()]
+        } else {
+            LEGACY_IMAGE_HOST
+        }
+        val paths = decoded.split(PATH_SEPARATOR).filter { it.isNotBlank() }
+        if (paths.isEmpty()) {
+            throw SiteException.ParseError("漫画160 章节没有图页", siteId = SiteId.MH160)
+        }
+        return paths.mapIndexed { index, path ->
+            val imageUrl = when {
+                path.startsWith("http") -> path
+                path.startsWith("/") -> host + encodePath(path)
+                else -> "${descriptor.baseUrl}/statics/pic/?p=" + URLEncoder.encode(path, "UTF-8")
+            }
+            GalleryPage(index = index + 1, pageUrl = "$chapterUrl#${index + 1}", imageUrl = imageUrl)
+        }
+    }
+
+    private fun encodePath(path: String): String = path.split("/").joinToString("/") { segment ->
+        URLEncoder.encode(segment, "UTF-8").replace("+", "%20")
+    }
+
+    private fun extractComicId(url: String): String? {
+        val parsed = ComicUrl.parse(url) ?: return null
+        val idx = parsed.pathSegments.indexOf("kanmanhua")
+        if (idx < 0 || idx + 1 > parsed.pathSegments.lastIndex) return null
+        return parsed.pathSegments[idx + 1].takeIf { it.isNotBlank() }
+    }
+
+    private fun sectionTitle(section: String): String =
+        SECTIONS.firstOrNull { it.id == section }?.title ?: "最近更新"
 
     private suspend fun fetchHtml(url: String): String {
         val response = try {
-            httpClient.getText(url = url, siteId = SiteId.MH160, kind = SiteRequestKind.PAGE)
+            httpClient.getText(
+                url = url,
+                siteId = SiteId.MH160,
+                kind = SiteRequestKind.PAGE,
+                headers = mapOf(
+                    "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                    "Accept-Language" to "zh-CN,zh;q=0.9,en;q=0.8",
+                ),
+            )
         } catch (e: CancellationException) {
             throw e
         } catch (e: SiteException) {
@@ -189,26 +328,118 @@ class Mh160SitePlugin(
                 cause = e,
             )
         }
-        if (response.code == 404) {
-            throw SiteException.NotFound(
-                message = "漫画160 站点返回 404，域名可能已更换或暂时下线",
-                siteId = SiteId.MH160,
-            )
-        }
-        if (response.code == 403) {
-            throw SiteException.Forbidden(
-                isChallenge = true,
-                message = "漫画160 触发浏览器验证或网络拦截，站点可能已更换域名",
-                siteId = SiteId.MH160,
-            )
-        }
         response.throwIfNotSuccessful(SiteId.MH160, descriptor.displayName)
         return response.bodyText()
     }
 
+    private data class ChapterEntry(val url: String, val title: String)
+
     companion object {
         val SITE_ID: SiteId = SiteId.MH160
-        const val BASE_URL: String = "https://mh160mh.com"
+        const val BASE_URL: String = "https://www.mh160ba.com"
+        private const val MOBILE_BASE: String = "https://m.mh160ba.com"
+
+        private const val PATH_SEPARATOR = "\$qingtiandy\$"
+        private const val NEW_HOST_THRESHOLD = 542_724L
+        private const val LEGACY_IMAGE_HOST = "https://mhpic6.kingwar.cn"
+        private val IMAGE_HOSTS = listOf(
+            "https://xwdf.kingwar.cn",
+            "https://mhreswhm.kingwar.cn",
+            "https://qwe123.kingwar.cn",
+            "https://resmhpic.kingwar.cn",
+            "https://reszxc.kingwar.cn",
+        )
+        private val MURL_REGEX = Regex("""qTcms_S_m_murl_e\s*=\s*"([^"]+)"""")
+        private val PID_REGEX = Regex("""qTcms_S_p_id\s*=\s*"(\d+)"""")
+
+        /** 移动端分类路径（与站点 `CATEGORY_OPTIONS` 一致）。 */
+        private val CATEGORY_PATHS: List<Pair<String, String?>> = listOf(
+            "连载中" to "lianzai",
+            "完结" to "wanjie",
+            "日韩" to "zaixian_rhmh",
+            "内地" to "zaixian_dlmh",
+            "港台" to "zaixian_gtmh",
+            "欧美" to "zaixian_ommh",
+            "其他" to "zaixian_qita",
+            "少年" to "shaonianqu",
+            "少女" to "shaonvqu",
+            "青年" to "qingnian",
+            "少儿" to "shaoer",
+            "热血" to "rexue",
+            "格斗" to "gedou",
+            "科幻" to "kehuan",
+            "竞技" to "jingji",
+            "搞笑" to "gaoxiao",
+            "推理" to "tuili",
+            "恐怖" to "kongbu",
+            "耽美" to "danmei",
+            "恋爱" to "lianai",
+            "生活" to "shenghuo",
+            "战争" to "zhanzheng",
+            "故事" to "gushi",
+            "冒险" to "maoxian",
+            "魔幻" to "mohuan",
+            "玄幻" to "xuanhuan",
+            "校园" to "xiaoyuan",
+            "悬疑" to "xuanyi",
+            "萌系" to "mengxi",
+            "穿越" to "chuanyue",
+            "后宫" to "hougong",
+            "都市" to "dushi",
+            "武侠" to "wuxia",
+            "历史" to "lishi",
+            "同人" to "tongren",
+            "励志" to "lizhi",
+            "百合" to "baihe",
+            "治愈" to "zhiyu",
+            "机甲" to "jijia",
+            "纯爱" to "chunai",
+            "美食" to "meishi",
+            "血腥" to "xuexing",
+            "僵尸" to "jiangshi",
+            "恶搞" to "egao",
+            "虐心" to "nuexin",
+            "动作" to "dongzuo",
+            "惊险" to "jingxian",
+            "唯美" to "weimei",
+            "震撼" to "zhenhan",
+            "复仇" to "fuchou",
+            "侦探" to "zhentan",
+            "脑洞" to "naodong",
+            "奇幻" to "qihuan",
+            "宫斗" to "gongdou",
+            "爆笑" to "baoxiao",
+            "运动" to "yundong",
+            "青春" to "qingchun",
+            "灵异" to "lingyi",
+            "古风" to "gufeng",
+            "权谋" to "quanmou",
+            "节操" to "jiecao",
+            "明星" to "mingxing",
+            "暗黑" to "anhei",
+            "社会" to "shehui",
+            "浪漫" to "langman",
+            "仙侠" to "xianxia",
+            "伪娘" to "weiniang",
+        )
+
+        internal val SECTIONS: List<SiteSectionSpec> = buildList {
+            add(SiteSectionSpec("latest", "最近更新", defaultSort = FeedSort.NEWEST))
+            add(SiteSectionSpec("popular", "人气榜", defaultSort = FeedSort.POPULAR))
+            CATEGORY_PATHS.forEach { (title, slug) ->
+                if (slug != null) {
+                    add(SiteSectionSpec("cat_$slug", title, category = "cat_$slug"))
+                }
+            }
+        }
+
+        internal val SECTION_PATHS: Map<String, String> = buildMap {
+            put("latest", "zaixian_recent.html")
+            put("popular", "zaixian_hit.html")
+            CATEGORY_PATHS.forEach { (_, slug) ->
+                if (slug != null) put("cat_$slug", slug)
+            }
+        }
 
         val DESCRIPTOR: SiteDescriptor = SiteDescriptor(
             id = SITE_ID,
@@ -216,16 +447,18 @@ class Mh160SitePlugin(
             shortName = "漫160",
             primaryKind = MediaKind.SERIAL_COMIC,
             supportedKinds = setOf(MediaKind.SERIAL_COMIC),
-            defaultHost = "mh160mh.com",
-            accessNote = "站点域名当前返回 404/403，可能已更换域名",
+            defaultHost = "www.mh160ba.com",
+            mirrorHosts = listOf("mh160ba.com", "m.mh160ba.com"),
+            accessNote = "晴天 CMS 站点，图页按章节编号选择镜像主机",
             capabilities = setOf(SiteCapability.FEED, SiteCapability.SEARCH),
-            feedSorts = listOf(FeedSort.NEWEST),
-            sections = listOf(SiteSectionSpec("latest", "最近更新", defaultSort = FeedSort.NEWEST)),
+            feedSorts = listOf(FeedSort.NEWEST, FeedSort.POPULAR),
+            sections = SECTIONS,
             searchScopes = listOf(SearchScope.ALL),
             networkProfile = SiteNetworkProfile(
                 userAgent = SiteNetworkProfile.DEFAULT_MOBILE_UA,
                 referer = "$BASE_URL/",
                 mediaReferer = "$BASE_URL/",
+                mediaDomains = setOf("kingwar.cn", "tgmhfc.uk", "miyeye.cn"),
             ),
         )
     }

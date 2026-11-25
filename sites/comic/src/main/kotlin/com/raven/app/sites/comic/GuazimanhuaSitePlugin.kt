@@ -187,7 +187,8 @@ class GuazimanhuaSitePlugin(
 
     private fun resolveFeedUrl(request: FeedRequest, page: Int, query: String): String {
         if (query.isNotEmpty()) {
-            return "${descriptor.baseUrl}/search.php?q=${HtmlUrlCleaner.encodeQueryParam(query)}&page=$page"
+            return "${descriptor.baseUrl}/category.php?keyword=${HtmlUrlCleaner.encodeQueryParam(query)}" +
+                "&sort=hits&page=$page"
         }
         val section = request.section?.trim()?.lowercase().orEmpty()
         val params = mutableListOf<String>()
@@ -202,15 +203,10 @@ class GuazimanhuaSitePlugin(
                 params += "is_end=${section.removePrefix("end_")}"
         }
         request.category?.trim()?.takeIf { it.all(Char::isDigit) }?.let { params += "cid=$it" }
-        sortParam(request.sort)?.let { params += "sort=$it" }
-        if (params.isEmpty()) {
-            return if (page <= 1) {
-                "${descriptor.baseUrl}/update.php"
-            } else {
-                "${descriptor.baseUrl}/update.php?page=$page"
-            }
-        }
-        if (page > 1) params += "page=$page"
+        val sort = sortParam(request.sort)
+            ?: if (section == "popular") "hits" else "update"
+        params += "sort=$sort"
+        params += "page=$page"
         return "${descriptor.baseUrl}/category.php?" + params.joinToString("&")
     }
 
@@ -410,6 +406,7 @@ class GuazimanhuaSitePlugin(
          */
         internal val SECTIONS: List<SiteSectionSpec> = buildList {
             add(SiteSectionSpec("latest", "最近更新", defaultSort = FeedSort.NEWEST))
+            add(SiteSectionSpec("popular", "人气榜", defaultSort = FeedSort.POPULAR))
             listOf(
                 "cid_41" to "耽美", "cid_9" to "恋爱", "cid_29" to "校园", "cid_5" to "霸总",
                 "cid_42" to "都市", "cid_8" to "穿越", "cid_23" to "古风", "cid_25" to "玄幻",
@@ -441,7 +438,7 @@ class GuazimanhuaSitePlugin(
             sections = SECTIONS,
             searchScopes = listOf(SearchScope.ALL),
             networkProfile = SiteNetworkProfile(
-                userAgent = SiteNetworkProfile.DEFAULT_MOBILE_UA,
+                userAgent = SiteNetworkProfile.DESKTOP_WINDOWS_UA,
                 referer = "$BASE_URL/",
                 mediaReferer = "$BASE_URL/",
                 mediaDomains = setOf("img.guazicdn.com"),

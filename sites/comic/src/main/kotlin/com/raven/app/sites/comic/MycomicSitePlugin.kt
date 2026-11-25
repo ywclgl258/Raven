@@ -26,6 +26,11 @@ import com.raven.app.core.sitespi.SearchSource
 import com.raven.app.core.sitespi.SitePlugin
 import com.raven.app.core.sitespi.SiteRequestKind
 import kotlinx.coroutines.CancellationException
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonPrimitive
 import org.jsoup.Jsoup
 
 /**
@@ -43,6 +48,8 @@ import org.jsoup.Jsoup
 class MycomicSitePlugin(
     private val httpClient: HttpClientAdapter,
 ) : SitePlugin {
+
+    private val json = Json { ignoreUnknownKeys = true; isLenient = true }
 
     override val descriptor: SiteDescriptor = DESCRIPTOR
 
@@ -87,12 +94,15 @@ class MycomicSitePlugin(
             val canonical = "${descriptor.baseUrl}/comics/$comicId"
             val html = fetchHtml(canonical)
             val doc = Jsoup.parse(html, canonical)
-            val title = doc.selectFirst("meta[property=og:title]")?.attr("content")
-                ?.takeIf { it.isNotBlank() }
+            val detailCard = doc.selectFirst("div[data-flux-card]")
+            val title = detailCard?.selectFirst("div[data-flux-heading]")?.text()?.takeIf { it.isNotBlank() }
+                ?: doc.selectFirst("meta[property=og:title]")?.attr("content")?.takeIf { it.isNotBlank() }
                 ?: doc.selectFirst("h1")?.text()?.takeIf { it.isNotBlank() }
                 ?: HtmlUrlCleaner.cleanText(doc.title().substringBefore(" - ")).ifBlank { "Comic $comicId" }
-            val cover = doc.selectFirst("meta[property=og:image]")?.attr("content")
+            val cover = detailCard?.selectFirst("img.object-cover")
+                ?.let { it.attr("data-src").ifBlank { it.attr("src") } }
                 ?.takeIf { it.isNotBlank() }
+                ?: doc.selectFirst("meta[property=og:image]")?.attr("content")?.takeIf { it.isNotBlank() }
                 ?: doc.selectFirst("img[src*=cover], img[data-src*=cover]")
                     ?.let { it.attr("data-src").ifBlank { it.attr("src") } }
                     .orEmpty()
@@ -183,7 +193,7 @@ class MycomicSitePlugin(
 
     private fun resolveFeedUrl(section: String?, page: Int, query: String): String {
         if (query.isNotEmpty()) {
-            return "${descriptor.baseUrl}/comics?keyword=${HtmlUrlCleaner.encodeQueryParam(query)}&page=$page"
+            return "${descriptor.baseUrl}/comics?q=${HtmlUrlCleaner.encodeQueryParam(query)}&page=$page"
         }
         val path = when (section?.trim()?.lowercase()) {
             "rank_week" -> "/rank?sort=-week"
@@ -205,43 +215,81 @@ class MycomicSitePlugin(
         SECTIONS.firstOrNull { it.id.equals(section, ignoreCase = true) }?.title ?: "最近更新"
 
     private fun parseComicCards(doc: org.jsoup.nodes.Document): List<MediaItem> {
-        val byId = LinkedHashMap<String, MutableList<org.jsoup.nodes.Element>>()
+        val byId = LinkedHashMap<String, MediaItem>()
+        // Flux UI 列表：div.grid > div.group，标题取封面 img[alt]
+        doc.select("div.grid > div.group").forEach { group ->
+            val anchor = group.selectFirst("a") ?: return@forEach
+            val href = anchor.absUrl("href").ifBlank { anchor.attr("href") }
+            val id = extractComicId(href) ?: return@forEach
+            val img = group.selectFirst("img") ?: return@forEach
+            val title = HtmlUrlCleaner.cleanText(img.attr("alt"))
+            if (title.isBlank()) return@forEach
+            val cover = img.attr("data-src").ifBlank { img.attr("src") }
+            byId.putIfAbsent(
+                id,
+                MediaItem(
+                    siteId = SiteId.MYCOMIC,
+                    id = id,
+                    url = "${descriptor.baseUrl}/comics/$id",
+                    kind = MediaKind.SERIAL_COMIC,
+                    title = title,
+                    coverUrl = if (cover.startsWith("/")) "${descriptor.baseUrl}$cover" else cover,
+                ),
+            )
+        }
+        if (byId.isNotEmpty()) return byId.values.toList()
+
+        // 兜底：直接扫描 /comics/<id> 链接，取文本最长的作为标题。
+        val anchorsById = LinkedHashMap<String, MutableList<org.jsoup.nodes.Element>>()
         doc.select("a[href*='/comics/']").forEach { anchor ->
             val href = anchor.attr("href")
             if (href.contains("?") || href.contains("#")) return@forEach
             val id = href.substringAfterLast("/").takeIf { it.all(Char::isDigit) } ?: return@forEach
-            byId.getOrPut(id) { mutableListOf() }.add(anchor)
+            anchorsById.getOrPut(id) { mutableListOf() }.add(anchor)
         }
-        return byId.mapNotNull { (id, anchors) ->
-            // 列表里同一部作品通常有两个链接：章节号与标题；取文本最长的一个作为标题。
-            val titleAnchor = anchors.maxByOrNull { HtmlUrlCleaner.cleanText(it.text()).length }
-                ?: return@mapNotNull null
-            val title = HtmlUrlCleaner.cleanText(
-                titleAnchor.attr("title").ifBlank { titleAnchor.text() },
-            )
-            if (title.isBlank() || title.all { it.isDigit() }) return@mapNotNull null
-            val container = titleAnchor.closest("li, article, .card, .comic-item, div") ?: titleAnchor
+        anchorsById.forEach { (id, anchors) ->
+            val titleAnchor = anchors.maxByOrNull { HtmlUrlCleaner.cleanText(it.text()).length } ?: return@forEach
+            val title = HtmlUrlCleaner.cleanText(titleAnchor.attr("title").ifBlank { titleAnchor.text() })
+            if (title.isBlank() || title.all { it.isDigit() }) return@forEach
+            val container = titleAnchor.closest("div.group, li, article, .card, div") ?: titleAnchor
             val cover = container.selectFirst("img")?.let { img ->
-                img.attr("data-src").ifBlank { img.attr("data-original") }
-                    .ifBlank { img.attr("src") }
+                img.attr("data-src").ifBlank { img.attr("src") }
             }.orEmpty()
-            MediaItem(
-                siteId = SiteId.MYCOMIC,
-                id = id,
-                url = "${descriptor.baseUrl}/comics/$id",
-                kind = MediaKind.SERIAL_COMIC,
-                title = title,
-                coverUrl = if (cover.startsWith("/")) "${descriptor.baseUrl}$cover" else cover,
+            byId.putIfAbsent(
+                id,
+                MediaItem(
+                    siteId = SiteId.MYCOMIC,
+                    id = id,
+                    url = "${descriptor.baseUrl}/comics/$id",
+                    kind = MediaKind.SERIAL_COMIC,
+                    title = title,
+                    coverUrl = if (cover.startsWith("/")) "${descriptor.baseUrl}$cover" else cover,
+                ),
             )
         }
+        return byId.values.toList()
     }
 
     private fun parseChapterIds(doc: org.jsoup.nodes.Document): List<String> {
         val seen = LinkedHashSet<String>()
-        doc.select("a[href*='/chapters/']").forEach { anchor ->
-            val href = anchor.attr("href")
-            val id = href.substringAfterLast("/").substringBefore("#").substringBefore("?")
-            if (id.isNotBlank() && id.all(Char::isDigit)) seen.add(id)
+        // 章节列表内嵌在 x-data 属性：chapters: [{id, title, ...}]
+        doc.select("div[data-flux-card] + div div[x-data]").forEach { element ->
+            val raw = element.attr("x-data")
+            CHAPTER_JSON_REGEX.find(raw)?.value?.let { jsonText ->
+                runCatching { json.parseToJsonElement(jsonText).jsonArray }.getOrNull()
+                    ?.mapNotNull { item ->
+                        (item as? JsonObject)?.get("id")?.jsonPrimitive?.content
+                            ?.takeIf { it.all(Char::isDigit) }
+                    }
+                    ?.forEach(seen::add)
+            }
+        }
+        if (seen.isEmpty()) {
+            doc.select("a[href*='/chapters/']").forEach { anchor ->
+                val href = anchor.attr("href")
+                val id = href.substringAfterLast("/").substringBefore("#").substringBefore("?")
+                if (id.isNotBlank() && id.all(Char::isDigit)) seen.add(id)
+            }
         }
         return seen.toList()
     }
@@ -263,6 +311,13 @@ class MycomicSitePlugin(
 
     private fun extractChapterImages(html: String): List<String> {
         val ordered = LinkedHashMap<String, Unit>()
+        // 阅读器图页：img[x-ref]（Alpine.js），优先使用 data-src
+        runCatching {
+            Jsoup.parse(html).select("img[x-ref]").forEach { img ->
+                val raw = img.attr("data-src").ifBlank { img.attr("src") }.trim()
+                if (isPageImage(raw)) ordered.putIfAbsent(raw, Unit)
+            }
+        }
         IMAGE_ATTRIBUTE_REGEX.findAll(html).forEach { match ->
             val raw = match.groupValues[1].replace("&amp;", "&").trim()
             if (isPageImage(raw)) ordered.putIfAbsent(raw, Unit)
@@ -324,6 +379,7 @@ class MycomicSitePlugin(
         val SITE_ID: SiteId = SiteId.MYCOMIC
         const val BASE_URL: String = "https://mycomic.com"
 
+        private val CHAPTER_JSON_REGEX = Regex("""(?<=chapters: )\[\{.*?}]""")
         private val IMAGE_ATTRIBUTE_REGEX = Regex(
             """(?:data-src|data-original|data-lazy-src|data-echo|data-url|src)\s*=\s*["'](https?://[^"']+)["']""",
             RegexOption.IGNORE_CASE,

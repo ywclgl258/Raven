@@ -24,11 +24,14 @@ import com.raven.app.core.sitespi.ResolvedLink
 import com.raven.app.core.sitespi.SearchSource
 import com.raven.app.core.sitespi.SitePlugin
 import com.raven.app.core.sitespi.SiteRequestKind
+import java.math.BigInteger
+import java.util.Base64
 import kotlinx.coroutines.CancellationException
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.intOrNull
+import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import org.jsoup.Jsoup
@@ -107,6 +110,8 @@ class HipmhSitePlugin(
                 ?: doc.title().substringBefore(" - ").ifBlank { "作品 $mid" }
             val cover = doc.selectFirst("meta[property=og:image]")?.attr("content").orEmpty()
             val chapters = loadChapters(mid)
+            val firstHid = chapters.firstOrNull()
+            val pages = if (firstHid != null) loadChapterPages(firstHid) else emptyList()
             return GalleryDetail(
                 item = MediaItem(
                     siteId = SiteId.HIPMH,
@@ -115,13 +120,13 @@ class HipmhSitePlugin(
                     kind = MediaKind.SERIAL_COMIC,
                     title = title,
                     coverUrl = if (cover.startsWith("/")) "${descriptor.baseUrl}$cover" else cover,
-                    pageCount = chapters.size,
+                    pageCount = pages.size,
                     extra = buildMap {
-                        put("chapterHid", chapters.firstOrNull().orEmpty())
+                        put("chapterHid", firstHid.orEmpty())
                     },
                 ),
-                pageCount = chapters.size.coerceAtLeast(1),
-                pages = emptyList(),
+                pageCount = pages.size.coerceAtLeast(1),
+                pages = pages,
                 chaptersUrl = if (chapters.size > 1) "$canonical#chapters" else null,
             )
         }
@@ -130,13 +135,35 @@ class HipmhSitePlugin(
             detail: GalleryDetail,
             pageIndex: Int,
             forceReload: Boolean,
-        ): GalleryPage = throw readingUnsupported()
+        ): GalleryPage {
+            if (pageIndex !in 1..detail.pageCount) {
+                throw SiteException.NotFound("页码超出范围：$pageIndex / ${detail.pageCount}", siteId = SiteId.HIPMH)
+            }
+            if (!forceReload) {
+                detail.pages.firstOrNull { it.index == pageIndex && it.imageUrl.isNotBlank() }?.let { return it }
+            }
+            val hid = detail.item.extra["chapterHid"].orEmpty()
+            if (hid.isBlank()) {
+                throw SiteException.ParseError("嬉皮漫畫章节信息缺失", siteId = SiteId.HIPMH)
+            }
+            val pages = loadChapterPages(hid)
+            return pages.firstOrNull { it.index == pageIndex }
+                ?: throw SiteException.NotFound("页码超出范围：$pageIndex / ${pages.size}", siteId = SiteId.HIPMH)
+        }
 
         override suspend fun resolvePageImage(
             pageUrl: String,
             preferOriginal: Boolean,
             forceReload: Boolean,
-        ): GalleryPage = throw readingUnsupported()
+        ): GalleryPage {
+            val parsed = ComicUrl.parse(pageUrl)
+                ?: throw SiteException.ParseError("无法识别嬉皮漫畫图页地址", siteId = SiteId.HIPMH)
+            val hid = parsed.pathSegments.lastOrNull().orEmpty()
+            val pageIndex = parsed.fragment?.toIntOrNull()?.takeIf { it > 0 } ?: 1
+            val pages = loadChapterPages(hid)
+            return pages.firstOrNull { it.index == pageIndex }
+                ?: throw SiteException.NotFound("页码超出范围：$pageIndex / ${pages.size}", siteId = SiteId.HIPMH)
+        }
     }
 
     override val linkResolver: LinkResolver = object : LinkResolver {
@@ -221,6 +248,101 @@ class HipmhSitePlugin(
         }
     }
 
+    // -------------------------------------------------------------------------
+    // Reader decoding (mirrors /assets/runtime/chapter-decoder.js on reader.hipmh.top)
+    // -------------------------------------------------------------------------
+
+    private suspend fun loadChapterPages(frontendHid: String): List<GalleryPage> {
+        if (frontendHid.isBlank()) return emptyList()
+        val apiHid = buildApiHid(frontendHid)
+            ?: throw SiteException.ParseError("嬉皮漫畫章节编号无法解析", siteId = SiteId.HIPMH)
+        val body = fetchApi("$API_BASE/v2/chapter?hid=${encode(apiHid)}")
+        val root = runCatching { json.parseToJsonElement(body).jsonObject }.getOrNull()
+            ?: throw SiteException.ParseError("嬉皮漫畫章节数据格式异常", siteId = SiteId.HIPMH)
+        val data = root["data"] as? JsonObject
+            ?: throw SiteException.ParseError("嬉皮漫畫章节数据为空", siteId = SiteId.HIPMH)
+        val images = when (val raw = data["images"]) {
+            is JsonArray -> raw.mapNotNull { it.jsonPrimitive.content }.toMutableList()
+            is kotlinx.serialization.json.JsonPrimitive -> {
+                if (raw.content.isBlank()) return emptyList()
+                decodeImages(raw.content).toMutableList()
+            }
+            else -> return emptyList()
+        }
+        val orderId = data["order_id"]?.jsonPrimitive?.content?.toLongOrNull() ?: -1L
+        val sid = data["sid"]?.jsonPrimitive?.content?.toLongOrNull() ?: -1L
+        if (images.isNotEmpty() && orderId >= 0 && sid >= 0) {
+            decoyIndex(images.size, orderId, sid)?.let { idx -> if (idx in images.indices) images.removeAt(idx) }
+        }
+        val line = data["line"]?.jsonPrimitive?.content?.toIntOrNull() ?: 1
+        val base = when (line) {
+            2 -> "https://hip-cf-1.s3imgs.top"
+            9 -> "https://hip-tx-s1.s3imgs.top"
+            else -> "https://hip-tx-1.s3imgs.top"
+        }
+        return images.mapIndexed { index, path ->
+            val imageUrl = when {
+                path.startsWith("http") -> path
+                path.startsWith("/") -> base + path
+                else -> "$base/$path"
+            }
+            GalleryPage(
+                index = index + 1,
+                pageUrl = "https://reader.hipmh.top/chapter/$frontendHid#${index + 1}",
+                imageUrl = imageUrl,
+            )
+        }
+    }
+
+    private fun buildApiHid(frontendHid: String): String? {
+        val head = frontendHid.substringBefore('-')
+        val suffix = frontendHid.substringAfter('-', "")
+        val decoded = runCatching { decodeBase64Url(head) }.getOrNull() ?: return null
+        val chapterPart = decoded.substringAfter('-', "")
+        if (!chapterPart.startsWith("c:")) return null
+        return encodeBase64Url(chapterPart) + if (suffix.isNotEmpty()) "-$suffix" else ""
+    }
+
+    private fun decodeImages(encoded: String): List<String> {
+        val body = encoded.removePrefix("qM9").removeSuffix("Z7")
+        if (body.length < 6) return emptyList()
+        val tailLength = (body.length - 5) / 3
+        val headLength = (body.length - 5 - tailLength) / 2
+        if (tailLength <= 0 || headLength <= 0) return emptyList()
+        val head = body.take(headLength)
+        val mid = body.substring(headLength + 2, body.length - 3 - tailLength)
+        val tail = body.takeLast(tailLength)
+        val base64 = (tail + head + mid).chunked(7)
+            .mapIndexed { index, block -> if (index % 2 == 1) block.reversed() else block }
+            .joinToString("")
+            .mapNotNull { ch ->
+                val idx = ENCODED_ALPHABET.indexOf(ch)
+                if (idx >= 0) DECODED_ALPHABET[idx] else null
+            }
+            .joinToString("")
+        val decoded = runCatching { decodeBase64Url(base64) }.getOrNull() ?: return emptyList()
+        return runCatching {
+            json.parseToJsonElement(decoded).jsonArray.mapNotNull { it.jsonPrimitive.content }
+        }.getOrDefault(emptyList())
+    }
+
+    private fun decoyIndex(size: Int, orderId: Long, sid: Long): Int? {
+        if (size <= 1) return null
+        val key = (sid.toBigInteger() * DECOY_SID_FACTOR)
+            .xor(size.toBigInteger() * DECOY_SIZE_FACTOR)
+            .mod(size.toBigInteger())
+        return orderId.toBigInteger().xor(key).takeIf { it in BigInteger.ZERO..<size.toBigInteger() }?.toInt()
+    }
+
+    private fun decodeBase64Url(raw: String): String {
+        val padded = raw.replace('-', '+').replace('_', '/')
+        val bytes = Base64.getDecoder().decode(padded)
+        return String(bytes, Charsets.UTF_8)
+    }
+
+    private fun encodeBase64Url(raw: String): String =
+        Base64.getUrlEncoder().withoutPadding().encodeToString(raw.toByteArray(Charsets.UTF_8))
+
     private suspend fun fetchApi(url: String): String {
         val response = try {
             httpClient.getText(
@@ -273,11 +395,6 @@ class HipmhSitePlugin(
         response.throwIfNotSuccessful(SiteId.HIPMH, descriptor.displayName)
         return response.bodyText()
     }
-
-    private fun readingUnsupported(): SiteException.Unsupported = SiteException.Unsupported(
-        message = "嬉皮漫畫阅读页图页由 reader.hipmh.top 混淆脚本解码，服务端不返回图片地址",
-        siteId = SiteId.HIPMH,
-    )
 
     private fun extractWorkSlug(url: String): String? {
         val parsed = ComicUrl.parse(url) ?: return null
@@ -332,6 +449,11 @@ class HipmhSitePlugin(
             "genre_gong-dou" to 44,
             "genre_ni-xi" to 32,
         )
+
+        private const val ENCODED_ALPHABET = "_-9876543210abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
+        private const val DECODED_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
+        private val DECOY_SID_FACTOR = BigInteger.valueOf(0x9E3779B1L)
+        private val DECOY_SIZE_FACTOR = BigInteger.valueOf(0x85EBCA6BL)
 
         val DESCRIPTOR: SiteDescriptor = SiteDescriptor(
             id = SITE_ID,

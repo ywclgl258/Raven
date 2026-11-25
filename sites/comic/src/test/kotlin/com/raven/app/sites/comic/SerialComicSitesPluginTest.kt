@@ -76,8 +76,8 @@ class SerialComicSitesPluginTest {
     @Test
     fun `guazimanhua parses feed detail chapters and page images`() = runTest {
         val http = FakeHttpClientAdapter()
-        http.onUrlText("https://www.guazimanhua.com/update.php", guaziUpdateHtml)
-        http.onUrlText("https://www.guazimanhua.com/update.php?page=2", guaziUpdateHtml)
+        http.onUrlText("https://www.guazimanhua.com/category.php?sort=update&page=1", guaziUpdateHtml)
+        http.onUrlText("https://www.guazimanhua.com/category.php?sort=update&page=2", guaziUpdateHtml)
         http.onUrlText("https://www.guazimanhua.com/comic.php?id=18741", guaziDetailHtml)
         http.onUrlText("https://www.guazimanhua.com/chapter.php?id=954976", guaziChapterHtml)
 
@@ -100,7 +100,7 @@ class SerialComicSitesPluginTest {
         assertEquals("954976", detail.item.extra["chapterId"])
 
         // 分类维度：/category.php?cid=25&sort=hits
-        http.onUrlText("https://www.guazimanhua.com/category.php?cid=25&sort=hits", guaziUpdateHtml)
+        http.onUrlText("https://www.guazimanhua.com/category.php?cid=25&sort=hits&page=1", guaziUpdateHtml)
         val categoryFeed = plugin.feedSource.loadFeed(
             FeedRequest(
                 siteId = SiteId.GUAZIMANHUA,
@@ -109,7 +109,7 @@ class SerialComicSitesPluginTest {
             ),
         )
         assertEquals(2, categoryFeed.items.size)
-        assertTrue(http.recordedRequests.last().url.endsWith("/category.php?cid=25&sort=hits"))
+        assertTrue(http.recordedRequests.last().url.endsWith("/category.php?cid=25&sort=hits&page=1"))
         assertTrue(
             plugin.descriptor.sections.any { it.id == "cid_25" && it.title == "玄幻" },
         )
@@ -219,13 +219,14 @@ class SerialComicSitesPluginTest {
         {
           "code": 200,
           "results": {
-            "limit": 21,
+            "limit": 30,
             "offset": 0,
+            "total": 2,
             "list": [
-              {"name": "上篇", "comic": {"name": "戰火硝煙下的海拉爾", "path_word": "zhanhuoxiaoyanxiadehailaer",
-                "cover": "https://sz.mangafunb.fun/z/cover.jpg", "popular": 123}},
-              {"name": "第1话", "comic": {"name": "第二個神之子", "path_word": "degszz",
-                "cover": "https://sd.mangafunb.fun/d/cover.jpg", "popular": 125}}
+              {"name": "戰火硝煙下的海拉爾", "path_word": "zhanhuoxiaoyanxiadehailaer",
+               "cover": "https://sz.mangafunb.fun/z/cover.jpg.328x422.jpg"},
+              {"name": "第二個神之子", "path_word": "degszz",
+               "cover": "https://sd.mangafunb.fun/d/cover.jpg.328x422.jpg"}
             ]
           }
         }
@@ -244,13 +245,59 @@ class SerialComicSitesPluginTest {
         }
     """.trimIndent()
 
+    private val mangacopyDetailJson = """
+        {
+          "code": 200,
+          "results": {
+            "comic": {"name": "戰火硝煙下的海拉爾", "path_word": "zhanhuoxiaoyanxiadehailaer",
+                      "cover": "https://sz.mangafunb.fun/z/cover.jpg.328x422.jpg", "brief": "简介"},
+            "groups": {"default": {"path_word": "default", "name": "默認", "count": 1}}
+          }
+        }
+    """.trimIndent()
+
+    private val mangacopyChaptersJson = """
+        {
+          "code": 200,
+          "results": {
+            "list": [
+              {"uuid": "9db4712d-e89f-11f1-b027-fa163e02432f", "name": "上篇",
+               "comic_path_word": "zhanhuoxiaoyanxiadehailaer"}
+            ],
+            "total": 1,
+            "limit": 500,
+            "offset": 0
+          }
+        }
+    """.trimIndent()
+
+    private fun mangacopyChapterHtml(): String {
+        val key = "0p0zzpvv.nmn.oop"
+        val iv = "abcdefghijklmnop"
+        val plain = """[{"url":"https://sz.mangafunb.fun/page/001.jpg"}]"""
+        val cipher = javax.crypto.Cipher.getInstance("AES/CBC/PKCS5Padding")
+        cipher.init(
+            javax.crypto.Cipher.ENCRYPT_MODE,
+            javax.crypto.spec.SecretKeySpec(key.toByteArray(), "AES"),
+            javax.crypto.spec.IvParameterSpec(iv.toByteArray()),
+        )
+        val encrypted = cipher.doFinal(plain.toByteArray())
+        val contentKey = iv + encrypted.joinToString("") { "%02x".format(it) }
+        return """
+            <html><body><script>
+              var cct = '$key';
+              var contentKey = '$contentKey';
+            </script></body></html>
+        """.trimIndent()
+    }
+
     @Test
     fun `mangacopy parses newest feed and search results`() = runTest {
         val http = FakeHttpClientAdapter()
-        http.onMatch({ req -> req.url.startsWith("https://api.mangacopy.com/api/v3/update/newest") }) { req ->
+        http.onMatch({ req -> req.url.startsWith("https://api.copy4000.com/api/v3/comics") }) { req ->
             FakeHttpClientAdapter.htmlResponse(req.url, mangacopyNewestJson)
         }
-        http.onMatch({ req -> req.url.startsWith("https://api.mangacopy.com/api/v3/search/comic") }) { req ->
+        http.onMatch({ req -> req.url.startsWith("https://api.copy4000.com/api/v3/search/comic") }) { req ->
             FakeHttpClientAdapter.htmlResponse(req.url, mangacopySearchJson)
         }
 
@@ -260,13 +307,116 @@ class SerialComicSitesPluginTest {
         assertEquals("zhanhuoxiaoyanxiadehailaer", feed.items.first().id)
         assertEquals("戰火硝煙下的海拉爾", feed.items.first().title)
         assertEquals("https://www.mangacopy.com/comic/zhanhuoxiaoyanxiadehailaer", feed.items.first().url)
+        assertEquals("https://sz.mangafunb.fun/z/cover.jpg", feed.items.first().coverUrl)
 
         val search = plugin.searchSource.search(FeedRequest(siteId = SiteId.MANGACOPY, query = "海賊王"))
         assertEquals("海賊王", search.items.single().title)
 
+        // 详情 + AES-CBC 章节解密
+        http.onMatch({ req -> req.url.startsWith("https://api.copy4000.com/api/v3/comic2/zhanhuoxiaoyanxiadehailaer") }) { req ->
+            FakeHttpClientAdapter.htmlResponse(req.url, mangacopyDetailJson)
+        }
+        http.onMatch({ req -> req.url.startsWith("https://api.copy4000.com/api/v3/comic/zhanhuoxiaoyanxiadehailaer/group/default/chapters") }) { req ->
+            FakeHttpClientAdapter.htmlResponse(req.url, mangacopyChaptersJson)
+        }
+        http.onUrlText(
+            "https://www.mangacopy.com/comic/zhanhuoxiaoyanxiadehailaer/chapter/9db4712d-e89f-11f1-b027-fa163e02432f",
+            mangacopyChapterHtml(),
+        )
+        val detail = plugin.gallerySource.loadGalleryDetail(
+            "https://www.mangacopy.com/comic/zhanhuoxiaoyanxiadehailaer",
+        )
+        assertEquals("戰火硝煙下的海拉爾", detail.item.title)
+        assertEquals("https://sz.mangafunb.fun/z/cover.jpg", detail.item.coverUrl)
+        assertEquals(1, detail.pageCount)
+        assertEquals("https://sz.mangafunb.fun/page/001.jpg", detail.pages.single().imageUrl)
+
         val resolved = plugin.linkResolver.resolve("https://www.mangacopy.com/comic/haizeiwang?from=share")
         assertTrue(resolved is ResolvedLink.Gallery)
         assertNull(plugin.linkResolver.resolve("https://unrelated-domain.invalid/comic/x"))
+    }
+
+    // -------------------------------------------------------------------------
+    // 漫画160
+    // -------------------------------------------------------------------------
+
+    private val mh160ListHtml = """
+        <html><body>
+          <div class="itemBox">
+            <div class="itemImg"><img src="https://p.miyeye.cn/cover/26001.jpg"></div>
+            <div class="itemTxt"><a class="title" href="/kanmanhua/26001/">苏生战铳</a></div>
+          </div>
+          <div class="itemBox">
+            <div class="itemImg"><img src="https://p.miyeye.cn/cover/123.jpg"></div>
+            <div class="itemTxt"><a class="title" href="/kanmanhua/123/">示例漫画</a></div>
+          </div>
+        </body></html>
+    """.trimIndent()
+
+    private val mh160DetailHtml = """
+        <html><head>
+          <title>苏生战铳漫画,苏生战铳漫画全集,苏生战铳漫画免费观看-漫画160</title>
+          <meta property="og:image" content="https://p.miyeye.cn/cover/26001.jpg">
+          <meta name="description" content="苏生战铳漫画简介">
+        </head><body>
+          <div class="chapters" id="chapterList_1">
+            <ul class="list" id="chapterList_ul_1">
+              <li><a href="/kanmanhua/26001/590566.html">第65话</a></li>
+              <li><a href="/kanmanhua/26001/583501.html">第1话</a></li>
+            </ul>
+          </div>
+        </body></html>
+    """.trimIndent()
+
+    private val mh160ChapterHtml = run {
+        val payload = "/mh160tuku/s/苏生战铳_26001/第01话_583501/0001.jpg" +
+            "\$qingtiandy\$" +
+            "/mh160tuku/s/苏生战铳_26001/第01话_583501/0002.jpg"
+        val encoded = java.util.Base64.getEncoder().encodeToString(payload.toByteArray(Charsets.UTF_8))
+        """
+        <html><body>
+          <script>
+            var qTcms_S_p_id="583501";
+            var qTcms_S_m_murl_e="$encoded";
+          </script>
+        </body></html>
+        """.trimIndent()
+    }
+
+    @Test
+    fun `mh160 parses mobile feed, detail chapters and encoded reader pages`() = runTest {
+        val http = FakeHttpClientAdapter()
+        http.onUrlText("https://m.mh160ba.com/kanmanhua/zaixian_recent.html", mh160ListHtml)
+        http.onUrlText("https://www.mh160ba.com/kanmanhua/26001/", mh160DetailHtml)
+        http.onUrlText("https://www.mh160ba.com/kanmanhua/26001/583501.html", mh160ChapterHtml)
+
+        val plugin = Mh160SitePlugin(http)
+        val feed = plugin.feedSource.loadFeed(FeedRequest(siteId = SiteId.MH160))
+        assertEquals(2, feed.items.size)
+        assertEquals("26001", feed.items.first().id)
+        assertEquals("苏生战铳", feed.items.first().title)
+        assertEquals("https://p.miyeye.cn/cover/26001.jpg", feed.items.first().coverUrl)
+
+        val detail = plugin.gallerySource.loadGalleryDetail("https://www.mh160ba.com/kanmanhua/26001/")
+        assertEquals("苏生战铳", detail.item.title)
+        assertEquals(2, detail.pageCount)
+        assertEquals("https://www.mh160ba.com/kanmanhua/26001/583501.html", detail.item.extra["chapterUrl"])
+        // 章节 id > 542724 时按 id % 5 选择 kingwar 镜像主机
+        assertTrue(detail.pages.first().imageUrl.contains(".kingwar.cn/mh160tuku/"))
+        assertTrue(detail.pages.first().imageUrl.endsWith("/0001.jpg"))
+
+        val page = plugin.gallerySource.resolvePageImage(
+            "https://www.mh160ba.com/kanmanhua/26001/583501.html#2",
+            preferOriginal = false,
+            forceReload = true,
+        )
+        assertEquals(2, page.index)
+        assertTrue(page.imageUrl.endsWith("/0002.jpg"))
+
+        val resolved = plugin.linkResolver.resolve("https://www.mh160ba.com/kanmanhua/26001/")
+        assertTrue(resolved is ResolvedLink.Gallery)
+        assertEquals("26001", (resolved as ResolvedLink.Gallery).id)
+        assertNull(plugin.linkResolver.resolve("https://unrelated-domain.invalid/kanmanhua/1/"))
     }
 
     // -------------------------------------------------------------------------
@@ -387,6 +537,22 @@ class SerialComicSitesPluginTest {
         }
     """.trimIndent()
 
+    private val hipmhChapterImagesJson = """
+        {
+          "code": 200,
+          "message": "ok",
+          "data": {
+            "chapter_id": 13721,
+            "chapter_number": 1,
+            "images": [
+              "https://hip-tx-1.s3imgs.top/kk/13721/001.jpg",
+              "https://hip-tx-1.s3imgs.top/kk/13721/002.jpg"
+            ],
+            "line": 1
+          }
+        }
+    """.trimIndent()
+
     private val hipmhWorkHtml = """
         <html><head>
           <title>登录武林系统 - 嬉皮漫畫</title>
@@ -404,6 +570,9 @@ class SerialComicSitesPluginTest {
         }
         http.onMatch({ req -> req.url.startsWith("https://hipapi1.s3file.top/v1/manga/chapters") }) { req ->
             FakeHttpClientAdapter.htmlResponse(req.url, hipmhChaptersJson)
+        }
+        http.onMatch({ req -> req.url.startsWith("https://hipapi1.s3file.top/v2/chapter") }) { req ->
+            FakeHttpClientAdapter.htmlResponse(req.url, hipmhChapterImagesJson)
         }
         http.onUrlText(
             "https://m.hipmh.com/works/bTo3MjQ0-deng-lu-wu-lin-xi-tong-7236",
@@ -432,12 +601,20 @@ class SerialComicSitesPluginTest {
         assertEquals("bTo3MjQ0LWM6MTM3MjE-NzI0NDoxLjAw", detail.item.extra["chapterHid"])
         assertTrue(detail.chaptersUrl.orEmpty().endsWith("#chapters"))
 
-        try {
-            plugin.gallerySource.loadGalleryPage(detail, 1, forceReload = false)
-            fail("Expected Unsupported for encrypted reader images")
-        } catch (expected: SiteException.Unsupported) {
-            assertTrue(expected.message.orEmpty().contains("reader.hipmh.top"))
-        }
+        assertEquals(
+            listOf(
+                "https://hip-tx-1.s3imgs.top/kk/13721/001.jpg",
+                "https://hip-tx-1.s3imgs.top/kk/13721/002.jpg",
+            ),
+            detail.pages.map { it.imageUrl },
+        )
+        val readerPage = plugin.gallerySource.resolvePageImage(
+            "https://reader.hipmh.top/chapter/bTo3MjQ0LWM6MTM3MjE-NzI0NDoxLjAw#2",
+            preferOriginal = false,
+            forceReload = true,
+        )
+        assertEquals(2, readerPage.index)
+        assertEquals("https://hip-tx-1.s3imgs.top/kk/13721/002.jpg", readerPage.imageUrl)
 
         val resolved = plugin.linkResolver.resolve("https://m.hipmh.com/works/bTo3MjQ0-deng-lu-wu-lin-xi-tong-7236?x=1")
         assertTrue(resolved is ResolvedLink.Gallery)

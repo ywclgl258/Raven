@@ -357,7 +357,7 @@ class WnacgAndJmcomicPluginTest {
             assertNotNull(registry.resolveLinkFromText("Book https://hdoujin.org/book/12345/abcdef123456"))
             assertNotNull(registry.resolveLinkFromText("Comic https://www.mangacopy.com/comic/abcdefg"))
             assertNotNull(registry.resolveLinkFromText("Comic https://www.guazimanhua.com/comic.php?id=18741"))
-            assertNotNull(registry.resolveLinkFromText("Comic https://mh160mh.com/comic/1234"))
+            assertNotNull(registry.resolveLinkFromText("Comic https://www.mh160ba.com/kanmanhua/26001/"))
             assertNotNull(registry.resolveLinkFromText("Comic https://mycomic.com/comics/1234"))
             assertNotNull(registry.resolveLinkFromText("Comic https://m.hipmh.com/works/demo-slug"))
         } finally {

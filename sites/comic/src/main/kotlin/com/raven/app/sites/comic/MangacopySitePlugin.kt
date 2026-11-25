@@ -18,19 +18,36 @@ import com.raven.app.core.model.SiteNetworkProfile
 import com.raven.app.core.model.SiteSectionSpec
 import com.raven.app.core.sitespi.FeedSource
 import com.raven.app.core.sitespi.GallerySource
-import com.raven.app.core.sitespi.HtmlUrlCleaner
 import com.raven.app.core.sitespi.HttpClientAdapter
 import com.raven.app.core.sitespi.LinkResolver
 import com.raven.app.core.sitespi.ResolvedLink
 import com.raven.app.core.sitespi.SearchSource
 import com.raven.app.core.sitespi.SitePlugin
 import com.raven.app.core.sitespi.SiteRequestKind
+import javax.crypto.Cipher
+import javax.crypto.spec.IvParameterSpec
+import javax.crypto.spec.SecretKeySpec
+import kotlinx.coroutines.CancellationException
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
-import org.jsoup.Jsoup
 
+/**
+ * 拷贝漫画 (`SiteId.MANGACOPY`) 连载漫画插件。
+ *
+ * 官方 App 接口（必须携带 `platform` / `version` 头，否则返回空列表）：
+ * - 列表：`GET https://api.copy4000.com/api/v3/comics?ordering=-datetime_updated&limit=30&offset=`
+ * - 搜索：`GET /api/v3/search/comic?platform=1&q=&q_type=`
+ * - 详情：`GET /api/v3/comic2/<path_word>?platform=1`（含分组 `groups`）
+ * - 章节：`GET /api/v3/comic/<path_word>/group/<group>/chapters?limit=500&offset=`
+ *
+ * 阅读：桌面版章节页内嵌 `var cct`（AES 密钥）与 `var contentKey`（前 16 字符为 IV，
+ * 其余为 hex 密文），AES-CBC 解密后得到图页 JSON 数组。
+ */
 class MangacopySitePlugin(
     private val httpClient: HttpClientAdapter,
 ) : SitePlugin {
@@ -46,64 +63,50 @@ class MangacopySitePlugin(
         }
 
         override suspend fun loadFeed(request: FeedRequest): FeedPage {
-            val url = "${descriptor.networkProfile.apiBase}/api/v3/update/newest?limit=21&offset=${(request.page - 1) * 21}&platform=3"
-            val body = fetchText(url)
-            val root = json.parseToJsonElement(body).jsonObject
-            val results = root["results"]?.jsonObject
-            val list = results?.get("list")?.jsonArray ?: emptyList()
-            val items = mutableListOf<MediaItem>()
-            for (entry in list) {
-                val obj = entry.jsonObject
-                val comic = obj["comic"]?.jsonObject ?: continue
-                val name = comic["name"]?.jsonPrimitive?.content.orEmpty()
-                val pathWord = comic["path_word"]?.jsonPrimitive?.content.orEmpty()
-                if (name.isBlank() || pathWord.isBlank()) continue
-                items.add(
-                    MediaItem(
-                        siteId = SiteId.MANGACOPY,
-                        id = pathWord,
-                        url = "${descriptor.baseUrl}/comic/$pathWord",
-                        kind = MediaKind.SERIAL_COMIC,
-                        title = name,
-                        coverUrl = comic["cover"]?.jsonPrimitive?.content.orEmpty(),
-                    ),
-                )
+            val page = request.page.coerceAtLeast(1)
+            val query = request.query?.trim().orEmpty()
+            if (query.isNotEmpty()) {
+                return searchComics(query, page)
             }
+            val ordering = when (request.section?.trim()?.lowercase()) {
+                "popular" -> "-popular"
+                else -> "-datetime_updated"
+            }
+            val results = api(
+                path = "comics",
+                query = listOf(
+                    "ordering" to ordering,
+                    "limit" to PAGE_SIZE.toString(),
+                    "offset" to ((page - 1) * PAGE_SIZE).toString(),
+                ),
+            )
+            val list = (results["list"] as? JsonArray).orEmpty()
+            val items = list.mapNotNull { (it as? JsonObject)?.let(::parseComicSummary) }
             if (items.isEmpty()) {
                 throw SiteException.ParseError("拷贝漫画列表结构不可识别", siteId = SiteId.MANGACOPY)
             }
-            return FeedPage(items = items.distinctBy { it.id }, hasMore = list.size >= 21)
+            val total = results.int("total") ?: 0
+            val offset = results.int("offset") ?: ((page - 1) * PAGE_SIZE)
+            return FeedPage(
+                items = items,
+                hasMore = offset + items.size < total,
+                nextPage = if (offset + items.size < total) page + 1 else null,
+                totalCount = total,
+                title = if (ordering == "-popular") "人气" else "最近更新",
+            )
         }
 
-        override fun supportedSorts(request: FeedRequest): List<FeedSort> = listOf(FeedSort.NEWEST)
+        override fun supportedSorts(request: FeedRequest): List<FeedSort> =
+            listOf(FeedSort.NEWEST, FeedSort.POPULAR)
     }
 
     override val searchSource: SearchSource = object : SearchSource {
         override suspend fun search(request: FeedRequest): FeedPage {
-            val q = HtmlUrlCleaner.encodeQueryParam(request.query?.trim().orEmpty())
-            val url = "${descriptor.networkProfile.apiBase}/api/v3/search/comic?limit=21&offset=${(request.page - 1) * 21}&platform=3&q=$q"
-            val body = fetchText(url)
-            val root = json.parseToJsonElement(body).jsonObject
-            val results = root["results"]?.jsonObject
-            val list = results?.get("list")?.jsonArray ?: emptyList()
-            val items = mutableListOf<MediaItem>()
-            for (entry in list) {
-                val obj = entry.jsonObject
-                val name = obj["name"]?.jsonPrimitive?.content.orEmpty()
-                val pathWord = obj["path_word"]?.jsonPrimitive?.content.orEmpty()
-                if (name.isBlank() || pathWord.isBlank()) continue
-                items.add(
-                    MediaItem(
-                        siteId = SiteId.MANGACOPY,
-                        id = pathWord,
-                        url = "${descriptor.baseUrl}/comic/$pathWord",
-                        kind = MediaKind.SERIAL_COMIC,
-                        title = name,
-                        coverUrl = obj["cover"]?.jsonPrimitive?.content.orEmpty(),
-                    ),
-                )
+            val query = request.query?.trim().orEmpty()
+            if (query.isEmpty()) {
+                throw SiteException.ParseError("拷贝漫画搜索关键词不能为空", siteId = SiteId.MANGACOPY)
             }
-            return FeedPage(items = items.distinctBy { it.id }, hasMore = list.size >= 21)
+            return searchComics(query, request.page.coerceAtLeast(1))
         }
 
         override val supportedScopes: Set<SearchScope> = setOf(SearchScope.ALL)
@@ -111,45 +114,80 @@ class MangacopySitePlugin(
 
     override val gallerySource: GallerySource = object : GallerySource {
         override suspend fun loadGalleryDetail(url: String): GalleryDetail {
-            val id = extractId(url) ?: throw SiteException.ParseError("无法识别拷贝漫画地址：$url", siteId = SiteId.MANGACOPY)
-            val canonical = "${descriptor.baseUrl}/comic/$id"
-            // 详情优先走官方 API；该接口对第三方客户端可能返回 210 反盗版限制，此时回退 HTML 标题。
-            val apiDetail = runCatching { loadComicDetailApi(id) }.getOrNull()
-            val title = apiDetail?.first.orEmpty().ifBlank {
-                val html = runCatching { fetchHtml(canonical) }.getOrNull().orEmpty()
-                if (html.isBlank()) {
-                    "Comic $id"
-                } else {
-                    HtmlUrlCleaner.cleanText(Jsoup.parse(html, canonical).selectFirst("h1, .comic-title")?.text().orEmpty())
-                        .ifBlank { "Comic $id" }
+            val pathWord = extractPathWord(url)
+                ?: throw SiteException.ParseError("无法识别拷贝漫画地址：$url", siteId = SiteId.MANGACOPY)
+            val results = api("comic2/$pathWord", listOf("platform" to "1"))
+            val comic = results["comic"] as? JsonObject
+                ?: throw SiteException.ParseError("拷贝漫画详情数据为空", siteId = SiteId.MANGACOPY)
+            val name = comic.string("name").ifBlank { "Comic $pathWord" }
+            val cover = stripCoverSize(comic.string("cover"))
+            val chapters = loadChapters(pathWord, results["groups"] as? JsonObject)
+            val first = chapters.firstOrNull()
+            val pages = if (first != null) {
+                val chapterUrl = "${descriptor.baseUrl}/comic/$pathWord/chapter/${first.uuid}"
+                loadChapterImages(pathWord, first.uuid).mapIndexed { index, imageUrl ->
+                    GalleryPage(index = index + 1, pageUrl = "$chapterUrl#${index + 1}", imageUrl = imageUrl)
                 }
+            } else {
+                emptyList()
             }
             return GalleryDetail(
                 item = MediaItem(
                     siteId = SiteId.MANGACOPY,
-                    id = id,
-                    url = canonical,
+                    id = pathWord,
+                    url = "${descriptor.baseUrl}/comic/$pathWord",
                     kind = MediaKind.SERIAL_COMIC,
-                    title = title,
-                    coverUrl = apiDetail?.second.orEmpty(),
+                    title = name,
+                    coverUrl = cover,
+                    pageCount = pages.size,
+                    extra = buildMap {
+                        put("chapterUuid", first?.uuid.orEmpty())
+                        put("chapterName", first?.name.orEmpty())
+                    },
                 ),
-                pages = emptyList(),
-                pageCount = 1,
+                description = comic.string("brief"),
+                pageCount = pages.size.coerceAtLeast(1),
+                pages = pages,
+                chaptersUrl = if (chapters.size > 1) "${descriptor.baseUrl}/comic/$pathWord#chapters" else null,
             )
         }
 
-        override suspend fun loadGalleryPage(detail: GalleryDetail, pageIndex: Int, forceReload: Boolean): GalleryPage {
-            throw SiteException.Unsupported(
-                message = "拷贝漫画章节图片接口对第三方客户端做了服务端限制，暂不可读",
-                siteId = SiteId.MANGACOPY,
-            )
+        override suspend fun loadGalleryPage(
+            detail: GalleryDetail,
+            pageIndex: Int,
+            forceReload: Boolean,
+        ): GalleryPage {
+            if (pageIndex !in 1..detail.pageCount) {
+                throw SiteException.NotFound("页码超出范围：$pageIndex / ${detail.pageCount}", siteId = SiteId.MANGACOPY)
+            }
+            if (!forceReload) {
+                detail.pages.firstOrNull { it.index == pageIndex && it.imageUrl.isNotBlank() }?.let { return it }
+            }
+            val uuid = detail.item.extra["chapterUuid"].orEmpty()
+            if (uuid.isBlank()) {
+                throw SiteException.ParseError("拷贝漫画章节信息缺失", siteId = SiteId.MANGACOPY)
+            }
+            val images = loadChapterImages(detail.item.id, uuid)
+            return images.getOrNull(pageIndex - 1)?.let { imageUrl ->
+                GalleryPage(index = pageIndex, pageUrl = "$uuid#$pageIndex", imageUrl = imageUrl)
+            } ?: throw SiteException.NotFound("页码超出范围：$pageIndex / ${images.size}", siteId = SiteId.MANGACOPY)
         }
 
-        override suspend fun resolvePageImage(pageUrl: String, preferOriginal: Boolean, forceReload: Boolean): GalleryPage {
-            throw SiteException.Unsupported(
-                message = "拷贝漫画章节图片接口对第三方客户端做了服务端限制，暂不可读",
-                siteId = SiteId.MANGACOPY,
-            )
+        override suspend fun resolvePageImage(
+            pageUrl: String,
+            preferOriginal: Boolean,
+            forceReload: Boolean,
+        ): GalleryPage {
+            val parsed = ComicUrl.parse(pageUrl)
+                ?: throw SiteException.ParseError("无法识别拷贝漫画图页地址", siteId = SiteId.MANGACOPY)
+            val pathWord = extractPathWord(pageUrl)
+                ?: throw SiteException.ParseError("无法识别拷贝漫画作品编号", siteId = SiteId.MANGACOPY)
+            val uuid = parsed.pathSegments.lastOrNull().orEmpty()
+            val pageIndex = parsed.fragment?.toIntOrNull()?.takeIf { it > 0 } ?: 1
+            val images = loadChapterImages(pathWord, uuid)
+            return images.getOrNull(pageIndex - 1)?.let { imageUrl ->
+                GalleryPage(index = pageIndex, pageUrl = "$uuid#$pageIndex", imageUrl = imageUrl)
+            } ?: throw SiteException.NotFound("页码超出范围：$pageIndex / ${images.size}", siteId = SiteId.MANGACOPY)
         }
     }
 
@@ -161,61 +199,218 @@ class MangacopySitePlugin(
 
         override fun canonicalize(url: String): String? {
             val parsed = ComicUrl.parse(url)?.takeIf { descriptor.matchesHost(it.host) } ?: return null
-            val id = extractId(parsed.toString()) ?: return null
+            val id = extractPathWord(parsed.toString()) ?: return null
             return "${descriptor.baseUrl}/comic/$id"
         }
 
         override fun resolve(url: String): ResolvedLink? {
             val parsed = ComicUrl.parse(url)?.takeIf { descriptor.matchesHost(it.host) } ?: return null
-            val id = extractId(parsed.toString()) ?: return null
+            val id = extractPathWord(parsed.toString()) ?: return null
             return ResolvedLink.Gallery(SiteId.MANGACOPY, id, "${descriptor.baseUrl}/comic/$id")
         }
     }
 
-    /**
-     * 官方详情 API：`/api/v3/comic/<path_word>?platform=3`。
-     * 部分网络/客户端会被站点返回 210 反盗版限制，此时抛出异常由调用方回退 HTML。
-     */
-    private suspend fun loadComicDetailApi(pathWord: String): Pair<String, String> {
-        val url = "${descriptor.networkProfile.apiBase}/api/v3/comic/$pathWord?platform=3"
-        val body = fetchText(url)
-        val root = json.parseToJsonElement(body).jsonObject
-        val results = root["results"]?.jsonObject
-            ?: throw SiteException.ParseError("拷贝漫画详情数据为空", siteId = SiteId.MANGACOPY)
-        val comic = results["comic"]?.jsonObject ?: results
-        val name = comic["name"]?.jsonPrimitive?.content.orEmpty()
-        val cover = comic["cover"]?.jsonPrimitive?.content.orEmpty()
-        if (name.isBlank()) {
-            throw SiteException.ParseError("拷贝漫画详情缺少标题", siteId = SiteId.MANGACOPY)
+    // -------------------------------------------------------------------------
+    // API & Parsing
+    // -------------------------------------------------------------------------
+
+    private suspend fun searchComics(query: String, page: Int): FeedPage {
+        val results = api(
+            path = "search/comic",
+            query = listOf(
+                "platform" to "1",
+                "q" to query,
+                "q_type" to "",
+                "limit" to PAGE_SIZE.toString(),
+                "offset" to ((page - 1) * PAGE_SIZE).toString(),
+            ),
+        )
+        val items = (results["list"] as? JsonArray).orEmpty()
+            .mapNotNull { (it as? JsonObject)?.let(::parseComicSummary) }
+        val total = results.int("total") ?: 0
+        val offset = results.int("offset") ?: ((page - 1) * PAGE_SIZE)
+        return FeedPage(
+            items = items,
+            hasMore = offset + items.size < total,
+            nextPage = if (offset + items.size < total) page + 1 else null,
+            totalCount = total,
+            title = query,
+        )
+    }
+
+    private fun parseComicSummary(obj: JsonObject): MediaItem? {
+        val name = obj.string("name").takeIf { it.isNotBlank() } ?: return null
+        val pathWord = obj.string("path_word").takeIf { it.isNotBlank() } ?: return null
+        return MediaItem(
+            siteId = SiteId.MANGACOPY,
+            id = pathWord,
+            url = "${descriptor.baseUrl}/comic/$pathWord",
+            kind = MediaKind.SERIAL_COMIC,
+            title = name,
+            coverUrl = stripCoverSize(obj.string("cover")),
+        )
+    }
+
+    private suspend fun loadChapters(pathWord: String, groups: JsonObject?): List<ChapterEntry> {
+        val groupWords = groups?.values?.mapNotNull { element ->
+            (element as? JsonObject)?.string("path_word")?.takeIf { it.isNotBlank() }
+        }.orEmpty().ifEmpty { listOf("default") }
+        val collected = mutableListOf<ChapterEntry>()
+        for (group in groupWords) {
+            val results = runCatching {
+                api(
+                    path = "comic/$pathWord/group/$group/chapters",
+                    query = listOf("limit" to "500", "offset" to "0"),
+                )
+            }.getOrNull() ?: continue
+            val list = (results["list"] as? JsonArray).orEmpty()
+                .mapNotNull { (it as? JsonObject)?.let { chapter ->
+                    val uuid = chapter.string("uuid").takeIf { it.isNotBlank() } ?: return@let null
+                    val name = chapter.string("name").ifBlank { uuid }
+                    ChapterEntry(uuid, name)
+                } }
+                .asReversed() // 接口按最新在前返回，反转为阅读顺序
+            collected += list
         }
-        return name to cover
+        return collected
     }
 
-    private suspend fun fetchText(url: String): String {
-        val response = httpClient.getText(url = url, siteId = SiteId.MANGACOPY, kind = SiteRequestKind.API)
+    private suspend fun loadChapterImages(pathWord: String, uuid: String): List<String> {
+        if (uuid.isBlank()) return emptyList()
+        val url = "${descriptor.baseUrl}/comic/$pathWord/chapter/$uuid"
+        val html = fetchDesktopHtml(url)
+        val key = KEY_REGEX.find(html)?.groupValues?.get(1)
+            ?: throw SiteException.ParseError("拷贝漫画章节密钥缺失", siteId = SiteId.MANGACOPY)
+        val contentKey = CONTENT_KEY_REGEX.find(html)?.groupValues?.get(1)
+            ?: throw SiteException.ParseError("拷贝漫画章节内容缺失", siteId = SiteId.MANGACOPY)
+        if (contentKey.length <= 16) return emptyList()
+        val cipherText = hexToBytes(contentKey.drop(16))
+        val plain = runCatching {
+            val cipher = Cipher.getInstance("AES/CBC/PKCS5Padding")
+            cipher.init(
+                Cipher.DECRYPT_MODE,
+                SecretKeySpec(key.toByteArray(Charsets.UTF_8), "AES"),
+                IvParameterSpec(contentKey.take(16).toByteArray(Charsets.UTF_8)),
+            )
+            cipher.doFinal(cipherText)
+        }.getOrNull() ?: throw SiteException.ParseError("拷贝漫画章节解密失败", siteId = SiteId.MANGACOPY)
+        val array = runCatching {
+            json.parseToJsonElement(String(plain, Charsets.UTF_8)).jsonArray
+        }.getOrNull() ?: throw SiteException.ParseError("拷贝漫画图页数据格式异常", siteId = SiteId.MANGACOPY)
+        return array.mapNotNull { element ->
+            (element as? JsonObject)?.string("url")?.takeIf { it.isNotBlank() }
+        }
+    }
+
+    private suspend fun api(path: String, query: List<Pair<String, String>> = emptyList()): JsonObject {
+        val builder = ComicUrl.parse(API_BASE)?.addPathSegments(path) ?: throw SiteException.ParseError(
+            "拷贝漫画接口地址无效",
+            siteId = SiteId.MANGACOPY,
+        )
+        val url = query.fold(builder) { acc, (k, v) -> acc.addQueryParameter(k, v) }.toString()
+        val response = try {
+            httpClient.getText(
+                url = url,
+                siteId = SiteId.MANGACOPY,
+                kind = SiteRequestKind.API,
+                headers = MOBILE_HEADERS + mapOf("Accept" to "application/json"),
+            )
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: SiteException) {
+            throw e
+        } catch (e: Exception) {
+            throw SiteException.Network(
+                message = "拷贝漫画接口请求失败：${e.message ?: "未知错误"}",
+                siteId = SiteId.MANGACOPY,
+                cause = e,
+            )
+        }
+        response.throwIfNotSuccessful(SiteId.MANGACOPY, descriptor.displayName)
+        val root = runCatching { json.parseToJsonElement(response.bodyText()).jsonObject }.getOrNull()
+            ?: throw SiteException.ParseError("拷贝漫画接口数据格式异常", siteId = SiteId.MANGACOPY)
+        val code = root.int("code") ?: 200
+        if (code != 200) {
+            throw SiteException.ParseError(
+                "拷贝漫画接口返回 $code：${root.string("message")}",
+                siteId = SiteId.MANGACOPY,
+            )
+        }
+        return root["results"] as? JsonObject ?: JsonObject(emptyMap())
+    }
+
+    private suspend fun fetchDesktopHtml(url: String): String {
+        val response = try {
+            httpClient.getText(
+                url = url,
+                siteId = SiteId.MANGACOPY,
+                kind = SiteRequestKind.PAGE,
+                headers = mapOf(
+                    "User-Agent" to SiteNetworkProfile.DESKTOP_WINDOWS_UA,
+                    "Referer" to "${descriptor.baseUrl}/",
+                    "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                ),
+            )
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: SiteException) {
+            throw e
+        } catch (e: Exception) {
+            throw SiteException.Network(
+                message = "拷贝漫画网络请求失败：${e.message ?: "未知错误"}",
+                siteId = SiteId.MANGACOPY,
+                cause = e,
+            )
+        }
         response.throwIfNotSuccessful(SiteId.MANGACOPY, descriptor.displayName)
         return response.bodyText()
     }
 
-    private suspend fun fetchHtml(url: String): String {
-        val response = httpClient.getText(url = url, siteId = SiteId.MANGACOPY, kind = SiteRequestKind.PAGE)
-        response.throwIfNotSuccessful(SiteId.MANGACOPY, descriptor.displayName)
-        return response.bodyText()
+    private fun stripCoverSize(cover: String): String =
+        cover.replace(COVER_SIZE_REGEX, "")
+
+    private fun hexToBytes(hex: String): ByteArray {
+        val clean = hex.trim()
+        require(clean.length % 2 == 0) { "Invalid hex length" }
+        return ByteArray(clean.length / 2) { i ->
+            clean.substring(i * 2, i * 2 + 2).toInt(16).toByte()
+        }
     }
 
-    private fun extractId(url: String): String? {
+    private fun extractPathWord(url: String): String? {
         val parsed = ComicUrl.parse(url) ?: return null
         val segments = parsed.pathSegments
         val comicIdx = segments.indexOf("comic")
         if (comicIdx >= 0 && comicIdx + 1 < segments.size) {
             return segments[comicIdx + 1].takeIf { it.isNotBlank() }
         }
-        return segments.lastOrNull()?.takeIf { it.isNotBlank() }
+        return null
     }
+
+    private fun JsonObject.string(name: String): String =
+        this[name]?.jsonPrimitive?.content?.trim().orEmpty()
+
+    private fun JsonObject.int(name: String): Int? =
+        this[name]?.jsonPrimitive?.intOrNull
+
+    private data class ChapterEntry(val uuid: String, val name: String)
 
     companion object {
         val SITE_ID: SiteId = SiteId.MANGACOPY
         const val BASE_URL: String = "https://www.mangacopy.com"
+        const val API_BASE: String = "https://api.copy4000.com/api/v3"
+        private const val WEB_VERSION = "2026.10.16"
+        private const val PAGE_SIZE = 30
+
+        private val COVER_SIZE_REGEX = Regex("""\.\d+x\d+\.\w+$""")
+        private val KEY_REGEX = Regex("""var cct = '([^']*)'""")
+        private val CONTENT_KEY_REGEX = Regex("""var contentKey = '([^']*)'""")
+
+        private val MOBILE_HEADERS = mapOf(
+            "platform" to "1",
+            "version" to WEB_VERSION,
+            "Referer" to "$BASE_URL/",
+        )
 
         val DESCRIPTOR: SiteDescriptor = SiteDescriptor(
             id = SITE_ID,
@@ -224,19 +419,29 @@ class MangacopySitePlugin(
             primaryKind = MediaKind.SERIAL_COMIC,
             supportedKinds = setOf(MediaKind.SERIAL_COMIC),
             defaultHost = "www.mangacopy.com",
-            mirrorHosts = listOf("copymanga.com", "www.copymanga.com", "www.copy4000.com", "copy4000.com"),
-            accessNote = "章节图片接口有服务端限制，列表与搜索可正常使用",
-            capabilities = setOf(SiteCapability.FEED, SiteCapability.SEARCH, SiteCapability.MIRRORS),
-            feedSorts = listOf(FeedSort.NEWEST),
-            sections = listOf(SiteSectionSpec("latest", "最近更新", defaultSort = FeedSort.NEWEST)),
+            mirrorHosts = listOf(
+                "copymanga.com", "www.copymanga.com", "www.copy4000.com",
+                "copy4000.com", "copy5000.com", "copy20.com", "copymanga.fun",
+            ),
+            accessNote = "官方 API 需要 platform/version 头；章节图页为 AES-CBC 加密",
+            capabilities = setOf(
+                SiteCapability.FEED,
+                SiteCapability.SEARCH,
+                SiteCapability.MIRRORS,
+            ),
+            feedSorts = listOf(FeedSort.NEWEST, FeedSort.POPULAR),
+            sections = listOf(
+                SiteSectionSpec("latest", "最近更新", defaultSort = FeedSort.NEWEST),
+                SiteSectionSpec("popular", "人气", defaultSort = FeedSort.POPULAR),
+            ),
             searchScopes = listOf(SearchScope.ALL),
             networkProfile = SiteNetworkProfile(
                 userAgent = SiteNetworkProfile.DEFAULT_MOBILE_UA,
                 referer = "$BASE_URL/",
                 mediaReferer = "$BASE_URL/",
-                apiBase = "https://api.mangacopy.com",
-                apiHosts = setOf("api.mangacopy.com"),
-                mediaDomains = setOf("mangafunb.fun"),
+                apiBase = API_BASE,
+                apiHosts = setOf("api.copy4000.com"),
+                mediaDomains = setOf("mangafunb.fun", "copy4000.com", "copy5000.com"),
             ),
         )
     }
