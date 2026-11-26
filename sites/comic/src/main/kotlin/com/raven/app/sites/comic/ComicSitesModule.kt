@@ -6,7 +6,8 @@ import org.koin.dsl.bind
 import org.koin.dsl.module
 
 /**
- * Koin DI module registering all 6 comic [SitePlugin] implementations via multi-binding (`bind SitePlugin::class`).
+ * Koin DI module registering all 12 comic [SitePlugin] implementations via multi-binding
+ * (`bind SitePlugin::class`): 7 standard comics and 5 serial comics.
  * Dependencies resolved from core modules: `HttpClientAdapter` and `SiteSessionStore`.
  */
 val comicSitesModule: Module = module {

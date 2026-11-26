@@ -1,6 +1,9 @@
 package com.raven.app
 
+import android.Manifest
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.hasClickAction
+import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onAllNodesWithTag
@@ -10,8 +13,10 @@ import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performScrollToNode
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import androidx.test.rule.GrantPermissionRule
 import org.junit.Rule
 import org.junit.Test
+import org.junit.rules.RuleChain
 import org.junit.runner.RunWith
 
 /**
@@ -21,8 +26,14 @@ import org.junit.runner.RunWith
 @RunWith(AndroidJUnit4::class)
 class RavenSmokeAndroidTest {
 
-    @get:Rule
+    private val notificationPermissionRule = GrantPermissionRule.grant(Manifest.permission.POST_NOTIFICATIONS)
+
     val composeRule = createAndroidComposeRule<MainActivity>()
+
+    @get:Rule
+    val ruleChain: RuleChain = RuleChain
+        .outerRule(notificationPermissionRule)
+        .around(composeRule)
 
     private fun waitForTag(tag: String, timeoutMillis: Long = 15_000L) {
         composeRule.waitUntil(timeoutMillis = timeoutMillis) {
@@ -95,6 +106,36 @@ class RavenSmokeAndroidTest {
     }
 
     @Test
+    fun libraryDownloadsFavoritesHubPreservesPrimaryActionsAndReturnNavigation() {
+        waitForTag("browse_home_screen")
+        composeRule.onNodeWithTag("nav_library").performClick()
+        waitForTag("library_hub_screen")
+
+        composeRule.onNodeWithTag("hub_open_downloads").performClick()
+        waitForTag("downloads_favorites_screen")
+        composeRule.onNodeWithTag("downloads_screen").assertIsDisplayed()
+        composeRule.onNodeWithTag("downloads_sync_disk_button").assertIsDisplayed()
+
+        composeRule.onNodeWithTag("collection_tab_favorites").performClick()
+        composeRule.onNodeWithTag("favorites_screen").assertIsDisplayed()
+        composeRule.onNodeWithTag("favorites_multiselect_button").assertIsDisplayed()
+
+        composeRule.onNodeWithTag("collection_tab_downloads").performClick()
+        composeRule.onNodeWithTag("downloads_screen").assertIsDisplayed()
+        composeRule.onNodeWithTag("downloads_sync_disk_button").assertIsDisplayed()
+        composeRule.onNodeWithTag("downloads_favorites_back_button").performClick()
+        waitForTag("library_hub_screen")
+
+        // The favorites entry must open the same hub directly on its favorites tab.
+        composeRule.onNodeWithTag("hub_open_favorites").performClick()
+        waitForTag("downloads_favorites_screen")
+        composeRule.onNodeWithTag("favorites_screen").assertIsDisplayed()
+        composeRule.onNodeWithTag("favorites_multiselect_button").assertIsDisplayed()
+        composeRule.onNodeWithTag("downloads_favorites_back_button").performClick()
+        waitForTag("library_hub_screen")
+    }
+
+    @Test
     fun navigateToSettingsDisplaysAppleHigGroupedSectionsAndHidesBottomNav() {
         waitForTag("browse_home_screen")
 
@@ -107,6 +148,30 @@ class RavenSmokeAndroidTest {
 
         // Sub-routes hide the primary bottom/rail navigation chrome
         composeRule.onNodeWithTag("nav_home").assertDoesNotExist()
+
+        composeRule.onNodeWithTag("settings_list")
+            .performScrollToNode(hasTestTag("settings_site_preferences_row"))
+        composeRule.onNodeWithTag("settings_site_preferences_row").performClick()
+        waitForTag("browse_site_functions_screen")
+        composeRule.onNodeWithTag("browse_site_functions_screen").assertIsDisplayed()
+        composeRule.onNodeWithTag("site_functions_back_button").performClick()
+        waitForTag("settings_screen")
+
+        composeRule.onNodeWithTag("settings_list")
+            .performScrollToNode(hasTestTag("settings_startup_default_site_row"))
+        composeRule.onNodeWithTag("settings_startup_default_site_row").performClick()
+        waitForTag("settings_startup_default_site_sheet")
+        composeRule.onNodeWithTag("settings_startup_default_site_mangacopy")
+            .performScrollTo()
+            .performClick()
+        composeRule.waitUntil(timeoutMillis = 10_000L) {
+            composeRule.onAllNodesWithTag("settings_startup_default_site_sheet").fetchSemanticsNodes().isEmpty()
+        }
+
+        // Restore the non-overriding default so this test does not affect later cold launches.
+        composeRule.onNodeWithTag("settings_startup_default_site_row").performClick()
+        waitForTag("settings_startup_default_site_sheet")
+        composeRule.onNodeWithTag("settings_startup_default_site_remember").performClick()
 
         // Verify Apple HIG grouped sections render across Settings list
         composeRule.onNodeWithTag("settings_list")
@@ -127,6 +192,20 @@ class RavenSmokeAndroidTest {
 
         // Navigate back to Profile and confirm top-level navigation reappears
         composeRule.onNodeWithTag("settings_back_button").performClick()
+        waitForTag("profile_screen")
+        composeRule.onNodeWithTag("nav_home").assertIsDisplayed()
+
+        // The main menu exposes the same current-site preference hub without duplicating global settings.
+        composeRule.onNodeWithTag("profile_list")
+            .performScrollToNode(hasTestTag("profile_site_preferences_row"))
+        composeRule.waitUntil(timeoutMillis = 15_000L) {
+            composeRule.onAllNodes(
+                hasTestTag("profile_site_preferences_row").and(hasClickAction()),
+            ).fetchSemanticsNodes().isNotEmpty()
+        }
+        composeRule.onNodeWithTag("profile_site_preferences_row").performClick()
+        waitForTag("browse_site_functions_screen")
+        composeRule.onNodeWithTag("site_functions_back_button").performClick()
         waitForTag("profile_screen")
         composeRule.onNodeWithTag("nav_home").assertIsDisplayed()
     }

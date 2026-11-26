@@ -198,7 +198,7 @@ class AppDiGraphTest {
     }
 
     @Test
-    fun all25RavenRoutesRoundTripThroughKotlinxSerialization() {
+    fun allCurrentRavenRoutesRoundTripThroughSerializationAndIntentContract() {
         val routes: List<RavenRoute> = listOf(
             RavenRoute.Home,
             RavenRoute.Explore,
@@ -228,7 +228,7 @@ class AppDiGraphTest {
                 offlineOnly = true,
                 queueToken = "queue-uuid-01",
             ),
-            RavenRoute.Downloads(siteId = SiteId.NHENTAI.value),
+            RavenRoute.Downloads(siteId = SiteId.NHENTAI.value, initialTab = "favorites"),
             RavenRoute.ShelfDetail(shelfId = "watch-later"),
             RavenRoute.SmartShelfDetail(smartShelfId = "unfinished"),
             RavenRoute.Favorites(siteId = SiteId.R34V.value),

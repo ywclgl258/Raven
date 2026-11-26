@@ -359,7 +359,7 @@ class PlayerViewModelTest {
     }
 
     @Test
-    fun expiredStreamRefreshesStrictlyOnceAndStallDowngradeNotifies() = runTest {
+    fun expiredStreamRefreshesStrictlyOnceAndStallNeverDowngrades() = runTest {
         val harness = PlayerTestHarness(mainDispatcherRule.dispatcher)
         val refreshedStreams = listOf(
             VideoStream(quality = "720p", label = "720p", url = "https://cdn.example/fresh/720p.mp4"),
@@ -388,16 +388,18 @@ class PlayerViewModelTest {
         advanceUntilIdle()
         assertEquals(1, plugin.refreshRequests.size)
 
-        // Stall downgrade emits notice
+        // A stall cannot switch streams or emit a quality-change notice.
         harness.playbackPort.syncSnapshot(clearError = true)
         harness.playbackPort.nextStallDowngradeStream = refreshedStreams.last()
         val downgraded = harness.playbackPort.evaluateStallTick()
-        assertEquals("480p", downgraded?.quality)
+        assertNull(downgraded)
         vm.uiState.test {
             advanceUntilIdle()
             val state = expectMostRecentItem()
-            assertEquals("480p", state.currentStream?.quality)
-            assertTrue(state.noticeMessage.orEmpty().contains("480p"))
+            assertEquals("720p", state.currentStream?.quality)
+            assertFalse(state.noticeMessage.orEmpty().contains("自动切换"))
+            assertFalse(state.noticeMessage.orEmpty().contains("网络较慢"))
+            assertEquals(0, state.autoDowngradeCount)
             cancelAndIgnoreRemainingEvents()
         }
     }

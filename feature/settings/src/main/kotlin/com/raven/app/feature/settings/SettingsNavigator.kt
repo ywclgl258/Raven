@@ -13,6 +13,8 @@ import java.util.Locale
  * Storage Access Framework document launchers, and APK installer handoff.
  */
 interface SettingsNavigator {
+    fun openSiteFunctions(siteId: SiteId)
+
     fun openSiteAccount(siteId: SiteId)
 
     fun openBlockedTerms(siteId: SiteId)

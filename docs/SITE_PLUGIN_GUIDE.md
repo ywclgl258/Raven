@@ -20,9 +20,9 @@ flowchart LR
         SK["SiteKit 公共协议库 (9 工具类)"]
     end
 
-    subgraph Sites["纯 JVM 站点实现层 (:sites:*)"]
-        SV[":sites:video (8 站)\nvideoSitesModule"]
-        SC[":sites:comic (6 站)\ncomicSitesModule"]
+    subgraph Sites["Pure JVM 站点实现层 (:sites:*)"]
+        SV[":sites:video (7 站)\nvideoSitesModule"]
+        SC[":sites:comic (12 站 = 7 + 5)\ncomicSitesModule"]
         SG[":sites:gallery (5 站)\ngallerySitesModule"]
     end
 
@@ -39,6 +39,8 @@ flowchart LR
     SV & SC & SG --> HTTP & SESS & SK
     SP --> SD
 ```
+
+三个 `:sites:*` 均为 **Pure JVM** 模块；其 Gradle 项目依赖只有 `:core:model`、`:core:site-spi`、`:core:common`，**不依赖 `:core:network`**。站点协议代码通过 SPI 使用 HTTP/Session 接口，直接通过 `test` 在桌面 JVM 上执行契约测试。
 
 ### 1.1 核心入口：`SitePlugin` 与 `SiteDescriptor`
 
@@ -106,7 +108,7 @@ flowchart LR
   - 提供查询：`allPlugins()`、`allDescriptors()`、`get(siteId)`、`require(siteId)`（对退役站点自动抛出带提示的 `SiteException.Unsupported`）、`byPrimaryKind(kind)`、`supportingKind(kind)`、`withCapability(cap)`、`findForHost`、`findForRequestHost`、`findForMediaHost`、`isRegisteredSiteHost`、`resolveLink(url)`、`resolveLinkFromText(text)`。
 - **Koin Multi-binding 自动装配**：
   1. 三个站点模块各自通过 `bind SitePlugin::class` 注册单例：
-     - `sites/video/src/main/kotlin/com/raven/app/sites/video/VideoSitesModule.kt`（`videoSitesModule`，8 站）
+     - `sites/video/src/main/kotlin/com/raven/app/sites/video/VideoSitesModule.kt`（`videoSitesModule`，7 站）
      - `sites/comic/src/main/kotlin/com/raven/app/sites/comic/ComicSitesModule.kt`（`comicSitesModule`，12 站：7 漫画 + 5 连载漫画）
      - `sites/gallery/src/main/kotlin/com/raven/app/sites/gallery/GallerySitesModule.kt`（`gallerySitesModule`，5 站）
   2. `app/src/main/kotlin/com/raven/app/AppModule.kt` 通过 `single<SiteRegistry> { createOrderedSiteRegistry(getAll<SitePlugin>()) }` 收集全部插件，按 `SiteId.ALL_LIVE` 严格排序并校验**零缺失、零重复、顺序完全一致**。
@@ -121,7 +123,7 @@ flowchart LR
 | 工具类 | 源码路径（相对 `core/site-spi/src/main/kotlin/com/raven/app/core/sitespi/`） | 核心能力与公开 API | 使用站点 / 消费者 |
 |---|---|---|---|
 | `Base62Packer` | `Base62Packer.kt` | Dean Edwards `eval(function(p,a,c,k,e,...)` 纯 Kotlin 解包器；支持 2–62 进制，单遍（single-pass）token 替换防止字典值被二次展开；API：`unpack(source)`、`unpackAll(html)`、`encodeBaseToken(value, base)` | `MissavSitePlugin` |
-| `JsExtractor` | `JsExtractor.kt` | 字符串感知的 JS 字面量与对象提取器；API：`extractBraceObject(source, marker, fromIndex)`（花括号平衡配对）、`extractBalanced(source, startIndex, openChar, closeChar)`（支持 `{}`/`[]`）、`extractJsStringVar(source, varName)`、`unescapeJsString(raw)`（处理 `\/`、`\uXXXX`、`\xXX` 等）、`extractNextRscFlightChunks(html)`（拼接并反转义 `self.__next_f.push([1,"..."])`） | `R34vSitePlugin`、`HanimeSitePlugin`、`JableSitePlugin`、`PornhubSitePlugin`、`KbjfreeSitePlugin`、`WnacgSitePlugin`、`WordPressPhotoEngine` |
+| `JsExtractor` | `JsExtractor.kt` | 字符串感知的 JS 字面量与对象提取器；API：`extractBraceObject(source, marker, fromIndex)`（花括号平衡配对）、`extractBalanced(source, startIndex, openChar, closeChar)`（支持 `{}`/`[]`）、`extractJsStringVar(source, varName)`、`unescapeJsString(raw)`（处理 `\/`、`\uXXXX`、`\xXX` 等）、`extractNextRscFlightChunks(html)`（拼接并反转义 `self.__next_f.push([1,"..."])`） | `R34vSitePlugin`、`HanimeSitePlugin`、`JableSitePlugin`、`PornhubSitePlugin`、`WnacgSitePlugin`、`WordPressPhotoEngine` |
 | `DualLanguageMerger` | `DualLanguageMerger.kt` | 无原生 `OR` 语种语法时的双流归并分页器；通过 `DualCursor(pageA, indexA, pageB, indexB)` 编码为 `"pA,iA,pB,iB"` 字符串游标，支持 `DualMergeStrategy.DESCENDING_NUMERIC_ID`（按数字 ID 降序合并最新流）和 `INTERLEAVED`（热门流交替归并），自动跨流去重 | `NhentaiSitePlugin`、`HitomiSitePlugin`、`WnacgSitePlugin` |
 | `MirrorLeaseRouter` | `MirrorLeaseRouter.kt` | 实现 `HostRouter` 的路由键控镜像租约路由器；默认租约 10 分钟（`DEFAULT_LEASE_DURATION_MS = 600_000L`）、故障冷却 2 分钟（`DEFAULT_FAILURE_COOLDOWN_MS = 120_000L`）；当网络切换/代理变化导致 `routeKey` 变更或当前节点失败时，通过 `Mutex` 串行探活并自动切至健康镜像；支持 `invalidate()` | `MissavSitePlugin`、`JmcomicSitePlugin` |
 | `LruCache` | `LruCache.kt` | 线程安全（`synchronized`）有界 LRU 缓存，支持可选全局/单条 TTL 过期、懒淘汰与主动 `evictExpired()`；API：`get`、`put`、`getOrPut`、`getOrPutSuspend`、`remove`、`clear`、`size` | `IwaraSitePlugin`、`EhSharedEngine`、`NhentaiSitePlugin`、`HitomiSitePlugin`、`WnacgSitePlugin`、`JmcomicSitePlugin`、`WordPressPhotoEngine` |
@@ -139,7 +141,7 @@ flowchart LR
 
 ## 3. 全部 24 个在线站点维护总表
 
-### 3.1 视频站点（`:sites:video`，8 站）
+### 3.1 视频站点（`:sites:video`，7 站）
 
 | `SiteId` | 实现类（`sites/video/src/main/kotlin/com/raven/app/sites/video/`） | 主域名 / 镜像 & 媒体域 | 认证方式 | 暴露能力接口 | 核心解析与特殊协议要点 |
 |---|---|---|---|---|---|
@@ -149,7 +151,6 @@ flowchart LR
 | `missav` | `MissavSitePlugin.kt` | `missav.ws` / 镜像 `missav.media`；媒体：`*.mrstcdn.store` | `None` | `Feed`, `Video`, `Search`, `Directory`, `HostRouter`, `Link` | `MirrorLeaseRouter` 驱动 `.ws`/`.media` 自动切镜像；链接规范化去除语言前缀（`/cn/`、`/ja/`）；详情用 `Base62Packer.unpackAll(html)` 单遍解包提取 UUID `playlist.m3u8`；目录支持 `/genres` 与 `/actresses` |
 | `jable` | `JableSitePlugin.kt` | `jable.vip` / 镜像识别 `jable.tv`；媒体：`senlin2026.com`, `sl260204.top` | `None` | `Feed`, `Video`, `Search`, `Link` | MacCMS SSR；详情路径 `/vodplay/<id>-1-1/`；用 `JsExtractor.extractBraceObject(html, "player_aaaa")` 抽 `"url"` 并反转义为 HLS；无 `<h1>` 时优先从 `<title>` 的 `《...》` 提取纯净标题；识别分享的旧 `jable.tv/videos/<slug>/` 并转站内搜索 |
 | `rouvideo` | `RouvideoSitePlugin.kt` | `rou.video`；媒体：`rn221.xyz`, `rn252.xyz` | `None` | `Feed`, `Video`, `Search`, `Directory`, `MediaTransportHook`, `Link` | TanStack Start SSR；详情页用 `RouPngProtocol.extractEvFromHtml` + `decodeEv`（Base64 后逐字节减偏移 `k`）解出 `/api/hls/<id>` 与 `thumbVTTUrl`；**挂载 `RouPngProtocol.transportHook`**，由播放器 DataSource 透明剥离 PNG `roUd` 壳并 zlib 解压 m3u8/TS |
-| `kbjfree` | `KbjfreeSitePlugin.kt` | `kbjfree.com`；媒体：`marshlecdn.com` | `None` | `Feed`, `Video`, `Search`, `Link` | Next.js App Router RSC；列表用 `JsExtractor.extractNextRscFlightChunks` 拼接 Flight 流后按 `{"id":"...","name":"...","categoryId"` 锚点窗口抽取卡片；详情优先从 `script[type=application/ld+json]` 的 `contentUrl` 提取公开预览 MP4，并标记 `SiteCapability.PREVIEW_ONLY` 与 `isPreviewOnly = true` |
 | `pornhub` | `PornhubSitePlugin.kt` | `www.pornhub.com` / `pornhub.com`；媒体：`*.phncdn.com` | `None` | `Feed`, `Video`, `Search`, `Directory`, `Link` | 双 DOM 解析：优先桌面端 `li.pcVideoListItem`，自动回退移动端 `li[data-video-vkey]`；详情从 `flashvars_*` 的 `mediaDefinitions` 数组（`JsExtractor.extractBalanced(..., '[', ']')` + 正则兜底）提取多档 HLS/MP4，排序 HLS 优先、高分辨率优先；目录支持 `/categories` 与 `/pornstars` |
 
 ### 3.2 漫画站点（`:sites:comic`，7 站）
@@ -261,12 +262,12 @@ https://www.4khd.com/content/2026/sample.html/2#15-2-4
 **快速单测回归命令**（Windows PowerShell）：
 ```powershell
 $env:ANDROID_HOME = "D:\Android\Sdk"
-.\gradlew.bat :core:site-spi:test :sites:video:testDebugUnitTest :sites:comic:testDebugUnitTest :sites:gallery:testDebugUnitTest :app:testDebugUnitTest --no-daemon
+.\gradlew.bat :core:site-spi:test :sites:video:test :sites:comic:test :sites:gallery:test :app:testDebugUnitTest --no-daemon
 ```
 
 ---
 
-## 6. 实战教程：从零接入第 20 个新站点
+## 6. 实战教程：从零接入一个新站点
 
 ### 6.1 完整 6 步接入清单
 
@@ -284,7 +285,7 @@ $env:ANDROID_HOME = "D:\Android\Sdk"
 4. **编写纯 JVM 契约单测**  
    使用模块内的 `FakeHttpClientAdapter`（及需要登录时的 `InMemorySiteSessionStore`）覆盖：URL 构建、列表/空列表/改版错误解析、详情与媒体源解析、链接 `canHandle`/`canonicalize`/`resolve`、404/429/403 挑战异常处理。
 5. **更新模块与 DI 拓扑数量断言**  
-   同步更新对应模块测试（如 `VideoSitesModuleTest.kt` 中的插件数断言）以及 `app/src/test/kotlin/com/raven/app/AppDiGraphTest.kt` 中的 `assertEquals(19, registry.size)` -> `20`。
+   同步更新对应模块测试中的插件数断言，以及 `app/src/test/kotlin/com/raven/app/AppDiGraphTest.kt` 的注册表数量与 `SiteId.ALL_LIVE` 顺序断言，使测试清单和实际新增站点一致。
 6. **运行全量单测 + Android 设备/模拟器实测验证**  
    先跑通 JVM 单测与 `:app:lintDebug`，再安装 Debug APK 到真机/模拟器，验证新站切换、列表、详情播放/阅读，**特别验证所有新增 `Regex` 在 Android ART ICU 下不会抛出 `PatternSyntaxException`**。
 

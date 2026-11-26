@@ -1,3 +1,5 @@
+@file:androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
+
 package com.raven.app.core.media
 
 import com.raven.app.core.database.repository.PreferencesRepository

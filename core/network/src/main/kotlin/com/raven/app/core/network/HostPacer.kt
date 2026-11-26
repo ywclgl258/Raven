@@ -1,6 +1,7 @@
 package com.raven.app.core.network
 
 import com.raven.app.core.model.SiteDescriptor
+import com.raven.app.core.model.SiteId
 import com.raven.app.core.sitespi.SiteRequestKind
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.sync.Mutex
@@ -15,7 +16,8 @@ import kotlin.random.Random
  *
  * Staggers request dispatch starts per host without holding any OkHttp dispatcher thread and
  * responds immediately to coroutine cancellation. Only registered site request hosts are paced;
- * external media CDNs, update hosts, and fast mirror probes bypass pacing.
+ * external media CDNs, update hosts, and fast mirror probes bypass pacing. R34V is the explicit
+ * exception for media because its HTML and media endpoints share one upstream rate-limit budget.
  */
 class HostPacer(
     private val clockMs: () -> Long = System::currentTimeMillis,
@@ -105,7 +107,8 @@ class HostPacer(
 
     /**
      * Computes whether a request to [host] / [encodedPath] for [descriptor] should be paced and
-     * suspends accordingly. Unregistered/CDN hosts and [SiteRequestKind.PROBE] are never paced.
+     * suspends accordingly. Unregistered/CDN hosts and [SiteRequestKind.PROBE] are never paced;
+     * R34V media is the explicit exception for its shared upstream rate-limit budget.
      */
     suspend fun paceForRequest(
         host: String,
@@ -113,12 +116,14 @@ class HostPacer(
         kind: SiteRequestKind,
         descriptor: SiteDescriptor?,
     ): Long {
-        if (kind == SiteRequestKind.PROBE || kind == SiteRequestKind.MEDIA) return 0L
+        if (kind == SiteRequestKind.PROBE) return 0L
         if (descriptor == null || !descriptor.matchesRequestHost(host)) return 0L
-        val gapMs = if (kind == SiteRequestKind.IMAGE || BrowserHeaders.isImagePath(encodedPath)) {
-            descriptor.networkProfile.imageIntervalMs
-        } else {
-            descriptor.networkProfile.pageIntervalMs
+        val gapMs = when {
+            descriptor.id == SiteId.R34V && kind == SiteRequestKind.MEDIA ->
+                descriptor.networkProfile.pageIntervalMs
+            kind == SiteRequestKind.IMAGE || BrowserHeaders.isImagePath(encodedPath) ->
+                descriptor.networkProfile.imageIntervalMs
+            else -> descriptor.networkProfile.pageIntervalMs
         }
         return pace(host, gapMs)
     }

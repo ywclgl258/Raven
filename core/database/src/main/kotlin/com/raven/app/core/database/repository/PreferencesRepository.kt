@@ -35,6 +35,9 @@ class PreferencesRepository(
 
     suspend fun setActiveSiteId(siteId: SiteId) = settingsDataStore.setActiveSiteId(siteId)
 
+    suspend fun setStartupDefaultSiteId(siteId: SiteId?) =
+        settingsDataStore.setStartupDefaultSiteId(siteId)
+
     suspend fun setPinnedSiteIds(siteIds: List<SiteId>) = settingsDataStore.setPinnedSiteIds(siteIds)
 
     suspend fun togglePinnedSite(siteId: SiteId): List<SiteId> =

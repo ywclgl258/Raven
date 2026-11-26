@@ -50,6 +50,16 @@ class SettingsDataStore(
         }
     }
 
+    suspend fun setStartupDefaultSiteId(siteId: SiteId?) {
+        dataStore.edit { prefs ->
+            if (siteId == null) {
+                prefs.remove(Keys.STARTUP_DEFAULT_SITE_ID)
+            } else {
+                prefs[Keys.STARTUP_DEFAULT_SITE_ID] = siteId.value
+            }
+        }
+    }
+
     suspend fun setPinnedSiteIds(siteIds: List<SiteId>) {
         val unique = siteIds.distinct()
         dataStore.edit { prefs ->
@@ -315,6 +325,7 @@ class SettingsDataStore(
         val current = currentSettings()
         return buildMap {
             put(KEY_ACTIVE_SITE_ID, current.activeSiteId.value)
+            current.startupDefaultSiteId?.value?.let { put(KEY_STARTUP_DEFAULT_SITE_ID, it) }
             put(KEY_PINNED_SITE_IDS, encodeSiteIdList(current.pinnedSiteIds))
             put(KEY_CROSS_SEARCH_SITE_IDS, encodeSiteIdList(current.crossSearchSiteIds))
             put(KEY_TRANSLATE_TAGS, current.translateTags.toString())
@@ -357,6 +368,14 @@ class SettingsDataStore(
     private fun applyPortableEntries(prefs: MutablePreferences, settingsMap: Map<String, String>) {
         settingsMap[KEY_ACTIVE_SITE_ID]?.trim()?.takeIf(String::isNotEmpty)?.let { raw ->
             prefs[Keys.ACTIVE_SITE_ID] = SiteId.of(raw).value
+        }
+        settingsMap[KEY_STARTUP_DEFAULT_SITE_ID]?.let { raw ->
+            val normalized = raw.trim()
+            if (normalized.isEmpty()) {
+                prefs.remove(Keys.STARTUP_DEFAULT_SITE_ID)
+            } else {
+                prefs[Keys.STARTUP_DEFAULT_SITE_ID] = SiteId.of(normalized).value
+            }
         }
         settingsMap[KEY_PINNED_SITE_IDS]?.let { raw ->
             prefs[Keys.PINNED_SITE_IDS] = encodeSiteIdList(decodeSiteIdList(raw).distinct())
@@ -457,6 +476,10 @@ class SettingsDataStore(
 
         return AppSettings(
             activeSiteId = activeSite,
+            startupDefaultSiteId = prefs[Keys.STARTUP_DEFAULT_SITE_ID]
+                ?.trim()
+                ?.takeIf(String::isNotEmpty)
+                ?.let(SiteId::of),
             pinnedSiteIds = decodeSiteIdList(prefs[Keys.PINNED_SITE_IDS]).distinct(),
             crossSearchSiteIds = decodeSiteIdList(prefs[Keys.CROSS_SEARCH_SITE_IDS]).distinct(),
             siteLanguages = languages,
@@ -505,6 +528,7 @@ class SettingsDataStore(
 
     object Keys {
         val ACTIVE_SITE_ID = stringPreferencesKey(KEY_ACTIVE_SITE_ID)
+        val STARTUP_DEFAULT_SITE_ID = stringPreferencesKey(KEY_STARTUP_DEFAULT_SITE_ID)
         val PINNED_SITE_IDS = stringPreferencesKey(KEY_PINNED_SITE_IDS)
         val CROSS_SEARCH_SITE_IDS = stringPreferencesKey(KEY_CROSS_SEARCH_SITE_IDS)
         val TRANSLATE_TAGS = booleanPreferencesKey(KEY_TRANSLATE_TAGS)
@@ -553,6 +577,7 @@ class SettingsDataStore(
         const val FILE_NAME: String = "raven_settings"
 
         const val KEY_ACTIVE_SITE_ID: String = "active_site_id"
+        const val KEY_STARTUP_DEFAULT_SITE_ID: String = "startup_default_site_id"
         const val KEY_PINNED_SITE_IDS: String = "pinned_site_ids"
         const val KEY_CROSS_SEARCH_SITE_IDS: String = "cross_search_site_ids"
         const val SITE_LANGUAGE_PREFIX: String = "site_language_"
@@ -594,6 +619,7 @@ class SettingsDataStore(
         /** Keys safe to include in encrypted cross-device backups (never device paths/credentials). */
         val PORTABLE_BACKUP_KEYS: Set<String> = setOf(
             KEY_ACTIVE_SITE_ID,
+            KEY_STARTUP_DEFAULT_SITE_ID,
             KEY_PINNED_SITE_IDS,
             KEY_CROSS_SEARCH_SITE_IDS,
             KEY_TRANSLATE_TAGS,

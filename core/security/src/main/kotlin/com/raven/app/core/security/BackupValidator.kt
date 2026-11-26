@@ -357,7 +357,7 @@ class BackupValidator(
                 val parsed = value.toFloatOrNull()
                 checkRule(parsed != null && parsed in 0.25f..3.0f) { "默认倍速设置无效：$value" }
             }
-            if (key == "active_site_id" && value.isNotBlank()) {
+            if ((key == "active_site_id" || key == "startup_default_site_id") && value.isNotBlank()) {
                 validateSite(SiteId.of(value))
             }
             if (key == "cross_search_site_ids" || key == "cross_search_sites" || key == "pinned_site_ids") {
@@ -516,6 +516,7 @@ class BackupValidator(
 
         val STRING_SETTINGS_KEYS: Set<String> = setOf(
             "active_site_id",
+            "startup_default_site_id",
             "pinned_site_ids",
             "cross_search_site_ids",
             "cross_search_sites",

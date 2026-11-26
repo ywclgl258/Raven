@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.Intent
 import android.media.AudioManager
 import android.provider.Settings
+import android.view.LayoutInflater
 import android.view.ViewGroup
 import android.widget.FrameLayout
 import androidx.activity.compose.BackHandler
@@ -227,7 +228,7 @@ fun VideoPlayerScreen(
         }
     }
 
-    // Auto-dismiss transient surface notices (stall downgrade / refresh / resume / loop)
+    // Auto-dismiss transient surface notices (refresh / resume / loop)
     LaunchedEffect(uiState.noticeMessage) {
         if (!uiState.noticeMessage.isNullOrBlank()) {
             delay(NOTICE_AUTO_DISMISS_MS)
@@ -284,6 +285,8 @@ fun VideoPlayerScreen(
 
     val currentExoPlayer by rememberUpdatedState(exoPlayer)
     val currentKeepScreenOn by rememberUpdatedState(uiState.isPlaying)
+    val currentVideoFrameReady by rememberUpdatedState(uiState.isVideoFrameReady)
+    val currentVideoRecoveryGeneration by rememberUpdatedState(uiState.videoRecoveryGeneration)
     val currentResizeMode by rememberUpdatedState(resizeMode)
     val currentZoomScale by rememberUpdatedState(zoomScale)
     val currentPanOffset by rememberUpdatedState(panOffset)
@@ -294,6 +297,8 @@ fun VideoPlayerScreen(
             Media3PlayerSurface(
                 player = currentExoPlayer,
                 keepScreenOn = currentKeepScreenOn,
+                isVideoFrameReady = currentVideoFrameReady,
+                videoRecoveryGeneration = currentVideoRecoveryGeneration,
                 resizeMode = currentResizeMode,
                 zoomScale = currentZoomScale,
                 panOffset = currentPanOffset,
@@ -709,6 +714,8 @@ fun VideoPlayerScreen(
 private fun Media3PlayerSurface(
     player: ExoPlayer?,
     keepScreenOn: Boolean,
+    isVideoFrameReady: Boolean = true,
+    videoRecoveryGeneration: Long = 0L,
     resizeMode: VideoResizeMode = VideoResizeMode.FIT,
     zoomScale: Float = 1f,
     panOffset: Offset = Offset.Zero,
@@ -721,20 +728,31 @@ private fun Media3PlayerSurface(
     }
     AndroidView(
         factory = { ctx ->
-            PlayerView(ctx).apply {
+            val view = LayoutInflater.from(ctx).inflate(
+                R.layout.raven_player_surface,
+                FrameLayout(ctx),
+                false,
+            ) as PlayerView
+            view.apply {
                 useController = false
                 this.resizeMode = targetResizeMode
-                setShutterBackgroundColor(android.graphics.Color.TRANSPARENT)
+                setShutterBackgroundColor(android.graphics.Color.BLACK)
                 layoutParams = FrameLayout.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT,
                     ViewGroup.LayoutParams.MATCH_PARENT,
                 )
                 this.player = player
                 this.keepScreenOn = keepScreenOn
+                alpha = if (isVideoFrameReady) 1f else 0f
             }
         },
         update = { view ->
-            if (view.player !== player) {
+            if (view.getTag(RECOVERY_GENERATION_TAG_ID) != videoRecoveryGeneration) {
+                // Reattach after clearVideoSurface so TextureView resumes rendering deterministically.
+                view.player = null
+                view.player = player
+                view.setTag(RECOVERY_GENERATION_TAG_ID, videoRecoveryGeneration)
+            } else if (view.player !== player) {
                 view.player = player
             }
             if (view.keepScreenOn != keepScreenOn) {
@@ -743,6 +761,7 @@ private fun Media3PlayerSurface(
             if (view.resizeMode != targetResizeMode) {
                 view.resizeMode = targetResizeMode
             }
+            view.alpha = if (isVideoFrameReady) 1f else 0f
         },
         onRelease = { view ->
             view.player = null
@@ -758,6 +777,8 @@ private fun Media3PlayerSurface(
             .testTag(PlayerTestTags.PLAYER_SURFACE),
     )
 }
+
+private const val RECOVERY_GENERATION_TAG_ID: Int = 0x7F0A0E01
 
 private fun readSystemBrightnessFraction(context: Context): Float = runCatching {
     val raw = Settings.System.getInt(context.contentResolver, Settings.System.SCREEN_BRIGHTNESS, 128)

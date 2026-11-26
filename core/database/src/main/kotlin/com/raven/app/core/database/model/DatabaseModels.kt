@@ -46,6 +46,8 @@ data class DownloadViewPreferences(
 @Serializable
 data class AppSettings(
     val activeSiteId: SiteId = SiteId.R34V,
+    /** `null` keeps the last active site; a value is applied once on process cold start. */
+    val startupDefaultSiteId: SiteId? = null,
     val pinnedSiteIds: List<SiteId> = emptyList(),
     val crossSearchSiteIds: List<SiteId> = emptyList(),
     val siteLanguages: Map<SiteId, ComicLanguage> = emptyMap(),

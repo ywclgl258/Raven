@@ -12,10 +12,12 @@ import com.raven.app.core.media.reader.OfflineGallerySnapshot
 import com.raven.app.core.media.reader.PreparedExport
 import com.raven.app.core.media.reader.SafSaveOutcome
 import com.raven.app.core.model.DownloadItem
+import com.raven.app.core.model.FeedRequest
 import com.raven.app.core.model.GalleryDetail
 import com.raven.app.core.model.GalleryPage
 import com.raven.app.core.model.MediaItem
 import com.raven.app.core.model.SiteId
+import com.raven.app.core.sitespi.SiteRegistry
 import kotlinx.coroutines.flow.Flow
 
 /**
@@ -77,6 +79,26 @@ interface ReaderPageLoader {
         offlineOnly: Boolean,
         sourceRoot: String,
     ): Bitmap?
+}
+
+/** Loads a serial comic's chapters in the source's official first-to-latest order. */
+fun interface SerialChapterLoader {
+    suspend fun loadChapters(siteId: SiteId, detail: GalleryDetail): List<MediaItem>
+}
+
+internal class SiteRegistrySerialChapterLoader(
+    private val siteRegistry: SiteRegistry,
+) : SerialChapterLoader {
+    override suspend fun loadChapters(siteId: SiteId, detail: GalleryDetail): List<MediaItem> {
+        if (detail.chaptersUrl.isNullOrBlank()) return emptyList()
+        val feed = siteRegistry.get(siteId)?.feedSource ?: return emptyList()
+        val comicId = detail.item.extra["comicId"]?.takeIf { it.isNotBlank() }
+            ?: detail.item.id.substringBefore(':')
+        if (comicId.isBlank()) return emptyList()
+        return feed.loadFeed(
+            FeedRequest(siteId = siteId, section = "chapters", category = comicId, page = 1),
+        ).items
+    }
 }
 
 /**

@@ -34,9 +34,9 @@ Raven 的启动图标采用 **02 绯红疾翼** 设计体系（源稿与 Play �
    - **唯一品牌点缀色**：**Raven Crimson `#FF4D58`** 严格限定于当前激活导航项、播放/阅读进度条、未读角标与渡鸦之眼，**严禁**铺满大面积背景；彻底废弃旧版 R34V 粉红主题 `#FF8DB4`（由 `RavenDesignTokensTest` 单元测试锁定回归防线）。
 2. **Apple HIG Precision（苹果级克制与精致）**
    - 优先使用 `0.5dp` 半透明白线 `Hairline`（`#FFFFFF @ 8%`）与 `RimHighlight`（`#FFFFFF @ 12%`）勾勒边界，而非厚重阴影。
-   - 大标题使用紧负字距（`-0.4.sp` 至 `-0.2.sp`），所有数字指标强制开启等宽数字 `tnum` 防止跳动。
+   - 字距采用 HarmonyOS 可读性策略：正文与标题为 `0.sp`，仅 `displayLarge` 为 `-0.1.sp`，小标签为 `0.05..0.1.sp`；所有数字指标强制开启等宽数字 `tnum` 防止跳动。
    - 设置项、高级筛选、播放偏好与阅读器配置统一采用 **Apple 风格分组内嵌卡片（`RavenGroupedSection`）+ 单屏 `RavenBottomSheet`**，彻底禁止套娃 `AlertDialog`。
-   - 交互元素附带物理弹簧按压微缩（`scale = 0.97f`），并原生兼容系统减弱动效与降低透明度开关。
+   - 交互元素附带物理弹簧按压微缩（默认 `scale = 0.968f`），并原生兼容系统减弱动效与降低透明度开关。
 3. **Netflix Cinema（流媒体影院氛围）**
    - **视频站点首页（`MediaKind.VIDEO`）**：全出血 Hero Banner 轮播（`430dp`）+ 顶部状态栏暗角与受限环境光（`alpha <= 0.18f`）+ 底部多段渐隐融黑 + 纯白高对比主 CTA「播放」与毛玻璃次 CTA「+ 稍后看」+「继续观看」横向货架（`2.5dp` 绯红底条）+ Top 10 超大排行货架 + 分类横向片单。
    - **漫画 / 写真站点首页（`MediaKind.COMIC` / `MediaKind.PHOTO`）**：无边框原生宽高比瀑布流 `LazyVerticalStaggeredGrid`（按宽度自动 `2–6` 列）+ 置顶紧凑续读卡 + 随滚动自动收起的单行语言筛选栏（`RavenLanguageBar`）。
@@ -94,6 +94,9 @@ RavenTheme(reduceTransparency = appSettings.reduceTransparency) {
 | `Warning` | `warning` | `#FFFFD60A` | 警告状态（计费网络暂停、限速、待迁移） |
 | `Error` | `error` | `#FFFF453A` | 错误状态与破坏性操作（删除、登出、清空） |
 | `ShimmerBase` / `ShimmerHighlight` | `shimmerBase` / `shimmerHighlight` | `#FF16161C` / `#FF262630` | 暗色骨架屏微光渐变起止色 |
+| `LightRimTop` / `LightRimBottom` | `lightRimTop` / `lightRimBottom` | `#2EFFFFFF` / `#0AFFFFFF` | 顶部/底部光学折射边（白色 18% / 4%） |
+| `InteractiveGlow` / `AccentGlow` | `interactiveGlow` / `accentGlow` | `#26FFFFFF` / `#38FF4D58` | 指针互动光（白色 15%）与绯红焦点光晕（22%） |
+| `FloatingBarScrim` | `floatingBarScrim` | `#E0121216` | 浮动导航/Sheet 半透明背景 |
 | `AMBIENT_GLOW_MAX_ALPHA` | —（常量） | **`0.18f`** | Hero/详情页顶部环境光不透明度硬上限 |
 
 > **Material 3 映射要点（`RavenDarkColorScheme`）**：`primary = Crimson`、`secondary = PrimaryCtaContainer`、`onSecondary = PrimaryCtaInk`、`background = Canvas`、`surface = Surface1`、`surfaceVariant = Surface2`、`surfaceTint = Color.Transparent`、`outline = OutlineSubtle`、`outlineVariant = Hairline`、`errorContainer = #3B1517`、`onErrorContainer = #FFB4AB`。
@@ -196,7 +199,7 @@ RavenTheme(reduceTransparency = appSettings.reduceTransparency) {
 | `RavenSearchField` | `RavenSearchField.kt` | `(query, onQueryChange, modifier, placeholder = "搜索作品、标签、作者…", onSearch = null, onClear = null, enabled = true, readOnly = false, trailingContent = null)` — 全应用**唯一**搜索胶囊（`Surface2`、`heightIn(min = 48.dp)`、聚焦绯红描边与光标、一键清空） | `raven_search_field`, `raven_search_clear` |
 | `RavenFilterChip` / `RavenFilterChipRow` | `RavenFilterChipRow.kt` | 胶囊筛选条（选中态纯白高对比 `PrimaryCtaContainer/Ink`，未选 `Surface1 + Hairline`，保证 `>= 48dp` 触控区与 `ravenSpringPress`） | — |
 | `RavenLanguageBar` | `RavenLanguageBar.kt` | `(selected: ComicLanguage, onSelected, modifier, visible = true, languages = ComicLanguage.entries, showBottomHairline = true)` — 带 `AnimatedVisibility` 垂直折叠的单行语言条（`全部 / 中文 / 日文 / 中＋日`），用于声明 `SiteCapability.LANGUAGE_FILTER` 的漫画站 | `raven_language_bar`, `lang_pill_${language.name.lowercase()}` |
-| `RavenGroupedSection` | `RavenGroupedList.kt` | `(modifier, title = null, footer = null, content: ColumnScope.() -> Unit)` — Apple HIG 圆角内嵌分组卡（`Surface1`、`14dp`、`0.5dp Hairline`） | — |
+| `RavenGroupedSection` | `RavenGroupedList.kt` | `(modifier, title = null, footer = null, content: ColumnScope.() -> Unit)` — 圆角内嵌分组卡（`Surface1`、`RavenShapes.CardRadius = 16dp`、`0.5dp Hairline`） | — |
 | `RavenGroupedDivider` | `RavenGroupedList.kt` | `(modifier, insetWithIcon = false)` — 分组行间 `0.5dp` 细线（带图标时缩进 `60.dp`，否则 `16.dp`） | — |
 | `RavenGroupedRow` | `RavenGroupedList.kt` | `(title, modifier, subtitle = null, value = null, icon = null, iconTint, iconContainerColor, showChevron = false, destructive = false, enabled = true, onClick = null, trailingContent = null)` — 最小高度 `52.dp`，右侧 `value` 自动 `.tabular()` | — |
 | `RavenGroupedSwitchRow` | `RavenGroupedList.kt` | `(title, checked, onCheckedChange, modifier, subtitle = null, icon = null, ...)` — 整行可点 `Role.Switch`，激活轨道为 `Crimson` | — |
@@ -288,7 +291,7 @@ flowchart LR
 
     subgraph MAIN["MainActivity (singleTop · Edge-to-Edge)"]
         SHELL["RavenAppShell<br/>RavenAdaptiveScaffold (<600dp BottomBar / >=600dp Rail)"]
-        NAV["Type-Safe NavHost (25 条 RavenRoute)<br/>Browse · Library · GalleryDetail · Reader · Settings"]
+        NAV["Type-Safe NavHost (27 条 RavenRoute)<br/>Browse · Library · GalleryDetail · Reader · Settings"]
         SHEET["SharedLinkConfirmationSheet<br/>(SiteRegistry.resolveLinkFromText)"]
         SHELL --> NAV
     end
@@ -312,7 +315,7 @@ flowchart LR
 
 1. **`MainActivity`**（`app/src/main/kotlin/com/raven/app/MainActivity.kt`，`launchMode="singleTop"`、`windowSoftInputMode="adjustResize"`）：
    - `onCreate` 首行启用 `enableEdgeToEdge` 透明暗色状态栏与导航栏，根部挂载 `RavenTheme(reduceTransparency)` + `LocalRavenImageRequestDecorator provides ::ravenImageRequestDecorator`。
-   - 托管 `RavenAppShell`（25 条 Type-Safe `NavHost`）与实现 `MainActivityHostActions`：启动 `PlayerActivity` / `SiteAuthActivity`、SAF 文件创建/打开/目录授权（`ACTION_CREATE_DOCUMENT` / `OpenDocument` / `OpenDocumentTree`）、`FileProvider` 分享、`RavenUpdateInstaller` 未知来源权限与 APK 安装、以及阅读器窗口控制（沉浸系统栏、独立屏幕亮度、`FLAG_KEEP_SCREEN_ON`、硬件音量键短按/长按翻页）。
+   - 托管 `RavenAppShell`（27 条 Type-Safe `NavHost`）与实现 `MainActivityHostActions`：启动 `PlayerActivity` / `SiteAuthActivity`、SAF 文件创建/打开/目录授权（`ACTION_CREATE_DOCUMENT` / `OpenDocument` / `OpenDocumentTree`）、`FileProvider` 分享、`RavenUpdateInstaller` 未知来源权限与 APK 安装、以及阅读器窗口控制（沉浸系统栏、独立屏幕亮度、`FLAG_KEEP_SCREEN_ON`、硬件音量键短按/长按翻页）。
    - `onNewIntent` 按优先级消费：（1）来自 `PlayerActivity` 的 `EXTRA_NAVIGATE_ROUTE`（经 `MainActivityIntentContract` JSON 反序列化后导航至标签/作者/图集/账号）；（2）外部 `ACTION_SEND` `text/plain`，调用 `siteRegistry.resolveLinkFromText` 弹出 `SharedLinkConfirmationSheet` 确认后跳转，绝不堆叠重复 `MainActivity`。
 
 2. **`PlayerActivity`**（`app/src/main/kotlin/com/raven/app/PlayerActivity.kt`，`launchMode="singleTop"`、`supportsPictureInPicture="true"`、`resizeableActivity="true"`、`configChanges="screenSize|smallestScreenSize|screenLayout|orientation|keyboardHidden"`）：
@@ -326,9 +329,9 @@ flowchart LR
    - 仅服务声明 `AuthMode.WebViewCookie` 的站点（E-Hentai / ExHentai），由 7 状态有限状态机 `SiteAuthPhase`（`RESETTING` → `FORUM` → `COPYING_IDENTITY` → `LOADING_TARGET` → `TARGET_READY` / `TARGET_FAILED` → `VERIFYING`）驱动。
    - 严格安全隔离：零 JS 桥接、`allowFileAccess = false`、`allowContentAccess = false`、`acceptThirdPartyCookies = false`、`MIXED_CONTENT_NEVER_ALLOW`、`LOAD_NO_CACHE`、`allowedHosts` HTTPS 白名单、所有 `onReceivedSslError` 无条件 `handler.cancel()`；退出时彻底清除 `WebStorage`、全部 WebView `CookieManager` 缓存、历史与表单数据。
 
-### 4.2 全部 25 条 Type-Safe `RavenRoute` 清单（`RavenRoute.kt`）
+### 4.2 全部 27 条 Type-Safe `RavenRoute` 清单（`RavenRoute.kt`）
 
-所有路由定义于 `:core:model` 的 `@Serializable sealed interface RavenRoute`，由 `RavenNavHost.kt` 统一注册，并在 `AppDiGraphTest` 中验证全部 25 条路由的 `kotlinx.serialization` 双向编解码：
+所有路由定义于 `:core:model` 的 `@Serializable sealed interface RavenRoute`，由 `RavenNavHost.kt` 统一注册，并在 `AppDiGraphTest` 中验证全部 27 条路由的 `kotlinx.serialization` 双向编解码：
 
 | 组别 | # | 路由类型 (`RavenRoute.*`) | 参数签名 | 目标 Screen（所属模块） | 显示主导航壳 |
 |---|---:|---|---|---|---|
@@ -342,21 +345,23 @@ flowchart LR
 | | 8 | `SiteFunctions` | `siteId: String` | `SiteFunctionsScreen` (`:feature:browse`) | 否 |
 | **2 图集/阅读** | 9 | `GalleryDetail` | `siteId: String, mediaId: String, url: String` | `GalleryDetailScreen` (`:feature:reader`) | 否 |
 | | 10 | `Reader` | `siteId: String, mediaId: String, url: String, startPage: Int = 1, offlineOnly: Boolean = false, queueToken: String? = null` | `ReaderScreen` (`:feature:reader`) | 否（连读下一本时 `popUpTo<Reader>(inclusive = true)` 原地替换防栈堆积） |
-| **9 片库子页** | 11 | `Downloads` | `data object` | `DownloadsScreen` (`:feature:library`) | 否 |
+| **10 片库子页** | 11 | `Downloads` | `data class(siteId: String? = null, initialTab: String = "downloads")` | `DownloadsScreen` (`:feature:library`) | 否 |
 | | 12 | `ShelfDetail` | `shelfId: String` | `ShelfDetailScreen` (`:feature:library`) | 否 |
 | | 13 | `SmartShelfDetail` | `smartShelfId: String` | `SmartShelfDetailScreen` (`:feature:library`) | 否 |
-| | 14 | `Favorites` | `data object` | `FavoritesScreen` (`:feature:library`) | 否 |
+| | 14 | `Favorites` | `data class(siteId: String? = null)` | `FavoritesScreen` (`:feature:library`) | 否 |
 | | 15 | `History` | `data object` | `HistoryScreen` (`:feature:library`) | 否 |
 | | 16 | `ImageFavorites` | `data object` | `ImageFavoritesScreen` (`:feature:library`) | 否 |
 | | 17 | `Subscriptions` | `siteId: String? = null` | `SubscriptionsScreen` (`:feature:library`) | 否 |
 | | 18 | `GlobalInbox` | `data object` | `GlobalInboxScreen` (`:feature:library`) | 否 |
 | | 19 | `LocalLibrary` | `data object` | `LocalLibraryScreen` (`:feature:library`) | 否 |
-| **6 设置子页** | 20 | `Settings` | `data object` | `SettingsScreen` (`:feature:settings`) | 否 |
-| | 21 | `SiteAccount` | `siteId: String` | `SiteAccountScreen` (`:feature:settings`) | 否 |
-| | 22 | `BlockedTerms` | `siteId: String` | `BlockedTermsScreen` (`:feature:settings`) | 否 |
-| | 23 | `BackupRestore` | `data object` | `BackupRestoreScreen` (`:feature:settings`) | 否 |
-| | 24 | `StorageMigration` | `data object` | `StorageMigrationScreen` (`:feature:settings`) | 否 |
-| | 25 | `DuplicateScanner` | `data object` | `DuplicateScannerScreen` (`:feature:settings`) | 否 |
+| | 20 | `Stats` | `data object` | `StatsScreen` (`:feature:library`) | 否 |
+| **7 设置子页** | 21 | `Settings` | `data object` | `SettingsScreen` (`:feature:settings`) | 否 |
+| | 22 | `SiteAccount` | `siteId: String` | `SiteAccountScreen` (`:feature:settings`) | 否 |
+| | 23 | `BlockedTerms` | `siteId: String` | `BlockedTermsScreen` (`:feature:settings`) | 否 |
+| | 24 | `TagDictionary` | `data object` | `TagDictionaryScreen` (`:feature:settings`) | 否 |
+| | 25 | `BackupRestore` | `data object` | `BackupRestoreScreen` (`:feature:settings`) | 否 |
+| | 26 | `StorageMigration` | `data object` | `StorageMigrationScreen` (`:feature:settings`) | 否 |
+| | 27 | `DuplicateScanner` | `data object` | `DuplicateScannerScreen` (`:feature:settings`) | 否 |
 
 > **主导航壳自适应与状态保留（`RavenNavHost.kt`）**：
 > - `RavenAdaptiveScaffold` 根据 `currentWindowAdaptiveInfo().windowSizeClass.isWidthAtLeastBreakpoint(WindowSizeClass.WIDTH_DP_MEDIUM_LOWER_BOUND)`（即 **`600dp`**）在底部导航栏与左侧持久 `NavigationRail` 之间自动切换。

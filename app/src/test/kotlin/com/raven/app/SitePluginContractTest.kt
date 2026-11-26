@@ -24,7 +24,7 @@ import org.koin.dsl.module
 
 /**
  * Contract test verifying structural, SPI, capability, auth, and host-isolation invariants
- * across all 19 registered [com.raven.app.core.sitespi.SitePlugin] implementations.
+ * across all 24 registered [com.raven.app.core.sitespi.SitePlugin] implementations.
  */
 class SitePluginContractTest {
 

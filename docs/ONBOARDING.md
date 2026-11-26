@@ -1,7 +1,7 @@
 # Raven（渡鸦）新开发者接手与日常开发指南 (`ONBOARDING.md`)
 
 > **适用读者**：首次接手、日常维护、评审 PR 或为 Raven 扩展新功能模块/页面的 Android 工程师  
-> **代码基准**：`d:\Raven` · Application ID `com.raven.app`（Debug：`com.raven.app.debug`）· 17 模块 Clean Architecture  
+> **代码基准**：`d:\Raven` · Application ID `com.raven.app`（Debug：`com.raven.app.debug`）· 当前版本 `0.6.0` / `versionCode = 10`（见 `release.properties`）· 17 模块 Clean Architecture
 > **关联手册**：仓库与发布红线见 [AGENTS.md](../AGENTS.md) · 签名与发布指南见 [SIGNING.md](SIGNING.md) · 架构总览见 [ARCHITECTURE.md](ARCHITECTURE.md) · 站点插件见 [SITE_PLUGIN_GUIDE.md](SITE_PLUGIN_GUIDE.md) · 设计与 UI 见 [DESIGN_AND_UI_GUIDE.md](DESIGN_AND_UI_GUIDE.md) · 数据/媒体/安全见 [DATA_MEDIA_SECURITY.md](DATA_MEDIA_SECURITY.md)
 
 ---
@@ -55,8 +55,8 @@
    # 1. 验证 Kotlin Gradle Plugin 已解析为 2.3.21
    .\gradlew.bat buildEnvironment --no-daemon | Select-String "kotlin-gradle-plugin"
 
-   # 2. 运行全部 17 模块 JVM 单元测试（273 条 @Test）
-   .\gradlew.bat :core:model:test :core:common:test :core:site-spi:test testDebugUnitTest --no-daemon
+   # 2. 运行全部 17 模块 JVM 单元测试（当前源码静态计数 380 处 @Test）
+   .\gradlew.bat :core:model:test :core:common:test :core:site-spi:test :sites:video:test :sites:comic:test :sites:gallery:test testDebugUnitTest --no-daemon
 
    # 3. 构建 Debug APK
    .\gradlew.bat :app:assembleDebug --no-daemon
@@ -115,8 +115,8 @@ flowchart TB
     end
 
     subgraph SITES["Site Plugin 层（24 个在线站点，Koin bind SitePlugin::class）"]
-        SV[":sites:video (8)"]
-        SC[":sites:comic (6)"]
+        SV[":sites:video (7)"]
+        SC[":sites:comic (12 = 7 + 5)"]
         SG[":sites:gallery (5)"]
     end
 
@@ -138,7 +138,7 @@ flowchart TB
     FB & FL & FP & FR --> CD & CDB & CN & SPI & COM & MOD
     FL & FP & FR --> CM
     FS --> CM & CD & CDB & CN & CSEC & SPI & COM & MOD
-    SITES --> CN & SPI & COM & MOD
+    SITES --> SPI & COM & MOD
     CM --> CDB & CN & SPI & COM & MOD
     CN --> CSEC & SPI & COM & MOD
     CDB & CD --> COM & MOD
@@ -147,29 +147,31 @@ flowchart TB
     COM --> MOD
 ```
 
+三个 `:sites:*` 均为 **Pure JVM**；其项目依赖仅含 `:core:model`、`:core:site-spi`、`:core:common`，不直接依赖 `:core:network`，生产 HTTP/Session 实现由 App 边界通过 SPI 注入。
+
 ### 2.2 全部 17 模块清册
 
-> 统计说明：当前代码库共有 **273 条 JVM 单元测试（`@Test`）** 分布在全部 17 个模块，另有 **3 条离线 Compose UI 冒烟测试** 位于 `:app/src/androidTest`。其中 13 个业务/引擎模块导出 Koin `Module`（在 `AppModule.kt` 的 `allRavenKoinModules` 中统一装配）；3 个 Pure JVM 模块与 `:core:designsystem` 为纯契约/纯 UI 库，不持有 Koin 模块。
+> 截至当前源码静态计数，全部 `src/test` 共有 **380 处 JVM `@Test`**，`src/androidTest` 共有 **6 处 `@Test`**（`:app` Compose 冒烟 4 处 + `:core:database` 迁移 2 处）。这些数字仅是注解静态计数，不表示测试已执行或通过；复算命令见 §3.1。13 个业务/引擎模块导出 Koin `Module`；`:core:model`、`:core:common`、`:core:site-spi` 与 `:core:designsystem` 不持有 Koin 模块。
 
-| # | 模块 | 类型 | 包名 / Namespace | Koin 模块 | 核心源码入口文件 | `@Test` 数 | 单模块测试命令 |
-|---|---|---|---|---|---|---:|---|
-| 1 | `:core:model` | Pure JVM | `com.raven.app.core.model` | — | `SiteModels.kt`, `MediaModels.kt`, `FeedModels.kt`, `PersonalModels.kt`, `RavenRoute.kt`, `SiteException.kt` | 9 | `.\gradlew.bat :core:model:test --no-daemon` |
-| 2 | `:core:common` | Pure JVM | `com.raven.app.core.common` | — | `AppDispatchers.kt`, `TagDictionary.kt`, `ContentFilter.kt`, `NaturalSortComparator.kt`, `UrlSanitizer.kt`, `TimestampParser.kt` | 8 | `.\gradlew.bat :core:common:test --no-daemon` |
-| 3 | `:core:site-spi` | Pure JVM | `com.raven.app.core.sitespi` | — | `SitePlugin.kt`, `SiteCapabilities.kt`, `SiteRegistry.kt`, `SiteHttp.kt`, `SiteSessionStore.kt`, 9 个协议工具 (`Base62Packer`, `RouPngProtocol`, `CossoraAesProtocol`, `JmcomicStripMath` 等) | 19 | `.\gradlew.bat :core:site-spi:test --no-daemon` |
-| 4 | `:core:security` | Android Lib | `com.raven.app.core.security` | `coreSecurityModule` | `CoreSecurityModule.kt`, `SessionVault.kt`, `VaultCipher.kt`, `BackupCodec.kt`, `BackupValidator.kt`, `LegacyR34vBackupAdapter.kt` | 14 | `.\gradlew.bat :core:security:testDebugUnitTest --no-daemon` |
-| 5 | `:core:network` | Android Lib | `com.raven.app.core.network` | `coreNetworkModule` | `CoreNetworkModule.kt`, `RavenOkHttpPool.kt`, `SiteHttpClient.kt`, `HostPacer.kt`, `SiteCookieJar.kt`, `Ipv4FirstDns.kt`, `SystemProxySelector.kt`, `NetworkMonitor.kt`, `RavenImageLoaderFactory.kt` | 21 | `.\gradlew.bat :core:network:testDebugUnitTest --no-daemon` |
-| 6 | `:core:database` | Android Lib (KSP) | `com.raven.app.core.database` | `coreDatabaseModule` | `CoreDatabaseModule.kt`, `RavenDatabase.kt` (18 表), `SettingsDataStore.kt` (17 键), `entity/*`, `dao/*`, `repository/*` (11 仓储) | 22 | `.\gradlew.bat :core:database:testDebugUnitTest --no-daemon` |
-| 7 | `:core:designsystem` | Android Lib (Compose) | `com.raven.app.core.designsystem` | — | `theme/RavenTheme.kt`, `RavenColors.kt`, `RavenTypography.kt`, `RavenShapes.kt`, `RavenMotion.kt`, `component/*` (13 文件) | 12 | `.\gradlew.bat :core:designsystem:testDebugUnitTest --no-daemon` |
-| 8 | `:core:media` | Android Lib | `com.raven.app.core.media` | `coreMediaModule` | `CoreMediaModule.kt`, `playback/PlayerSessionController.kt`, `reader/GalleryPageRepository.kt`, `reader/ReaderBuffer.kt`, `download/DownloadCoordinator.kt`, `storage/StorageRootManager.kt`, `LocalLibraryImporter.kt`, `DuplicateScanner.kt` | 30 | `.\gradlew.bat :core:media:testDebugUnitTest --no-daemon` |
-| 9 | `:sites:video` | Android Lib | `com.raven.app.sites.video` | `videoSitesModule` | `VideoSitesModule.kt`, `VideoSiteSupport.kt`, 8 个视频插件 (`R34v`, `Hanime`, `Iwara`, `Missav`, `Jable`, `Rouvideo`, `Kbjfree`, `Pornhub`) | 19 | `.\gradlew.bat :sites:video:testDebugUnitTest --no-daemon` |
-| 10 | `:sites:comic` | Android Lib | `com.raven.app.sites.comic` | `comicSitesModule` | `ComicSitesModule.kt`, `EhSharedEngine.kt`, 6 个漫画插件 (`Ehentai`, `Exhentai`, `Nhentai`, `Hitomi`, `Wnacg`, `Jmcomic`) | 19 | `.\gradlew.bat :sites:comic:testDebugUnitTest --no-daemon` |
-| 11 | `:sites:gallery` | Android Lib | `com.raven.app.sites.gallery` | `gallerySitesModule` | `GallerySitesModule.kt`, `WordPressPhotoEngine.kt`, 5 个写真插件 (`FourKhd`, `Everia`, `FourKup`, `GalleryEpic`, `Cosplaytele`) | 17 | `.\gradlew.bat :sites:gallery:testDebugUnitTest --no-daemon` |
-| 12 | `:feature:browse` | Android Lib (Compose) | `com.raven.app.feature.browse` | `browseFeatureModule` | `BrowseFeatureModule.kt`, `BrowseNavigator.kt`, `HomeScreen.kt`, `ExploreScreen.kt`, `SearchScreen.kt`, `SiteFeedScreen.kt`, `SiteDirectoryScreen.kt`, `SiteFunctionsScreen.kt`, `SiteSwitcherSheet.kt` | 14 | `.\gradlew.bat :feature:browse:testDebugUnitTest --no-daemon` |
-| 13 | `:feature:library` | Android Lib (Compose) | `com.raven.app.feature.library` | `libraryFeatureModule` | `LibraryFeatureModule.kt`, `LibraryNavigator.kt`, `ProfileScreen.kt`, `LibraryHubScreen.kt`, `ShelfDetailScreen.kt`, `FavoritesScreen.kt`, `HistoryScreen.kt`, `ImageFavoritesScreen.kt`, `DownloadsScreen.kt`, `SubscriptionsScreen.kt`, `GlobalInboxScreen.kt`, `LocalLibraryScreen.kt` | 13 | `.\gradlew.bat :feature:library:testDebugUnitTest --no-daemon` |
-| 14 | `:feature:player` | Android Lib (Compose) | `com.raven.app.feature.player` | `playerFeatureModule` | `PlayerFeatureModule.kt`, `PlayerContracts.kt`, `PlayerViewModel.kt`, `VideoPlayerScreen.kt`, `PlayerControlsOverlay.kt`, `PlayerGestures.kt`, `PlayerSheets.kt`, `PlayerDetailPane.kt` | 18 | `.\gradlew.bat :feature:player:testDebugUnitTest --no-daemon` |
-| 15 | `:feature:reader` | Android Lib (Compose) | `com.raven.app.feature.reader` | `readerFeatureModule` | `ReaderFeatureModule.kt`, `ReaderNavigator.kt`, `GalleryDetailScreen.kt`, `GalleryDetailViewModel.kt`, `ReaderScreen.kt`, `ReaderViewModel.kt`, `ReaderSheets.kt`, `ReaderTestTags.kt` | 13 | `.\gradlew.bat :feature:reader:testDebugUnitTest --no-daemon` |
-| 16 | `:feature:settings` | Android Lib (Compose) | `com.raven.app.feature.settings` | `settingsFeatureModule` | `SettingsFeatureModule.kt`, `SettingsNavigator.kt`, `SettingsScreen.kt`, `SiteAccountScreen.kt`, `auth/SiteAuthActivity.kt`, `BlockedTermsScreen.kt`, `BackupRestoreScreen.kt`, `StorageMigrationScreen.kt`, `DuplicateScannerScreen.kt`, `RavenUpdater.kt` | 19 | `.\gradlew.bat :feature:settings:testDebugUnitTest --no-daemon` |
-| 17 | `:app` | Android App (Compose) | `com.raven.app` | `appModule` (`allRavenKoinModules`) | `RavenApplication.kt`, `AppModule.kt`, `MainActivity.kt`, `PlayerActivity.kt`, `RavenNavHost.kt`, `MainActivityIntentContract.kt` | 6 (+3 UI) | `.\gradlew.bat :app:testDebugUnitTest --no-daemon` |
+| # | 模块 | 类型 | 包名 / Namespace | Koin 模块 | 核心源码入口文件 | 单模块测试命令 |
+|---|---|---|---|---|---|---|
+| 1 | `:core:model` | Pure JVM | `com.raven.app.core.model` | — | `SiteModels.kt`, `MediaModels.kt`, `FeedModels.kt`, `PersonalModels.kt`, `RavenRoute.kt`, `SiteException.kt` | `.\gradlew.bat :core:model:test --no-daemon` |
+| 2 | `:core:common` | Pure JVM | `com.raven.app.core.common` | — | `AppDispatchers.kt`, `TagDictionary.kt`, `ContentFilter.kt`, `NaturalSortComparator.kt`, `UrlSanitizer.kt`, `TimestampParser.kt` | `.\gradlew.bat :core:common:test --no-daemon` |
+| 3 | `:core:site-spi` | Pure JVM | `com.raven.app.core.sitespi` | — | `SitePlugin.kt`, `SiteCapabilities.kt`, `SiteRegistry.kt`, `SiteHttp.kt`, `SiteSessionStore.kt`, 9 个协议工具 (`Base62Packer`, `RouPngProtocol`, `CossoraAesProtocol`, `JmcomicStripMath` 等) | `.\gradlew.bat :core:site-spi:test --no-daemon` |
+| 4 | `:core:security` | Android Lib | `com.raven.app.core.security` | `coreSecurityModule` | `CoreSecurityModule.kt`, `SessionVault.kt`, `VaultCipher.kt`, `BackupCodec.kt`, `BackupValidator.kt`, `LegacyR34vBackupAdapter.kt` | `.\gradlew.bat :core:security:testDebugUnitTest --no-daemon` |
+| 5 | `:core:network` | Android Lib | `com.raven.app.core.network` | `coreNetworkModule` | `CoreNetworkModule.kt`, `RavenOkHttpPool.kt`, `SiteHttpClient.kt`, `HostPacer.kt`, `SiteCookieJar.kt`, `Ipv4FirstDns.kt`, `SystemProxySelector.kt`, `NetworkMonitor.kt`, `RavenImageLoaderFactory.kt` | `.\gradlew.bat :core:network:testDebugUnitTest --no-daemon` |
+| 6 | `:core:database` | Android Lib (KSP) | `com.raven.app.core.database` | `coreDatabaseModule` | `CoreDatabaseModule.kt`, `RavenDatabase.kt` (20 表 / Schema v3), `SettingsDataStore.kt` (37 固定 Key + 2 类动态站点 Key), `entity/*`, `dao/*`, `repository/*` (13 仓储) | `.\gradlew.bat :core:database:testDebugUnitTest --no-daemon` |
+| 7 | `:core:designsystem` | Android Lib (Compose) | `com.raven.app.core.designsystem` | — | `theme/RavenTheme.kt`, `RavenColors.kt`, `RavenTypography.kt`, `RavenShapes.kt`, `RavenMotion.kt`, `component/*` | `.\gradlew.bat :core:designsystem:testDebugUnitTest --no-daemon` |
+| 8 | `:core:media` | Android Lib | `com.raven.app.core.media` | `coreMediaModule` | `CoreMediaModule.kt`, `playback/PlayerSessionController.kt`, `reader/GalleryPageRepository.kt`, `reader/ReaderBuffer.kt`, `download/DownloadCoordinator.kt`, `storage/StorageRootManager.kt`, `LocalLibraryImporter.kt`, `DuplicateScanner.kt` | `.\gradlew.bat :core:media:testDebugUnitTest --no-daemon` |
+| 9 | `:sites:video` | Pure JVM | `com.raven.app.sites.video` | `videoSitesModule` | `VideoSitesModule.kt`, `VideoSiteSupport.kt`, 7 个视频插件 (`R34v`, `Hanime`, `Iwara`, `Missav`, `Jable`, `Rouvideo`, `Pornhub`) | `.\gradlew.bat :sites:video:test --no-daemon` |
+| 10 | `:sites:comic` | Pure JVM | `com.raven.app.sites.comic` | `comicSitesModule` | `ComicSitesModule.kt`, `EhSharedEngine.kt`, 12 个漫画插件（普通漫画 7 + 连载漫画 5） | `.\gradlew.bat :sites:comic:test --no-daemon` |
+| 11 | `:sites:gallery` | Pure JVM | `com.raven.app.sites.gallery` | `gallerySitesModule` | `GallerySitesModule.kt`, `WordPressPhotoEngine.kt`, 5 个写真插件 (`FourKhd`, `Everia`, `FourKup`, `GalleryEpic`, `Cosplaytele`) | `.\gradlew.bat :sites:gallery:test --no-daemon` |
+| 12 | `:feature:browse` | Android Lib (Compose) | `com.raven.app.feature.browse` | `browseFeatureModule` | `BrowseFeatureModule.kt`, `BrowseNavigator.kt`, `HomeScreen.kt`, `ExploreScreen.kt`, `SearchScreen.kt`, `SiteFeedScreen.kt`, `SiteDirectoryScreen.kt`, `SiteFunctionsScreen.kt`, `SiteSwitcherSheet.kt` | `.\gradlew.bat :feature:browse:testDebugUnitTest --no-daemon` |
+| 13 | `:feature:library` | Android Lib (Compose) | `com.raven.app.feature.library` | `libraryFeatureModule` | `LibraryFeatureModule.kt`, `LibraryNavigator.kt`, `ProfileScreen.kt`, `LibraryHubScreen.kt`, `ShelfDetailScreen.kt`, `FavoritesScreen.kt`, `HistoryScreen.kt`, `ImageFavoritesScreen.kt`, `DownloadsScreen.kt`, `SubscriptionsScreen.kt`, `GlobalInboxScreen.kt`, `LocalLibraryScreen.kt` | `.\gradlew.bat :feature:library:testDebugUnitTest --no-daemon` |
+| 14 | `:feature:player` | Android Lib (Compose) | `com.raven.app.feature.player` | `playerFeatureModule` | `PlayerFeatureModule.kt`, `PlayerContracts.kt`, `PlayerViewModel.kt`, `VideoPlayerScreen.kt`, `PlayerControlsOverlay.kt`, `PlayerGestures.kt`, `PlayerSheets.kt`, `PlayerDetailPane.kt` | `.\gradlew.bat :feature:player:testDebugUnitTest --no-daemon` |
+| 15 | `:feature:reader` | Android Lib (Compose) | `com.raven.app.feature.reader` | `readerFeatureModule` | `ReaderFeatureModule.kt`, `ReaderNavigator.kt`, `GalleryDetailScreen.kt`, `GalleryDetailViewModel.kt`, `ReaderScreen.kt`, `ReaderViewModel.kt`, `ReaderSheets.kt`, `ReaderTestTags.kt` | `.\gradlew.bat :feature:reader:testDebugUnitTest --no-daemon` |
+| 16 | `:feature:settings` | Android Lib (Compose) | `com.raven.app.feature.settings` | `settingsFeatureModule` | `SettingsFeatureModule.kt`, `SettingsNavigator.kt`, `SettingsScreen.kt`, `SiteAccountScreen.kt`, `auth/SiteAuthActivity.kt`, `BlockedTermsScreen.kt`, `BackupRestoreScreen.kt`, `StorageMigrationScreen.kt`, `DuplicateScannerScreen.kt`, `RavenUpdater.kt` | `.\gradlew.bat :feature:settings:testDebugUnitTest --no-daemon` |
+| 17 | `:app` | Android App (Compose) | `com.raven.app` | `appModule` (`allRavenKoinModules`) | `RavenApplication.kt`, `AppModule.kt`, `MainActivity.kt`, `PlayerActivity.kt`, `RavenNavHost.kt`, `MainActivityIntentContract.kt` | `.\gradlew.bat :app:testDebugUnitTest --no-daemon` |
 
 ### 2.3 应用启动装配顺序（`RavenApplication.kt`）
 
@@ -188,9 +190,10 @@ flowchart TB
 ### 3.1 测试命令
 
 ```powershell
-# 1. 运行全部 17 模块 JVM 单元测试（3 个 Pure JVM 模块 + 14 个 Android 模块，共 273 条 @Test）
-# 注意：仅跑 testDebugUnitTest 会跳过 :core:model / :core:common / :core:site-spi！
-.\gradlew.bat :core:model:test :core:common:test :core:site-spi:test testDebugUnitTest --no-daemon
+# 1. 运行全部 17 模块 JVM 单元测试（6 个 Pure JVM 模块 + 11 个 Android 模块）
+# 截至当前源码静态计数为 380 处 @Test；计数不代表已执行或通过
+# 注意：仅跑 testDebugUnitTest 会跳过 6 个 Pure JVM 模块！
+.\gradlew.bat :core:model:test :core:common:test :core:site-spi:test :sites:video:test :sites:comic:test :sites:gallery:test testDebugUnitTest --no-daemon
 
 # 2. 运行单个 Pure JVM 模块单测（极速，数秒完成）
 .\gradlew.bat :core:site-spi:test --no-daemon
@@ -201,6 +204,10 @@ flowchart TB
 # 4. 运行指定测试类或单个测试方法
 .\gradlew.bat :app:testDebugUnitTest --tests "com.raven.app.AppDiGraphTest" --no-daemon
 .\gradlew.bat :feature:player:testDebugUnitTest --tests "com.raven.app.feature.player.PlayerViewModelTest.*" --no-daemon
+
+# 5. 源码静态计数（不会执行测试）
+(rg -o --no-filename '@Test\b' -g '**/src/test/**/*.kt' . | Measure-Object).Count
+(rg -o --no-filename '@Test\b' -g '**/src/androidTest/**/*.kt' . | Measure-Object).Count
 ```
 
 ### 3.2 静态检查与打包
@@ -231,8 +238,8 @@ adb install -r .\app\build\outputs\apk\debug\app-debug.apk
 # 冷启动主页面
 adb shell am start -n com.raven.app.debug/com.raven.app.MainActivity
 
-# 运行离线 Compose UI 冒烟测试（RavenSmokeAndroidTest，3 条用例，无需外网）
-.\gradlew.bat :app:connectedDebugAndroidTest --no-daemon
+# 运行 androidTest（当前源码静态计数 6 处：app Compose 冒烟 4 + database 迁移 2）
+.\gradlew.bat :app:connectedDebugAndroidTest :core:database:connectedDebugAndroidTest --no-daemon
 
 # 只看 Raven Debug 进程实时日志（最推荐）
 $pidRaven = (adb shell pidof com.raven.app.debug).Trim()
@@ -326,7 +333,7 @@ data class LibraryStats(
     val siteId: String? = null, // 显式传 SiteId.value，严禁读全局状态
 ) : RavenRoute
 ```
-> 同步在 `app/src/test/kotlin/com/raven/app/AppDiGraphTest.kt` 的 `all25RavenRoutesRoundTripThroughKotlinxSerialization` 中补充新路由的 JSON 往返测试并更新总数断言。
+> 同步在 `app/src/test/kotlin/com/raven/app/AppDiGraphTest.kt` 的 `allCurrentRavenRoutesRoundTripThroughSerializationAndIntentContract` 中补充新路由的 JSON 往返测试并更新总数断言（当前为 27 条路由）。
 
 #### Step 2：编写响应式 ViewModel 与不可变 UiState
 在目标 Feature 模块内新建 `LibraryStatsViewModel.kt`（不依赖 Android `Context`/`Activity`）：

@@ -622,6 +622,13 @@ class SettingsViewModel(
 
     // ---- Sites & Security ----
 
+    fun setStartupDefaultSiteId(siteId: SiteId?) {
+        if (siteId != null && siteRegistry.get(siteId) == null) return
+        viewModelScope.launch {
+            preferencesRepository.setStartupDefaultSiteId(siteId)
+        }
+    }
+
     fun refreshAuthStatuses() {
         viewModelScope.launch {
             val items = withContext(dispatchers.io) {

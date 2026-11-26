@@ -26,7 +26,7 @@ import com.raven.app.core.sitespi.SearchSource
 import com.raven.app.core.sitespi.SitePlugin
 import com.raven.app.core.sitespi.SiteRequestKind
 import java.net.URLEncoder
-import java.util.Base64
+import kotlin.io.encoding.Base64
 import kotlinx.coroutines.CancellationException
 import org.jsoup.Jsoup
 import org.jsoup.nodes.Document
@@ -333,7 +333,7 @@ class Mh160SitePlugin(
         val encoded = MURL_REGEX.find(html)?.groupValues?.get(1)
             ?: throw SiteException.ParseError("漫画160 找不到图片列表，页面结构可能已更改", siteId = SiteId.MH160)
         val decoded = runCatching {
-            String(Base64.getDecoder().decode(encoded), Charsets.UTF_8)
+            String(Base64.decode(encoded), Charsets.UTF_8)
         }.getOrNull() ?: throw SiteException.ParseError("漫画160 图片列表解码失败", siteId = SiteId.MH160)
         if (decoded.contains("+http://") || decoded.contains("+https://")) {
             throw SiteException.Unsupported("漫画160 该章节已下架", siteId = SiteId.MH160)

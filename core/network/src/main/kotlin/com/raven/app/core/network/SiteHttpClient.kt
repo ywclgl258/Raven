@@ -188,6 +188,9 @@ object SiteHttpErrorMapper {
  *   [executeChecked] for full HTTP-status -> [SiteException] throwing semantics.
  */
 private const val NET_LOG_TAG: String = "RavenNet"
+private const val DEFAULT_RATE_LIMIT_COOLDOWN_MS: Long = 5_000L
+private const val DEFAULT_R34V_RATE_LIMIT_COOLDOWN_MS: Long = 30_000L
+private const val MAX_RATE_LIMIT_COOLDOWN_MS: Long = 15L * 60L * 1_000L
 
 class SiteHttpClient(
     private val okHttpPool: RavenOkHttpPool,
@@ -273,9 +276,24 @@ class SiteHttpClient(
         if (response.code == 429) {
             val retryLabel = response.retryAfterSeconds?.let { "${it}s" } ?: "default"
             rateLimitLog.record(httpUrl.host, "HTTP 429 (Retry-After=$retryLabel)")
+            val cooldownMs = rateLimitCooldownMs(httpUrl.host, response.retryAfterSeconds)
+            hostPacer.penalize(httpUrl.host, cooldownMs)
+            if (logging) {
+                Log.w(NET_LOG_TAG, "Host ${httpUrl.host} cooling down for ${cooldownMs}ms after HTTP 429")
+            }
         }
 
         return response
+    }
+
+    internal fun rateLimitCooldownMs(host: String, retryAfterSeconds: Long?): Long {
+        val defaultMs = if (host.equals("rule34video.com", ignoreCase = true)) {
+            DEFAULT_R34V_RATE_LIMIT_COOLDOWN_MS
+        } else {
+            DEFAULT_RATE_LIMIT_COOLDOWN_MS
+        }
+        val serverMs = retryAfterSeconds?.coerceAtLeast(0L)?.times(1_000L)
+        return (serverMs ?: defaultMs).coerceAtMost(MAX_RATE_LIMIT_COOLDOWN_MS)
     }
 
     /**

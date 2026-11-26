@@ -11,6 +11,8 @@ import com.raven.app.core.sitespi.AuthMode
 import com.raven.app.core.sitespi.InMemorySiteSessionStore
 import com.raven.app.core.sitespi.ResolvedLink
 import com.raven.app.core.sitespi.SiteHttpResponse
+import kotlinx.coroutines.async
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -72,6 +74,36 @@ class R34vAndHanimeSitePluginTest {
                 FeedRequest(SiteId.R34V, section = "channel:featured-chan"),
             ),
         )
+    }
+
+    @Test
+    fun `r34v home loads latest and popular sequentially without request bursts`() = runTest {
+        val latestUrl = "https://rule34video.com/latest-updates/"
+        val popularUrl = "https://rule34video.com/most-popular/?sort_by=video_viewed"
+        val popularStarted = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val releaseLatest = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val fakeHttp = FakeHttpClientAdapter()
+        fakeHttp.onGetDynamic(latestUrl) { request ->
+            releaseLatest.await()
+            SiteHttpResponse(200, request.url, body = feedHtml("latest").toByteArray())
+        }
+        fakeHttp.onGetDynamic(popularUrl) { request ->
+            popularStarted.complete(Unit)
+            SiteHttpResponse(200, request.url, body = feedHtml("popular").toByteArray())
+        }
+        val plugin = R34vSitePlugin(fakeHttp, InMemorySiteSessionStore(), rateLimitBackoffMs = 0L)
+
+        val home = async { plugin.feedSource.loadHome() }
+        runCurrent()
+        assertEquals(listOf(latestUrl), fakeHttp.requests.map { it.url })
+        assertFalse(popularStarted.isCompleted)
+
+        releaseLatest.complete(Unit)
+        home.await()
+        assertEquals(listOf(latestUrl, popularUrl), fakeHttp.requests.map { it.url })
+        assertTrue(popularStarted.isCompleted)
+        assertEquals(1_200L, plugin.descriptor.networkProfile.pageIntervalMs)
+        assertEquals(350L, plugin.descriptor.networkProfile.imageIntervalMs)
     }
 
     @Test
@@ -604,4 +636,17 @@ class R34vAndHanimeSitePluginTest {
             // expected
         }
     }
+
+    private fun feedHtml(section: String): String = """
+        <html><body>
+        <div class="thumbs">
+            <div data-video-card-id="${if (section == "latest") "1001" else "1002"}" class="item thumb">
+                <a class="th" href="/video/${if (section == "latest") "1001" else "1002"}/sample/">
+                    <img class="thumb" src="/thumbs/$section.jpg" alt="$section" />
+                </a>
+                <div class="thumb_title">$section</div>
+            </div>
+        </div>
+        </body></html>
+    """.trimIndent()
 }

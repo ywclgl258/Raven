@@ -115,6 +115,10 @@ data class ReaderUiState(
     val imageFavoritePages: Set<Int> = emptySet(),
     val queueSession: PlaybackQueueSession? = null,
     val showQueueNextCard: Boolean = false,
+    val previousChapter: MediaItem? = null,
+    val nextChapter: MediaItem? = null,
+    val isChapterListReady: Boolean = false,
+    val isChapterTransitionLoading: Boolean = false,
     val isExporting: Boolean = false,
     val exportStatusText: String? = null,
     val authRequired: Boolean = false,
@@ -122,6 +126,9 @@ data class ReaderUiState(
     val errorMessage: String? = null,
     val snackbarMessage: String? = null,
 ) {
+    val isSerialComic: Boolean
+        get() = !offlineOnly && !detail?.chaptersUrl.isNullOrBlank()
+
     val effectiveSpread: Int
         get() = if (preferences.mode == ReaderMode.SPREAD && isLandscapeViewport) 2 else 1
 
@@ -166,7 +173,7 @@ data class ReaderUiState(
 
 /**
  * One-shot side effects emitted by [ReaderViewModel] for programmatic scrolls, SAF export,
- * image sharing, and sequential queue transitions.
+ * image sharing, sequential queue transitions, and serial chapter advancement.
  */
 sealed interface ReaderEvent {
     data class ScrollToPage(
@@ -194,12 +201,22 @@ sealed interface ReaderEvent {
         val replacement: PlaybackQueueSession,
         val nextItem: MediaItem,
     ) : ReaderEvent
+
+    data class OpenChapter(
+        val nextItem: MediaItem,
+    ) : ReaderEvent
+}
+
+private enum class SerialChapterDirection {
+    PREVIOUS,
+    NEXT,
 }
 
 class ReaderViewModel(
     private val route: RavenRoute.Reader,
     private val siteRegistry: SiteRegistry,
     private val pageLoader: ReaderPageLoader,
+    private val serialChapterLoader: SerialChapterLoader = SiteRegistrySerialChapterLoader(siteRegistry),
     private val exportGateway: GalleryExportGateway,
     private val historyRepository: HistoryRepository,
     private val bookmarkRepository: BookmarkRepository,
@@ -295,6 +312,18 @@ class ReaderViewModel(
     private var progressSaveJob: Job? = null
     private var autoPageJob: Job? = null
     private var exportJob: Job? = null
+    private var chapterListJob: Job? = null
+    private var chapterAdvanceJob: Job? = null
+
+    @Volatile
+    private var preparedNextChapter: MediaItem? = null
+
+    @Volatile
+    private var preparedPreviousChapter: MediaItem? = null
+
+    @Volatile
+    private var serialChaptersPrepared: Boolean = false
+    private var chapterTransitionEmitted: Boolean = false
 
     private var hasDirtyProgress: Boolean = false
     private var lastSavedPage: Int = -1
@@ -414,6 +443,20 @@ class ReaderViewModel(
     fun loadGallery(forceRefresh: Boolean = false) {
         if (!forceRefresh && loadJob?.isActive == true) return
         loadJob?.cancel()
+        chapterListJob?.cancel()
+        chapterAdvanceJob?.cancel()
+        preparedNextChapter = null
+        preparedPreviousChapter = null
+        serialChaptersPrepared = false
+        chapterTransitionEmitted = false
+        _uiState.update {
+            it.copy(
+                previousChapter = null,
+                nextChapter = null,
+                isChapterListReady = false,
+                isChapterTransitionLoading = false,
+            )
+        }
         loadJob = viewModelScope.launch(dispatchers.io) {
             _uiState.update {
                 it.copy(
@@ -532,6 +575,7 @@ class ReaderViewModel(
 
                 _events.emit(ReaderEvent.ScrollToPage(page = initialPage, scrollOffsetPx = initialOffset))
                 scheduleProgressSave(page = initialPage, scrollOffsetPx = initialOffset)
+                prepareSerialChapters(detail)
             } catch (ce: CancellationException) {
                 throw ce
             } catch (auth: SiteException.AuthRequired) {
@@ -553,6 +597,103 @@ class ReaderViewModel(
                 }
             }
         }
+    }
+
+    private fun prepareSerialChapters(detail: GalleryDetail) {
+        if (offlineOnly || detail.chaptersUrl.isNullOrBlank()) return
+        chapterListJob = viewModelScope.launch(dispatchers.io) {
+            try {
+                cacheAdjacentChapters(serialChapterLoader.loadChapters(siteId, detail), detail)
+            } catch (ce: CancellationException) {
+                throw ce
+            } catch (_: Throwable) {
+                // A manual chapter command or boundary request retries and reports the error.
+            }
+        }
+    }
+
+    private fun cacheAdjacentChapters(
+        chapters: List<MediaItem>,
+        detail: GalleryDetail,
+    ) {
+        val hints = listOfNotNull(
+            detail.item.extra["chapterId"],
+            detail.item.extra["chapterUuid"],
+            detail.item.extra["chapterHid"],
+        )
+        val currentIndex = chapters.indexOfFirst { chapter ->
+            chapter.id == mediaId ||
+                chapter.id == detail.item.id ||
+                hints.any { hint -> hint.isNotBlank() && chapter.id.endsWith(hint) }
+        }
+        val previous = chapters.getOrNull(currentIndex - 1)?.takeIf { currentIndex > 0 && it.url.isNotBlank() }
+        val next = chapters.getOrNull(currentIndex + 1)?.takeIf { currentIndex >= 0 && it.url.isNotBlank() }
+        preparedPreviousChapter = previous
+        preparedNextChapter = next
+        serialChaptersPrepared = chapters.isNotEmpty()
+        _uiState.update {
+            it.copy(
+                previousChapter = previous,
+                nextChapter = next,
+                isChapterListReady = chapters.isNotEmpty(),
+            )
+        }
+    }
+
+    private fun requestNextChapterAtBoundary(): Boolean = requestChapter(SerialChapterDirection.NEXT)
+
+    fun openPreviousChapter() {
+        requestChapter(SerialChapterDirection.PREVIOUS)
+    }
+
+    fun openNextChapter() {
+        requestChapter(SerialChapterDirection.NEXT)
+    }
+
+    private fun requestChapter(direction: SerialChapterDirection): Boolean {
+        val detail = _uiState.value.detail ?: return false
+        if (offlineOnly || detail.chaptersUrl.isNullOrBlank() || isInvalidSiteId) return false
+        if (chapterTransitionEmitted || chapterAdvanceJob?.isActive == true) return true
+
+        chapterAdvanceJob = viewModelScope.launch(dispatchers.io) {
+            _uiState.update { it.copy(isChapterTransitionLoading = true) }
+            try {
+                chapterListJob?.join()
+                if (!serialChaptersPrepared) {
+                    cacheAdjacentChapters(serialChapterLoader.loadChapters(siteId, detail), detail)
+                }
+                val target = when (direction) {
+                    SerialChapterDirection.PREVIOUS -> preparedPreviousChapter
+                    SerialChapterDirection.NEXT -> preparedNextChapter
+                }
+                if (target == null) {
+                    emitSnackbar(
+                        when (direction) {
+                            SerialChapterDirection.PREVIOUS -> "已经是第一话"
+                            SerialChapterDirection.NEXT -> "已经是最后一话"
+                        },
+                    )
+                    return@launch
+                }
+
+                chapterTransitionEmitted = true
+                flushProgress()
+                _events.emit(ReaderEvent.OpenChapter(nextItem = target))
+            } catch (ce: CancellationException) {
+                throw ce
+            } catch (error: Throwable) {
+                emitSnackbar(error.message?.takeIf(String::isNotBlank) ?: "章节加载失败，请重试")
+            } finally {
+                _uiState.update { it.copy(isChapterTransitionLoading = false) }
+            }
+        }
+        return true
+    }
+
+    fun onChapterNavigationFailed() {
+        chapterTransitionEmitted = false
+        _uiState.update { it.copy(isChapterTransitionLoading = false) }
+        emitSnackbar("无法打开所选章节，请重试")
     }
 
     private fun resolveInitialPage(
@@ -787,6 +928,21 @@ class ReaderViewModel(
      * - Supports normal (`down -> next, up -> prev`) and reversed (`up -> next, down -> prev`) direction.
      * - Supports long-press jump straight to first / last page via [SpreadNavigator.boundaryPage].
      */
+    fun onStripEndReached() {
+        val state = _uiState.value
+        val lastPage = state.pageNumbers.lastOrNull() ?: return
+        onVisiblePagesChanged(
+            anchorPage = lastPage,
+            visiblePages = setOf(lastPage),
+            scrollOffsetPx = state.stripScrollOffsetPx,
+        )
+        if (_uiState.value.queueSession?.hasNext == true) {
+            _uiState.update { it.copy(showQueueNextCard = true) }
+        } else {
+            requestNextChapterAtBoundary()
+        }
+    }
+
     fun navigateAdjacentPage(forward: Boolean): Boolean {
         val state = _uiState.value
         val nav = state.spreadNavigator ?: return false
@@ -796,6 +952,8 @@ class ReaderViewModel(
             return true
         } else if (forward && state.queueSession?.hasNext == true) {
             _uiState.update { it.copy(showQueueNextCard = true) }
+            return true
+        } else if (forward && requestNextChapterAtBoundary()) {
             return true
         }
         return false
@@ -817,6 +975,8 @@ class ReaderViewModel(
             jumpToPage(target)
         } else if (forward && state.queueSession?.hasNext == true) {
             _uiState.update { it.copy(showQueueNextCard = true) }
+        } else if (forward) {
+            requestNextChapterAtBoundary()
         }
         return true
     }
@@ -967,7 +1127,11 @@ class ReaderViewModel(
 
                 val pages = latest.pageNumbers
                 if (pages.size <= 1) {
+                    val opensNextChapter = latest.slideshowOrder == SlideshowOrder.SEQUENTIAL &&
+                        latest.queueSession?.hasNext != true &&
+                        requestNextChapterAtBoundary()
                     _uiState.update { it.copy(autoPageIntervalSeconds = 0) }
+                    if (!opensNextChapter) emitSnackbar("自动翻页已到达末尾")
                     break
                 }
 
@@ -992,13 +1156,16 @@ class ReaderViewModel(
                 if (nextPage != null) {
                     jumpToPage(nextPage)
                 } else {
+                    val opensNextChapter = latest.slideshowOrder == SlideshowOrder.SEQUENTIAL &&
+                        latest.queueSession?.hasNext != true &&
+                        requestNextChapterAtBoundary()
                     _uiState.update {
                         it.copy(
                             autoPageIntervalSeconds = 0,
                             showQueueNextCard = it.queueSession?.hasNext == true,
                         )
                     }
-                    emitSnackbar("自动翻页已到达末尾")
+                    if (!opensNextChapter) emitSnackbar("自动翻页已到达末尾")
                     break
                 }
             }
@@ -1425,6 +1592,8 @@ class ReaderViewModel(
 
     override fun onCleared() {
         autoPageJob?.cancel()
+        chapterListJob?.cancel()
+        chapterAdvanceJob?.cancel()
         bufferCollectJob?.cancel()
         flushProgress()
         readerBuffer?.close()

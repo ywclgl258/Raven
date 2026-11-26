@@ -150,8 +150,19 @@ class MainActivity : ComponentActivity(), MainActivityHostActions {
             val unreadCount by subscriptionRepository.observeUnreadCount().collectAsStateWithLifecycle(
                 initialValue = 0,
             )
+            val startupUpdate by StartupUpdateNotifier.latestUpdate.collectAsStateWithLifecycle()
 
             latestAppSettings = appSettings
+
+            LaunchedEffect(startupUpdate?.release?.tagName, isAppLocked) {
+                val available = startupUpdate ?: return@LaunchedEffect
+                if (isAppLocked) return@LaunchedEffect
+                Toast.makeText(
+                    this@MainActivity,
+                    "发现新版本 ${available.release.tagName}，可在设置中查看",
+                    Toast.LENGTH_LONG,
+                ).show()
+            }
 
             LaunchedEffect(appSettings.privacyScreenSecure) {
                 if (appSettings.privacyScreenSecure) {

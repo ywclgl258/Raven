@@ -49,6 +49,7 @@ class BackupRestoreViewModelTest {
         val (vm, db, saf) = createEnv()
 
         // Seed local data to export
+        db.preferencesRepository.setStartupDefaultSiteId(SiteId.NHENTAI)
         db.favoriteDao.upsert(
             FavoriteEntity(
                 siteId = SiteId.R34V.value,
@@ -144,6 +145,7 @@ class BackupRestoreViewModelTest {
             assertEquals(1, restored!!.mergedSummary.favoritesCount)
             assertEquals(1, db.favoriteDao.getAll().size)
             assertEquals(1, db.watchProgressDao.getAll().size)
+            assertEquals(SiteId.NHENTAI, db.preferencesRepository.currentSettings().startupDefaultSiteId)
             assertTrue(exportUri in saf.releasedGrants)
             cancelAndIgnoreRemainingEvents()
         }

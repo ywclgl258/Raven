@@ -26,10 +26,10 @@ flowchart LR
 
 ## 1. 数据持久化层（`:core:database`）
 
-### 1.1 `RavenDatabase` 与全部 18 张表结构
+### 1.1 `RavenDatabase` 与全部 20 张表结构
 
 - **实现路径**：`core/database/src/main/kotlin/com/raven/app/core/database/RavenDatabase.kt`
-- **关键配置**：`DATABASE_NAME = "raven.db"`、`SCHEMA_VERSION = 1`、`exportSchema = true`、`@TypeConverters(RavenTypeConverters::class)`。
+- **关键配置**：`DATABASE_NAME = "raven.db"`、`SCHEMA_VERSION = 3`、`exportSchema = true`、`@TypeConverters(RavenTypeConverters::class)`；构建时显式挂载 `MIGRATION_1_2` 与 `MIGRATION_2_3`。
 - **建库种子回调**：`watchLaterSeedCallback` 在 `onCreate` 时通过 `INSERT OR IGNORE` 预置内置系统片单 `id = "watch-later"`（`Shelf.WATCH_LATER_ID`，名称 `"稍后看"`，`is_system = 1`）。该片单受业务层保护，禁止重命名或删除。
 
 | # | 表名 (`tableName`) | Entity 类 | 主键 (PK) | 外键 (FK) | 索引 (Indices) | 容量上限 / 语义备注 |
@@ -38,22 +38,24 @@ flowchart LR
 | 2 | `reading_progress` | `ReadingProgressEntity` | `(site_id, media_id)` | 无 | `(updated_at DESC)`, `(site_id ASC, updated_at DESC)` | 每站点上限 **500** 条 (`ReadingProgressDao.MAX_PER_SITE`) |
 | 3 | `favorites` | `FavoriteEntity` | `(site_id, kind, target_id)` | 无 | `(added_at DESC)`, `(kind ASC, added_at DESC)` | 支持作品/作者/角色/标签等 `FavoriteKind` |
 | 4 | `shelves` | `ShelfEntity` | `id` | 无 | `(is_pinned DESC, modified_at DESC)` | 内置 `watch-later` (`is_system = 1`)；名称 `<= 80`，备注 `<= 1000` |
-| 5 | `shelf_items` | `ShelfItemEntity` | `(shelf_id, site_id, media_id)` | **`shelf_id -> shelves(id) ON DELETE CASCADE`** | `(shelf_id ASC, position ASC)`, `(shelf_id ASC, added_at DESC)` | **全库唯一外键约束**；批量覆写时须先删子表再删父表、先插父表再插子表 |
+| 5 | `shelf_items` | `ShelfItemEntity` | `(shelf_id, site_id, media_id)` | **`shelf_id -> shelves(id) ON DELETE CASCADE`** | `(shelf_id ASC, position ASC)`, `(shelf_id ASC, added_at DESC)`, `(site_id, media_id)` | **全库唯一外键约束**；批量覆写时须先删子表再删父表、先插父表再插子表 |
 | 6 | `smart_shelves` | `SmartShelfEntity` | `id` | 无 | `(is_pinned DESC, created_at DESC)` | 动态规则片单（`UNFINISHED` / `OFFLINE_UNSEEN` / `RECENT`） |
 | 7 | `page_bookmarks` | `PageBookmarkEntity` | `id` | 无 | `(site_id, media_id, page)`, `(created_at DESC)` | 漫画/写真页码与滚动偏移书签 |
 | 8 | `time_bookmarks` | `TimeBookmarkEntity` | `id` | 无 | `(site_id, media_id, position_ms)`, `(created_at DESC)` | 视频时间点书签；`label <= 500`，`group_name <= 80` |
 | 9 | `image_favorites` | `ImageFavoriteEntity` | `id` | 无 | `(site_id, media_id, page_index)`, `(added_at DESC)` | 全局上限 **20,000** 条 (`ImageFavoriteDao.MAX_IMAGE_FAVORITES`) |
 | 10 | `tag_subscriptions` | `TagSubscriptionEntity` | `(site_id, slug, scope)` | 无 | `(site_id ASC, sort_order ASC)` | 支持手动拖拽排序 `sort_order` |
 | 11 | `saved_searches` | `SavedSearchEntity` | `id` | 无 | `(created_at DESC)` | 跨站/单站保存搜索（含 `AdvancedSearchFilters` JSON） |
-| 12 | `update_inbox` | `UpdateInboxEntity` | `id` | 无 | `(is_read ASC, discovered_at DESC)`, `(source_kind, source_id)` | 订阅与保存搜索更新通知；覆盖写入时保留已读态 `is_read = true` |
+| 12 | `update_inbox` | `UpdateInboxEntity` | `id` | 无 | `(is_read ASC, discovered_at DESC)`, `(source_kind, source_id)`, `(site_id ASC, discovered_at DESC)` | 订阅与保存搜索更新通知；覆盖写入时保留已读态 `is_read = true` |
 | 13 | `blocked_terms` | `BlockedTermEntity` | `(site_id, term)` | 无 | `(site_id)` | 写入前统一经 `ContentFilter.normalizeTerm` 归一化 |
 | 14 | `search_history` | `SearchHistoryEntity` | `(site_id, query, scope)` | 无 | `(site_id ASC, searched_at DESC)` | 每站点上限 **30** 条 (`SearchHistoryDao.MAX_PER_SITE`) |
 | 15 | `download_items` | `DownloadItemEntity` | `id` | 无 | `(status ASC, priority DESC, updated_at DESC)`, `(site_id, media_id)` | 视频与图集统一下载队列投影表 |
 | 16 | `playback_preferences` | `PlaybackPreferencesEntity` | `site_id` | 无 | 无 | 2 级覆盖：`site_id = "*"` 为全局默认，具体 `siteId` 为按站覆盖 |
 | 17 | `reader_preferences` | `ReaderPreferencesEntity` | `(site_id, media_id)` | 无 | `(site_id)` | 3 级覆盖：`("*", "")` 全局 → `("<site>", "")` 按站 → `("<site>", "<mediaId>")` 按本 |
 | 18 | `browse_positions` | `BrowsePositionEntity` | `position_key` | 无 | `(updated_at DESC)` | 全局上限 **32** 条，跨进程恢复列表浏览锚点 |
+| 19 | `tag_translations` | `TagTranslationEntity` | `(source, namespace, raw_slug)` | 无 | `(raw_slug)`, `(chinese_name)`, `(source)` | 中文标签词典；由 `MIGRATION_1_2` 引入 |
+| 20 | `media_tag_cache` | `MediaTagCacheEntity` | `(site_id, media_id)` | 无 | `(updated_at DESC)` | 作品标签缓存，用于本地过滤与屏蔽；由 `MIGRATION_1_2` 引入 |
 
-### 1.2 11 个 Domain Repository 与 Koin 装配
+### 1.2 13 个 Domain Repository 与 Koin 装配
 
 全部由 `coreDatabaseModule`（`core/database/src/main/kotlin/com/raven/app/core/database/CoreDatabaseModule.kt`）注册为单例，通过 `DatabaseTransactionRunner`（生产实现 `RoomTransactionRunner`）抽象事务边界，便于 JVM 单元测试注入假实现。
 
@@ -68,129 +70,76 @@ flowchart LR
 | `SearchHistoryRepository` | `search_history` | 按站点维护最近 30 条搜索记录，重复搜索刷新 `searched_at` |
 | `DownloadStateRepository` | `download_items` | 为下载引擎与 UI 提供统一 Room 投影（状态、进度、错因、优先级、分组、存储根） |
 | `BrowsePositionRepository` | `browse_positions` | 持久化最近 32 个列表滚动位置与页码锚点 |
+| `TagDictionaryRepository` | `tag_translations` | 合并远程/用户标签翻译并维护本地词典运行时快照 |
+| `MediaTagCacheRepository` | `media_tag_cache` | 按作品读写标签 JSON 缓存，供本地筛选与屏蔽使用 |
 | `PreferencesRepository` | `SettingsDataStore`, `playback_preferences`, `reader_preferences` | 偏好统一门面：负责解析 2 级播放偏好（全局 → 站点）与 3 级阅读偏好（全局 → 站点 → 单本）合并生效值 |
-| `BackupDataRepository` | 除 `download_items`、`browse_positions` 外的全部 16 张表 + `SettingsDataStore` | 单一 Room 事务内导出/合并快照（调用 `BackupMerger`）；严格排除凭证、密钥、本地存储路径与下载队列；导出 `LOCAL` 单图收藏前剥离本地磁盘路径；Room 事务失败时全量回滚且**绝不修改 `SettingsDataStore`** |
+| `BackupDataRepository` | 除 `download_items`、`browse_positions`、`media_tag_cache` 外的 17 张表 + `SettingsDataStore` | 单一 Room 事务内导出/合并快照（调用 `BackupMerger`）；严格排除凭证、密钥、本地存储路径与下载队列；导出 `LOCAL` 单图收藏前剥离本地磁盘路径；Room 事务失败时全量回滚且**绝不修改 `SettingsDataStore`** |
 
-### 1.3 `SettingsDataStore` 全部 17 项键值与默认值
+### 1.3 `SettingsDataStore` 37 个固定 Key + 2 类动态站点 Key
 
 - **实现路径**：`core/database/src/main/kotlin/com/raven/app/core/database/datastore/SettingsDataStore.kt`
-- **持久化文件**：`raven_settings.preferences_pb`（读取遇 `IOException` 时降级返回 `emptyPreferences()`，不崩进程）。
+- **持久化文件**：`raven_settings.preferences_pb`（读取遇 `IOException` 时降级返回 `emptyPreferences()`，文件损坏由 `ReplaceFileCorruptionHandler` 替换为空偏好）。
+- **WebDAV 边界**：DataStore 只保存 `webdav_last_sync_at`；服务器地址、账号、密码、备份口令、远端文件名与自动同步开关由 `WebDavCredentialStore` 使用 AndroidKeyStore AES-256-GCM 加密保存。
 
 | # | Key 名称 | 值类型 | 默认值 | 可跨设备备份 (`PORTABLE_BACKUP_KEYS`) | 说明与约束 |
 | :-: | :--- | :--- | :--- | :-: | :--- |
 | 1 | `active_site_id` | `String` | `"r34v"` | 是 | 当前选中站点 ID |
 | 2 | `pinned_site_ids` | `String` (JSON 数组) | `"[]"` | 是 | 置顶站点列表，自动去重 |
-| 3 | `cross_search_site_ids` | `String` (JSON 数组) | `"[]"` | 是 | 跨站搜索勾选站点（兼容读取逗号分隔的旧版 `cross_search_sites`） |
-| 4 | `site_language_<siteId>` | `String` (动态前缀) | 无（视为 `ComicLanguage.ALL`） | 是（经 `siteLanguages` 字段） | 按站点语言偏好；设为 `ALL` 时移除该键 |
-| 5 | `site_explore_filter_<siteId>` | `String` (JSON, 动态前缀) | 无（空筛选） | **否** | 按站点持久化的 `ExploreFilterState`；为空时移除 |
-| 6 | `translate_tags` | `Boolean` | `true` | 是 | 是否开启标签中文词典翻译 |
-| 7 | `auto_fullscreen` | `Boolean` | **`false`** | 是 | 起播是否自动进全屏（默认关闭，且即便开启也绝不对自动播放/连播生效，见 §3.5） |
-| 8 | `preferred_quality` | `String` | `"auto"` | 是 | 首选画质（如 `"auto"`, `"1080p"`, `"720p"`） |
-| 9 | `default_playback_speed` | `Float` | `1.0f` | 是 | 默认播放倍速，强制钳制在 `0.25f..3.0f` |
-| 10 | `stream_cache_enabled` | `Boolean` | `false` | 是 | 是否启用 512 MiB 在线流式缓存 |
-| 11 | `seek_cache_enabled` | `Boolean` | `true` | 是 | 是否启用会话级 MP4/HLS Seek 缓存 |
-| 12 | `download_unmetered_only` | `Boolean` | `false` | 是 | 仅在非计量网络（Wi-Fi）下载 |
-| 13 | `storage_location` | `String` (`StorageLocation.name`) | `PRIVATE` | **否** | 当前生效的下载存储根（设备相关） |
-| 14 | `pending_storage_location` | `String` | `""` (`null`) | **否** | 待下次冷启动生效的存储根，由 `applyPendingStorageLocation()` 原子切换并清空 |
-| 15 | `reduce_transparency` | `Boolean` | `false` | 是 | 降低半透明材质/视觉透明度 |
-| 16 | `auto_update_check` | `Boolean` | `true` | 是 | 是否启用 12 小时自动检查 GitHub Release 更新 |
-| 17 | `site_switch_tutorial_seen` | `Boolean` | `false` | **否** | 站点切换引导是否已展示；通过 `consumeSiteSwitchTutorial()` 保证严格单次消费 |
+| 3 | `cross_search_site_ids` | `String` (JSON 数组) | `"[]"` | 是 | 跨站搜索勾选站点（兼容读取逗号分隔旧值） |
+| 4 | `translate_tags` | `Boolean` | `true` | 是 | 是否开启标签中文词典翻译 |
+| 5 | `auto_fullscreen` | `Boolean` | `false` | 是 | 仅手动起播可自动全屏；自动播放/连播不触发 |
+| 6 | `preferred_quality` | `String` | `"auto"` | 是 | 首选画质（如 `"auto"`, `"1080p"`, `"720p"`） |
+| 7 | `default_playback_speed` | `Float` | `1.0f` | 是 | 默认播放倍速，钳制在 `0.25f..3.0f` |
+| 8 | `stream_cache_enabled` | `Boolean` | `false` | 是 | 是否启用 512 MiB 在线流式缓存 |
+| 9 | `seek_cache_enabled` | `Boolean` | `true` | 是 | 是否启用会话级 MP4/HLS Seek 缓存 |
+| 10 | `download_unmetered_only` | `Boolean` | `false` | 是 | 仅在非计量网络下载 |
+| 11 | `download_view` | `String` (JSON) | `RECENT` / `NONE` / `false` | 是 | 下载排序、分组与标签匹配展示偏好 |
+| 12 | `storage_location` | `String` | `PRIVATE` | 否 | 当前生效的下载存储根（设备相关） |
+| 13 | `pending_storage_location` | `String` | `""`（映射为 `null`） | 否 | 待下次冷启动生效的存储根 |
+| 14 | `reduce_transparency` | `Boolean` | `false` | 是 | 降低半透明材质/视觉透明度 |
+| 15 | `ui_sound_effects_enabled` | `Boolean` | `true` | 是 | 是否启用界面音效 |
+| 16 | `auto_update_check` | `Boolean` | `true` | 是 | 是否启用 12 小时自动检查更新 |
+| 17 | `site_switch_tutorial_seen` | `Boolean` | `false` | 否 | 站点切换引导状态；严格单次消费 |
+| 18 | `tag_dict_auto_sync` | `Boolean` | `true` | 是 | 是否自动同步标签词典 |
+| 19 | `tag_dict_etag` | `String` | `""` | 否 | 标签词典 HTTP ETag |
+| 20 | `tag_dict_release_tag` | `String` | `""` | 否 | 标签词典 Release 标记 |
+| 21 | `tag_dict_updated_at` | `Long` | `0L` | 否 | 标签词典同步时间 |
+| 22 | `block_tags_globally` | `Boolean` | `true` | 是 | 是否全局应用屏蔽标签 |
+| 23 | `autoplay_video` | `Boolean` | `true` | 否 | 自动播放/连播开关，不覆盖“自动播放不自动全屏”规则 |
+| 24 | `background_audio_playback` | `Boolean` | `false` | 否 | 是否允许后台音频播放 |
+| 25 | `reader_tap_zones_enabled` | `Boolean` | `true` | 否 | 是否启用阅读器三区点击翻页 |
+| 26 | `reader_show_status_bar` | `Boolean` | `false` | 否 | 阅读器是否显示状态栏 |
+| 27 | `reader_prefetch_pages` | `Int` | `3` | 否 | 向后预读页数，钳制在 `1..6` |
+| 28 | `reader_memory_budget_mb` | `Int` | `24` | 否 | 屏外位图预算，钳制在 `16..96` MiB |
+| 29 | `reader_auto_split_wide_pages` | `Boolean` | `false` | 否 | 是否自动拆分宽图 |
+| 30 | `image_load_concurrency` | `Int` | `3` | 否 | 图片加载并发，钳制在 `2..3` |
+| 31 | `background_subscription_sync` | `Boolean` | `true` | 否 | 是否启用后台订阅更新同步 |
+| 32 | `privacy_screen_secure` | `Boolean` | `false` | 否 | 是否在主页面/播放器窗口启用 `FLAG_SECURE` |
+| 33 | `app_lock_enabled` | `Boolean` | `false` | 否 | 是否启用 PIN/生物识别应用锁 |
+| 34 | `app_lock_timeout_seconds` | `Int` | `0` | 否 | 后台再锁定宽限秒数，钳制在 `0..3600` |
+| 35 | `incognito_mode` | `Boolean` | `false` | 否 | 无痕模式；跳过观看/阅读历史写入 |
+| 36 | `webdav_last_sync_at` | `Long` | `0L` | 否 | 最近一次 WebDAV 同步的 epoch milliseconds |
+| 37 | `startup_default_site_id` | `String` | 键缺失 = 记住上次使用 | 是 | 冷启动默认站点；仅进程启动应用一次，不覆盖返回首页或手动切换 |
+| D1 | `site_language_<siteId>` | `String`（动态前缀） | 键缺失 = `ALL` | 是（经 `siteLanguages` 字段） | 按站点语言偏好；设为 `ALL` 时移除该键 |
+| D2 | `site_explore_filter_<siteId>` | `String`（JSON，动态前缀） | 键缺失 = 空筛选 | 否 | 按站点保存 `ExploreFilterState`；为空时移除 |
 
-### 1.4 数据库升版迁移（Schema Migration）标准流程
+### 1.4 当前 Schema v3 与迁移链
 
-`core/database/build.gradle.kts` 已启用 `androidx.room` Gradle 插件并配置：
+迁移直接定义在 `RavenDatabase.kt` 的 `companion object`，并由 `RavenDatabase.build()` 通过 `.addMigrations(MIGRATION_1_2, MIGRATION_2_3)` 挂载。生产构建未使用 `fallbackToDestructiveMigration()`。
 
-```kotlin
-room {
-    schemaDirectory("$projectDir/schemas")
-}
-```
+| 迁移 | 当前实现 | 验证源码 |
+|---|---|---|
+| `MIGRATION_1_2` | 新建 `tag_translations`（含 `raw_slug` / `chinese_name` / `source` 索引）与 `media_tag_cache`（含 `updated_at DESC` 索引） | `RavenDatabaseMigrationTest.migrate1To3PreservesDataAndCreatesExpectedIndices` 覆盖 `1 -> 2 -> 3` 链 |
+| `MIGRATION_2_3` | 新建 `shelf_items(site_id, media_id)` 与 `update_inbox(site_id ASC, discovered_at DESC)` 索引 | `migrate1To3PreservesDataAndCreatesExpectedIndices` 与 `migrate2To3ValidatesNewIndices` |
 
-仓库中已有基线快照：`core/database/schemas/com.raven.app.core.database.RavenDatabase/1.json`，且已引入测试依赖 `libs.androidx.room.testing`。
+仓库已导出 `core/database/schemas/com.raven.app.core.database.RavenDatabase/1.json`、`2.json`、`3.json`。上述 androidTest 共 2 处 `@Test`；这里只描述测试源码覆盖点，不声称本轮已执行。
 
-**严禁红线**：生产环境 `RavenDatabase.build()` **严禁调用 `fallbackToDestructiveMigration()`**，任何表结构变更必须走以下 5 步标准迁移流程：
+后续表结构变更必须延续显式迁移，不得回退到破坏性重建：
 
-1. **修改 Entity 并递增版本**：修改或新增 `@Entity` 后，将 `RavenDatabase.SCHEMA_VERSION` 从 `1` 递增到 `2`（若新增表，同步加入 `@Database(entities = [...])` 与 DAO 声明，并在 `coreDatabaseModule` 注册 DAO）。
-2. **编写显式 `Migration`**：在 `core/database/src/main/kotlin/com/raven/app/core/database/Migrations.kt` 新增确定性 SQL 迁移对象：
-
-```kotlin
-package com.raven.app.core.database
-
-import androidx.room.migration.Migration
-import androidx.sqlite.db.SupportSQLiteDatabase
-
-val MIGRATION_1_2: Migration = object : Migration(1, 2) {
-    override fun migrate(db: SupportSQLiteDatabase) {
-        // 示例：为 watch_progress 新增不可空列并赋默认值，避免旧行校验失败
-        db.execSQL(
-            "ALTER TABLE watch_progress ADD COLUMN audio_track TEXT NOT NULL DEFAULT ''",
-        )
-    }
-}
-
-val ALL_RAVEN_MIGRATIONS: Array<Migration> = arrayOf(
-    MIGRATION_1_2,
-)
-```
-
-3. **在 `RavenDatabase.build()` 挂载迁移**：
-
-```kotlin
-fun build(context: Context): RavenDatabase =
-    Room.databaseBuilder(
-        context.applicationContext,
-        RavenDatabase::class.java,
-        DATABASE_NAME,
-    )
-        .addMigrations(*ALL_RAVEN_MIGRATIONS)
-        .addCallback(watchLaterSeedCallback)
-        .build()
-```
-
-4. **导出新 Schema JSON 并提交 Git**：执行 KSP 生成 `core/database/schemas/com.raven.app.core.database.RavenDatabase/2.json`，并与旧版 `1.json` 做 diff 核对列名、类型与索引是否完全一致：
-
-```bash
-./gradlew :core:database:kspDebugKotlin
-```
-
-5. **编写 `MigrationTestHelper` 迁移验证测试**（放在 `core/database/src/androidTest/`，并在 `android.sourceSets["androidTest"].assets.srcDir("$projectDir/schemas")` 暴露 Schema 资源）：
-
-```kotlin
-@RunWith(AndroidJUnit4::class)
-class RavenDatabaseMigrationTest {
-    @get:Rule
-    val helper = MigrationTestHelper(
-        InstrumentationRegistry.getInstrumentation(),
-        RavenDatabase::class.java,
-    )
-
-    @Test
-    fun migrate1To2_preservesExistingRows() {
-        helper.createDatabase("migration-test.db", 1).apply {
-            execSQL(
-                """
-                INSERT INTO watch_progress
-                (site_id, media_id, url, title, cover_url, position_ms, duration_ms, updated_at, completed, quality)
-                VALUES ('r34v', '123', 'https://rule34video.com/video/123/', 'Demo', '', 15000, 60000, 1700000000, 0, '720p')
-                """.trimIndent(),
-            )
-            close()
-        }
-
-        val migrated = helper.runMigrationsAndValidate(
-            "migration-test.db",
-            2,
-            true,
-            MIGRATION_1_2,
-        )
-        migrated.query("SELECT media_id, audio_track FROM watch_progress WHERE media_id = '123'").use { c ->
-            assertTrue(c.moveToFirst())
-            assertEquals("123", c.getString(0))
-            assertEquals("", c.getString(1))
-        }
-    }
-}
-```
+1. 修改 Entity/DAO，并将 `SCHEMA_VERSION` 从当前 `3` 递增到下一版本；新增表还需加入 `@Database(entities = [...])`、DAO 声明与 Koin 注册。
+2. 在 `RavenDatabase.kt` 编写下一段确定性 `Migration`，并加入 `build()` 的 `addMigrations(...)`；补齐必要索引与旧行默认值。
+3. 执行 `./gradlew :core:database:kspDebugKotlin` 导出新 Schema JSON，与 `3.json` diff 核对表、列、主键、外键和索引。
+4. 在 `core/database/src/androidTest/.../RavenDatabaseMigrationTest.kt` 增加从旧版本到最新版本的 `MigrationTestHelper` 验证；在设备/模拟器上运行 `:core:database:connectedDebugAndroidTest` 后以实际报告为准。
 
 ---
 
@@ -310,15 +259,16 @@ flowchart TB
 | 3. MP4 Seek 缓存 | `cacheDir/raven-seeks` | `64 MiB` LRU | 受 `seek_cache_enabled` 控制（默认 `true`）；绑定 `sessionKey`，切换视频时自动驱逐上一会话全部 Key |
 | 4. HLS VOD Seek 缓存 | `cacheDir/raven-hls-seeks` | `32 MiB` LRU（分片 `2 MiB`） | 冷启动清理孤儿 Key；`HlsSeekSession` 仅在解析 `HlsMediaPlaylist.hasEndTag == true` 时缓存 **VOD** 分片（绝不缓存直播/滑动窗口），活跃租约归零后立即按会话 UUID 前缀物理删除 |
 
-### 3.3 带宽估计、探测、选流、缓冲与卡顿降档
+### 3.3 带宽估计、探测、稳定选流与缓冲恢复
 
 | 组件 | 路径 (`core/media/.../playback/`) | 核心参数与决策规则 |
 | :--- | :--- | :--- |
 | `LinkSpeedEstimator` | `LinkSpeedEstimator.kt` | 封装 `DefaultBandwidthMeter`，**纯进程内、不落盘**；`NetworkMonitor.routeEpoch` 变化或超过 `ESTIMATE_TTL_MS = 5 分钟` 自动失效；自动忽略 `.m3u8` 播放列表与 `< 16 KiB` 小样本 |
 | `MediaBandwidthProber` | `MediaBandwidthProber.kt` | 基于 `NetworkQualifiers.MEDIA` 发起短预算测速：`BUDGETED` 首播探测（上限 `128 KiB` / `2s`）与 `BASELINE` 基准探测（`1 MiB`） |
-| `StreamSelector` | `StreamSelection.kt` | `HEADROOM = 0.7`、`DEFAULT_CEILING_HEIGHT = 720`、参考码率阶梯 `144p = 200 kbps .. 2160p = 18000 kbps`。自动选流或降档**仅作用于当前会话**，绝不篡改用户持久化的 `preferred_quality` |
+| `StreamSelector` | `StreamSelection.kt` | `HEADROOM = 0.7`、`DEFAULT_CEILING_HEIGHT = 720`、参考码率阶梯 `144p = 200 kbps .. 2160p = 18000 kbps`。明确选择的清晰度不因瞬时测速而降低；`auto` 按偏好上限选择。过期地址刷新优先保持同一清晰度，不自动降档 |
 | `BufferPlanner` | `StreamSelection.kt` | 3 档预定义缓冲方案：<br>• `HIGH_BITRATE_PLAN`（`>= 4200 kbps`）：min `8s` / max `40s` / play `500ms` / rebuffer `800ms`<br>• `STANDARD_720P_PLAN`（`>= 2000 kbps`）：min `4s` / max `15s` / play `500ms` / rebuffer `1s`<br>• `LOW_NET_PLAN`（`< 2000 kbps` 或弱网受压）：min `2.5s` / max `12s` / play `500ms` / rebuffer `1s` |
-| `StallPolicy` / `StallTracker` | `StreamSelection.kt` | 触发自动降档条件（满足任一）：① 起播阶段（`pos < 5s`）卡顿 `>= 6s`；② 播放中卡顿 `>= 8s`；③ `30s` 滚动窗口内累计 `>= 3` 次卡顿。单视频上限降档 **2 次**，每次冷却 **20s** |
+| `StallPolicy` / `StallTracker` | `StreamSelection.kt`, `PlayerSessionController.kt` | 保留卡顿诊断与计数，但 `evaluateStallTick()` **绝不换流、不降低清晰度**。缓冲时等待当前流恢复，无法恢复时显示真实播放错误 |
+| `Media3PlayerSurface` | `feature/player/.../VideoPlayerScreen.kt`, `raven_player_surface.xml` | 使用 `TextureView`；显式 seek、换流与自动续播使旧帧失效并重新绑定表面，新首帧到达前显示“正在恢复画面…”，避免旧帧残留或透明 shutter 黑屏 |
 
 ### 3.4 协议无感传输桥与本地 Seek 缩略图
 
@@ -498,6 +448,7 @@ flowchart LR
   - **每站独立 AAD**：`raven-session-vault:v1:<siteId>`，防止跨站密文拷贝重放。
   - **零明文降级**：任何 KeyStore 不可用、密文截断、Tag 篡改或 AAD 不匹配均直接抛出 `SessionVaultException`（`SecurityException` 子类），绝不回退明文落盘；加解密结束在 `finally` 中 `fill(0)` 擦零临时明文字节数组。
 - **保护范围与测试双替身**：保护全部 5 个认证站点（`r34v`、`hanime1`、`iwara`、`ehentai`、`exhentai`）及未来新站点的 Cookie、Bearer JWT、用户名与扩展 Secret；纯 JVM 单元测试可直接注入真实 JCA 加密的 `SoftwareAesGcmVaultCipher` + `InMemoryVaultStorage` 验证篡改拦截。
+- **WebDAV 独立凭据金库**：`WebDavCredentialStore` 以同一 AndroidKeyStore AES-256-GCM 机制加密完整 `WebDavConfig`（`endpointUrl`、用户名、密码、备份口令、远端文件名、自动同步开关），密文落在独立的 `raven_webdav_vault_v1` SharedPreferences。Preferences DataStore 不保存这些配置，只保存非敏感的 `webdav_last_sync_at` 时间戳；WebDAV 配置也不进入加密备份载荷。
 
 ### 6.2 隔离 WebView 登录安全红线与 7 状态机（`SiteAuthActivity` & `SiteAuthFsm`）
 

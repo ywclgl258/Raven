@@ -23,7 +23,7 @@ import org.koin.dsl.module
 
 /**
  * Koin DI module for `:core:database` per `ARCHITECTURE.md` §3.1.
- * Provides [RavenDatabase], all 18 Room DAOs, [SettingsDataStore], and all domain repositories.
+ * Provides [RavenDatabase], all 20 Room DAOs, [SettingsDataStore], and 13 domain repositories.
  */
 val coreDatabaseModule: Module = module {
     single<RavenDatabase> { RavenDatabase.build(androidContext()) }

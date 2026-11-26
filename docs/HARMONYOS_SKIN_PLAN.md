@@ -1,6 +1,6 @@
 # HarmonyOS 视觉皮肤落地方案（Raven Obsidian × Crimson）
 
-> **状态**：已实施（P0–P5 落库并完成编译/单测验证，待真机视觉走查）  
+> **状态**：已实施；当前实现以 `:core:designsystem` 源码为准，本文件保留方案及实施前对照，不记录本轮测试执行结论
 > **品牌不变量**：Obsidian `#09090B` + Crimson `#FF4D58` 保持不变  
 > **字体策略**：不打包 HarmonyOS Sans，使用系统默认字体 `FontFamily.SansSerif`，仅调整字距为 HarmonyOS 可读性策略
 
@@ -19,16 +19,16 @@
 
 ---
 
-## 2. 现状基线（代码事实）
+## 2. 实施前基线（历史对照，非当前令牌来源）
 
-| 区域 | 当前状态 | 关键文件 |
+| 区域 | 当时状态 | 关键文件 |
 |---|---|---|
 | 字体 | 全部 `FontFamily.SansSerif`，负字距偏 Apple HIG | `core/designsystem/.../theme/RavenTypography.kt` |
 | 动效曲线 | `HarmonyDecelerationEasing = CubicBezier(0.18, 0.96, 0.28, 1f)`；已有三组重力弹簧、互动光、材质层级 | `core/designsystem/.../theme/RavenMotion.kt` |
 | 形状 | Card 16 / Button 20 / Dialog 28 / Sheet 32 | `core/designsystem/.../theme/RavenShapes.kt` |
 | 响应式 | 320/600/840 断点，2/4/8/12 栅格；导航 600 rail / 1200 drawer | `core/designsystem/.../theme/RavenLayout.kt`、`RavenAdaptiveScaffold.kt` |
 | Button | 无公共 `RavenButton` 家族；settings 有私有 `SettingsPrimaryButton/SecondaryButton`；feature 大量直用 M3 Button/TextButton/IconButton/OutlinedButton | `feature/settings/.../SettingsCommonComponents.kt`、`RavenStates.kt` |
-| Sheet | 公共 `RavenBottomSheet` 已有，但 `skipPartiallyExpanded = true`、无多档位、无宽屏居中形态 | `core/designsystem/.../component/RavenBottomSheet.kt`，59 处调用 |
+| Sheet | 公共 `RavenBottomSheet` 已有，但 `skipPartiallyExpanded = true`、无多档位、无宽屏居中形态 | `core/designsystem/.../component/RavenBottomSheet.kt` 及既有调用点 |
 | Dialog | 无 `RavenDialog`；无 M3 AlertDialog；确认流目前全部用 BottomSheet 替代 | 代码检索无 AlertDialog 调用 |
 | 品牌色 | Crimson 已集中在 token；Material primary = Crimson | `core/designsystem/.../theme/RavenColors.kt` |
 
@@ -115,7 +115,7 @@
 
 ### 5.2 BottomSheet（升级 `RavenBottomSheet.kt`）
 
-现有 59 处调用保持 API 兼容，新增可选能力。
+既有调用保持 API 兼容，新增可选能力。
 
 **统一规则：**
 
@@ -226,7 +226,7 @@ fun RavenBottomSheet(
 |---|---|---|---|
 | P0 Token | Typography 字距、deceleration 曲线、Dialog/Sheet 尺寸 token | `RavenTypography.kt`、`RavenMotion.kt`、`RavenShapes.kt`、`RavenLayout.kt` | 单测通过；曲线断言更新 |
 | P1 Button | 新增 `RavenButton` 家族 + `RavenButtonRow`，替换 designsystem/settings 共用按钮 | `component/RavenButton.kt`、`RavenStates.kt`、`SettingsCommonComponents.kt` | grep 裸 Button 减少；加载/禁用/危险态统一 |
-| P2 Sheet | `RavenBottomSheet` 支持 detent/presentation；抽取 `RavenSheetSurface`；宽屏居中形态 | `RavenBottomSheet.kt`、调用点按场景配置 | 59 处调用不回归；手机/平板截图对比 |
+| P2 Sheet | `RavenBottomSheet` 支持 detent/presentation；抽取 `RavenSheetSurface`；宽屏居中形态 | `RavenBottomSheet.kt`、调用点按场景配置 | 既有调用不回归；手机/平板截图对比 |
 | P3 Dialog | 新增 `RavenDialog` 家族；高风险确认从 Sheet 迁移 | `component/RavenDialog.kt`、library/settings 删除/登出/清空流程 | 危险操作不可 scrim 误关；焦点和 TalkBack 正确 |
 | P4 适配 | 折叠屏/平板/桌面窗口类、导航、hover/focus、居中面板规则 | `RavenLayout.kt`、`RavenAdaptiveScaffold.kt`、各 Sheet/Dialog 调用点 | 600/840/1200dp、横屏、折叠展开、桌面窗口验证 |
 | P5 清理 | 废弃旧 easing 别名、移除私有按钮/分段重复实现、补设计文档 | feature 模块、`docs/DESIGN_AND_UI_GUIDE.md` | 文档与代码一致；无新增裸 M3 弹窗 |
@@ -247,6 +247,6 @@ fun RavenBottomSheet(
 
 ## 9. 风险与待确认
 
-1. **Sheet 语义迁移**：现有 59 处 BottomSheet 调用中，哪些属于“高风险确认”需要产品规则确认后迁移到 Dialog，不能机械替换。
+1. **Sheet 语义迁移**：既有 BottomSheet 调用中，哪些属于“高风险确认”需要产品规则确认后迁移到 Dialog，不能机械替换。
 2. **居中 Sheet 的实现形态**：Compose `ModalBottomSheet` 天然底部锚定；宽屏居中形态建议复用同一内容壳但换容器（Dialog/Surface），需保证动效和焦点一致。
 3. **官方曲线视觉感受**：从当前弹性 deceleration `(0.18,0.96,0.28,1)` 切到官方 friction `(0.2,0,0.1,1)` 后，页面会更“稳”、少“弹”，需要在播放器、阅读器、Sheet 上实机确认是否符合想要的 HarmonyOS 观感。

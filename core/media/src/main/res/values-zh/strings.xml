@@ -2,4 +2,5 @@
 <resources>
     <string name="raven_video_download_channel">视频下载</string>
     <string name="raven_gallery_download_channel">图集下载</string>
+    <string name="raven_download_events_channel">离线下载结果通知</string>
 </resources>

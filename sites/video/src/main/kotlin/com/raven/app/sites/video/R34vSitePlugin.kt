@@ -49,20 +49,19 @@ import org.jsoup.nodes.Element
 class R34vSitePlugin(
     private val http: HttpClientAdapter,
     private val sessionStore: SiteSessionStore,
-    private val rateLimitBackoffMs: Long = 1_000L,
+    private val rateLimitBackoffMs: Long = 30_000L,
 ) : SitePlugin {
 
     override val descriptor: SiteDescriptor = DESCRIPTOR
 
     override val feedSource: FeedSource = object : FeedSource {
-        override suspend fun loadHome(language: ComicLanguage): HomeFeed = coroutineScope {
+        override suspend fun loadHome(language: ComicLanguage): HomeFeed {
+            // R34V rate-limits bursty parallel page requests; keep the two home sections sequential.
             val latestRequest = FeedRequest(siteId = SiteId.R34V, section = "latest", sort = FeedSort.NEWEST)
             val popularRequest = FeedRequest(siteId = SiteId.R34V, section = "popular", sort = FeedSort.VIEWS)
-            val latestDeferred = async { loadFeed(latestRequest) }
-            val popularDeferred = async { suspendRunCatching { loadFeed(popularRequest) }.getOrNull() }
-            val latestPage = latestDeferred.await()
-            val popularPage = popularDeferred.await()
-            VideoSiteSupport.buildHomeFeed(
+            val latestPage = loadFeed(latestRequest)
+            val popularPage = suspendRunCatching { loadFeed(popularRequest) }.getOrNull()
+            return VideoSiteSupport.buildHomeFeed(
                 siteId = SiteId.R34V,
                 primaryTitle = "最新更新",
                 primaryPage = latestPage,
@@ -482,6 +481,8 @@ class R34vSitePlugin(
                 userAgent = SiteNetworkProfile.DEFAULT_MOBILE_UA,
                 referer = "$BASE_URL/",
                 mediaReferer = "$BASE_URL/",
+                pageIntervalMs = 1_200L,
+                imageIntervalMs = 350L,
             ),
         )
 

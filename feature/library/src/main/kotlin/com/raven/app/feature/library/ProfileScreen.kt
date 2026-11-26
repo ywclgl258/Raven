@@ -31,6 +31,7 @@ import androidx.compose.material.icons.outlined.History
 import androidx.compose.material.icons.outlined.NotificationsActive
 import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material.icons.outlined.Settings
+import androidx.compose.material.icons.outlined.Tune
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -138,7 +139,9 @@ fun ProfileScreenContent(
         )
 
         LazyColumn(
-            modifier = Modifier.fillMaxSize(),
+            modifier = Modifier
+                .fillMaxSize()
+                .testTag("profile_list"),
             contentPadding = PaddingValues(top = 10.dp, bottom = 28.dp),
             verticalArrangement = Arrangement.spacedBy(18.dp),
         ) {
@@ -303,10 +306,10 @@ fun ProfileScreenContent(
                 }
             }
 
-            // Quick Apple HIG Personal Shortcuts
+            // Main menu: personal content plus contextual site preferences.
             item(key = "profile_quick_links") {
                 RavenGroupedSection(
-                    title = "个人资产快捷入口",
+                    title = "主菜单",
                     modifier = Modifier.padding(horizontal = 16.dp),
                 ) {
                     RavenGroupedRow(
@@ -343,11 +346,16 @@ fun ProfileScreenContent(
                     )
                     RavenGroupedDivider(insetWithIcon = true)
                     RavenGroupedRow(
-                        title = "应用设置",
-                        subtitle = "站点账号、存储与备份、播放器与阅读偏好",
-                        icon = Icons.Outlined.Settings,
+                        title = "站点与偏好",
+                        subtitle = "语言、默认阅读模式、本站收藏与下载",
+                        value = uiState.activeSite?.shortName,
+                        icon = Icons.Outlined.Tune,
                         showChevron = true,
-                        onClick = navigator::openSettings,
+                        enabled = uiState.activeSite != null,
+                        onClick = uiState.activeSite?.let { site ->
+                            { navigator.openSiteFunctions(site.id) }
+                        },
+                        modifier = Modifier.testTag("profile_site_preferences_row"),
                     )
                 }
             }

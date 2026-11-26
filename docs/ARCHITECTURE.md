@@ -14,6 +14,7 @@
 | **English Name** | `Raven` | `Raven Debug` | `app/src/main/res/values/strings.xml` / `app/src/debug/res/values/strings.xml` |
 | **Chinese Name** | `渡鸦` | `渡鸦 开发版` | `app/src/main/res/values-zh/strings.xml` / `app/src/debug/res/values-zh/strings.xml` |
 | **Application ID** | `com.raven.app` | `com.raven.app.debug` | `app/build.gradle.kts` (`applicationIdSuffix = ".debug"`) |
+| **Current Version** | `0.6.0` / `versionCode = 10` | Same base version + `-debug` suffix | `release.properties` is the sole version metadata source |
 | **Launcher Icon** | Adaptive Icon (API 26+) + legacy mipmaps | Same | **02 绯红疾翼** (`docs/icon-concepts/02-crimson-wing-android/`): `adaptive-background.svg`, `adaptive-foreground.svg`, `adaptive-monochrome.svg` |
 
 **Adaptive Icon Specification** (from `docs/icon-concepts/02-crimson-wing-android/source/`):
@@ -57,9 +58,9 @@ flowchart TD
     fr[":feature:reader"]
     fs[":feature:settings"]
 
-    sv[":sites:video<br/>8 Video Plugins"]
-    sc[":sites:comic<br/>6 Comic Plugins"]
-    sg[":sites:gallery<br/>5 Photo Plugins"]
+    sv[":sites:video<br/>7 Video Plugins · Pure JVM"]
+    sc[":sites:comic<br/>12 Comic Plugins (7 + 5 Serial) · Pure JVM"]
+    sg[":sites:gallery<br/>5 Photo Plugins · Pure JVM"]
 
     cm[":core:media<br/>Media3, Reader Cache, Downloads, Storage"]
     cd[":core:designsystem<br/>Obsidian HIG Cinema Theme & Components"]
@@ -81,7 +82,7 @@ flowchart TD
     fr --> cm & cd & cdb & cn & spi & com & mod
     fs --> cm & cd & cdb & cn & csec & spi & com & mod
 
-    sv & sc & sg --> cn & spi & com & mod
+    sv & sc & sg --> spi & com & mod
     cm --> cdb & cn & spi & com & mod
     cn --> csec & spi & com & mod
     cdb --> com & mod
@@ -90,6 +91,8 @@ flowchart TD
     spi --> com & mod
     com --> mod
 ```
+
+The three `:sites:*` modules are **Pure JVM** modules. Their Gradle project dependencies are limited to `:core:model`, `:core:site-spi`, and `:core:common`; they do **not** depend on `:core:network`. Production HTTP/session implementations are injected through SPI interfaces at the app boundary.
 
 ### 2.2 Module Catalog & Parallel Builder Ownership Rules
 
@@ -100,12 +103,12 @@ flowchart TD
 | 3 | `:core:site-spi` | Pure JVM | `com.raven.app.core.sitespi` | Composable `SitePlugin` SPI, `HttpClientAdapter`, immutable `SiteRegistry`, 9 `SiteKit` pure-Kotlin utilities | **LOCKED by Foundation Lead** |
 | 4 | `:core:security` | Android Lib | `com.raven.app.core.security` | `SessionVault`, `PrivacyLockStore`, `WebDavCredentialStore` (AndroidKeyStore AES-256-GCM), `BackupCodec` (`RVNBK01` + `R34VBK01` import), TLS/cert helpers | Core Infra Builder |
 | 5 | `:core:network` | Android Lib | `com.raven.app.core.network` | Shared OkHttp pool (`page`/`api`/`image`/`media`/`probe`), coroutine `HostPacer`, `Ipv4FirstDns`, `SystemProxySelector`, `MediaRedirectCache`, encrypted `SiteCookieJar`, `SiteHttpClient`, single Coil3 `ImageLoader` | Core Infra Builder |
-| 6 | `:core:database` | Android Lib + KSP + Room | `com.raven.app.core.database` | `RavenDatabase`, 20 Room entities/DAOs (schema v3), repositories, `SettingsDataStore` (33 fixed keys) | Core Infra Builder |
-| 7 | `:core:designsystem` | Android Lib + Compose | `com.raven.app.core.designsystem` | Raven Obsidian × Apple HIG × Netflix Cinema tokens, typography, adaptive navigation shell (`>= 1200dp` Drawer), cards, sheets (`RavenShelfPickerSheet`), `RavenAppLockOverlay`, HUD components | Design System Builder |
+| 6 | `:core:database` | Android Lib + KSP + Room | `com.raven.app.core.database` | `RavenDatabase`, 20 Room entities/DAOs (schema v3), 13 repositories, `SettingsDataStore` (37 fixed keys + 2 dynamic per-site key families) | Core Infra Builder |
+| 7 | `:core:designsystem` | Android Lib + Compose | `com.raven.app.core.designsystem` | Raven Obsidian × Apple HIG × Netflix Cinema tokens, HarmonyOS-readable typography and geometry, adaptive navigation shell (`>= 1200dp` Drawer), cards, sheets (`RavenShelfPickerSheet`), `RavenAppLockOverlay`, HUD components | Design System Builder |
 | 8 | `:core:media` | Android Lib | `com.raven.app.core.media` | Media3 `PlayerSessionController`, `LanCastManager`, `StreamSelection`, `StallPolicy`, 4-tier caches, `RouPngDataSource`, `GalleryPageStore` + `ImageStructure` + JMComic strip bitmap renderer, `DownloadCoordinator` (Video + Gallery), `StorageRootManager`, `LocalLibraryImporter`, `DuplicateScanner` | Media & Download Builder |
-| 9 | `:sites:video` | Android Lib | `com.raven.app.sites.video` | 8 video plugins: `r34v`, `hanime1`, `iwara` (dual-media), `missav`, `jable`, `rouvideo`, `kbjfree`, `pornhub` + JVM fixture tests | Video Sites Builder |
-| 10 | `:sites:comic` | Android Lib | `com.raven.app.sites.comic` | 6 comic plugins: `ehentai`, `exhentai`, `nhentai`, `hitomi`, `wnacg`, `jmcomic` + JVM fixture tests | Comic Sites Builder |
-| 11 | `:sites:gallery` | Android Lib | `com.raven.app.sites.gallery` | 5 photo plugins: `4khd`, `everia`, `4kup`, `galleryepic`, `cosplaytele` (dual-media Cossora) + shared `WordPressPhotoEngine` + JVM fixture tests | Photo/Gallery Sites Builder |
+| 9 | `:sites:video` | Pure JVM | `com.raven.app.sites.video` | 7 video plugins: `r34v`, `hanime1`, `iwara` (dual-media), `missav`, `jable`, `rouvideo`, `pornhub` + JVM fixture tests | Video Sites Builder |
+| 10 | `:sites:comic` | Pure JVM | `com.raven.app.sites.comic` | 12 comic plugins: 7 standard (`ehentai`, `exhentai`, `nhentai`, `hitomi`, `wnacg`, `jmcomic`, `hdoujin`) + 5 serial (`mangacopy`, `mh160`, `guazimanhua`, `mycomic`, `hipmh`) + JVM fixture tests | Comic Sites Builder |
+| 11 | `:sites:gallery` | Pure JVM | `com.raven.app.sites.gallery` | 5 photo plugins: `4khd`, `everia`, `4kup`, `galleryepic`, `cosplaytele` (dual-media Cossora) + shared `WordPressPhotoEngine` + JVM fixture tests | Photo/Gallery Sites Builder |
 | 12 | `:feature:browse` | Android Lib + Compose | `com.raven.app.feature.browse` | Video Cinema Home (Hero/Top 10/Shelves), Comic/Photo Masonry Home, Explore, Single/Cross-Site Search + Advanced Filters, Site Switcher Drawer, Site Functions, Directory | Browse Feature Builder |
 | 13 | `:feature:library` | Android Lib + Compose | `com.raven.app.feature.library` | Profile/Personal Home, `StatsScreen`, Library Hub, Shelves, Smart Shelves, Favorites, History, Downloads Center, Image Favorites, Tag Subscriptions (`SubscriptionSyncRunner`), Global Update Inbox, Local Import | Library Feature Builder |
 | 14 | `:feature:player` | Android Lib + Compose | `com.raven.app.feature.player` | Video Detail & Media3 Player UI, Visual Gestures HUD, Track & Cast Sheets, Grouped BottomSheet Controls, Quality/Speed/Sleep/A-B Loop/Time Bookmarks, PiP Host | Player Feature Builder |
@@ -135,10 +138,10 @@ Each module exposes a single top-level `val <moduleName>Module: Module` inside i
 |---|---|---|
 | `:core:security` | `coreSecurityModule` | `SessionVault`, `PrivacyLockStore`, `WebDavCredentialStore`, `BackupCodec`, `BackupValidator` |
 | `:core:network` | `coreNetworkModule` | `AppDispatchers`, `ApplicationScope`, `Ipv4FirstDns`, `SystemProxySelector`, `HostPacer`, `SiteCookieJar`, `OkHttpClient` (named: `page`, `api`, `image`, `media`, `probe`), `HttpClientAdapter` (`SiteHttpClient`), `ImageLoader` (Coil3) |
-| `:core:database` | `coreDatabaseModule` | `RavenDatabase`, all 20 Room DAOs, `SettingsDataStore`, domain repositories (`HistoryRepository`, `FavoriteRepository`, `ShelfRepository`, `BookmarkRepository`, `SubscriptionRepository`, `DownloadStateRepository`, `BrowsePositionRepository`, `TagDictionaryRepository`, `MediaTagCacheRepository`) |
+| `:core:database` | `coreDatabaseModule` | `RavenDatabase`, all 20 Room DAOs, `SettingsDataStore`, 13 domain repositories (`HistoryRepository`, `FavoriteRepository`, `ShelfRepository`, `BookmarkRepository`, `SubscriptionRepository`, `BlockedTermsRepository`, `SearchHistoryRepository`, `DownloadStateRepository`, `BrowsePositionRepository`, `PreferencesRepository`, `TagDictionaryRepository`, `MediaTagCacheRepository`, `BackupDataRepository`) |
 | `:core:media` | `coreMediaModule` | `DownloadCaches`, `PlayerSessionController`, `LanCastManager`, `GalleryPageRepository`, `DownloadCoordinator`, `StorageRootManager`, `LocalLibraryImporter`, `DuplicateScanner`, WorkManager workers (`workerOf(...)`) |
-| `:sites:video` | `videoSitesModule` | 8 video `SitePlugin` singletons bound with `bind<SitePlugin>()` |
-| `:sites:comic` | `comicSitesModule` | 6 comic `SitePlugin` singletons bound with `bind<SitePlugin>()` |
+| `:sites:video` | `videoSitesModule` | 7 video `SitePlugin` singletons bound with `bind<SitePlugin>()` |
+| `:sites:comic` | `comicSitesModule` | 12 comic `SitePlugin` singletons (7 standard + 5 serial) bound with `bind<SitePlugin>()` |
 | `:sites:gallery` | `gallerySitesModule` | 5 gallery `SitePlugin` singletons bound with `bind<SitePlugin>()` |
 | `:feature:*` | `browseFeatureModule`, `libraryFeatureModule`, `playerFeatureModule`, `readerFeatureModule`, `settingsFeatureModule` | Feature ViewModels (`viewModelOf(...)`) and feature-scoped UseCases |
 | `:app` | `appModule` | `SiteRegistry(getAll<SitePlugin>())`, `AppNavigationCoordinator`, `AppUpdater` |
@@ -147,10 +150,10 @@ Each module exposes a single top-level `val <moduleName>Module: Module` inside i
 ```kotlin
 // In :sites:video
 val videoSitesModule = module {
-    single { R34vSitePlugin(get()) } bind SitePlugin::class
-    single { HanimeSitePlugin(get()) } bind SitePlugin::class
-    single { IwaraSitePlugin(get(), get()) } bind SitePlugin::class
-    // ... remaining 5 video plugins
+    single { R34vSitePlugin(http = get(), sessionStore = get()) } bind SitePlugin::class
+    single { HanimeSitePlugin(http = get(), sessionStore = get()) } bind SitePlugin::class
+    single { IwaraSitePlugin(http = get(), sessionStore = get()) } bind SitePlugin::class
+    // ... remaining 4 video plugins
 }
 
 // In :app
@@ -189,25 +192,29 @@ All visual tokens live exclusively in `:core:designsystem` (`package com.raven.a
 | `SecondaryCtaContainer` | `#1B1B22` @ `78%` | Frosted translucent secondary CTA (Watch Later / Info) with `1dp` `#FFFFFF @ 12%` rim |
 | `ScrimTop` / `ScrimBottom` | `#09090B` @ `0%` -> `100%` | Edge-to-edge Hero & player HUD vignette gradients |
 | `Success` / `Warning` / `Error` | `#30D158` / `#FFD60A` / `#FF453A` | Download complete, metered/rate-limit warning, error & destructive actions |
+| `ShimmerBase` / `ShimmerHighlight` | `#16161C` / `#262630` | Dark skeleton shimmer gradient stops |
+| `LightRimTop` / `LightRimBottom` | `#FFFFFF` @ `18%` / `4%` | HarmonyOS optical top/bottom refraction edges |
+| `InteractiveGlow` / `AccentGlow` | `#FFFFFF` @ `15%` / `#FF4D58` @ `22%` | Pointer-origin interaction light and crimson focus halo |
+| `FloatingBarScrim` | `#E0121216` | Translucent floating navigation/sheet backdrop |
 
 > **Ambient Artwork Glow Rule**: Optional low-saturation ambient tint derived from Hero artwork is restricted to the top Hero/Detail backdrop at `alpha <= 0.18f`. It **never** mutates `MaterialTheme.colorScheme.primary` or replaces Raven Crimson `#FF4D58`.
 
-### 4.2 Typography, Geometry & Motion (Apple HIG Precision)
+### 4.2 Typography, Geometry & Motion (Apple HIG Precision + HarmonyOS Readability)
 - **Typography Scale (`RavenTypography`)**:
-  - Tight-tracked bold display & section headers (`letterSpacing = -0.4.sp` to `-0.2.sp`, `FontWeight.SemiBold` / `Bold`).
+  - System `FontFamily.SansSerif` with HarmonyOS-readable tracking: body/title/display styles use `0.sp`, only `displayLarge` uses `-0.1.sp`, and small labels use `0.05.sp` / `0.1.sp`.
   - **Tabular Numerals (`fontFeatureSettings = "tnum"`)** mandatory for all durations (`12:34`), page counters (`14 / 120`), view/like counts, download sizes, and timestamps so numbers never jitter while ticking.
   - Full `200%` accessibility font scale support: cards and bars reflow cleanly without clipping; touch targets maintain `>= 48dp` minimum interactive bounds.
 - **Shape Geometry (`RavenShapes`)**:
-  - `CardShape`: `RoundedCornerShape(14.dp)`
-  - `SheetShape`: `RoundedCornerShape(topStart = 18.dp, topEnd = 18.dp)`
-  - `DialogShape`: `RoundedCornerShape(18.dp)`
-  - `ControlShape`: `RoundedCornerShape(10.dp)`
-  - `PillShape`: `CircleShape` (site switcher pill, filter chips, play/action pills)
+  - `MicroShape`: `4.dp`; `BadgeShape`: `6.dp`; `SmallShape`: `8.dp`; `ControlShape`: `12.dp`.
+  - `CardShape`: `RoundedCornerShape(16.dp)`; `ButtonShape`: `RoundedCornerShape(20.dp)`.
+  - `DialogShape`: `RoundedCornerShape(28.dp)`; `SheetShape`: `RoundedCornerShape(topStart = 32.dp, topEnd = 32.dp)`.
+  - `PillShape`: `CircleShape` (site switcher pill, filter chips, play/action pills).
 - **Tactile Motion (`RavenMotion`)**:
-  - Spring press feedback: `scale = 0.97f` via `animateFloatAsState(spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessMediumLow))`.
-  - Subtle dark frosted overlays on top headers & media bars: native `Modifier.blur()` on API 31+ (`Build.VERSION_CODES.S`) when `reduceTransparency == false`; clean `#121216 @ 92%` translucent scrim + `Hairline` fallback on API 24–30 or when `reduceTransparency == true`. **Zero** third-party `backdrop` dependency.
+  - Spring press feedback defaults to `scale = 0.968f`, driven by the responsive/interactive gravity spring specs; reduced-motion mode uses `snap()`.
+  - `HarmonyDecelerationEasing = CubicBezierEasing(0.2f, 0.0f, 0.1f, 1.0f)` for route/modal/sheet/tab transitions.
+  - Five-tier optical frosted materials use native API 31+ rendering when `reduceTransparency == false`; API 24–30 or reduced-transparency mode falls back to `#121216 @ 92%` plus `Hairline`. **Zero** third-party `backdrop` dependency.
 - **Grouped Inset Settings & Sheets**:
-  - All settings, advanced search filters, smart-shelf builders, playback preferences, and per-book reader overrides use **Apple-style grouped inset rows** (`Surface1` `#121216` rounded `14dp` containers with `Hairline` internal dividers) inside a single-screen `ModalBottomSheet` or sub-page.
+  - All settings, advanced search filters, smart-shelf builders, playback preferences, and per-book reader overrides use **grouped inset rows** (`Surface1` `#121216` rounded `16dp` containers with `Hairline` internal dividers) inside a single-screen `RavenBottomSheet` or sub-page.
   - **Prohibited**: Chained / recursive `AlertDialog` workflows.
 
 ### 4.3 Netflix Cinema & Gallery Showcase Patterns
@@ -279,7 +286,10 @@ sealed interface RavenRoute {
     ) : RavenRoute
 
     // Library Sub-Routes
-    @Serializable data class Downloads(val siteId: String? = null) : RavenRoute
+    @Serializable data class Downloads(
+        val siteId: String? = null,
+        val initialTab: String = "downloads",
+    ) : RavenRoute
     @Serializable data class ShelfDetail(val shelfId: String) : RavenRoute
     @Serializable data class SmartShelfDetail(val smartShelfId: String) : RavenRoute
     @Serializable data class Favorites(val siteId: String? = null) : RavenRoute
@@ -315,52 +325,73 @@ Replaces R34V's monolithic single-key `SharedPreferences` JSON blob (`personal_l
 | `reading_progress` | `(site_id, media_id)` | `(updated_at DESC)`, `(site_id, updated_at DESC)` | Per-comic/photo page, pixel offset, total pages, completion |
 | `favorites` | `(site_id, kind, target_id)` | `(added_at DESC)`, `(kind, added_at DESC)` | Works, tags, authors, characters across all sites |
 | `shelves` | `id` | `(is_pinned DESC, modified_at DESC)` | Built-in `watch-later` + unlimited custom shelves |
-| `shelf_items` | `(shelf_id, site_id, media_id)` | `(shelf_id, position ASC)`, `(shelf_id, added_at DESC)` | Ordered shelf memberships with FK cascade delete on `shelves.id` |
+| `shelf_items` | `(shelf_id, site_id, media_id)` | `(shelf_id, position ASC)`, `(shelf_id, added_at DESC)`, `(site_id, media_id)` | Ordered shelf memberships with FK cascade delete on `shelves.id` |
 | `smart_shelves` | `id` | `(is_pinned DESC, created_at DESC)` | Dynamic rules (`UNFINISHED`, `OFFLINE_UNSEEN`, `RECENT`) |
 | `page_bookmarks` | `id` | `(site_id, media_id, page)`, `(created_at DESC)` | Gallery/comic page + strip pixel-offset bookmarks |
 | `time_bookmarks` | `id` | `(site_id, media_id, position_ms)`, `(created_at DESC)` | Video timestamp bookmarks & labeled clips |
 | `image_favorites` | `id` | `(site_id, media_id, page_index)`, `(added_at DESC)` | Single-page image favorites (capped at 20,000) |
 | `tag_subscriptions` | `(site_id, slug, scope)` | `(site_id, sort_order ASC)` | Per-site tag/author subscriptions with manual sort order |
 | `saved_searches` | `id` | `(created_at DESC)` | Multi-site saved search recipes & filter snapshots |
-| `update_inbox` | `id` | `(is_read, discovered_at DESC)`, `(source_kind, source_id)` | Unified unread feed for tag subscriptions & saved searches |
+| `update_inbox` | `id` | `(is_read, discovered_at DESC)`, `(source_kind, source_id)`, `(site_id, discovered_at DESC)` | Unified unread feed for tag subscriptions & saved searches |
 | `blocked_terms` | `(site_id, term)` | `(site_id)` | Strict per-site content blocklist |
 | `search_history` | `(site_id, query, scope)` | `(site_id, searched_at DESC)` | Recent 30 searches per site |
 | `download_items` | `id` | `(status, priority DESC, updated_at DESC)`, `(site_id, media_id)` | Unified projection table for Video (Media3) & Gallery downloads |
 | `playback_preferences` | `site_id` (`"*"` for global) | — | Per-site speed, long-press speed, seek step, sensitivity, quality |
 | `reader_preferences` | `(site_id, media_id)` (`""` for site default) | `(site_id)` | Per-site & per-book mode, fit, crop, spread cover, original-image toggle |
 | `browse_positions` | `position_key` | `(updated_at DESC)` | Last 32 cross-process scroll restoration anchors (`workId`, `throughPage`, `shelfId`) |
-| `tag_translations` | `(source, namespace, raw_slug)` | `(source)`, `(chinese_name)` | Synchronized community/user Chinese tag dictionary translations |
-| `media_tag_cache` | `(site_id, media_id)` | `(site_id)`, `(updated_at DESC)` | Cached per-item tag metadata used for local filtering & blocking |
+| `tag_translations` | `(source, namespace, raw_slug)` | `(raw_slug)`, `(chinese_name)`, `(source)` | Synchronized community/user Chinese tag dictionary translations |
+| `media_tag_cache` | `(site_id, media_id)` | `(updated_at DESC)` | Cached per-item tag metadata used for local filtering & blocking |
 
 All DAOs expose `Flow<List<T>>` / `Flow<T?>` so Compose screens react atomically with zero `revision++` hacks.
 
+`RavenDatabase.build()` explicitly installs two migrations: `MIGRATION_1_2` creates `tag_translations` and `media_tag_cache` plus their initial indices; `MIGRATION_2_3` adds the `(site_id, media_id)` shelf-item lookup index and `(site_id, discovered_at DESC)` inbox index. Exported schemas `1.json`, `2.json`, and `3.json` are present, and device migration tests cover `1 -> 3` and `2 -> 3`.
+
 ### 6.2 Preferences DataStore (`raven_settings.preferences_pb`)
+
+The current source declares **37 fixed keys** plus **2 dynamic per-site key families** (`site_language_<siteId>` and `site_explore_filter_<siteId>`).
 
 | Key | Type | Default | Description |
 |---|---|---|---|
 | `active_site_id` | `String` | `"r34v"` | Currently selected live site in Browse shell |
 | `pinned_site_ids` | `String` (JSON list) | `[]` | Pinned sites at top of Site Switcher drawer |
 | `cross_search_site_ids` | `String` (JSON list) | `[]` (empty = all searchable) | Selected sites for multi-site search |
-| `site_language_<siteId>` | `String` | `"ALL"` | Per-site `ComicLanguage` (`ALL`/`CHINESE`/`JAPANESE`/`CHINESE_AND_JAPANESE`) |
-| `site_explore_filter_<siteId>` | `String` (JSON) | `""` | Last Explore filter state per site |
-| `translate_tags` | `Boolean` | `true` | Enable 165-entry (and extensible) Chinese tag translation |
-| `auto_fullscreen` | `Boolean` | `false` | Auto-enter fullscreen matching video orientation on manual play (autoplay never auto-fullscreens) |
+| `translate_tags` | `Boolean` | `true` | Enable Chinese tag translation |
+| `auto_fullscreen` | `Boolean` | `false` | Auto-enter fullscreen on manual play only; autoplay never auto-fullscreens |
 | `preferred_quality` | `String` | `"auto"` | Default playback quality preference |
 | `default_playback_speed` | `Float` | `1.0f` | Global default playback speed (`0.25..3.0`) |
 | `stream_cache_enabled` | `Boolean` | `false` | Optional 512 MiB LRU Media3 stream cache |
 | `seek_cache_enabled` | `Boolean` | `true` | 64 MiB MP4 + 32 MiB HLS session seek caches |
-| `download_unmetered_only` | `Boolean` | `false` | Pause active downloads on metered cellular links |
+| `download_unmetered_only` | `Boolean` | `false` | Pause active downloads on metered links |
+| `download_view` | `String` (JSON) | `RECENT` / `NONE` / `false` | Download sort, grouping, and tag-match presentation preferences |
 | `storage_location` | `String` | `"PRIVATE"` | `PRIVATE` (`filesDir`) vs `SHARED` (`/storage/emulated/0/Raven`) |
-| `pending_storage_location` | `String` | `""` | Deferred storage root applied cleanly on next cold start |
-| `reduce_transparency` | `Boolean` | `false` | Replace API 31+ frosted blur with opaque dark scrim |
-| `auto_update_check` | `Boolean` | `true` | 12-hour background GitHub Release check |
-| `site_switch_tutorial_seen` | `Boolean` | `false` | Consumed once on fresh install before showing switcher hint |
-| `background_subscription_sync` | `Boolean` | `true` | Enable 12-hour background subscription inbox sync (`RavenBackgroundMaintenanceWorker`) |
-| `privacy_screen_secure` | `Boolean` | `false` | Apply `WindowManager.LayoutParams.FLAG_SECURE` across main & player windows |
-| `app_lock_enabled` | `Boolean` | `false` | Require PIN / biometric unlock overlay on launch and after background timeout |
-| `app_lock_timeout_seconds` | `Int` | `0` | Grace timeout in seconds before re-locking after returning from background |
-| `incognito_mode` | `Boolean` | `false` | Skip watch/reading history writes and display incognito indicator strip |
-| `webdav_server_url` / `username` / `remote_path` / `last_sync_epoch_ms` | `String` / `Long` | `""` / `0L` | WebDAV encrypted backup sync configuration & timestamp (credentials in `WebDavCredentialStore`) |
+| `pending_storage_location` | `String` | `""` | Deferred storage root applied on next cold start |
+| `reduce_transparency` | `Boolean` | `false` | Replace optical materials with the dark fallback scrim |
+| `ui_sound_effects_enabled` | `Boolean` | `true` | Enable UI sound effects |
+| `auto_update_check` | `Boolean` | `true` | Startup GitHub Release check with a 12-hour per-installation throttle |
+| `site_switch_tutorial_seen` | `Boolean` | `false` | One-shot site switcher hint state |
+| `tag_dict_auto_sync` | `Boolean` | `true` | Enable automatic tag dictionary sync |
+| `tag_dict_etag` | `String` | `""` | Tag dictionary HTTP ETag |
+| `tag_dict_release_tag` | `String` | `""` | Tag dictionary release marker |
+| `tag_dict_updated_at` | `Long` | `0L` | Tag dictionary sync timestamp |
+| `block_tags_globally` | `Boolean` | `true` | Apply blocked tags across sites |
+| `autoplay_video` | `Boolean` | `true` | Enable automatic video playback/continuation; does not override the no-auto-fullscreen rule |
+| `background_audio_playback` | `Boolean` | `false` | Enable background audio playback |
+| `reader_tap_zones_enabled` | `Boolean` | `true` | Enable reader tap-zone navigation |
+| `reader_show_status_bar` | `Boolean` | `false` | Show the system status bar in the reader |
+| `reader_prefetch_pages` | `Int` | `3` | Reader forward prefetch count (`1..6`) |
+| `reader_memory_budget_mb` | `Int` | `24` | Off-screen reader bitmap budget (`16..96` MiB) |
+| `reader_auto_split_wide_pages` | `Boolean` | `false` | Split wide reader pages automatically |
+| `image_load_concurrency` | `Int` | `3` | Image decode/load concurrency (`2..3`) |
+| `background_subscription_sync` | `Boolean` | `true` | Enable 12-hour background subscription inbox sync |
+| `privacy_screen_secure` | `Boolean` | `false` | Apply `FLAG_SECURE` to main/player windows |
+| `app_lock_enabled` | `Boolean` | `false` | Require PIN / biometric unlock |
+| `app_lock_timeout_seconds` | `Int` | `0` | Background re-lock grace timeout (`0..3600`) |
+| `incognito_mode` | `Boolean` | `false` | Skip watch/reading history writes and show the incognito indicator |
+| `webdav_last_sync_at` | `Long` | `0L` | Last WebDAV sync epoch milliseconds; this is the only WebDAV field in DataStore |
+| `site_language_<siteId>` (dynamic) | `String` | absent = `ALL` | Per-site `ComicLanguage` |
+| `site_explore_filter_<siteId>` (dynamic) | `String` (JSON) | absent = empty filter | Last Explore filter state per site |
+
+WebDAV `endpointUrl`, username, password, backup passphrase, remote filename, and auto-sync flag are encrypted by `WebDavCredentialStore` (AndroidKeyStore AES-256-GCM, `raven_webdav_vault_v1`), not stored as DataStore preference keys.
 
 ---
 

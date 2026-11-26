@@ -96,8 +96,8 @@ object BufferPlanner {
 /**
  * Pure quality selection and bitrate estimation strategy.
  *
- * Uses a [HEADROOM] factor (`0.7`) on observed link speed to leave margin for CDN jitter and
- * retransmissions, without ever mutating the user's saved preferred quality setting.
+ * A [HEADROOM] factor (`0.7`) remains available for throughput estimates and buffer planning;
+ * stream selection itself is stable and never silently lowers the preferred quality.
  */
 object StreamSelector {
     const val HEADROOM: Double = 0.7
@@ -181,31 +181,24 @@ object StreamSelector {
     }
 
     /**
-     * Picks the best startup stream under [bandwidthKbps] * [HEADROOM] without mutating user defaults.
+     * Resolves the preferred quality without silently lowering it to match a transient speed sample.
+     * Buffering may pause playback, but the selected stream stays stable until the user changes it.
      */
-    fun pick(streams: List<VideoStream>, preferredQuality: String, bandwidthKbps: Int): VideoStream {
-        val wanted = requireNotNull(preferred(streams, preferredQuality)) { "没有可用的清晰度" }
-        val budget = bandwidthBudget(bandwidthKbps)
-        val wantedHeight = extractHeight(wanted)
-        if (budget <= 0 || wantedHeight <= 0 || requiredKbps(wanted) <= budget) {
-            return wanted
-        }
-        val lower = lowerCandidates(streams, wanted)
-        return lower.filter { requiredKbps(it) <= budget }.maxByOrNull { extractHeight(it) }
-            ?: lower.minByOrNull { extractHeight(it) }
-            ?: wanted
-    }
+    fun pick(streams: List<VideoStream>, preferredQuality: String, bandwidthKbps: Int): VideoStream =
+        requireNotNull(preferred(streams, preferredQuality)) { "没有可用的清晰度" }
 
     /**
-     * Preserves the active quality across expired-stream refresh; re-selects only if it disappeared.
+     * Preserves the active stream across expired-URL refreshes whenever possible. If it disappeared,
+     * retain its quality tier rather than introducing a bandwidth-driven downgrade.
      */
     fun afterRefresh(streams: List<VideoStream>, previous: VideoStream, bandwidthKbps: Int): VideoStream {
         streams.firstOrNull {
-            it.quality.equals(previous.quality, ignoreCase = true) ||
-                it.label.equals(previous.label, ignoreCase = true)
+            (it.quality.equals(previous.quality, ignoreCase = true) ||
+                it.label.equals(previous.label, ignoreCase = true)) &&
+                it.url == previous.url
         }?.let { return it }
         val key = previous.quality.ifBlank { previous.label }
-        return pick(streams, key, bandwidthKbps)
+        return requireNotNull(preferred(streams, key)) { "刷新后没有可用的清晰度" }
     }
 
     /**

@@ -142,7 +142,7 @@ data class SharedLinkPrompt(
 )
 
 /**
- * Root Compose shell hosting [RavenAdaptiveScaffold], the complete 25-route Type-Safe [NavHost],
+ * Root Compose shell hosting [RavenAdaptiveScaffold], the complete 27-route Type-Safe [NavHost],
  * and incoming shared-URL confirmation bottom sheet.
  */
 @Composable
@@ -388,6 +388,12 @@ fun RavenAppShell(
                 navController.navigate(route)
             }
 
+            override fun openSiteFunctions(siteId: SiteId) {
+                navController.navigate(RavenRoute.SiteFunctions(siteId = siteId.value)) {
+                    launchSingleTop = true
+                }
+            }
+
             override fun openSearch(initialQuery: String?, crossSite: Boolean) {
                 openSearchRoute(initialQuery, crossSite)
             }
@@ -572,6 +578,12 @@ fun RavenAppShell(
 
     val settingsNavigator = remember(navController, hostActions) {
         object : SettingsNavigator {
+            override fun openSiteFunctions(siteId: SiteId) {
+                navController.navigate(RavenRoute.SiteFunctions(siteId = siteId.value)) {
+                    launchSingleTop = true
+                }
+            }
+
             override fun openSiteAccount(siteId: SiteId) {
                 navController.navigate(RavenRoute.SiteAccount(siteId = siteId.value)) {
                     launchSingleTop = true

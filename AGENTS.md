@@ -10,7 +10,7 @@
 |---|---|
 | **应用形态** | Kotlin `2.3.21` + Jetpack Compose + 17 模块 Clean Architecture 原生 Android 客户端（`compileSdk = 36` / `targetSdk = 36` / `minSdk = 24` / JDK 17 / Gradle Wrapper `9.1.0` / AGP `9.0.1`） |
 | **包名边界** | 正式版 `applicationId = com.raven.app`；开发版 Debug `applicationId = com.raven.app.debug`（可并存，禁止混发） |
-| **版本元数据唯一源** | 根目录 [release.properties](release.properties) 统一提供 `versionName`、`versionCode`、`releaseCertificate`。**每次正式发布必须严格递增 `versionCode` 并更新 `versionName`** |
+| **版本元数据唯一源** | 根目录 [release.properties](release.properties) 统一提供 `versionName`、`versionCode`、`releaseCertificate`；当前源码为 `0.6.0` / `versionCode = 10`。**每次正式发布必须严格递增 `versionCode` 并更新 `versionName`** |
 | **工具链红线** | Android 模块严禁启用 `org.jetbrains.kotlin.android` 与 `kotlin-kapt`（AGP 9 内置 Kotlin）；仅 `:core:database` 使用 KSP；依赖禁止越过 API 36 / Kotlin 2.3 上限（详见 [docs/ONBOARDING.md](docs/ONBOARDING.md)） |
 | **视觉与交互不变量** | 严格遵循 **Dark Obsidian（`#09090B`）× Apple HIG Precision × Netflix Cinema** 体系，唯一品牌强调色 **Raven Crimson `#FF4D58`**；严禁硬编码 `Color(0x...)` 或引入旧版粉红 `#FF8DB4`；严禁套娃 `AlertDialog` |
 | **运行时代码红线** | 严禁全局可变 `SiteRegistry.current` 与 `:sites:*` 外跨模块 `when (siteId)`；严禁 `Thread.sleep` 与每请求新建 `OkHttpClient`；`Regex(...)` 中字面量 `}` / `]` 必须显式转义为 `\}` / `\]`（规避 Android ART ICU `PatternNative` 崩溃）；**视频自动播放绝不自动全屏**；凭据统一由 `SessionVault` 加密，严禁外泄至 CDN/更新器/备份 |
@@ -63,12 +63,16 @@ Android 通过 **包名 + 签名证书指纹** 校验覆盖安装合法性。签
 任何正式 APK 在归档、上传 GitHub Release 或交付前，**必须**执行 `apksigner` 验签并逐项核对通过：
 
 ```powershell
+# 默认范围：验证当前 minSdk 24+ 实际使用的 v2 / v3
 apksigner verify --verbose --print-certs .\app\build\outputs\apk\release\app-release.apk
+
+# 强制 API 23 范围：单独验证 JAR v1（默认范围在存在 v2/v3 时会跳过 v1）
+apksigner verify --verbose --print-certs --min-sdk-version 23 --max-sdk-version 23 .\app\build\outputs\apk\release\app-release.apk
 ```
 
 核对项（缺一不可）：
-1. 签名验证通过，且 `Verified using v1 scheme` / `v2 scheme` / `v3 scheme` 均为 `true`。
-2. 证书 SHA-256 摘要精确等于 `1F9407377D2D3AB5C04527CF6E587F0B789BA8B971D60AD8F99360D05CA52F3A`（不区分大小写）。
+1. 默认范围签名验证通过，且 `Verified using v2 scheme` / `v3 scheme` 均为 `true`；强制 API 23 范围验证通过，且 `Verified using v1 scheme` 为 `true`。默认输出中的 `v1=false` 只表示该范围跳过了 JAR 验证，不能替代第二条命令。
+2. 两次验签的证书 SHA-256 摘要均精确等于 `1F9407377D2D3AB5C04527CF6E587F0B789BA8B971D60AD8F99360D05CA52F3A`（不区分大小写）。
 3. APK 包名为 `com.raven.app`，且 `versionCode` 严格大于上一已发布版本、`versionName` 与本次发布说明一致。
 
 ---
@@ -79,5 +83,5 @@ apksigner verify --verbose --print-certs .\app\build\outputs\apk\release\app-rel
 - 新开发者接手、环境红线与日常开发命令：[docs/ONBOARDING.md](docs/ONBOARDING.md)
 - 17 模块系统架构与工程契约：[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
 - 设计系统与 UI 架构手册：[docs/DESIGN_AND_UI_GUIDE.md](docs/DESIGN_AND_UI_GUIDE.md)
-- 19 站插件架构与新站接入：[docs/SITE_PLUGIN_GUIDE.md](docs/SITE_PLUGIN_GUIDE.md)
+- 24 站插件架构与新站接入：[docs/SITE_PLUGIN_GUIDE.md](docs/SITE_PLUGIN_GUIDE.md)
 - 数据、媒体内核、加密备份与更新器：[docs/DATA_MEDIA_SECURITY.md](docs/DATA_MEDIA_SECURITY.md)

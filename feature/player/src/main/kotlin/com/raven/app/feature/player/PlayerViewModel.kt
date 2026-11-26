@@ -118,7 +118,7 @@ private data class PlayerPersonalBindings(
 /**
  * Reactive ViewModel orchestrating video detail resolution, offline/local fallback, watch-history
  * auto-resume & persistence, session speed precedence over per-site defaults, A-B loop, monotonic
- * sleep timer, stall downgrade notices, 1-time expired stream refresh, bookmarks/tags/library
+ * sleep timer, stable-quality stall observation, 1-time expired stream refresh, bookmarks/tags/library
  * actions, and in-place related/sequential-queue switching.
  */
 @OptIn(ExperimentalCoroutinesApi::class)
@@ -1693,6 +1693,8 @@ class PlayerViewModel(
             durationMs = engine.durationMs,
             videoWidth = engine.videoWidth,
             videoHeight = engine.videoHeight,
+            isVideoFrameReady = engine.isVideoFrameReady,
+            videoRecoveryGeneration = engine.videoRecoveryGeneration,
             currentStream = engine.currentStream,
             availableStreams = engine.availableStreams.ifEmpty { detail?.streams.orEmpty() },
             isOffline = engine.isOffline,

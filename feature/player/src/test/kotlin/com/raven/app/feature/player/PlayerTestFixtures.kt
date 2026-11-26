@@ -374,11 +374,8 @@ internal class FakePlayerPlaybackPort(
 
     override fun evaluateStallTick(): VideoStream? {
         stallTickCount += 1
-        val lower = nextStallDowngradeStream ?: return null
-        nextStallDowngradeStream = null
-        _state.update { it.copy(autoDowngradeCount = it.autoDowngradeCount + 1) }
-        switchStream(lower, preservePosition = true, notice = "网络较慢，已自动切换至 ${lower.label}")
-        return lower
+        // Stalls are observable but must never mutate the selected quality.
+        return null
     }
 
     override fun pipAspectRatioPair(): Pair<Int, Int>? =

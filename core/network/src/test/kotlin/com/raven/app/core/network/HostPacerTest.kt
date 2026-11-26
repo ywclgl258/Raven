@@ -102,7 +102,7 @@ class HostPacerTest {
     }
 
     @Test
-    fun `paces page and image lanes on registered hosts but bypasses CDNs media and probes`() = runTest {
+    fun `paces page image and R34V media while bypassing CDN and probes`() = runTest {
         val pacer = HostPacer(
             clockMs = { currentTime },
             delayFn = { ms -> delay(ms) },
@@ -115,10 +115,10 @@ class HostPacerTest {
         // Next image waits 150ms
         assertEquals(150L, pacer.paceForRequest("rule34video.com", "/thumbs/cover2.jpg", SiteRequestKind.PAGE, r34Descriptor))
 
-        // External CDN, PROBE, and MEDIA never wait
+        // External CDN and PROBE never wait; R34V media joins the shared page budget.
         assertEquals(0L, pacer.paceForRequest("cdn.example.com", "/video.mp4", SiteRequestKind.IMAGE, r34Descriptor))
         assertEquals(0L, pacer.paceForRequest("rule34video.com", "/latest-updates/", SiteRequestKind.PROBE, r34Descriptor))
-        assertEquals(0L, pacer.paceForRequest("rule34video.com", "/get-file/1/", SiteRequestKind.MEDIA, r34Descriptor))
+        assertEquals(150L, pacer.paceForRequest("rule34video.com", "/get-file/1/", SiteRequestKind.MEDIA, r34Descriptor))
         assertEquals(0L, pacer.paceForRequest("api.github.com", "/releases/latest", SiteRequestKind.API, null))
     }
 

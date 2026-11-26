@@ -6,12 +6,16 @@ import coil3.ImageLoader
 import coil3.PlatformContext
 import coil3.SingletonImageLoader
 import com.raven.app.core.common.AppDispatchers
+import com.raven.app.core.database.repository.PreferencesRepository
 import com.raven.app.core.database.repository.TagDictionaryRepository
 import com.raven.app.core.media.download.DownloadCoordinator
 import com.raven.app.core.media.storage.StorageRootManager
 import com.raven.app.core.network.ApplicationScope
 import com.raven.app.core.network.NetworkMonitor
+import com.raven.app.core.sitespi.SiteRegistry
 import com.raven.app.feature.settings.EhTagTranslationSyncer
+import com.raven.app.feature.settings.RavenUpdater
+import com.raven.app.feature.settings.UpdateCheckOutcome
 import kotlinx.coroutines.launch
 import org.koin.android.ext.android.getKoin
 import org.koin.android.ext.koin.androidContext
@@ -56,6 +60,21 @@ class RavenApplication : Application(), SingletonImageLoader.Factory {
         val downloadCoordinator = koin.get<DownloadCoordinator>()
         val tagDictionaryRepository = koin.get<TagDictionaryRepository>()
         val ehTagTranslationSyncer = koin.get<EhTagTranslationSyncer>()
+        val preferencesRepository = koin.get<PreferencesRepository>()
+        val siteRegistry = koin.get<SiteRegistry>()
+        val updater = koin.get<RavenUpdater>()
+
+        applicationScope.launch(dispatchers.io) {
+            runCatching {
+                applyStartupDefaultSiteOnColdStart(preferencesRepository, siteRegistry)
+            }.onFailure { Log.w(TAG, "Failed to apply startup default site", it) }
+        }
+
+        applicationScope.launch(dispatchers.io) {
+            runCatching {
+                runStartupUpdateCheck(updater, preferencesRepository)
+            }.onFailure { Log.w(TAG, "Startup update check failed", it) }
+        }
 
         applicationScope.launch(dispatchers.io) {
             runCatching { storageRootManager.applyPendingOnColdStart() }

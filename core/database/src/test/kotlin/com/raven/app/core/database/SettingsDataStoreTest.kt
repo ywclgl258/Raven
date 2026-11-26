@@ -31,6 +31,7 @@ class SettingsDataStoreTest {
             val initial = awaitItem()
             assertEquals(AppSettings(), initial)
             assertEquals(SiteId.R34V, initial.activeSiteId)
+            assertNull(initial.startupDefaultSiteId)
             assertTrue(initial.translateTags)
             assertFalse(initial.autoFullscreen)
             assertEquals("auto", initial.preferredQuality)
@@ -52,6 +53,12 @@ class SettingsDataStoreTest {
 
             settingsStore.setActiveSiteId(SiteId.EHENTAI)
             assertEquals(SiteId.EHENTAI, awaitItem().activeSiteId)
+
+            settingsStore.setStartupDefaultSiteId(SiteId.MANGACOPY)
+            assertEquals(SiteId.MANGACOPY, awaitItem().startupDefaultSiteId)
+
+            settingsStore.setStartupDefaultSiteId(null)
+            assertNull(awaitItem().startupDefaultSiteId)
 
             val pinnedAfterAdd = settingsStore.togglePinnedSite(SiteId.NHENTAI)
             assertEquals(listOf(SiteId.NHENTAI), pinnedAfterAdd)
@@ -150,6 +157,7 @@ class SettingsDataStoreTest {
 
         // Export excludes device-local storage, sync metadata & tutorial keys, includes portable tag/block flags
         settingsStore.setPreferredQuality("720p")
+        settingsStore.setStartupDefaultSiteId(SiteId.MANGACOPY)
         settingsStore.setUiSoundEffectsEnabled(false)
         settingsStore.setTagDictAutoSync(false)
         settingsStore.setBlockTagsGlobally(false)
@@ -158,6 +166,7 @@ class SettingsDataStoreTest {
         settingsStore.setTagDictSyncState(etag = "etag-1", releaseTag = "r1", updatedAt = 1234L)
         val exported = settingsStore.exportPortableSettings()
         assertEquals("720p", exported[SettingsDataStore.KEY_PREFERRED_QUALITY])
+        assertEquals("mangacopy", exported[SettingsDataStore.KEY_STARTUP_DEFAULT_SITE_ID])
         assertEquals("false", exported[SettingsDataStore.KEY_UI_SOUND_EFFECTS_ENABLED])
         assertEquals("false", exported[SettingsDataStore.KEY_TAG_DICT_AUTO_SYNC])
         assertEquals("false", exported[SettingsDataStore.KEY_BLOCK_TAGS_GLOBALLY])
@@ -174,6 +183,7 @@ class SettingsDataStoreTest {
         settingsStore.applyBackupSettings(
             settingsMap = mapOf(
                 SettingsDataStore.KEY_PREFERRED_QUALITY to "4k",
+                SettingsDataStore.KEY_STARTUP_DEFAULT_SITE_ID to "",
                 SettingsDataStore.KEY_UI_SOUND_EFFECTS_ENABLED to "true",
                 SettingsDataStore.KEY_DOWNLOAD_VIEW to
                     "{\"sort\":\"SIZE\",\"groupMode\":\"TAG\",\"tagMatchAll\":true}",
@@ -184,6 +194,7 @@ class SettingsDataStoreTest {
         )
         val afterRestore = settingsStore.currentSettings()
         assertEquals("4k", afterRestore.preferredQuality)
+        assertNull(afterRestore.startupDefaultSiteId)
         assertTrue(afterRestore.uiSoundEffectsEnabled)
         assertEquals("SIZE", afterRestore.downloadView.sort)
         assertEquals("TAG", afterRestore.downloadView.groupMode)

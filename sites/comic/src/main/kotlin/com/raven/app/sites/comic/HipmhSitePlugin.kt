@@ -25,7 +25,7 @@ import com.raven.app.core.sitespi.SearchSource
 import com.raven.app.core.sitespi.SitePlugin
 import com.raven.app.core.sitespi.SiteRequestKind
 import java.math.BigInteger
-import java.util.Base64
+import kotlin.io.encoding.Base64
 import kotlinx.coroutines.CancellationException
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
@@ -415,13 +415,14 @@ class HipmhSitePlugin(
     }
 
     private fun decodeBase64Url(raw: String): String {
-        val padded = raw.replace('-', '+').replace('_', '/')
-        val bytes = Base64.getDecoder().decode(padded)
+        val normalized = raw.replace('-', '+').replace('_', '/')
+        val padded = normalized.padEnd((normalized.length + 3) / 4 * 4, '=')
+        val bytes = Base64.decode(padded)
         return String(bytes, Charsets.UTF_8)
     }
 
     private fun encodeBase64Url(raw: String): String =
-        Base64.getUrlEncoder().withoutPadding().encodeToString(raw.toByteArray(Charsets.UTF_8))
+        Base64.UrlSafe.encode(raw.toByteArray(Charsets.UTF_8)).trimEnd('=')
 
     private suspend fun fetchApi(url: String): String {
         val response = try {

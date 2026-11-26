@@ -6,6 +6,7 @@ import com.raven.app.core.common.AppDispatchers
 import com.raven.app.core.database.domain.CompletionPolicy
 import com.raven.app.core.database.repository.FavoriteRepository
 import com.raven.app.core.database.repository.HistoryRepository
+import com.raven.app.core.database.repository.PreferencesRepository
 import com.raven.app.core.database.repository.ShelfRepository
 import com.raven.app.core.database.repository.SubscriptionRepository
 import com.raven.app.core.model.DownloadStatus
@@ -15,6 +16,7 @@ import com.raven.app.core.model.ReadingProgress
 import com.raven.app.core.model.SavedSearch
 import com.raven.app.core.model.Shelf
 import com.raven.app.core.model.ShelfItem
+import com.raven.app.core.model.SiteDescriptor
 import com.raven.app.core.model.SiteId
 import com.raven.app.core.model.WatchProgress
 import com.raven.app.core.sitespi.SiteRegistry
@@ -75,6 +77,7 @@ data class ProfileHeroItem(
 
 data class ProfileUiState(
     val selectedFilter: LibraryMediaFilter = LibraryMediaFilter.ALL,
+    val activeSite: SiteDescriptor? = null,
     val heroItem: ProfileHeroItem? = null,
     val continueItems: List<ProfileContinueItem> = emptyList(),
     val watchLaterItems: List<ShelfItem> = emptyList(),
@@ -110,6 +113,7 @@ class ProfileViewModel(
     private val subscriptionRepository: SubscriptionRepository,
     private val favoriteRepository: FavoriteRepository,
     private val downloadGateway: LibraryDownloadGateway,
+    private val preferencesRepository: PreferencesRepository,
     private val siteRegistry: SiteRegistry,
     private val dispatchers: AppDispatchers,
 ) : ViewModel() {
@@ -147,8 +151,14 @@ class ProfileViewModel(
         selectedFilter,
         activityFlow,
         statsFlow,
-    ) { filter, activity, stats ->
-        buildUiState(filter = filter, activity = activity, stats = stats)
+        preferencesRepository.settings,
+    ) { filter, activity, stats, settings ->
+        buildUiState(
+            filter = filter,
+            activity = activity,
+            stats = stats,
+            activeSiteId = settings.activeSiteId,
+        )
     }.stateIn(
         scope = viewModelScope,
         started = SharingStarted.WhileSubscribed(5_000L),
@@ -175,6 +185,7 @@ class ProfileViewModel(
         filter: LibraryMediaFilter,
         activity: ProfileActivitySnapshot,
         stats: ProfileStatsSnapshot,
+        activeSiteId: SiteId,
     ): ProfileUiState {
         val kindFilter = filter.mediaKind
 
@@ -241,6 +252,7 @@ class ProfileViewModel(
 
         return ProfileUiState(
             selectedFilter = filter,
+            activeSite = siteRegistry.get(activeSiteId)?.descriptor,
             heroItem = heroItem,
             continueItems = allContinue,
             watchLaterItems = filteredWatchLater,

@@ -18,8 +18,12 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
+import androidx.compose.material.icons.outlined.CheckBox
+import androidx.compose.material.icons.outlined.DeleteOutline
 import androidx.compose.material.icons.outlined.Download
 import androidx.compose.material.icons.outlined.FavoriteBorder
+import androidx.compose.material.icons.outlined.Sync
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -84,6 +88,7 @@ fun DownloadsFavoritesScreen(
     var selectedTab by rememberSaveable(siteId?.value, initialTab) {
         mutableStateOf(CollectionTab.fromKey(initialTab))
     }
+    var showClearSiteConfirm by rememberSaveable { mutableStateOf(false) }
 
     Column(
         modifier = modifier
@@ -99,12 +104,63 @@ fun DownloadsFavoritesScreen(
                 append(" · 收藏 ${favoritesState.totalCount}")
             },
             navigationIcon = {
-                IconButton(onClick = navigator::navigateBack) {
+                IconButton(
+                    onClick = navigator::navigateBack,
+                    modifier = Modifier.testTag("downloads_favorites_back_button"),
+                ) {
                     Icon(
                         imageVector = Icons.AutoMirrored.Rounded.ArrowBack,
                         contentDescription = "返回",
                         tint = colors.inkPrimary,
                     )
+                }
+            },
+            actions = {
+                when (selectedTab) {
+                    CollectionTab.DOWNLOADS -> IconButton(
+                        onClick = downloadsViewModel::syncFromDisk,
+                        enabled = !downloadsState.isSyncingDisk,
+                        modifier = Modifier.testTag("downloads_sync_disk_button"),
+                    ) {
+                        if (downloadsState.isSyncingDisk) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(18.dp),
+                                strokeWidth = 2.dp,
+                                color = colors.crimson,
+                            )
+                        } else {
+                            Icon(
+                                imageVector = Icons.Outlined.Sync,
+                                contentDescription = "同步磁盘离线记录",
+                                tint = colors.inkPrimary,
+                            )
+                        }
+                    }
+
+                    CollectionTab.FAVORITES -> {
+                        IconButton(
+                            onClick = { favoritesViewModel.toggleSelectionMode() },
+                            modifier = Modifier.testTag("favorites_multiselect_button"),
+                        ) {
+                            Icon(
+                                imageVector = Icons.Outlined.CheckBox,
+                                contentDescription = "批量管理",
+                                tint = if (favoritesState.selectionMode) colors.crimson else colors.inkPrimary,
+                            )
+                        }
+                        if (favoritesState.siteFilter != null && favoritesState.items.isNotEmpty()) {
+                            IconButton(
+                                onClick = { showClearSiteConfirm = true },
+                                modifier = Modifier.testTag("favorites_clear_site_button"),
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Outlined.DeleteOutline,
+                                    contentDescription = "清空当前站点收藏",
+                                    tint = colors.inkSecondary,
+                                )
+                            }
+                        }
+                    }
                 }
             },
         )
@@ -123,14 +179,28 @@ fun DownloadsFavoritesScreen(
                     navigator = navigator,
                     siteId = siteId,
                     embedded = true,
+                    viewModel = downloadsViewModel,
                 )
                 CollectionTab.FAVORITES -> FavoritesScreen(
                     navigator = navigator,
                     siteId = siteId,
                     embedded = true,
+                    viewModel = favoritesViewModel,
                 )
             }
         }
+    }
+
+    if (showClearSiteConfirm && favoritesState.siteFilter != null) {
+        val clearSiteId = favoritesState.siteFilter!!
+        val label = favoritesState.siteLabels[clearSiteId] ?: clearSiteId.value
+        LibraryConfirmBottomSheet(
+            title = "清空「$label」的全部收藏？",
+            message = "该站点的所有收藏条目将被移除，此操作不可撤销。",
+            confirmLabel = "确认清空",
+            onConfirm = { favoritesViewModel.clearSiteFavorites(clearSiteId) },
+            onDismiss = { showClearSiteConfirm = false },
+        )
     }
 }
 

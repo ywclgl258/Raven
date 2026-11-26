@@ -336,7 +336,7 @@ class FileUpdateStateStore(
  *   `downloadClient` with `callTimeout = 0` + 30s read stall timeout for APK streaming) — zero
  *   per-request OkHttp client construction and no 25s whole-file timeout.
  * - Never sends site cookies or Bearer tokens (GitHub is never a registered site host).
- * - 12-hour background check throttle and debug-build guard.
+ * - 12-hour startup check throttle and debug-build guard.
  * - Verifies byte length, optional SHA-256 digest, package name, version monotonicity, and signing
  *   certificate lineage via [ApkSignatureVerifier] before publishing or handing off an APK.
  */

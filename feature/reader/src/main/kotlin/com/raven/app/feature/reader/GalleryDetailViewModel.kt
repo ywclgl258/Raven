@@ -292,7 +292,12 @@ class GalleryDetailViewModel(
             }.collectLatest { snapshot ->
                 _uiState.update { state ->
                     state.copy(
-                        readingProgress = snapshot.progress,
+                        // Auto-resume can replace a series root with a chapter; keep that chapter's loaded progress.
+                        readingProgress = if (state.detail != null && state.detail.item.id != mediaId) {
+                            state.readingProgress
+                        } else {
+                            snapshot.progress
+                        },
                         pageBookmarks = snapshot.bookmarks,
                         containingShelfIds = snapshot.containingShelfIds,
                         isInWatchLater = Shelf.WATCH_LATER_ID in snapshot.containingShelfIds,
@@ -526,11 +531,32 @@ class GalleryDetailViewModel(
      */
     private fun loadChaptersAndMaybeResume(detail: GalleryDetail) {
         if (detail.chaptersUrl.isNullOrBlank()) return
-        viewModelScope.launch(dispatchers.io) {
-            val chapters = runCatching { fetchChapters(detail) }.getOrElse { emptyList() }
-            if (chapters.isEmpty()) return@launch
-            _uiState.update { it.copy(chapters = chapters) }
-            if (chapters.size <= 1) return@launch
+        chaptersJob?.cancel()
+        chaptersJob = viewModelScope.launch(dispatchers.io) {
+            _uiState.update { it.copy(chaptersLoading = true, chaptersError = null) }
+            val chapters = try {
+                fetchChapters(detail)
+            } catch (ce: CancellationException) {
+                throw ce
+            } catch (error: Throwable) {
+                _uiState.update {
+                    it.copy(
+                        chaptersLoading = false,
+                        chaptersError = error.message?.takeIf(String::isNotBlank) ?: "章节列表加载失败",
+                    )
+                }
+                return@launch
+            }
+
+            _uiState.update {
+                it.copy(
+                    chaptersLoading = false,
+                    chapters = chapters,
+                    chaptersError = if (chapters.isEmpty()) "没有可用章节" else null,
+                )
+            }
+            // Explicit chapter selections must never be replaced by an older reading-history entry.
+            if (!isSeriesRootEntry(detail) || chapters.size <= 1) return@launch
             val chapterIds = chapters.mapTo(HashSet()) { it.id }
             val history = runCatching {
                 historyRepository.observeReadingProgressBySite(siteId).first()
@@ -540,9 +566,16 @@ class GalleryDetailViewModel(
             } ?: return@launch
             val chapter = chapters.firstOrNull { it.id == resume.mediaId } ?: return@launch
             if (chapter.id == detail.item.id) return@launch
-            val snapshot = runCatching {
+            val snapshot = try {
                 pageLoader.loadDetail(siteId, chapter.id, chapter.url, offlineOnly = false)
-            }.getOrNull() ?: return@launch
+            } catch (ce: CancellationException) {
+                throw ce
+            } catch (error: Throwable) {
+                emitSnackbar(error.message?.takeIf(String::isNotBlank) ?: "历史续读章节加载失败，请手动选话")
+                return@launch
+            }
+            // A refresh or a newer selection may have changed the visible detail while resume was loading.
+            if (_uiState.value.detail?.item?.id != detail.item.id) return@launch
             _uiState.update {
                 it.copy(
                     detail = snapshot.detail,
@@ -561,6 +594,18 @@ class GalleryDetailViewModel(
                 )
             }
         }
+    }
+
+    private fun isSeriesRootEntry(detail: GalleryDetail): Boolean {
+        val comicId = detail.item.extra["comicId"]?.takeIf { it.isNotBlank() }
+        if (comicId != null) {
+            return mediaId == comicId && detail.item.id == comicId
+        }
+        val chaptersBaseUrl = detail.chaptersUrl
+            ?.substringBefore('#')
+            ?.trimEnd('/')
+            ?: return false
+        return mediaId == detail.item.id && chaptersBaseUrl == detail.item.url.trimEnd('/')
     }
 
     fun formatTagLabel(tag: TagRef): String =

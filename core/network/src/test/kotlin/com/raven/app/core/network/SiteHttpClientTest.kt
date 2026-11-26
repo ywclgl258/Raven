@@ -290,6 +290,20 @@ class SiteHttpClientTest {
             assertEquals(30L, (rateErr as SiteException.RateLimited).retryAfterSeconds)
             assertTrue(stack.rateLimitLog.report().contains("HTTP 429"))
 
+            // The next request to the same host must respect Retry-After instead of immediately retrying.
+            var pacedNowMs = 10_000L
+            val paced = buildTestStack(
+                pacerClockMs = { pacedNowMs },
+                pacerDelayFn = { ms -> pacedNowMs += ms },
+            )
+            val pacedBase = "http://apiq.iwara.tv:${server.port}"
+            server.enqueue(MockResponse().setResponseCode(429).setHeader("Retry-After", "3"))
+            paced.client.execute(SiteHttpRequest(url = "$pacedBase/limited", siteId = SiteId.IWARA, kind = SiteRequestKind.API))
+            assertEquals(10_000L, pacedNowMs)
+            server.enqueue(MockResponse().setResponseCode(200).setBody("ok"))
+            paced.client.execute(SiteHttpRequest(url = "$pacedBase/after-limit", siteId = SiteId.IWARA, kind = SiteRequestKind.API))
+            assertEquals(13_000L, pacedNowMs)
+
             // 401 -> AuthRequired
             assertTrue(SiteHttpErrorMapper.fromResponse(SiteHttpResponse(401, "$base/a"), SiteId.IWARA) is SiteException.AuthRequired)
 

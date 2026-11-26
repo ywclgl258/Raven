@@ -13,6 +13,7 @@ import androidx.media3.common.MediaMetadata
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.PlaybackParameters
 import androidx.media3.common.Player
+import androidx.media3.common.Player.PositionInfo
 import androidx.media3.common.TrackSelectionOverride
 import androidx.media3.common.Tracks
 import androidx.media3.common.VideoSize
@@ -99,6 +100,8 @@ data class PlayerEngineState(
     val playbackSpeed: Float = 1.0f,
     val videoWidth: Int = 0,
     val videoHeight: Int = 0,
+    val isVideoFrameReady: Boolean = false,
+    val videoRecoveryGeneration: Long = 0L,
     val siteId: SiteId? = null,
     val mediaId: String? = null,
     val title: String = "",
@@ -125,8 +128,8 @@ data class PlayerEngineState(
 }
 
 /**
- * Lifecycle-aware ExoPlayer session controller managing stream selection, dynamic buffer-plan
- * rebuilds, stall auto-downgrade, 1-time expired stream refresh, A-B loop evaluation, PiP aspect
+ * Lifecycle-aware ExoPlayer session controller managing stable quality selection, dynamic buffer-plan
+ * rebuilds, media-transition video reset, 1-time expired stream refresh, A-B loop evaluation, PiP aspect
  * ratio calculation, track selection, [MediaSession], and local/offline MP4 seek previews.
  */
 class PlayerSessionController(
@@ -152,6 +155,8 @@ class PlayerSessionController(
     private var activeArtworkUrl: String = ""
     private var activeStreamCacheEnabled: Boolean = false
     private var activeSeekCacheEnabled: Boolean = true
+    private var lastObservedVideoPositionMs: Long = -1L
+    private var lastObservedVideoGeneration: Long = -1L
 
     private val _state = MutableStateFlow(PlayerEngineState())
     val state: StateFlow<PlayerEngineState> = _state.asStateFlow()
@@ -189,9 +194,31 @@ class PlayerSessionController(
         override fun onVideoSizeChanged(videoSize: VideoSize) {
             if (videoSize.width > 0 && videoSize.height > 0) {
                 _state.update {
-                    it.copy(videoWidth = videoSize.width, videoHeight = videoSize.height)
+                    it.copy(
+                        videoWidth = videoSize.width,
+                        videoHeight = videoSize.height,
+                        isVideoFrameReady = true,
+                    )
                 }
             }
+        }
+
+        override fun onPositionDiscontinuity(
+            oldPosition: PositionInfo,
+            newPosition: PositionInfo,
+            reason: Int,
+        ) {
+            if (reason == Player.DISCONTINUITY_REASON_SEEK ||
+                reason == Player.DISCONTINUITY_REASON_SEEK_ADJUSTMENT ||
+                reason == Player.DISCONTINUITY_REASON_AUTO_TRANSITION
+            ) {
+                beginVideoRecovery(clearRenderedFrame = true)
+            }
+            syncSnapshot()
+        }
+
+        override fun onRenderedFirstFrame() {
+            _state.update { it.copy(isVideoFrameReady = true) }
         }
 
         override fun onPlaybackParametersChanged(playbackParameters: PlaybackParameters) {
@@ -242,6 +269,7 @@ class PlayerSessionController(
         val isNewMedia = _state.value.siteId != siteId || _state.value.mediaId != mediaId
         if (isNewMedia) {
             stallTracker.reset()
+            beginVideoRecovery(clearRenderedFrame = true)
         }
 
         activeStreamCacheEnabled = streamCacheEnabled
@@ -377,6 +405,7 @@ class PlayerSessionController(
     ) {
         stallTracker.reset()
         closeActiveHlsSeekSession()
+        beginVideoRecovery(clearRenderedFrame = true)
         activeLocalFilePath = null
         activeCacheKey = cacheKey
         activeSourceRoot = sourceRoot
@@ -473,6 +502,7 @@ class PlayerSessionController(
         require(file.isFile && file.canRead()) { "本地视频文件不可用：$filePath" }
         stallTracker.reset()
         closeActiveHlsSeekSession()
+        beginVideoRecovery(clearRenderedFrame = true)
         activeLocalFilePath = file.absolutePath
         activeCacheKey = null
         activeSourceRoot = ""
@@ -541,6 +571,7 @@ class PlayerSessionController(
         val wasPlaying = player?.playWhenReady ?: snapshot.isPlaying
         val speed = player?.playbackParameters?.speed ?: snapshot.playbackSpeed
         val key = cacheKey(siteId, mediaId, stream.quality.ifBlank { stream.label })
+        beginVideoRecovery(clearRenderedFrame = true)
         activeCacheKey = key
 
         val plan = BufferPlanner.planFor(stream, linkSpeedEstimator.estimateKbps())
@@ -614,6 +645,7 @@ class PlayerSessionController(
         val duration = exo.duration.takeIf { it > 0L }
         val clamped = if (duration != null) positionMs.coerceIn(0L, duration) else positionMs.coerceAtLeast(0L)
         exo.seekTo(clamped)
+        beginVideoRecovery(clearRenderedFrame = true)
         // Manual seek outside an active A-B loop clears the loop range.
         val loop = _state.value.loopRange
         if (loop.isActive && !loop.contains(clamped)) {
@@ -666,6 +698,7 @@ class PlayerSessionController(
             return false
         }
         if (loop.shouldRepeat(pos, exo.isPlaying)) {
+            beginVideoRecovery(clearRenderedFrame = true)
             exo.seekTo(loop.startMs)
             syncSnapshot()
             return true
@@ -674,32 +707,28 @@ class PlayerSessionController(
     }
 
     /**
-     * Periodic stall evaluation (recommended ~500ms while foregrounded). Automatically steps down
-     * one quality tier when [StallTracker] triggers and a lower stream is available.
+     * Stall observation is retained for diagnostics, but never changes the selected stream.
+     * Recovery stays on the same quality and lets ExoPlayer buffer or report the actual error.
      */
     fun evaluateStallTick(): VideoStream? {
         val snapshot = _state.value
         if (snapshot.isOffline || snapshot.isLocal) return null
-        val current = snapshot.currentStream ?: return null
         val exo = player ?: return null
-        val now = clockMs()
-        val buffering = exo.playbackState == Player.STATE_BUFFERING && exo.playWhenReady
-        val decision = stallTracker.evaluate(
+        stallTracker.evaluate(
             positionMs = exo.currentPosition.coerceAtLeast(0L),
-            isBuffering = buffering,
-            nowMs = now,
+            isBuffering = exo.playbackState == Player.STATE_BUFFERING && exo.playWhenReady,
+            nowMs = clockMs(),
         )
-        if (decision !is StallDecision.Downgrade) return null
-        val lower = StreamSelector.lower(snapshot.availableStreams, current) ?: return null
-        stallTracker.recordDowngrade(now)
-        val nextCount = stallTracker.downgradeCount
-        _state.update { it.copy(autoDowngradeCount = nextCount) }
-        switchStream(
-            stream = lower,
-            preservePosition = true,
-            notice = "网络较慢，已自动切换至 ${lower.label.ifBlank { lower.quality }}",
-        )
-        return lower
+        return null
+    }
+
+    private fun beginVideoRecovery(clearRenderedFrame: Boolean) {
+        if (clearRenderedFrame) {
+            player?.clearVideoSurface()
+            // A detached texture/surface must be rebound before ExoPlayer can render a new frame.
+            _state.update { it.copy(videoRecoveryGeneration = it.videoRecoveryGeneration + 1) }
+        }
+        _state.update { it.copy(isVideoFrameReady = false) }
     }
 
     /**
@@ -737,6 +766,16 @@ class PlayerSessionController(
     fun syncSnapshot(clearError: Boolean = false) {
         val exo = player ?: return
         val duration = exo.duration.takeIf { it > 0L } ?: _state.value.durationMs
+        val videoPosition = exo.videoFormat?.let { exo.currentPosition.coerceAtLeast(0L) }
+        val recoveryGeneration = _state.value.videoRecoveryGeneration
+        val hasFreshVideoPosition = videoPosition != null &&
+            exo.playbackState == Player.STATE_READY &&
+            (lastObservedVideoGeneration != recoveryGeneration ||
+                videoPosition != lastObservedVideoPositionMs)
+        if (videoPosition != null) {
+            lastObservedVideoPositionMs = videoPosition
+            lastObservedVideoGeneration = recoveryGeneration
+        }
         _state.update { current ->
             current.copy(
                 isInitialized = true,
@@ -747,6 +786,7 @@ class PlayerSessionController(
                 bufferedPositionMs = exo.bufferedPosition.coerceAtLeast(0L),
                 durationMs = duration,
                 playbackSpeed = exo.playbackParameters.speed,
+                isVideoFrameReady = current.isVideoFrameReady || hasFreshVideoPosition,
                 errorMessage = if (clearError) null else current.errorMessage,
                 errorCode = if (clearError) null else current.errorCode,
             )
@@ -812,6 +852,7 @@ class PlayerSessionController(
         runCatching { mediaSession?.release() }
         mediaSession = null
         existing?.removeListener(playerListener)
+        existing?.clearVideoSurface()
         existing?.release()
 
         val audioAttributes = AudioAttributes.Builder()

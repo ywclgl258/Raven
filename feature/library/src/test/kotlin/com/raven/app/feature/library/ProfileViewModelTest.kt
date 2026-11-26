@@ -78,6 +78,7 @@ class ProfileViewModelTest {
             subscriptionRepository = harness.subscriptionRepository,
             favoriteRepository = harness.favoriteRepository,
             downloadGateway = harness.downloadGateway,
+            preferencesRepository = harness.preferencesRepository,
             siteRegistry = harness.siteRegistry,
             dispatchers = harness.dispatchers,
         )
@@ -162,6 +163,7 @@ class ProfileViewModelTest {
             subscriptionRepository = harness.subscriptionRepository,
             favoriteRepository = harness.favoriteRepository,
             downloadGateway = harness.downloadGateway,
+            preferencesRepository = harness.preferencesRepository,
             siteRegistry = harness.siteRegistry,
             dispatchers = harness.dispatchers,
         )

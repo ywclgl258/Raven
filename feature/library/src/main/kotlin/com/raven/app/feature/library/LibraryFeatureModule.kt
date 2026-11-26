@@ -33,6 +33,7 @@ val libraryFeatureModule: Module = module {
             subscriptionRepository = get(),
             favoriteRepository = get(),
             downloadGateway = get(),
+            preferencesRepository = get(),
             siteRegistry = get(),
             dispatchers = get(),
         )

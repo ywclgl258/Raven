@@ -42,6 +42,8 @@ import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
+import androidx.compose.material.icons.outlined.SkipNext
+import androidx.compose.material.icons.outlined.SkipPrevious
 import androidx.compose.material.icons.filled.Bookmark
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.outlined.AutoStories
@@ -258,6 +260,20 @@ fun ReaderScreen(
                         viewModel.rollbackQueueAdvance(event.previous, event.replacement)
                     }
                 }
+                is ReaderEvent.OpenChapter -> {
+                    runCatching {
+                        navigator.openReader(
+                            siteId = event.nextItem.siteId,
+                            mediaId = event.nextItem.id,
+                            url = event.nextItem.url,
+                            startPage = 1,
+                            offlineOnly = false,
+                            queueToken = null,
+                        )
+                    }.onFailure {
+                        viewModel.onChapterNavigationFailed()
+                    }
+                }
             }
         }
     }
@@ -366,6 +382,7 @@ fun ReaderScreen(
                             onSingleTap = viewModel::toggleChrome,
                             onRetryPage = viewModel::retryPage,
                             onInteractionChanged = viewModel::onInteractionStateChanged,
+                            onEndReached = viewModel::onStripEndReached,
                         )
                     }
                     ReaderMode.LTR -> {
@@ -415,6 +432,34 @@ fun ReaderScreen(
                         }
                     }
                 }
+            }
+        }
+
+        AnimatedVisibility(
+            visible = uiState.isChapterTransitionLoading,
+            enter = fadeIn(tween(120)),
+            exit = fadeOut(tween(120)),
+            modifier = Modifier.align(Alignment.Center),
+        ) {
+            Row(
+                modifier = Modifier
+                    .clip(RavenShapes.PillShape)
+                    .background(colors.surface1)
+                    .border(0.5.dp, colors.hairline, RavenShapes.PillShape)
+                    .padding(horizontal = 16.dp, vertical = 12.dp),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                CircularProgressIndicator(
+                    modifier = Modifier.size(18.dp),
+                    strokeWidth = 2.dp,
+                    color = colors.crimson,
+                )
+                Text(
+                    text = "正在打开下一话…",
+                    style = MaterialTheme.typography.labelLarge,
+                    color = colors.inkPrimary,
+                )
             }
         }
 
@@ -571,6 +616,8 @@ fun ReaderScreen(
                     onToggleModePanel = { viewModel.toggleQuickPanel(ReaderQuickPanel.MODE) },
                     onToggleBrightnessPanel = { viewModel.toggleQuickPanel(ReaderQuickPanel.BRIGHTNESS_AUTO_PAGE) },
                     onOpenSettings = { viewModel.openSheet(ReaderSheet.SETTINGS) },
+                    onPreviousChapter = viewModel::openPreviousChapter,
+                    onNextChapter = viewModel::openNextChapter,
                 )
             }
         }
@@ -678,6 +725,7 @@ private fun StripReaderViewport(
     onSingleTap: () -> Unit,
     onRetryPage: (Int) -> Unit,
     onInteractionChanged: (Boolean) -> Unit,
+    onEndReached: () -> Unit,
 ) {
     val pageNumbers = uiState.pageNumbers
     val initialIndex = remember(pageNumbers) {
@@ -738,6 +786,19 @@ private fun StripReaderViewport(
                 if (anchor != null) {
                     onVisiblePagesChanged(anchor, visibleSet, offsetPx)
                 }
+            }
+    }
+
+    // A strip only advances after the user actually scrolls the final page to its bottom.
+    LaunchedEffect(listState, pageNumbers) {
+        snapshotFlow {
+            listState.isScrollInProgress &&
+                !listState.canScrollForward &&
+                listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index == pageNumbers.lastIndex
+        }
+            .distinctUntilChanged()
+            .collectLatest { atEnd ->
+                if (atEnd) onEndReached()
             }
     }
 
@@ -1006,6 +1067,8 @@ private fun ReaderBottomControlBar(
     onToggleModePanel: () -> Unit,
     onToggleBrightnessPanel: () -> Unit,
     onOpenSettings: () -> Unit,
+    onPreviousChapter: () -> Unit,
+    onNextChapter: () -> Unit,
 ) {
     val colors = LocalRavenColors.current
     val reduceTransparency = LocalReduceTransparency.current
@@ -1072,6 +1135,38 @@ private fun ReaderBottomControlBar(
                         .padding(horizontal = 12.dp, vertical = 8.dp),
                     verticalArrangement = Arrangement.spacedBy(4.dp),
                 ) {
+                if (uiState.isSerialComic) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        ReaderChapterButton(
+                            icon = Icons.Outlined.SkipPrevious,
+                            label = "上一话",
+                            subtitle = uiState.previousChapter?.title
+                                ?: if (uiState.isChapterListReady) "已是第一话" else "加载或重试",
+                            enabled = !uiState.isChapterTransitionLoading &&
+                                (!uiState.isChapterListReady || uiState.previousChapter != null),
+                            onClick = onPreviousChapter,
+                            modifier = Modifier
+                                .weight(1f)
+                                .testTag("reader_previous_chapter"),
+                        )
+                        ReaderChapterButton(
+                            icon = Icons.Outlined.SkipNext,
+                            label = "下一话",
+                            subtitle = uiState.nextChapter?.title
+                                ?: if (uiState.isChapterListReady) "已是最后一话" else "加载或重试",
+                            enabled = !uiState.isChapterTransitionLoading &&
+                                (!uiState.isChapterListReady || uiState.nextChapter != null),
+                            onClick = onNextChapter,
+                            modifier = Modifier
+                                .weight(1f)
+                                .testTag("reader_next_chapter"),
+                        )
+                    }
+                }
+
                 // Page Scrubber Row
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -1160,6 +1255,49 @@ private fun ReaderBottomControlBar(
                 }
                 }
             }
+        }
+    }
+}
+
+@Composable
+private fun ReaderChapterButton(
+    icon: ImageVector,
+    label: String,
+    subtitle: String,
+    enabled: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val colors = LocalRavenColors.current
+    OutlinedButton(
+        onClick = onClick,
+        enabled = enabled,
+        shape = RavenShapes.ControlShape,
+        colors = ButtonDefaults.outlinedButtonColors(
+            contentColor = colors.inkPrimary,
+            disabledContentColor = colors.inkTertiary,
+        ),
+        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 7.dp),
+        modifier = modifier.heightIn(min = 52.dp),
+    ) {
+        Icon(
+            imageVector = icon,
+            contentDescription = null,
+            modifier = Modifier.size(18.dp),
+        )
+        Spacer(modifier = Modifier.width(6.dp))
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = label,
+                style = MaterialTheme.typography.labelLarge,
+                maxLines = 1,
+            )
+            Text(
+                text = subtitle,
+                style = MaterialTheme.typography.labelSmall,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
         }
     }
 }

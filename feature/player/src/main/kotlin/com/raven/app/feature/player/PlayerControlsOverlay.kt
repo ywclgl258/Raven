@@ -261,7 +261,7 @@ internal fun PlayerControlsOverlay(
             }
         }
 
-        // 4. Transient notice banner (stall downgrade, expired stream refresh, resume, loop)
+        // 4. Transient notice banner (stream refresh, resume, loop)
         AnimatedVisibility(
             visible = !uiState.noticeMessage.isNullOrBlank() && !uiState.isTemporarySpeedActive,
             enter = fadeIn(),
@@ -296,7 +296,8 @@ internal fun PlayerControlsOverlay(
         }
 
         // 5. Buffering or loading spinner
-        if ((uiState.isBuffering || uiState.isLoadingDetail || uiState.isRefreshingExpiredStream) &&
+        if ((uiState.isBuffering || uiState.isLoadingDetail || uiState.isRefreshingExpiredStream ||
+                (uiState.isInitialized && !uiState.isVideoFrameReady)) &&
             uiState.loadError == null &&
             uiState.playbackError == null
         ) {
@@ -310,9 +311,14 @@ internal fun PlayerControlsOverlay(
                     strokeWidth = 3.dp,
                     modifier = Modifier.size(36.dp),
                 )
-                if (uiState.isRefreshingExpiredStream) {
+                val recoveryText = when {
+                    uiState.isRefreshingExpiredStream -> "正在刷新播放地址…"
+                    uiState.isInitialized && !uiState.isVideoFrameReady -> "正在恢复画面…"
+                    else -> null
+                }
+                if (recoveryText != null) {
                     Text(
-                        text = "正在刷新播放地址…",
+                        text = recoveryText,
                         style = MaterialTheme.typography.labelMedium,
                         color = colors.inkPrimary,
                     )

@@ -42,22 +42,13 @@ class PlaybackCoreTest {
     }
 
     @Test
-    fun `stream selector applies 0_7 headroom without mutating preference`() {
-        // 4000 kbps * 0.7 = 2800 kbps budget -> supports 720p (2500), not 1080p (4500)
-        val picked = StreamSelector.pick(standardStreams, "1080p", bandwidthKbps = 4_000)
-        assertEquals("720p", picked.quality)
-
-        // 1800 kbps * 0.7 = 1260 kbps budget -> supports 480p (1200)
-        val pickedMid = StreamSelector.pick(standardStreams, "1080p", bandwidthKbps = 1_800)
-        assertEquals("480p", pickedMid.quality)
-
-        // Extremely slow link (300 kbps -> 210 kbps budget) still returns lowest tier (360p)
-        val pickedLow = StreamSelector.pick(standardStreams, "1080p", bandwidthKbps = 300)
-        assertEquals("360p", pickedLow.quality)
-
-        // Sufficient bandwidth (7000 * 0.7 = 4900 >= 4500) keeps 1080p
-        val pickedHigh = StreamSelector.pick(standardStreams, "1080p", bandwidthKbps = 7_000)
-        assertEquals("1080p", pickedHigh.quality)
+    fun `stream selector never lowers preferred quality because of a bandwidth sample`() {
+        for (bandwidthKbps in listOf(0, 300, 1_800, 4_000, 7_000)) {
+            val picked = StreamSelector.pick(standardStreams, "1080p", bandwidthKbps)
+            assertEquals("1080p", picked.quality)
+        }
+        // Automatic mode still respects the 720p preference ceiling, not transient throughput.
+        assertEquals("720p", StreamSelector.pick(standardStreams, "auto", bandwidthKbps = 300).quality)
     }
 
     @Test
@@ -80,6 +71,17 @@ class PlaybackCoreTest {
             bandwidthKbps = 2_000,
         )
         assertEquals("https://cdn.example/1080-new.mp4", refreshed.url)
+
+        // A vanished quality falls back to the same tier preference, never a speed-based lower tier.
+        val sameTierFallback = StreamSelector.afterRefresh(
+            streams = listOf(
+                VideoStream(quality = "720p", label = "720p", url = "https://cdn.example/720-new.mp4"),
+                VideoStream(quality = "480p", label = "480p", url = "https://cdn.example/480-new.mp4"),
+            ),
+            previous = streams[1],
+            bandwidthKbps = 100,
+        )
+        assertEquals("720p", sameTierFallback.quality)
 
         // Observed playback sample overrides probe seed
         assertEquals(5_000, StreamSelector.mergeEstimates(sampledKbps = 5_000, seededKbps = 1_200))

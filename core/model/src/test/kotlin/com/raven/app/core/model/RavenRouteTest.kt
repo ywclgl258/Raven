@@ -30,7 +30,10 @@ class RavenRouteTest {
                 queueToken = "q-1",
             ),
             RavenRoute.Downloads(),
-            RavenRoute.Downloads(siteId = SiteId.R34V.value),
+            RavenRoute.Downloads(
+                siteId = SiteId.R34V.value,
+                initialTab = "favorites",
+            ),
             RavenRoute.ShelfDetail(shelfId = Shelf.WATCH_LATER_ID),
             RavenRoute.SmartShelfDetail(smartShelfId = "smart-1"),
             RavenRoute.Favorites(),

@@ -2,7 +2,6 @@ import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 
 plugins {
     id("org.jetbrains.kotlin.jvm")
-    alias(libs.plugins.kotlin.serialization)
 }
 
 java {
@@ -20,7 +19,6 @@ dependencies {
     api(project(":core:model"))
     api(project(":core:common"))
     implementation(libs.kotlinx.coroutines.core)
-    implementation(libs.kotlinx.serialization.json)
 
     testImplementation(libs.junit)
     testImplementation(libs.kotlinx.coroutines.test)

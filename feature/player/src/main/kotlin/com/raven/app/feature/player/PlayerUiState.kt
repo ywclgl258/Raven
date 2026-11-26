@@ -147,6 +147,8 @@ data class PlayerUiState(
     val durationMs: Long = 0L,
     val videoWidth: Int = 0,
     val videoHeight: Int = 0,
+    val isVideoFrameReady: Boolean = false,
+    val videoRecoveryGeneration: Long = 0L,
     val currentStream: VideoStream? = null,
     val availableStreams: List<VideoStream> = emptyList(),
     val isOffline: Boolean = false,

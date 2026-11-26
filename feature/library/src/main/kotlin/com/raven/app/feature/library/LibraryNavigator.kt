@@ -45,6 +45,8 @@ interface LibraryNavigator {
 
     fun openSiteFeed(route: RavenRoute.SiteFeed)
 
+    fun openSiteFunctions(siteId: SiteId)
+
     fun openSearch(
         initialQuery: String? = null,
         crossSite: Boolean = false,

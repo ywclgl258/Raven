@@ -36,6 +36,7 @@ import androidx.compose.material.icons.outlined.Folder
 import androidx.compose.material.icons.outlined.Fullscreen
 import androidx.compose.material.icons.outlined.Headphones
 import androidx.compose.material.icons.outlined.HighQuality
+import androidx.compose.material.icons.outlined.Home
 import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.outlined.Lock
 import androidx.compose.material.icons.outlined.ManageAccounts
@@ -49,6 +50,7 @@ import androidx.compose.material.icons.outlined.Sync
 import androidx.compose.material.icons.outlined.SystemUpdate
 import androidx.compose.material.icons.outlined.TouchApp
 import androidx.compose.material.icons.outlined.Translate
+import androidx.compose.material.icons.outlined.Tune
 import androidx.compose.material.icons.outlined.VisibilityOff
 import androidx.compose.material.icons.outlined.Wifi
 import androidx.compose.material.icons.rounded.Check
@@ -106,6 +108,7 @@ import org.koin.androidx.compose.koinViewModel
 
 private enum class SettingsSheetKind {
     NONE,
+    STARTUP_DEFAULT_SITE,
     QUALITY,
     DIAGNOSTICS,
     LICENSES,
@@ -132,6 +135,7 @@ fun SettingsScreen(
         onToggleTranslateTags = viewModel::setTranslateTags,
         onToggleAutoFullscreen = viewModel::setAutoFullscreen,
         onSelectQuality = viewModel::setPreferredQuality,
+        onSelectStartupDefaultSite = viewModel::setStartupDefaultSiteId,
         onChangeDefaultSpeed = viewModel::setDefaultPlaybackSpeed,
         onToggleStreamCache = viewModel::setStreamCacheEnabled,
         onToggleSeekCache = viewModel::setSeekCacheEnabled,
@@ -179,6 +183,7 @@ fun SettingsScreenContent(
     onToggleTranslateTags: (Boolean) -> Unit,
     onToggleAutoFullscreen: (Boolean) -> Unit,
     onSelectQuality: (String) -> Unit,
+    onSelectStartupDefaultSite: (SiteId?) -> Unit,
     onChangeDefaultSpeed: (Float) -> Unit,
     onToggleStreamCache: (Boolean) -> Unit,
     onToggleSeekCache: (Boolean) -> Unit,
@@ -235,6 +240,9 @@ fun SettingsScreenContent(
 
     val activeSite = uiState.activeSite
     val activeSiteId = activeSite?.id ?: uiState.settings.activeSiteId
+    val startupDefaultSiteLabel = uiState.settings.startupDefaultSiteId?.let { id ->
+        uiState.allSites.firstOrNull { it.id == id }?.displayName ?: id.value
+    } ?: "记住上次使用"
     val signedInCount = uiState.authSites.count { it.authState.isAuthenticated }
     val storageStatus = uiState.storageStatus
 
@@ -640,6 +648,27 @@ fun SettingsScreenContent(
                     title = "站点与安全",
                     footer = "所有站点 Cookie 与 Bearer 令牌统一经 AndroidKeyStore AES-256-GCM 加密隔离，绝不发往媒体 CDN 或更新服务器。",
                 ) {
+                    RavenGroupedRow(
+                        title = "启动默认站点",
+                        subtitle = startupDefaultSiteLabel,
+                        icon = Icons.Outlined.Home,
+                        showChevron = true,
+                        onClick = { activeSheet = SettingsSheetKind.STARTUP_DEFAULT_SITE },
+                        modifier = Modifier.testTag("settings_startup_default_site_row"),
+                    )
+                    RavenGroupedDivider(insetWithIcon = true)
+                    RavenGroupedRow(
+                        title = "当前站点快捷偏好",
+                        subtitle = activeSite?.let { "管理 ${it.displayName} 的语言、阅读模式与本站内容" }
+                            ?: "管理当前站点语言、阅读模式与本站内容",
+                        value = activeSite?.shortName,
+                        icon = Icons.Outlined.Tune,
+                        showChevron = true,
+                        onClick = { navigator.openSiteFunctions(activeSiteId) },
+                        modifier = Modifier.testTag("settings_site_preferences_row"),
+                    )
+                    RavenGroupedDivider(insetWithIcon = true)
+
                     if (uiState.activeSiteSupportsAuth && activeSite != null) {
                         val activeAuth = uiState.authSites.firstOrNull { it.descriptor.id == activeSite.id }
                         RavenGroupedRow(
@@ -847,7 +876,7 @@ fun SettingsScreenContent(
                     RavenGroupedDivider(insetWithIcon = true)
                     RavenGroupedSwitchRow(
                         title = "自动检查更新",
-                        subtitle = "每 12 小时在正式版中静默检查 GitHub Release 新版本",
+                        subtitle = "启动时检查 GitHub Release；距上次不足 12 小时则跳过，避免重复请求",
                         icon = Icons.Outlined.CloudDownload,
                         checked = uiState.settings.autoUpdateCheck,
                         onCheckedChange = onToggleAutoUpdateCheck,
@@ -886,8 +915,74 @@ fun SettingsScreenContent(
         }
     }
 
-    // Quality selection bottom sheet
+    // Startup default and quality selection bottom sheets
     when (activeSheet) {
+        SettingsSheetKind.STARTUP_DEFAULT_SITE -> {
+            RavenBottomSheet(
+                onDismissRequest = { activeSheet = SettingsSheetKind.NONE },
+                detent = com.raven.app.core.designsystem.component.RavenSheetDetent.Large,
+                title = "启动默认站点",
+                subtitle = "每次冷启动进入首页时应用，不会在返回首页或配置变化时重置当前站点",
+                modifier = Modifier.testTag("settings_startup_default_site_sheet"),
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .verticalScroll(rememberScrollState()),
+                ) {
+                    RavenGroupedSection {
+                        val rememberLastUsed = uiState.settings.startupDefaultSiteId == null
+                        RavenGroupedRow(
+                            title = "记住上次使用",
+                            subtitle = "沿用退出前最后使用的站点",
+                            trailingContent = if (rememberLastUsed) {
+                                {
+                                    Icon(
+                                        imageVector = Icons.Rounded.Check,
+                                        contentDescription = "已选中",
+                                        tint = colors.crimson,
+                                    )
+                                }
+                            } else {
+                                null
+                            },
+                            onClick = {
+                                onSelectStartupDefaultSite(null)
+                                activeSheet = SettingsSheetKind.NONE
+                            },
+                            modifier = Modifier.testTag("settings_startup_default_site_remember"),
+                        )
+                        uiState.allSites.forEach { descriptor ->
+                            RavenGroupedDivider()
+                            val selected = uiState.settings.startupDefaultSiteId == descriptor.id
+                            RavenGroupedRow(
+                                title = descriptor.displayName,
+                                subtitle = descriptor.defaultHost,
+                                trailingContent = if (selected) {
+                                    {
+                                        Icon(
+                                            imageVector = Icons.Rounded.Check,
+                                            contentDescription = "已选中",
+                                            tint = colors.crimson,
+                                        )
+                                    }
+                                } else {
+                                    null
+                                },
+                                onClick = {
+                                    onSelectStartupDefaultSite(descriptor.id)
+                                    activeSheet = SettingsSheetKind.NONE
+                                },
+                                modifier = Modifier.testTag(
+                                    "settings_startup_default_site_${descriptor.id.value}",
+                                ),
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
         SettingsSheetKind.QUALITY -> {
             RavenBottomSheet(
                 onDismissRequest = { activeSheet = SettingsSheetKind.NONE },

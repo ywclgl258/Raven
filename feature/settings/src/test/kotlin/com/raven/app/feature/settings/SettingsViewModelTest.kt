@@ -34,6 +34,7 @@ import okhttp3.mockwebserver.MockWebServer
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
@@ -190,6 +191,7 @@ class SettingsViewModelTest {
             assertEquals(5, initial.authSites.size)
             assertTrue(initial.authSites.first { it.descriptor.id == SiteId.R34V }.authState.isAuthenticated)
             assertFalse(initial.settings.autoFullscreen)
+            assertNull(initial.settings.startupDefaultSiteId)
             assertEquals(2, initial.readingCache.totalPages)
             assertEquals(3072L, initial.readingCache.totalBytes)
 
@@ -198,6 +200,7 @@ class SettingsViewModelTest {
             vm.setTranslateTags(false)
             vm.setAutoFullscreen(true)
             vm.setPreferredQuality("1080p")
+            vm.setStartupDefaultSiteId(SiteId.NHENTAI)
             vm.setDefaultPlaybackSpeed(1.62f) // snaps to 1.50x
             vm.setStreamCacheEnabled(true)
             vm.setSeekCacheEnabled(false)
@@ -211,6 +214,8 @@ class SettingsViewModelTest {
             assertFalse(updated.settings.translateTags)
             assertTrue(updated.settings.autoFullscreen)
             assertEquals("1080p", updated.settings.preferredQuality)
+            assertEquals(SiteId.NHENTAI, updated.settings.startupDefaultSiteId)
+            assertEquals(SiteId.R34V, updated.settings.activeSiteId)
             assertEquals(1.5f, updated.settings.defaultPlaybackSpeed, 0.001f)
             assertTrue(updated.settings.streamCacheEnabled)
             assertFalse(updated.settings.seekCacheEnabled)
@@ -221,7 +226,13 @@ class SettingsViewModelTest {
             val persisted = db.preferencesRepository.currentSettings()
             assertTrue(persisted.autoFullscreen)
             assertEquals("1080p", persisted.preferredQuality)
+            assertEquals(SiteId.NHENTAI, persisted.startupDefaultSiteId)
             assertEquals(1.5f, persisted.defaultPlaybackSpeed, 0.001f)
+
+            vm.setStartupDefaultSiteId(null)
+            advanceUntilIdle()
+            assertNull(expectMostRecentItem().settings.startupDefaultSiteId)
+            assertNull(db.preferencesRepository.currentSettings().startupDefaultSiteId)
             cancelAndIgnoreRemainingEvents()
         }
     }

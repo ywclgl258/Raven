@@ -16,7 +16,7 @@ Android 包管理器（`PackageManager`）在执行覆盖安装时，强制校�
 一旦 Release 签名证书发生变化：
 - 系统会直接拒绝覆盖安装并报错 `INSTALL_FAILED_UPDATE_INCOMPATIBLE`；
 - 应用内更新器 `RavenUpdater` 也会在调起系统安装器前直接拦截该安装包；
-- 用户被迫卸载旧版重装，导致应用私有沙盒数据全部清空（Room 18 表历史/收藏/片单、`SessionVault` 加密站点登录态、DataStore 偏好设置及私有下载索引）。
+- 用户被迫卸载旧版重装，导致应用私有沙盒数据全部清空（Room 20 表历史/收藏/片单、`SessionVault` 加密站点登录态、DataStore 偏好设置及私有下载索引）。
 
 因此，**从 v0.1.0 起，Raven 全生命周期所有正式版本必须永久使用同一份发布密钥签名**。
 
@@ -24,7 +24,7 @@ Android 包管理器（`PackageManager`）在执行覆盖安装时，强制校�
 
 ## 2. 官方发布证书与版本元数据基线
 
-仓库根目录 [release.properties](../release.properties) 是正式版版本号与公钥指纹的**唯一受控源**：
+仓库根目录 [release.properties](../release.properties) 是正式版版本号与公钥指纹的**唯一受控源**。当前源码版本为 `0.6.0` / `versionCode = 10`；下面的 `0.1.0` / `1` **仅用于展示文件结构，不是当前版本或发布指令**，实际值必须直接读取 `release.properties`：
 
 ```properties
 versionName=0.1.0
@@ -150,6 +150,8 @@ Workflow 关键步骤示例（在 `$RUNNER_TEMP` 中短暂落盘并在 `always()
   run: rm -rf "${RUNNER_TEMP}/raven-signing"
 ```
 
+仓库提供 [.github/workflows/release-verify.yml](../.github/workflows/release-verify.yml) 作为完整手动验证入口：仅在 Actions 中显式触发 `workflow_dispatch`，完成外部签名注入、Gradle Release 构建、`apksigner` v1/v2/v3 验签、证书指纹和包名／版本元数据核对。该工作流不上传 APK、不推送 Git、不创建 Tag 或 GitHub Release。
+
 ---
 
 ## 6. 构建期 + 运行期双重签名防线
@@ -192,7 +194,7 @@ flowchart LR
 ## 7. 标准发布打包与 `apksigner` 验签步骤
 
 ### Step 1：递增版本元数据
-编辑根目录 [release.properties](../release.properties)，更新 `versionName` 并严格递增 `versionCode`（保持 `releaseCertificate` 不变）：
+编辑根目录 [release.properties](../release.properties)，更新 `versionName` 并严格递增 `versionCode`（保持 `releaseCertificate` 不变）。以下 `0.2.0` / `2` **仅是版本递增示例**；当前值与本次发布目标均以 `release.properties` 和发布计划为准，不要照抄示例覆盖实际元数据：
 
 ```properties
 versionName=0.2.0
@@ -217,10 +219,13 @@ releaseCertificate=1F9407377D2D3AB5C04527CF6E587F0B789BA8B971D60AD8F99360D05CA52
 > `apksigner` 与 `aapt2` 位于 Android SDK 的 `build-tools/36.0.0/` 目录（如 `D:\Android\Sdk\build-tools\36.0.0\apksigner.bat`）。
 
 ```powershell
-# 1. 强制验签并打印证书指纹
+# 1. 默认范围：验签并打印证书，确认 v2 / v3
 & "$env:ANDROID_HOME\build-tools\36.0.0\apksigner.bat" verify --verbose --print-certs .\app\build\outputs\apk\release\app-release.apk
 
-# 2. 核对包名、versionCode 与 versionName
+# 2. 强制 API 23 范围：单独确认 JAR v1
+& "$env:ANDROID_HOME\build-tools\36.0.0\apksigner.bat" verify --verbose --print-certs --min-sdk-version 23 --max-sdk-version 23 .\app\build\outputs\apk\release\app-release.apk
+
+# 3. 核对包名、versionCode 与 versionName
 & "$env:ANDROID_HOME\build-tools\36.0.0\aapt2.exe" dump badging .\app\build\outputs\apk\release\app-release.apk | Select-String "^package:"
 ```
 
@@ -228,19 +233,24 @@ Linux / macOS 等价命令：
 
 ```bash
 "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --verbose --print-certs app/build/outputs/apk/release/app-release.apk
+"$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --verbose --print-certs --min-sdk-version 23 --max-sdk-version 23 app/build/outputs/apk/release/app-release.apk
 "$ANDROID_HOME/build-tools/36.0.0/aapt2" dump badging app/build/outputs/apk/release/app-release.apk | grep "^package:"
 ```
 
 **通过标准（缺一不可）**：
-- `Verifies` 成功退出（返回码 `0`）；
-- `Verified using v1 scheme (JAR signing): true`、`v2 scheme (APK Signature Scheme v2): true`、`v3 scheme (APK Signature Scheme v3): true`；
-- `Signer #1 certificate DN:` 包含 `CN=Raven`；
-- `Signer #1 certificate SHA-256 digest:` 精确等于 `1f9407377d2d3ab5c04527cf6e587f0b789ba8b971d60ad8f99360d05ca52f3a`（与 `release.properties` 大写形式一致）；
+- 两次 `Verifies` 均成功退出（返回码 `0`）；
+- 默认范围输出 `Verified using v2 scheme (APK Signature Scheme v2): true`、`v3 scheme (APK Signature Scheme v3): true`；强制 API 23 范围输出 `Verified using v1 scheme (JAR signing): true`；
+- 两次输出的 `Signer #1 certificate DN:` 均包含 `CN=Raven`；
+- 两次输出的 `Signer #1 certificate SHA-256 digest:` 均精确等于 `1f9407377d2d3ab5c04527cf6e587f0b789ba8b971d60ad8f99360d05ca52f3a`（与 `release.properties` 大写形式一致）；
 - `package: name='com.raven.app'` 且 `versionCode` / `versionName` 与本次发布完全一致。
+
+> `apksigner` 在 `minSdk >= 24` 且存在 APK Signing Block（v2/v3）时，默认会跳过 JAR v1 验证并输出 `v1=false`；这不等于缺少 v1 签名。验收必须使用上述第二条命令强制覆盖 API 23 范围单独验证，不能只看默认输出。具体条件见 [AOSP `ApkVerifier`](https://android.googlesource.com/platform/tools/apksig/+/master/src/main/java/com/android/apksig/ApkVerifier.java)。
 
 ---
 
 ## 8. Release 与 Debug 构建边界
+
+下表中的 `0.1.0` 仅为版本字符串格式示例；当前版本及每次发布值以 [release.properties](../release.properties) 为准。
 
 | 对比维度 | Release 正式版 | Debug 开发版 |
 |---|---|---|

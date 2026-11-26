@@ -484,8 +484,8 @@ fun SiteFunctionsScreenContent(
                         }
                         if (hasAbove) RavenGroupedDivider(insetWithIcon = true)
                         RavenGroupedSwitchRow(
-                            title = "标签中文翻译",
-                            subtitle = "开启内置 165 条常用标签中文化显示",
+                            title = "全局标签中文翻译",
+                            subtitle = "与主设置共用同一偏好，对所有站点生效",
                             icon = Icons.Outlined.Translate,
                             checked = uiState.translateTags,
                             onCheckedChange = onToggleTranslateTags,
