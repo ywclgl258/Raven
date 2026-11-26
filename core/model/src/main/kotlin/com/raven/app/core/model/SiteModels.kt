@@ -20,6 +20,19 @@ value class SiteId(val value: String) {
     val isRetired: Boolean get() = this in RETIRED_HOSTS
     val isKnown: Boolean get() = isLive || isLocal || isRetired || isGlobal
 
+    /**
+     * Identity under which credentials/session cookies are stored.
+     *
+     * E-Hentai (`e-hentai.org`) and ExHentai (`exhentai.org`) are two hostnames of one account and
+     * share the same forum cookies (`ipb_member_id` / `ipb_pass_hash` / `igneous`), so both map to
+     * [EHENTAI]. Every other site is its own account holder.
+     */
+    val accountId: SiteId
+        get() = when (this) {
+            EXHENTAI -> EHENTAI
+            else -> this
+        }
+
     override fun toString(): String = value
 
     companion object {

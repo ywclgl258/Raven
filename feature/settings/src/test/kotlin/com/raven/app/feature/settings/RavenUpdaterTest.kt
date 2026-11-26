@@ -208,6 +208,68 @@ class RavenUpdaterTest {
     }
 
     @Test
+    fun `GitHub rate limit falls back to VPS metadata and keeps APK download on VPS`() = runTest {
+        val server = MockWebServer()
+        val fakeApkBytes = ByteArray(4_096) { idx -> (idx * 31 and 0xFF).toByte() }
+        val expectedSha256 = MessageDigest.getInstance("SHA-256")
+            .digest(fakeApkBytes)
+            .joinToString("") { b -> String.format(Locale.ROOT, "%02x", b) }
+        server.start()
+        val mirrorBase = server.url("/raven/releases").toString().trimEnd('/')
+        val releaseJson = """
+            {
+              "id": 9000013,
+              "tag_name": "v1.3.0",
+              "name": "Raven 1.3.0",
+              "body": "VPS mirror",
+              "html_url": "$mirrorBase/latest",
+              "assets": [{
+                "id": 9000013,
+                "name": "raven-1.3.0-universal-release.apk",
+                "size": ${fakeApkBytes.size},
+                "browser_download_url": "$mirrorBase/assets/9000013",
+                "digest": "sha256:$expectedSha256"
+              }]
+            }
+        """.trimIndent()
+        server.enqueue(MockResponse().setResponseCode(429).setBody("rate limit"))
+        server.enqueue(MockResponse().setResponseCode(200).setBody(releaseJson))
+        server.enqueue(MockResponse().setResponseCode(200).setBody(Buffer().write(fakeApkBytes)))
+
+        try {
+            val updater = RavenUpdater(
+                appInfo = RavenAppInfo(
+                    versionName = "1.0.0",
+                    versionCode = 1L,
+                    isDebug = false,
+                    packageName = "com.raven.app",
+                    mirrorReleasesApiBaseUrl = mirrorBase,
+                ),
+                metadataClient = OkHttpClient(),
+                downloadClient = OkHttpClient(),
+                updatesDir = tempFolder.newFolder("updates-vps-fallback"),
+                signatureVerifier = object : ApkSignatureVerifier {
+                    override fun verify(apkFile: File) = Unit
+                },
+                stateStore = InMemoryUpdateStateStore(),
+                supportedAbisProvider = { listOf("arm64-v8a") },
+                dispatchers = mainDispatcherRule.appDispatchers,
+                releasesApiBaseUrlOverride = server.url("/github/releases").toString(),
+            )
+
+            val available = updater.checkForUpdate(manual = true) as UpdateCheckOutcome.UpdateAvailable
+            assertEquals(mirrorBase, available.release.sourceBaseUrl)
+            val verified = updater.downloadAndVerify(available.release)
+            assertTrue(verified.isFile)
+            assertEquals("/github/releases/latest", server.takeRequest().path)
+            assertEquals("/raven/releases/latest", server.takeRequest().path)
+            assertEquals("/raven/releases/assets/9000013", server.takeRequest().path)
+        } finally {
+            server.shutdown()
+        }
+    }
+
+    @Test
     fun `rejects tampered APK signature or digest and cleans temporary file`() = runTest {
         val server = MockWebServer()
         val fakeApkBytes = ByteArray(2048) { 9 }

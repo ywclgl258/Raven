@@ -769,15 +769,18 @@ internal class FakeSiteAuthProvider(
     var acceptCookies: (Map<String, String>) -> Boolean = { true },
 ) : AuthProvider {
 
+    // Mirrors production session semantics: aliased hosts (E-Hentai / ExHentai) share one bucket.
+    private val accountSiteId: SiteId = siteId.accountId
+
     override suspend fun loginWithCredentials(username: String, password: String): AuthState {
         if (!acceptCredentials(username, password)) {
             throw SiteException.AuthRequired("账号或密码错误", siteId = siteId)
         }
         when (mode) {
-            AuthMode.JwtBearer -> sessionStore.saveBearerToken(siteId, "jwt-token-$username", username)
+            AuthMode.JwtBearer -> sessionStore.saveBearerToken(accountSiteId, "jwt-token-$username", username)
             else -> {
-                sessionStore.saveCookies(siteId, mapOf("session" to "sid-$username"))
-                sessionStore.saveUsername(siteId, username)
+                sessionStore.saveCookies(accountSiteId, mapOf("session" to "sid-$username"))
+                sessionStore.saveUsername(accountSiteId, username)
             }
         }
         return currentAuthState()
@@ -787,22 +790,23 @@ internal class FakeSiteAuthProvider(
         if (!acceptCookies(cookies)) {
             throw SiteException.AuthRequired("账号暂无 ${siteId.value} 访问权限", siteId = siteId)
         }
-        sessionStore.replaceCookies(siteId, cookies)
+        sessionStore.replaceCookies(accountSiteId, cookies)
         val uid = cookies["ipb_member_id"]?.let { "UID $it" } ?: "imported"
-        sessionStore.saveUsername(siteId, uid)
+        sessionStore.saveUsername(accountSiteId, uid)
         return currentAuthState()
     }
 
     override suspend fun logout() {
-        sessionStore.clearSite(siteId)
+        sessionStore.clearSite(accountSiteId)
     }
 
     override suspend fun currentAuthState(): AuthState {
-        val hasCreds = sessionStore.getBearerToken(siteId) != null || sessionStore.getCookies(siteId).isNotEmpty()
+        val hasCreds = sessionStore.getBearerToken(accountSiteId) != null ||
+            sessionStore.getCookies(accountSiteId).isNotEmpty()
         return AuthState(
             isAuthenticated = hasCreds,
-            username = if (hasCreds) sessionStore.getUsername(siteId) else null,
-            epoch = sessionStore.authEpoch(siteId),
+            username = if (hasCreds) sessionStore.getUsername(accountSiteId) else null,
+            epoch = sessionStore.authEpoch(accountSiteId),
         )
     }
 }

@@ -99,7 +99,7 @@ class SiteAccountViewModelTest {
             val missingErr = expectMostRecentItem()
             assertNotNull(missingErr.errorMessage)
             assertFalse(missingErr.authState.isAuthenticated)
-            assertTrue(sessionStore.getCookies(SiteId.EXHENTAI).isEmpty())
+            assertTrue(sessionStore.getCookies(SiteId.EXHENTAI.accountId).isEmpty())
 
             // Valid shape but account lacks ExHentai access -> plugin rejects, nothing persisted
             val cookieHeader = "Cookie: ipb_member_id=12345; ipb_pass_hash=abcdef1234567890abcdef; igneous=valid123; ignored=xyz"
@@ -109,7 +109,7 @@ class SiteAccountViewModelTest {
             val denied = expectMostRecentItem()
             assertNotNull(denied.errorMessage)
             assertFalse(denied.authState.isAuthenticated)
-            assertTrue(sessionStore.getCookies(SiteId.EXHENTAI).isEmpty())
+            assertTrue(sessionStore.getCookies(SiteId.EXHENTAI.accountId).isEmpty())
 
             // Once remote access verification succeeds, filtered cookies are persisted
             allowExhentaiAccess = true
@@ -119,7 +119,7 @@ class SiteAccountViewModelTest {
             assertTrue(verified.authState.isAuthenticated)
             assertNull(verified.errorMessage)
             assertEquals("", verified.cookieInput)
-            val saved = sessionStore.getCookies(SiteId.EXHENTAI)
+            val saved = sessionStore.getCookies(SiteId.EXHENTAI.accountId)
             assertEquals("12345", saved["ipb_member_id"])
             assertEquals("abcdef1234567890abcdef", saved["ipb_pass_hash"])
             assertEquals("valid123", saved["igneous"])
@@ -212,5 +212,33 @@ class SiteAccountViewModelTest {
         assertTrue(policy.hasRequiredIdentity(extracted))
         assertFalse(policy.hasRequiredIdentity(mapOf("ipb_member_id" to "0", "ipb_pass_hash" to "0123456789abcdef")))
         assertFalse(policy.hasRequiredIdentity(mapOf("ipb_member_id" to "12", "ipb_pass_hash" to "short")))
+    }
+
+    @Test
+    fun `E-Hentai and ExHentai resolve to one account bucket so either login signs in both`() = runTest {
+        val sessionStore = InMemorySiteSessionStore()
+        val registry = createTestSiteRegistry(sessionStore = sessionStore)
+        val cookies = mapOf(
+            "ipb_member_id" to "4242",
+            "ipb_pass_hash" to "0123456789abcdef0123",
+            "igneous" to "shared-session",
+        )
+
+        // ExHentai is an alias of the E-Hentai account; unrelated sites keep their own identity.
+        assertEquals(SiteId.EHENTAI, SiteId.EXHENTAI.accountId)
+        assertEquals(SiteId.EHENTAI, SiteId.EHENTAI.accountId)
+        assertEquals(SiteId.NHENTAI, SiteId.NHENTAI.accountId)
+
+        // Importing through ExHentai persists into the shared bucket and is visible from E-Hentai.
+        registry.get(SiteId.EXHENTAI)!!.authProvider.importCookies(cookies)
+        val fromEhentai = registry.get(SiteId.EHENTAI)!!.authProvider.currentAuthState()
+        assertTrue(fromEhentai.isAuthenticated)
+        assertEquals("UID 4242", fromEhentai.username)
+        assertEquals("4242", sessionStore.getCookies(SiteId.EHENTAI)["ipb_member_id"])
+
+        // Logging out of E-Hentai also signs ExHentai out because they share one session.
+        registry.get(SiteId.EHENTAI)!!.authProvider.logout()
+        assertFalse(registry.get(SiteId.EXHENTAI)!!.authProvider.currentAuthState().isAuthenticated)
+        assertTrue(sessionStore.getCookies(SiteId.EXHENTAI.accountId).isEmpty())
     }
 }

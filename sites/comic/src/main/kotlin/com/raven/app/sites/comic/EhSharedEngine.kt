@@ -55,6 +55,11 @@ class EhSharedEngine(
 ) : FeedSource, GallerySource, SearchSource, AuthProvider, LinkResolver {
 
     private val siteId: SiteId = descriptor.id
+
+    // E-Hentai and ExHentai share one account identity (same forum cookies), so all session
+    // reads/writes for either host resolve to the same storage bucket.
+    private val accountSiteId: SiteId = descriptor.id.accountId
+
     private val previewPageCache = LruCache<String, List<GalleryPage>>(maxEntries = 64)
 
     override val mode: AuthMode = AuthMode.WebViewCookie(
@@ -85,22 +90,22 @@ class EhSharedEngine(
         if (descriptor.matchesHost(host)) mapOf("nw" to "1") else emptyMap()
 
     override suspend fun currentAuthState(): AuthState {
-        val cookies = sessionStore.getCookies(siteId)
+        val cookies = sessionStore.getCookies(accountSiteId)
         val authenticated = hasValidIdentity(cookies)
         val username = if (authenticated) {
-            sessionStore.getUsername(siteId) ?: cookies["ipb_member_id"]?.let { "UID $it" }
+            sessionStore.getUsername(accountSiteId) ?: cookies["ipb_member_id"]?.let { "UID $it" }
         } else {
             null
         }
         return AuthState(
             isAuthenticated = authenticated,
             username = username,
-            epoch = sessionStore.authEpoch(siteId),
+            epoch = sessionStore.authEpoch(accountSiteId),
         )
     }
 
     override suspend fun logout() {
-        sessionStore.clearSite(siteId)
+        sessionStore.clearSite(accountSiteId)
         previewPageCache.clear()
     }
 
@@ -176,14 +181,14 @@ class EhSharedEngine(
             }
         }
 
-        sessionStore.replaceCookies(siteId, candidate)
+        sessionStore.replaceCookies(accountSiteId, candidate)
         previewPageCache.clear()
         val username = "UID ${candidate["ipb_member_id"]}"
-        sessionStore.saveUsername(siteId, username)
+        sessionStore.saveUsername(accountSiteId, username)
         return AuthState(
             isAuthenticated = true,
             username = username,
-            epoch = sessionStore.authEpoch(siteId),
+            epoch = sessionStore.authEpoch(accountSiteId),
         )
     }
 
@@ -498,7 +503,7 @@ class EhSharedEngine(
     // -------------------------------------------------------------------------
 
     private fun requireAccess() {
-        if (requiresAuthGate && !hasValidIdentity(sessionStore.getCookies(siteId))) {
+        if (requiresAuthGate && !hasValidIdentity(sessionStore.getCookies(accountSiteId))) {
             throw SiteException.AuthRequired(
                 message = "ExHentai 必须登录并具备账号权限；未登录可能只显示白屏",
                 siteId = siteId,
@@ -513,7 +518,7 @@ class EhSharedEngine(
                 siteId = siteId,
                 kind = SiteRequestKind.PAGE,
                 allowCache = allowCache,
-                authEpoch = sessionStore.authEpoch(siteId),
+                authEpoch = sessionStore.authEpoch(accountSiteId),
             )
         } catch (e: CancellationException) {
             throw e
@@ -1025,6 +1030,7 @@ class EhSharedEngine(
     companion object {
         const val OFFICIAL_LOGIN_URL: String = "https://forums.e-hentai.org/index.php?act=Login"
         const val ALL_CATEGORIES_MASK: Int = 1023
+
 
         val ALLOWED_AUTH_HOSTS: Set<String> = setOf(
             "forums.e-hentai.org",

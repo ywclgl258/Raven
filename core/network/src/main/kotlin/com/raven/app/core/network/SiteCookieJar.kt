@@ -126,9 +126,11 @@ class SiteCookieJar(
 
     /** Clears ONLY [siteId] credentials/cookies without affecting any other site. */
     fun clearSite(siteId: SiteId) {
+        // ExHentai shares E-Hentai's account bucket, so clearing either clears the shared session.
+        val accountId = siteId.accountId
         synchronized(lock) {
-            lastSyncedEpoch.remove(siteId)
-            sessionStore.clearSite(siteId)
+            lastSyncedEpoch.remove(accountId)
+            sessionStore.clearSite(accountId)
         }
     }
 
@@ -137,16 +139,35 @@ class SiteCookieJar(
         return plugin.takeIf { it.descriptor.matchesHost(host) }
     }
 
+    /**
+     * Descriptors whose cookies may legitimately live in [plugin]'s account bucket. For aliased
+     * accounts (E-Hentai / ExHentai) this includes every registered host of that account, so a
+     * cookie set on one hostname stays usable on the other; unrelated sites are never included.
+     */
+    private fun accountDescriptorsLocked(plugin: SitePlugin): List<SiteDescriptor> {
+        val accountId = plugin.id.accountId
+        val registry = runCatching { siteRegistryProvider() }.getOrNull() ?: return listOf(plugin.descriptor)
+        val aliases = registry.allPlugins()
+            .filter { it.id.accountId == accountId }
+            .map { it.descriptor }
+        return aliases.ifEmpty { listOf(plugin.descriptor) }
+    }
+
     private fun loadSiteCookiesLocked(plugin: SitePlugin, now: Long): List<Cookie> {
-        val siteId = plugin.id
+        // Session state is stored per account identity, so E-Hentai/ExHentai share one bucket.
+        val siteId = plugin.id.accountId
         val descriptor = plugin.descriptor
+        val accountDescriptors = accountDescriptorsLocked(plugin)
+        val acceptsHost: (String) -> Boolean = { host ->
+            accountDescriptors.any { it.matchesHost(host) }
+        }
         val encodedBlob = sessionStore.getSecret(siteId, JAR_SECRET_KEY)
         val plainMap = sessionStore.getCookies(siteId)
 
         val jarCookies = encodedBlob
             ?.lineSequence()
             ?.filter { it.isNotBlank() }
-            ?.mapNotNull { decodeCookie(descriptor, it) }
+            ?.mapNotNull { decodeCookie(descriptor, it, acceptsHost) }
             ?.filter { it.expiresAt > now }
             ?.toList()
             .orEmpty()
@@ -176,7 +197,7 @@ class SiteCookieJar(
         for ((name, rawVal) in plainMap) {
             if (name in matchedPlainNames) continue
             if (rawVal.startsWith(HOST_ONLY_PREFIX) || rawVal.startsWith(DOMAIN_PREFIX)) {
-                decodeCookie(descriptor, rawVal)?.takeIf { it.expiresAt > now }?.let(result::add)
+                decodeCookie(descriptor, rawVal, acceptsHost)?.takeIf { it.expiresAt > now }?.let(result::add)
             } else if (name.isNotBlank() && defaultBareHost.isNotEmpty()) {
                 runCatching {
                     Cookie.Builder()
@@ -193,19 +214,20 @@ class SiteCookieJar(
     }
 
     private fun persistSiteCookiesLocked(siteId: SiteId, cookies: List<Cookie>) {
+        val accountId = siteId.accountId
         if (cookies.isEmpty()) {
-            sessionStore.saveSecret(siteId, JAR_SECRET_KEY, null)
-            sessionStore.replaceCookies(siteId, emptyMap())
+            sessionStore.saveSecret(accountId, JAR_SECRET_KEY, null)
+            sessionStore.replaceCookies(accountId, emptyMap())
         } else {
             val encodedLines = cookies.joinToString("\n") { encodeCookie(it) }
-            sessionStore.saveSecret(siteId, JAR_SECRET_KEY, encodedLines)
+            sessionStore.saveSecret(accountId, JAR_SECRET_KEY, encodedLines)
             val plainSummary = LinkedHashMap<String, String>(cookies.size)
             for (cookie in cookies) {
                 plainSummary[cookie.name] = cookie.value
             }
-            sessionStore.replaceCookies(siteId, plainSummary)
+            sessionStore.replaceCookies(accountId, plainSummary)
         }
-        lastSyncedEpoch[siteId] = sessionStore.authEpoch(siteId)
+        lastSyncedEpoch[accountId] = sessionStore.authEpoch(accountId)
     }
 
     companion object {
@@ -225,16 +247,21 @@ class SiteCookieJar(
         }
 
         /**
-         * Decodes an encoded cookie record and validates its domain against [descriptor].
-         * Rejects cookies that escape [descriptor]'s registered hosts or fail host-only invariants.
+         * Decodes an encoded cookie record and validates its domain against the account's hosts.
+         * [acceptsHost] defaults to [descriptor]-only validation; aliased accounts pass a predicate
+         * covering every hostname of the same login while still rejecting foreign domains.
          */
-        fun decodeCookie(descriptor: SiteDescriptor, raw: String): Cookie? {
+        fun decodeCookie(
+            descriptor: SiteDescriptor,
+            raw: String,
+            acceptsHost: (String) -> Boolean = descriptor::matchesHost,
+        ): Cookie? {
             if (raw.startsWith(HOST_ONLY_PREFIX)) {
                 val parts = raw.split('\u0001', limit = 3)
                 if (parts.size < 3) return null
                 val host = parts[1].trim().lowercase(Locale.ROOT)
                 val header = parts[2]
-                if (!descriptor.matchesHost(host)) return null
+                if (!acceptsHost(host)) return null
                 val url = "https://$host/".toHttpUrlOrNull() ?: return null
                 return Cookie.parse(url, header)
                     ?.takeIf { it.hostOnly && it.domain.equals(host, ignoreCase = true) }
@@ -256,7 +283,7 @@ class SiteCookieJar(
                 return Cookie.parse(baseUrl, header)?.takeIf { it.hostOnly }
             }
 
-            if (!descriptor.matchesHost(domainAttr)) return null
+            if (!acceptsHost(domainAttr)) return null
             val url = "https://$domainAttr/".toHttpUrlOrNull() ?: return null
             return Cookie.parse(url, header)
                 ?.takeIf { !it.hostOnly && it.domain.equals(domainAttr, ignoreCase = true) }

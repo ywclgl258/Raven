@@ -65,6 +65,14 @@ class SiteCookieJarTest {
                 mediaDomains = setOf("ehgt.org", "hath.network"),
                 defaultCookies = mapOf("nw" to "1"),
             ),
+            // E-Hentai is the account holder ExHentai shares its session with.
+            plugin(
+                SiteId.EHENTAI,
+                "e-hentai.org",
+                kind = MediaKind.COMIC,
+                mediaDomains = setOf("ehgt.org", "hath.network"),
+                defaultCookies = mapOf("nw" to "1"),
+            ),
         ),
     )
 
@@ -177,9 +185,10 @@ class SiteCookieJarTest {
         assertEquals(mapOf("nw" to "1"), anonEx.associate { it.name to it.value })
         assertTrue(jar.loadForRequest("https://ehgt.org/img.jpg".toHttpUrl()).isEmpty())
 
-        // Importing cookies via SiteSessionStore (like WebView/CookieImport) immediately flows into SiteCookieJar
+        // Importing cookies via SiteSessionStore (like WebView/CookieImport) immediately flows into SiteCookieJar.
+        // E-Hentai and ExHentai share one account bucket, so writes are keyed by the account identity.
         vault.saveCookies(
-            SiteId.EXHENTAI,
+            SiteId.EXHENTAI.accountId,
             mapOf("ipb_member_id" to "77777", "ipb_pass_hash" to "0123456789abcdef", "igneous" to "ig99"),
         )
         val authedEx = jar.loadForRequest("https://exhentai.org/g/1/abc/".toHttpUrl())
@@ -189,10 +198,16 @@ class SiteCookieJarTest {
         assertEquals("ig99", map["igneous"])
         assertEquals("1", map["nw"])
 
-        // Clearing ExHentai clears ONLY ExHentai and does not touch R34V
+        // The same cookies are visible on E-Hentai, because both hosts belong to one account.
+        val authedEh = jar.loadForRequest("https://e-hentai.org/g/1/abc/".toHttpUrl())
+            .associate { it.name to it.value }
+        assertEquals("77777", authedEh["ipb_member_id"])
+
+        // Clearing either host clears the shared session but never touches R34V
         vault.saveCookies(SiteId.R34V, mapOf("PHPSESSID" to "keep-me"))
         jar.clearSite(SiteId.EXHENTAI)
         assertEquals(mapOf("nw" to "1"), jar.loadForRequest("https://exhentai.org/".toHttpUrl()).associate { it.name to it.value })
+        assertEquals(mapOf("nw" to "1"), jar.loadForRequest("https://e-hentai.org/".toHttpUrl()).associate { it.name to it.value })
         assertEquals("keep-me", vault.getCookies(SiteId.R34V)["PHPSESSID"])
     }
 

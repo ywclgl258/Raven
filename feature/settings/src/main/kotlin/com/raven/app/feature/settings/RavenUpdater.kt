@@ -43,6 +43,7 @@ data class RavenAppInfo(
     val packageName: String,
     val githubOwner: String = DEFAULT_GITHUB_OWNER,
     val githubRepo: String = DEFAULT_GITHUB_REPO,
+    val mirrorReleasesApiBaseUrl: String? = DEFAULT_MIRROR_RELEASES_API_BASE_URL,
     val releaseCertSha256: String? = null,
 ) {
     val releasesApiBaseUrl: String
@@ -51,6 +52,8 @@ data class RavenAppInfo(
     companion object {
         const val DEFAULT_GITHUB_OWNER: String = "ywclgl258"
         const val DEFAULT_GITHUB_REPO: String = "Raven"
+        const val DEFAULT_MIRROR_RELEASES_API_BASE_URL: String =
+            "https://ywclgl258.us.ci:8443/raven/releases"
         const val DEFAULT_PACKAGE_NAME: String = "com.raven.app"
 
         @Suppress("DEPRECATION")
@@ -153,6 +156,8 @@ data class RavenReleaseInfo(
     val htmlUrl: String,
     val asset: RavenReleaseAsset,
     val cachedApk: File? = null,
+    /** The endpoint that supplied this metadata; downloads must stay on the same working source. */
+    val sourceBaseUrl: String? = null,
 )
 
 sealed interface UpdateCheckOutcome {
@@ -422,34 +427,30 @@ class RavenUpdater(
         }
         return try {
             withContext(dispatchers.io) {
-                val request = Request.Builder()
-                    .url("$releasesBaseUrl/latest")
-                    .header("Accept", "application/vnd.github+json")
-                    .header("Cache-Control", "no-cache")
-                    .header("User-Agent", "Raven/${appInfo.versionName} (Android)")
-                    .build()
-
-                val releaseDto = executeCancellable(metadataClient.newCall(request)).use { response ->
-                    val body = response.body?.string().orEmpty()
-                    if (response.code == 403 || response.code == 429) {
-                        val msg = if (body.contains("rate limit", ignoreCase = true)) {
-                            "GitHub 请求过于频繁，请稍后重试"
-                        } else {
-                            "GitHub 拒绝访问 (HTTP ${response.code})，请检查网络或代理设置"
-                        }
-                        return@withContext UpdateCheckOutcome.Error(msg)
+                var releaseDto: GitHubReleaseDto? = null
+                var releaseBaseUrl: String? = null
+                val failures = mutableListOf<String>()
+                for (endpoint in updateEndpoints()) {
+                    try {
+                        releaseDto = fetchLatestRelease(endpoint)
+                        releaseBaseUrl = endpoint.baseUrl
+                        break
+                    } catch (ce: CancellationException) {
+                        throw ce
+                    } catch (e: Exception) {
+                        failures += "${endpoint.label}：${e.message ?: "连接失败"}"
                     }
-                    if (!response.isSuccessful) {
-                        return@withContext UpdateCheckOutcome.Error("更新检查失败：HTTP ${response.code}")
-                    }
-                    json.decodeFromString(GitHubReleaseDto.serializer(), body)
                 }
+                val resolvedRelease = releaseDto ?: return@withContext UpdateCheckOutcome.Error(
+                    message = failures.joinToString("；").ifBlank { "所有更新通道均不可用" },
+                )
+                val resolvedBaseUrl = releaseBaseUrl ?: releasesBaseUrl
 
                 val prevState = stateStore.read()
                 stateStore.write(prevState.copy(lastCheckedAtMs = clockMs()))
 
-                val remoteTag = releaseDto.tagName.trim()
-                if (remoteTag.isEmpty() || releaseDto.draft) {
+                val remoteTag = resolvedRelease.tagName.trim()
+                if (remoteTag.isEmpty() || resolvedRelease.draft) {
                     return@withContext UpdateCheckOutcome.Error("未获取到有效的正式版本发布信息")
                 }
                 if (!isRemoteVersionNewer(remoteTag, appInfo.versionName)) {
@@ -461,21 +462,22 @@ class RavenUpdater(
                 }
 
                 val selectedDto = selectReleaseAsset(
-                    assets = releaseDto.assets,
+                    assets = resolvedRelease.assets,
                     compatibilityMode = signatureVerifier.needsCompatibilityPackage(),
                     supportedAbis = supportedAbisProvider(),
                 ) ?: return@withContext UpdateCheckOutcome.Error("此版本暂未提供适配当前设备的正式 APK，请稍后重试")
 
-                val asset = RavenReleaseAsset.fromDto(releaseDto.id, selectedDto)
+                val asset = RavenReleaseAsset.fromDto(resolvedRelease.id, selectedDto)
                 val cachedFile = findVerifiedCachedApk(asset)
                 val releaseInfo = RavenReleaseInfo(
-                    releaseId = releaseDto.id,
+                    releaseId = resolvedRelease.id,
                     tagName = remoteTag,
-                    title = releaseDto.name.ifBlank { remoteTag },
-                    releaseNotes = releaseDto.body.orEmpty().trim().take(MAX_RELEASE_NOTES_CHARS),
-                    htmlUrl = releaseDto.htmlUrl,
+                    title = resolvedRelease.name.ifBlank { remoteTag },
+                    releaseNotes = resolvedRelease.body.orEmpty().trim().take(MAX_RELEASE_NOTES_CHARS),
+                    htmlUrl = resolvedRelease.htmlUrl,
                     asset = asset,
                     cachedApk = cachedFile,
+                    sourceBaseUrl = resolvedBaseUrl,
                 )
                 UpdateCheckOutcome.UpdateAvailable(releaseInfo)
             }
@@ -488,6 +490,36 @@ class RavenUpdater(
             )
         } finally {
             operationMutex.unlock()
+        }
+    }
+
+    private data class UpdateEndpoint(val label: String, val baseUrl: String)
+
+    private fun updateEndpoints(): List<UpdateEndpoint> = buildList {
+        add(UpdateEndpoint("GitHub", releasesBaseUrl))
+        val mirror = appInfo.mirrorReleasesApiBaseUrl?.trim()?.trimEnd('/').orEmpty()
+        if (mirror.isNotEmpty() && mirror != releasesBaseUrl) {
+            add(UpdateEndpoint("VPS 备用通道", mirror))
+        }
+    }
+
+    private suspend fun fetchLatestRelease(endpoint: UpdateEndpoint): GitHubReleaseDto {
+        val request = Request.Builder()
+            .url("${endpoint.baseUrl}/latest")
+            .header("Accept", "application/vnd.github+json, application/json")
+            .header("Cache-Control", "no-cache")
+            .header("User-Agent", "Raven/${appInfo.versionName} (Android)")
+            .build()
+        return executeCancellable(metadataClient.newCall(request)).use { response ->
+            val body = response.body?.string().orEmpty()
+            if (response.code == 403 || response.code == 429) {
+                throw IOException("${endpoint.label} 请求受限 (HTTP ${response.code})")
+            }
+            if (!response.isSuccessful) {
+                throw IOException("HTTP ${response.code}")
+            }
+            if (body.isBlank()) throw IOException("发布信息为空")
+            json.decodeFromString(GitHubReleaseDto.serializer(), body)
         }
     }
 
@@ -511,7 +543,9 @@ class RavenUpdater(
                     return@withContext cached
                 }
 
-                val targetUrl = "$releasesBaseUrl/assets/${asset.assetId}"
+                val downloadBaseUrl = release.sourceBaseUrl?.trim()?.trimEnd('/')
+                    ?.takeIf { it.isNotEmpty() } ?: releasesBaseUrl
+                val targetUrl = "$downloadBaseUrl/assets/${asset.assetId}"
                 val request = Request.Builder()
                     .url(targetUrl)
                     .header("Accept", "application/octet-stream")

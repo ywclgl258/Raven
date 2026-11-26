@@ -184,7 +184,7 @@ class EhSitesPluginTest {
         )
         assertTrue(state.isAuthenticated)
         assertEquals("UID 123456", state.username)
-        val saved = store.getCookies(SiteId.EXHENTAI)
+        val saved = store.getCookies(SiteId.EXHENTAI.accountId)
         assertEquals("123456", saved["ipb_member_id"])
         assertEquals("abc987def654", saved["igneous"])
         assertEquals("sktokenvalue1234", saved["sk"])
@@ -197,11 +197,13 @@ class EhSitesPluginTest {
         val page = ex.feedSource!!.loadFeed(FeedRequest(SiteId.EXHENTAI))
         assertEquals(2, page.items.size)
 
-        // Logout isolates ExHentai without affecting E-Hentai cookies
+        // ExHentai and E-Hentai share one account, so logging out of either signs both out.
         store.saveCookies(SiteId.EHENTAI, mapOf("ipb_member_id" to "999", "ipb_pass_hash" to "fedcba9876543210fedcba9876543210"))
+        assertTrue(eh.authProvider.currentAuthState().isAuthenticated)
         ex.authProvider.logout()
         assertFalse(ex.authProvider.currentAuthState().isAuthenticated)
-        assertTrue(eh.authProvider.currentAuthState().isAuthenticated)
+        assertFalse(eh.authProvider.currentAuthState().isAuthenticated)
+        assertTrue(store.getCookies(SiteId.EHENTAI.accountId).isEmpty())
     }
 
     @Test
@@ -440,7 +442,7 @@ class EhSitesPluginTest {
     fun `exhentai 403 challenge throws Forbidden and ehentai skips translated language tag and handles limits`() = runTest {
         val exHttp = FakeHttpClientAdapter()
         val exStore = InMemorySiteSessionStore()
-        exStore.saveCookies(SiteId.EXHENTAI, mapOf("ipb_member_id" to "1", "ipb_pass_hash" to "0123456789abcdef0123456789abcdef"))
+        exStore.saveCookies(SiteId.EXHENTAI.accountId, mapOf("ipb_member_id" to "1", "ipb_pass_hash" to "0123456789abcdef0123456789abcdef"))
         exHttp.onMatch({ true }) { req ->
             FakeHttpClientAdapter.htmlResponse(
                 req.url,

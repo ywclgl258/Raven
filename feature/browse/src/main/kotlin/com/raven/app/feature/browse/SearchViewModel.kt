@@ -3,6 +3,7 @@ package com.raven.app.feature.browse
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.raven.app.core.common.AppDispatchers
+import com.raven.app.core.common.BlockedTermExcludeInjection
 import com.raven.app.core.common.ContentFilter
 import com.raven.app.core.common.MediaDateParser
 import com.raven.app.core.common.TagDictionary
@@ -101,6 +102,7 @@ data class SearchUiState(
     val allSites: List<SiteDescriptor> = emptyList(),
     val searchableSites: List<SiteDescriptor> = emptyList(),
     val pinnedSiteIds: List<SiteId> = emptyList(),
+    val dynamicSiteSorting: Boolean = true,
     val siteOpenCounts: Map<SiteId, Int> = emptyMap(),
     val startupDefaultSiteId: SiteId? = null,
     val query: String = "",
@@ -145,6 +147,7 @@ data class SearchUiState(
     val watchProgressMap: Map<String, Float> = emptyMap(),
     val readingProgressMap: Map<String, Float> = emptyMap(),
     val watchLaterKeys: Set<String> = emptySet(),
+    val showSearchTutorial: Boolean = false,
     val lastSavedSearchNotice: String? = null,
 ) {
     val activeAdvancedFilterCount: Int
@@ -549,6 +552,7 @@ class SearchViewModel(
             allSites = settings.sortSitesByUsage(allDescriptors) { it.id },
             searchableSites = settings.sortSitesByUsage(searchableDescriptors) { it.id },
             pinnedSiteIds = settings.pinnedSiteIds,
+            dynamicSiteSorting = settings.dynamicSiteSorting,
             siteOpenCounts = settings.siteOpenCounts,
             startupDefaultSiteId = settings.startupDefaultSiteId,
             query = input.query,
@@ -590,6 +594,7 @@ class SearchViewModel(
             watchProgressMap = db.watchProgressMap,
             readingProgressMap = db.readingProgressMap,
             watchLaterKeys = db.watchLaterKeys,
+            showSearchTutorial = !settings.hasSeenTutorial(com.raven.app.core.model.FeatureTutorialIds.SEARCH_DISCOVER),
             lastSavedSearchNotice = input.lastSavedNotice,
         )
     }.stateIn(
@@ -646,6 +651,22 @@ class SearchViewModel(
     fun togglePinnedSite(siteId: SiteId) {
         viewModelScope.launch {
             preferencesRepository.togglePinnedSite(siteId)
+        }
+    }
+
+    /** Persists a manual reorder of the pinned sites. */
+    fun reorderPinnedSites(siteIds: List<SiteId>) {
+        val known = allDescriptors.mapTo(HashSet()) { it.id }
+        val sanitized = siteIds.filter { it in known }.distinct()
+        if (sanitized.isEmpty()) return
+        viewModelScope.launch {
+            preferencesRepository.setPinnedSiteIds(sanitized)
+        }
+    }
+
+    fun setDynamicSiteSorting(enabled: Boolean) {
+        viewModelScope.launch {
+            preferencesRepository.setDynamicSiteSorting(enabled)
         }
     }
 
@@ -934,6 +955,18 @@ class SearchViewModel(
 
     fun dismissSavedSearchNotice() {
         inputState.update { it.copy(lastSavedNotice = null) }
+    }
+
+    fun completeSearchTutorial() {
+        viewModelScope.launch(dispatchers.io) {
+            preferencesRepository.markTutorialSeen(com.raven.app.core.model.FeatureTutorialIds.SEARCH_DISCOVER)
+        }
+    }
+
+    fun skipAllTutorials() {
+        viewModelScope.launch(dispatchers.io) {
+            preferencesRepository.markTutorialsSeen(com.raven.app.core.model.FeatureTutorialIds.ALL)
+        }
     }
 
     fun applySavedSearch(savedSearch: SavedSearch) {
@@ -1638,30 +1671,12 @@ class SearchViewModel(
             effectiveBlockedTerms: Collection<String>,
             tagDictionary: TagDictionary,
             maxTerms: Int = MAX_SERVER_EXCLUDE_BLOCKED_TERMS,
-        ): List<String> {
-            if (effectiveBlockedTerms.isEmpty()) return existingExcludeTags
-            val result = LinkedHashSet<String>()
-            val seenLower = HashSet<String>()
-            for (raw in existingExcludeTags) {
-                val trimmed = raw.trim()
-                if (trimmed.isNotEmpty() && seenLower.add(trimmed.lowercase())) {
-                    result.add(trimmed)
-                }
-            }
-            val cap = maxOf(result.size, maxTerms)
-            for (term in effectiveBlockedTerms) {
-                if (result.size >= cap) break
-                val englishSlugs = tagDictionary.canonicalEnglishSlugs(term)
-                for (slug in englishSlugs) {
-                    if (result.size >= cap) break
-                    val cleaned = slug.trim()
-                    if (cleaned.isNotEmpty() && seenLower.add(cleaned.lowercase())) {
-                        result.add(cleaned)
-                    }
-                }
-            }
-            return result.toList()
-        }
+        ): List<String> = BlockedTermExcludeInjection.merge(
+            existingExcludeTags = existingExcludeTags,
+            effectiveBlockedTerms = effectiveBlockedTerms,
+            tagDictionary = tagDictionary,
+            maxTerms = maxTerms,
+        )
 
         val CROSS_SITE_SORTS: List<FeedSort> = listOf(
             FeedSort.RELEVANCE,
