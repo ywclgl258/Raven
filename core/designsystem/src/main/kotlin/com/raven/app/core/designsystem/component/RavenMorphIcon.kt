@@ -1,9 +1,6 @@
 package com.raven.app.core.designsystem.component
 
-import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.Animatable
-import androidx.compose.animation.core.snap
-import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.size
@@ -17,6 +14,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.Shape
@@ -25,6 +23,7 @@ import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Fill
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.role
@@ -41,11 +40,20 @@ import com.raven.app.core.designsystem.theme.LocalRavenColors
 import com.raven.app.core.designsystem.theme.RavenMotion
 import kotlin.math.min
 
+internal fun boundedMorphTint(start: Color, target: Color, progress: Float): Color {
+    val bounded = if (progress.isFinite()) progress.coerceIn(0f, 1f) else 1f
+    return lerp(start, target, bounded)
+}
+
 private class MorphIconRuntimeState(
     initialGlyph: RavenMorphGlyph,
     preset: MorphSpringPreset,
+    initialTint: Color,
+    initialTargetTint: Color?,
 ) {
     var targetGlyph: RavenMorphGlyph = initialGlyph
+    var startTint: Color = initialTint
+    var targetTint: Color? = initialTargetTint
     var plan: MorphPlan = MorphIconEngine.buildPlan(initialGlyph, initialGlyph)
     var buffers: MutableList<FloatArray> = plan.allocateBuffers().toMutableList()
     var paths: MutableList<Path> = MutableList(plan.pairs.size) { Path() }
@@ -79,7 +87,9 @@ private class MorphIconRuntimeState(
  *
  * - Runs a `withFrameNanos` loop ONLY while the spring is active (zero idle GPU/CPU cost).
  * - Snapshots in-flight geometry and preserves clamped spring velocity when [glyph] changes mid-morph.
- * - Snaps immediately with zero frame loops when [LocalMotionReduced] is `true`.
+ * - When [targetTint] is supplied, shape and Compose perceptual color interpolation share one
+ *   bounded progress; spring overshoot never crosses either visual endpoint.
+ * - Clips to the icon bounds and snaps immediately with zero frame loops when [LocalMotionReduced] is `true`.
  */
 @Composable
 fun RavenMorphIcon(
@@ -90,19 +100,24 @@ fun RavenMorphIcon(
     strokeWidth: Dp = 2.dp,
     springPreset: MorphSpringPreset = MorphSpringPreset.SNAPPY,
     contentDescription: String? = null,
+    targetTint: Color? = null,
 ) {
     val motionReduced = LocalMotionReduced.current
-    val runtime = remember { MorphIconRuntimeState(glyph, springPreset) }
+    val runtime = remember { MorphIconRuntimeState(glyph, springPreset, tint, targetTint) }
 
-    LaunchedEffect(glyph, motionReduced, springPreset) {
+    LaunchedEffect(glyph, targetTint, motionReduced, springPreset) {
         runtime.spring.preset = springPreset
         val glyphChanged = runtime.targetGlyph != glyph
+        val tintChanged = runtime.targetTint != targetTint
+        val visualChanged = glyphChanged || tintChanged
         if (motionReduced) {
-            if (glyphChanged || runtime.spring.isRunning) {
+            if (visualChanged || runtime.spring.isRunning) {
                 val staticPlan = MorphIconEngine.buildPlan(glyph, glyph)
                 runtime.ensureCapacity(staticPlan)
                 runtime.plan = staticPlan
                 runtime.targetGlyph = glyph
+                runtime.startTint = tint
+                runtime.targetTint = targetTint
                 runtime.spring.snapTo(1f)
                 MorphIconEngine.interpolatePlan(staticPlan, 1f, runtime.buffers)
                 runtime.frameTick += 1f
@@ -110,14 +125,19 @@ fun RavenMorphIcon(
             return@LaunchedEffect
         }
 
-        if (glyphChanged) {
+        if (visualChanged) {
             val currentT = runtime.spring.value
+            val currentTint = runtime.targetTint?.let { currentTarget ->
+                boundedMorphTint(runtime.startTint, currentTarget, currentT)
+            } ?: tint
             val currentSnapshot = MorphIconEngine.snapshotBuffers(runtime.plan, runtime.buffers, currentT)
             val targetSampled = MorphIconEngine.resampleGlyph(glyph)
             val nextPlan = MorphIconEngine.buildPlan(currentSnapshot, targetSampled)
             runtime.ensureCapacity(nextPlan)
             runtime.plan = nextPlan
             runtime.targetGlyph = glyph
+            runtime.startTint = currentTint
+            runtime.targetTint = targetTint
             runtime.spring.start(fromValue = 0f, toValue = 1f, preserveVelocity = true)
             MorphIconEngine.interpolatePlan(nextPlan, 0f, runtime.buffers)
             runtime.frameTick += 1f
@@ -148,6 +168,7 @@ fun RavenMorphIcon(
     Canvas(
         modifier = modifier
             .size(size)
+            .clipToBounds()
             .then(semanticsModifier),
     ) {
         // Observe frameTick strictly inside draw scope to avoid recomposition during morphing.
@@ -161,6 +182,9 @@ fun RavenMorphIcon(
 
         val plan = runtime.plan
         val t = runtime.spring.value.coerceIn(0f, 1f)
+        val resolvedTint = runtime.targetTint?.let { currentTarget ->
+            boundedMorphTint(runtime.startTint, currentTarget, t)
+        } ?: tint
         val pairCount = plan.pairs.size
 
         for (i in 0 until pairCount) {
@@ -199,14 +223,14 @@ fun RavenMorphIcon(
             if (fillAlpha > 0.01f) {
                 drawPath(
                     path = path,
-                    color = tint.copy(alpha = tint.alpha * fillAlpha),
+                    color = resolvedTint.copy(alpha = resolvedTint.alpha * fillAlpha),
                     style = Fill,
                 )
             }
             if (strokeAlpha > 0.01f) {
                 drawPath(
                     path = path,
-                    color = tint.copy(alpha = tint.alpha * strokeAlpha),
+                    color = resolvedTint.copy(alpha = resolvedTint.alpha * strokeAlpha),
                     style = Stroke(
                         width = strokePx,
                         cap = StrokeCap.Round,
@@ -219,8 +243,8 @@ fun RavenMorphIcon(
 }
 
 /**
- * Convenience toggle icon pairing [RavenMorphIcon] with animated [activeTint] / [inactiveTint]
- * color transition and an optional subtle activation scale kick, respecting [LocalMotionReduced].
+ * Convenience toggle icon pairing [RavenMorphIcon] with synchronized [activeTint] / [inactiveTint]
+ * color transition and an optional, bounded 6% activation scale kick, respecting [LocalMotionReduced].
  */
 @Composable
 fun RavenMorphToggleIcon(
@@ -237,19 +261,7 @@ fun RavenMorphToggleIcon(
     contentDescription: String? = null,
 ) {
     val motionReduced = LocalMotionReduced.current
-    val resolvedTint by animateColorAsState(
-        targetValue = if (active) activeTint else inactiveTint,
-        animationSpec = if (motionReduced) {
-            snap()
-        } else {
-            tween(
-                durationMillis = RavenMotion.CHIP_TRANSITION_DURATION_MS,
-                easing = RavenMotion.HarmonyDecelerationEasing,
-            )
-        },
-        label = "ravenMorphToggleTint",
-    )
-
+    val targetTint = if (active) activeTint else inactiveTint
     val scaleAnim = remember { Animatable(1f) }
     val kickTriggered = remember { booleanArrayOf(false) }
 
@@ -260,19 +272,27 @@ fun RavenMorphToggleIcon(
             return@LaunchedEffect
         }
         if (active && !kickTriggered[0]) {
-            scaleAnim.snapTo(1f)
             scaleAnim.animateTo(
-                targetValue = 1.14f,
-                animationSpec = spring(dampingRatio = 0.55f, stiffness = 900f),
+                targetValue = 1.06f,
+                animationSpec = tween(
+                    durationMillis = 110,
+                    easing = RavenMotion.HarmonyDecelerationEasing,
+                ),
             )
             scaleAnim.animateTo(
                 targetValue = 1f,
-                animationSpec = spring(dampingRatio = 0.65f, stiffness = 550f),
+                animationSpec = tween(
+                    durationMillis = 160,
+                    easing = RavenMotion.HarmonyDecelerationEasing,
+                ),
             )
         } else if (!active) {
             scaleAnim.animateTo(
                 targetValue = 1f,
-                animationSpec = spring(dampingRatio = 0.85f, stiffness = 600f),
+                animationSpec = tween(
+                    durationMillis = 140,
+                    easing = RavenMotion.HarmonyDecelerationEasing,
+                ),
             )
         }
         kickTriggered[0] = active
@@ -280,7 +300,7 @@ fun RavenMorphToggleIcon(
 
     RavenMorphIcon(
         glyph = if (active) activeGlyph else inactiveGlyph,
-        tint = resolvedTint,
+        tint = targetTint,
         modifier = modifier.graphicsLayer {
             val s = scaleAnim.value
             scaleX = s
@@ -290,6 +310,7 @@ fun RavenMorphToggleIcon(
         strokeWidth = strokeWidth,
         springPreset = springPreset,
         contentDescription = contentDescription,
+        targetTint = targetTint,
     )
 }
 

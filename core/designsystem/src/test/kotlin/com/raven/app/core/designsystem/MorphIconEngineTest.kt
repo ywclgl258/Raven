@@ -135,6 +135,27 @@ class MorphIconEngineTest {
     }
 
     @Test
+    fun `interpolation clamps overshooting spring progress to exact shape endpoints`() {
+        val plan = MorphIconEngine.buildPlan(RavenMorphIcons.Play, RavenMorphIcons.Pause)
+        val expectedStart = plan.allocateBuffers()
+        val expectedEnd = plan.allocateBuffers()
+        val actual = plan.allocateBuffers()
+        MorphIconEngine.interpolatePlan(plan, 0f, expectedStart)
+        MorphIconEngine.interpolatePlan(plan, 1f, expectedEnd)
+
+        for (i in plan.pairs.indices) {
+            MorphIconEngine.interpolatePlan(plan, -0.35f, actual)
+            assertFloatArraysClose("Negative progress must clamp to Play", expectedStart[i], actual[i], 1e-4f)
+
+            MorphIconEngine.interpolatePlan(plan, 1.35f, actual)
+            assertFloatArraysClose("Overshoot must clamp to Pause", expectedEnd[i], actual[i], 1e-4f)
+
+            MorphIconEngine.interpolatePlan(plan, Float.NaN, actual)
+            assertFloatArraysClose("Non-finite progress must resolve to Pause", expectedEnd[i], actual[i], 1e-4f)
+        }
+    }
+
+    @Test
     fun `MorphSpring converges for all presets and BOUNCY exhibits overshoot`() {
         for (preset in MorphSpringPreset.entries) {
             val spring = MorphSpring(preset)

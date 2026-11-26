@@ -126,6 +126,8 @@ fun RavenBloubPresence(
 
     LaunchedEffect(motionReduced) {
         if (motionReduced) {
+            tapSquash.snapTo(0f)
+            winkProgress.snapTo(0f)
             frameTimeSec.floatValue = STATIC_TIME_SEC
             return@LaunchedEffect
         }
@@ -159,14 +161,20 @@ fun RavenBloubPresence(
                     feedback.perform(RavenFeedbackEffect.TAP)
                     if (!motionReduced) {
                         scope.launch {
-                            tapSquash.snapTo(1f)
+                            tapSquash.animateTo(
+                                targetValue = 1f,
+                                animationSpec = tween(durationMillis = 70, easing = FastOutSlowInEasing),
+                            )
                             tapSquash.animateTo(
                                 targetValue = 0f,
-                                animationSpec = spring(dampingRatio = 0.45f, stiffness = 420f),
+                                animationSpec = spring(dampingRatio = 0.58f, stiffness = 420f),
                             )
                         }
                         scope.launch {
-                            winkProgress.snapTo(1f)
+                            winkProgress.animateTo(
+                                targetValue = 1f,
+                                animationSpec = tween(durationMillis = 70, easing = FastOutSlowInEasing),
+                            )
                             winkProgress.animateTo(
                                 targetValue = 0f,
                                 animationSpec = tween(durationMillis = 260, easing = FastOutSlowInEasing),
@@ -206,7 +214,7 @@ fun RavenBloubPresence(
 
             // Apply living idle breathing and interactive squash-and-stretch
             val breath = if (motionReduced) 0f else loopNoise(t, period = 3.6f, seed = 0.7f)
-            val bounce = tapSquash.value
+            val bounce = tapSquash.value.coerceIn(0f, 1f)
             val moodPulse = when (currentMood) {
                 BloubMood.SUCCESS -> if (motionReduced) 0f else sin(t * 5.2f) * 0.03f
                 BloubMood.ERROR -> if (motionReduced) 0f else loopNoise(t, period = 1.6f, seed = 4.2f) * 0.025f
@@ -333,7 +341,7 @@ fun RavenBloubPresence(
                 mood = currentMood,
                 t = t,
                 motionReduced = motionReduced,
-                winkAmount = winkProgress.value,
+                winkAmount = winkProgress.value.coerceIn(0f, 1f),
                 centerX = faceCenterX,
                 centerY = faceCenterY,
                 baseRadius = baseRadius,

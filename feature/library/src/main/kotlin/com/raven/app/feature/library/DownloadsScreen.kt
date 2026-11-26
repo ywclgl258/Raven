@@ -1146,7 +1146,7 @@ private fun DownloadPosterCard(
                     style = MaterialTheme.typography.labelSmall.tabular(),
                     color = colors.warning,
                 )
-            } else if (item.status == DownloadStatus.FAILED) {
+            } else if (item.status == DownloadStatus.FAILED || (item.status == DownloadStatus.COMPLETED && !item.errorMessage.isNullOrBlank())) {
                 val errText = buildString {
                     item.errorCategory?.let { append("${it.displayLabel()}：") }
                     append(item.errorMessage?.takeIf { it.isNotBlank() } ?: "下载失败")
@@ -1333,7 +1333,7 @@ private fun DownloadItemCard(
                         style = MaterialTheme.typography.labelSmall.tabular(),
                         color = colors.warning,
                     )
-                } else if (item.status == DownloadStatus.FAILED) {
+                } else if (item.status == DownloadStatus.FAILED || (item.status == DownloadStatus.COMPLETED && !item.errorMessage.isNullOrBlank())) {
                     val errText = buildString {
                         item.errorCategory?.let { append("${it.displayLabel()}：") }
                         append(item.errorMessage?.takeIf { it.isNotBlank() } ?: "下载失败")

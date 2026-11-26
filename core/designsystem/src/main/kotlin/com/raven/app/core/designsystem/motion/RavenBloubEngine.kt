@@ -10,8 +10,8 @@ import kotlin.math.sin
 /** Fixed radial sample count around every [BloubSilhouette] contour. */
 const val PROFILE_SAMPLES: Int = 64
 
-/** Spring overshoot scale applied to [RavenPopBadge] when unread/item counts increase. */
-const val NOTIF_POP_SCALE: Float = 1.14f
+/** Bounded peak scale applied to [RavenPopBadge] when unread/item counts increase. */
+const val NOTIF_POP_SCALE: Float = 1.08f
 
 private const val TWO_PI: Float = (2.0 * PI).toFloat()
 private const val PI_F: Float = PI.toFloat()

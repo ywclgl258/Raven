@@ -24,7 +24,7 @@ class RavenBloubEngineTest {
     @Test
     fun `profile constants and mood silhouettes stay bounded and consistent`() {
         assertEquals(64, PROFILE_SAMPLES)
-        assertEquals(1.14f, NOTIF_POP_SCALE, 0.0001f)
+        assertEquals(1.08f, NOTIF_POP_SCALE, 0.0001f)
 
         for (mood in BloubMood.entries) {
             val silhouette = BloubSilhouettes.forMood(mood)

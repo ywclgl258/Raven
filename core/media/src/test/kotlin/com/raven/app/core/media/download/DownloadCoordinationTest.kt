@@ -7,9 +7,12 @@ import com.raven.app.core.database.repository.DownloadStateRepository
 import com.raven.app.core.media.TestMediaFixtures
 import com.raven.app.core.media.reader.GalleryPageRepository
 import com.raven.app.core.media.reader.GalleryStorageException
+import com.raven.app.core.media.storage.DiskSidecarRecord
 import com.raven.app.core.media.storage.LocalLibraryImporter
 import com.raven.app.core.media.storage.StorageRootManager
 import com.raven.app.core.model.DownloadErrorCategory
+import com.raven.app.core.model.DownloadItem
+import com.raven.app.core.model.DownloadKind
 import com.raven.app.core.model.DownloadStatus
 import com.raven.app.core.model.GalleryDetail
 import com.raven.app.core.model.GalleryPage
@@ -277,6 +280,48 @@ class DownloadCoordinationTest {
         assertTrue(idA != GalleryDownloadService.FOREGROUND_NOTIFICATION_ID)
     }
 
+    @Test
+    fun `stale completed sidecar cannot overwrite newer projection or storage warning`() {
+        val existing = DownloadItem(
+            id = "r34v:v1:1080p",
+            siteId = SiteId.R34V,
+            mediaId = "v1",
+            url = "https://rule34video.com/v1",
+            title = "new-title",
+            kind = DownloadKind.VIDEO,
+            status = DownloadStatus.COMPLETED,
+            downloadedBytes = 200L,
+            errorCategory = DownloadErrorCategory.STORAGE,
+            errorMessage = "sidecar write failed",
+            updatedAt = 200L,
+        )
+        val oldSidecar = DiskSidecarRecord(
+            kind = DownloadKind.VIDEO,
+            siteId = SiteId.R34V,
+            mediaId = "v1",
+            quality = "1080p",
+            title = "old-title",
+            bytes = 100L,
+            updatedAt = 100L,
+            status = DownloadStatus.COMPLETED,
+        )
+
+        assertTrue(shouldSkipStaleCompletedVideoSidecar(oldSidecar, existing))
+        assertFalse(shouldSkipStaleCompletedVideoSidecar(oldSidecar.copy(updatedAt = 300L), existing))
+        assertFalse(
+            shouldSkipStaleCompletedVideoSidecar(
+                oldSidecar.copy(sourceRoot = "/shared"),
+                existing.copy(localPath = "/private"),
+            ),
+        )
+        assertFalse(
+            shouldSkipStaleCompletedVideoSidecar(
+                oldSidecar.copy(status = DownloadStatus.FAILED),
+                existing,
+            ),
+        )
+    }
+
     // ---- Deletion Generation Guard ----
 
     @Test
@@ -285,18 +330,23 @@ class DownloadCoordinationTest {
         val id = "r34v:vid-42:720p"
 
         val capturedGen = guard.currentGeneration(id)
+        val scanGeneration = guard.globalGeneration()
         assertFalse(guard.isStale(id, capturedGen))
 
         // User deletes while refresh is in flight
         val removalToken = guard.beginRemoval(id)
         assertNotNull(removalToken)
+        assertTrue(guard.globalGeneration() > scanGeneration)
+        val completedRemovalGeneration = guard.globalGeneration()
         assertTrue(guard.isRemoving(id))
         assertTrue(guard.isStale(id, capturedGen))
         // Duplicate removal while already in-flight returns null
         assertNull(guard.beginRemoval(id))
+        assertEquals(completedRemovalGeneration, guard.globalGeneration())
 
         // Even after removal finishes, the old refresh's generation remains permanently stale
         guard.completeRemoval(id, removalToken!!)
+        assertEquals(completedRemovalGeneration, guard.globalGeneration())
         assertFalse(guard.isRemoving(id))
         assertTrue(guard.isStale(id, capturedGen))
         assertFalse(guard.isStale(id, guard.currentGeneration(id)))

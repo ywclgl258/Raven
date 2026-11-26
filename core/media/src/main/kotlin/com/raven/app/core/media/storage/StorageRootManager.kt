@@ -17,6 +17,7 @@ import com.raven.app.core.model.DownloadStatus
 import com.raven.app.core.model.SiteId
 import com.raven.app.core.model.StorageLocation
 import java.io.File
+import java.io.FileOutputStream
 import java.io.IOException
 import java.security.MessageDigest
 import java.util.Locale
@@ -223,7 +224,7 @@ class StorageRootManager(
      * library on fresh reinstall when private storage is empty.
      */
     suspend fun applyPendingOnColdStart(): StorageStartupResult = withContext(dispatchers.io) {
-        val currentSettings = settingsDataStore?.currentSettings()
+        val currentSettings = settingsDataStore?.readPersistedSettings()
         val storedLocation = currentSettings?.storageLocation ?: configuredLocation
         val storedPending = currentSettings?.pendingStorageLocation ?: pendingLocation
 
@@ -435,6 +436,7 @@ class StorageRootManager(
         _sidecarRevision.update { it + 1 }
     }
 
+    @Synchronized
     fun removeVideoSidecar(siteId: SiteId, mediaId: String, quality: String) {
         readableLayouts().forEach { layout ->
             videoSidecarFile(siteId, mediaId, quality, layout).delete()
@@ -458,6 +460,7 @@ class StorageRootManager(
         _sidecarRevision.update { it + 1 }
     }
 
+    @Synchronized
     fun removeComicSidecar(siteId: SiteId, mediaId: String, sourceRoot: String = "") {
         val targets = if (sourceRoot.isBlank()) {
             readableLayouts().map { comicSidecarFile(siteId, mediaId, it) }
@@ -472,6 +475,7 @@ class StorageRootManager(
         _sidecarRevision.update { it + 1 }
     }
 
+    @Synchronized
     fun readSidecar(file: File): DiskSidecarRecord? = runCatching {
         if (!file.isFile || file.length() !in 1L..MAX_SIDECAR_BYTES) return null
         json.decodeFromString(DiskSidecarRecord.serializer(), file.readText())
@@ -760,16 +764,25 @@ class StorageRootManager(
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) info.longVersionCode.toInt() else info.versionCode
     }.getOrDefault(0)
 
-    private fun atomicWriteText(target: File, text: String) {
+    @Synchronized
+    internal fun atomicWriteText(
+        target: File,
+        text: String,
+        renameFile: (from: File, to: File) -> Boolean = { from, to -> from.renameTo(to) },
+    ) {
         if (runCatching { target.isFile && target.readText() == text }.getOrDefault(false)) return
         val parent = checkNotNull(target.parentFile) { "Invalid sidecar path: ${target.path}" }
         check(parent.isDirectory || parent.mkdirs()) { "无法创建索引目录：${parent.path}" }
         val temp = File(parent, "${target.name}.${System.nanoTime()}.part")
         try {
-            temp.writeText(text)
-            if (!temp.renameTo(target)) {
-                if (target.exists()) target.delete()
-                check(temp.renameTo(target)) { "无法写入下载索引：${target.name}" }
+            FileOutputStream(temp).use { output ->
+                output.write(text.toByteArray(Charsets.UTF_8))
+                output.fd.sync()
+            }
+            // renameTo maps to an atomic replacement on Android/Linux. If the platform refuses
+            // the replacement, keep the previous valid sidecar instead of deleting it first.
+            if (!renameFile(temp, target)) {
+                throw IOException("无法写入下载索引：${target.name}")
             }
         } finally {
             temp.delete()

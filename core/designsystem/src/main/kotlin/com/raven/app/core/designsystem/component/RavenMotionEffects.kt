@@ -56,12 +56,26 @@ import kotlin.math.sin
 
 private const val BURST_DURATION_MS: Int = 380
 private const val BURST_SPARK_COUNT: Int = 7
-private const val SQUASH_PRESS_SX: Float = 1.05f
-private const val SQUASH_PRESS_SY: Float = 0.93f
+internal const val SQUASH_PRESS_SX: Float = 1.04f
+internal const val SQUASH_PRESS_SY: Float = 1f / SQUASH_PRESS_SX
+
+internal fun ravenBurstSparkEnvelope(progress: Float): Float {
+    if (!progress.isFinite()) return 0f
+    return sin(progress.coerceIn(0f, 1f) * PI.toFloat()).coerceIn(0f, 1f)
+}
+
+internal fun ravenBurstSparkScale(index: Int): Float {
+    val slot = ((index * 2) % 3 + 3) % 3
+    return 0.88f + slot * 0.12f
+}
+
+internal fun shouldRestartBurst(isRunning: Boolean, progress: Float): Boolean =
+    !isRunning || !progress.isFinite() || progress <= 0f || progress >= 1f
 
 /**
  * Zero-recomposition `ModifierNodeElement` that fires a crisp 380ms radial hairline halo and
- * spiral micro-sparks whenever [trigger] transitions to a truthy or incremented active state.
+ * gently varied spiral micro-sparks whenever [trigger] transitions to a truthy or incremented
+ * active state. Retriggers coalesce with the visible burst instead of snapping it back to zero.
  *
  * No-ops on initial composition and whenever [LocalMotionReduced] is true. Resolves
  * [Color.Unspecified] via `currentValueOf(LocalRavenColors).crimson`.
@@ -152,6 +166,7 @@ private class RavenBurstFeedbackNode(
 
     private fun fireBurst() {
         if (!isAttached || !enabled) return
+        if (!shouldRestartBurst(burstJob?.isActive == true, burstProgress.value)) return
         if (currentValueOf(LocalMotionReduced)) {
             burstJob?.cancel()
             burstJob = coroutineScope.launch {
@@ -176,7 +191,7 @@ private class RavenBurstFeedbackNode(
     override fun ContentDrawScope.draw() {
         drawContent()
         val progress = burstProgress.value
-        if (!enabled || progress <= 0f || progress >= 1f || size.minDimension <= 0f) return
+        if (!enabled || currentValueOf(LocalMotionReduced) || progress <= 0f || progress >= 1f || size.minDimension <= 0f) return
 
         val resolvedColor = if (burstColor == Color.Unspecified) {
             currentValueOf(LocalRavenColors).crimson
@@ -194,7 +209,7 @@ private class RavenBurstFeedbackNode(
             style = Stroke(width = 1.dp.toPx()),
         )
 
-        val sparkEnvelope = sin(progress * PI.toFloat()).coerceIn(0f, 1f)
+        val sparkEnvelope = ravenBurstSparkEnvelope(progress)
         val sparkRadius = (1.1.dp.toPx() * (0.6f + 0.5f * sparkEnvelope)).coerceAtLeast(1f)
         val sparkAlpha = (sparkEnvelope * 0.90f).coerceIn(0f, 1f)
         val twoPi = (2.0 * PI).toFloat()
@@ -202,10 +217,11 @@ private class RavenBurstFeedbackNode(
         for (i in 0 until BURST_SPARK_COUNT) {
             val baseAngle = twoPi * i / BURST_SPARK_COUNT
             val spiralAngle = baseAngle + progress * 0.72f
-            val dist = baseRadius * (0.48f + 1.12f * progress)
+            val distanceScale = 0.96f + (i % 3) * 0.04f
+            val dist = baseRadius * (0.48f + 1.12f * progress) * distanceScale
             drawCircle(
                 color = resolvedColor.copy(alpha = sparkAlpha),
-                radius = sparkRadius,
+                radius = sparkRadius * ravenBurstSparkScale(i),
                 center = Offset(
                     x = center.x + dist * cos(spiralAngle),
                     y = center.y + dist * sin(spiralAngle),
@@ -234,8 +250,8 @@ private fun shouldFireBurst(previous: Any?, current: Any?): Boolean {
 }
 
 /**
- * Volume-preserving organic squash-and-stretch press feedback (`sx = 1.05f`, `sy = 0.93f` on press,
- * snappy spring rebound on release) via [ModifierNodeElement], respecting [LocalMotionReduced].
+ * Volume-preserving organic squash-and-stretch press feedback (`sx = 1.04f`, `sy = 1 / sx` on
+ * press, gently damped spring rebound on release) via [ModifierNodeElement], respecting [LocalMotionReduced].
  */
 fun Modifier.ravenSquashPress(
     interactionSource: InteractionSource? = null,
@@ -355,7 +371,7 @@ private class RavenSquashPressNode(
                 val spec = if (isPressed) {
                     RavenMotion.responsiveSpringSpec<Float>()
                 } else {
-                    spring(dampingRatio = 0.62f, stiffness = 480f)
+                    spring(dampingRatio = 0.72f, stiffness = 460f)
                 }
                 launch { sxAnim.animateTo(targetSx, spec) }
                 launch { syAnim.animateTo(targetSy, spec) }
@@ -398,8 +414,9 @@ private class RavenSquashPressNode(
 }
 
 /**
- * Compact numeric pill badge with bloub-inspired [NOTIF_POP_SCALE] (`1.14f`) spring pop whenever
+ * Compact numeric pill badge with a bounded [NOTIF_POP_SCALE] (`1.08f`) two-stage pop whenever
  * [count] increases, preserving [RavenTabularTextStyle] and `99+` overflow formatting.
+ * Rapid count changes continue from the visible scale without a snap or an abandoned mid-pop state.
  * Renders nothing when `count <= 0`.
  */
 @Composable
@@ -426,10 +443,27 @@ fun RavenPopBadge(
             return@LaunchedEffect
         }
         if (count > lastCount) {
-            popScale.snapTo(NOTIF_POP_SCALE)
+            popScale.animateTo(
+                targetValue = NOTIF_POP_SCALE,
+                animationSpec = tween(
+                    durationMillis = 90,
+                    easing = RavenMotion.HarmonyDecelerationEasing,
+                ),
+            )
             popScale.animateTo(
                 targetValue = 1f,
-                animationSpec = spring(dampingRatio = 0.48f, stiffness = 460f),
+                animationSpec = tween(
+                    durationMillis = 180,
+                    easing = RavenMotion.HarmonyDecelerationEasing,
+                ),
+            )
+        } else {
+            popScale.animateTo(
+                targetValue = 1f,
+                animationSpec = tween(
+                    durationMillis = 120,
+                    easing = RavenMotion.HarmonyDecelerationEasing,
+                ),
             )
         }
         lastCount = count

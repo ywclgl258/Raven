@@ -73,12 +73,12 @@ flowchart LR
 | `TagDictionaryRepository` | `tag_translations` | 合并远程/用户标签翻译并维护本地词典运行时快照 |
 | `MediaTagCacheRepository` | `media_tag_cache` | 按作品读写标签 JSON 缓存，供本地筛选与屏蔽使用 |
 | `PreferencesRepository` | `SettingsDataStore`, `playback_preferences`, `reader_preferences` | 偏好统一门面：负责解析 2 级播放偏好（全局 → 站点）与 3 级阅读偏好（全局 → 站点 → 单本）合并生效值 |
-| `BackupDataRepository` | 除 `download_items`、`browse_positions`、`media_tag_cache` 外的 17 张表 + `SettingsDataStore` | 单一 Room 事务内导出/合并快照（调用 `BackupMerger`）；严格排除凭证、密钥、本地存储路径与下载队列；导出 `LOCAL` 单图收藏前剥离本地磁盘路径；Room 事务失败时全量回滚且**绝不修改 `SettingsDataStore`** |
+| `BackupDataRepository` | 除 `download_items`、`browse_positions`、`media_tag_cache` 外的 17 张表 + `SettingsDataStore` | 同一互斥锁串行化导出与恢复，避免 Room / DataStore 快照跨代；单一 Room 事务内导出/合并快照（调用 `BackupMerger`）；严格排除凭证、密钥、本地存储路径与下载队列；导出 `LOCAL` 单图收藏前剥离本地磁盘路径；Room 事务失败时全量回滚且**绝不修改 `SettingsDataStore`** |
 
 ### 1.3 `SettingsDataStore` 37 个固定 Key + 2 类动态站点 Key
 
 - **实现路径**：`core/database/src/main/kotlin/com/raven/app/core/database/datastore/SettingsDataStore.kt`
-- **持久化文件**：`raven_settings.preferences_pb`（读取遇 `IOException` 时降级返回 `emptyPreferences()`，文件损坏由 `ReplaceFileCorruptionHandler` 替换为空偏好）。
+- **持久化文件**：`raven_settings.preferences_pb`（真正的文件损坏由 `ReplaceFileCorruptionHandler` 替换为空偏好；界面与策略读取采用有上限退避重试，避免崩溃或静默停止；存储根切换与备份快照使用严格读取，普通 `IOException` 直接向上传递，绝不把瞬时故障伪装成默认设置）。
 - **WebDAV 边界**：DataStore 只保存 `webdav_last_sync_at`；服务器地址、账号、密码、备份口令、远端文件名与自动同步开关由 `WebDavCredentialStore` 使用 AndroidKeyStore AES-256-GCM 加密保存。
 
 | # | Key 名称 | 值类型 | 默认值 | 可跨设备备份 (`PORTABLE_BACKUP_KEYS`) | 说明与约束 |
@@ -373,7 +373,7 @@ flowchart LR
   - 视频因直链过期触发 `STATE_FAILED` 时，引擎会自动发起 1 次异步直链刷新并重新入队。
   - 若用户在异步刷链期间删除了该任务，普通异步回调容易把旧任务重新入队造成“删不掉/僵尸复活”。
   - `DeletionGenerationGuard` 为每个 `downloadId` 维护单调递增的**删除代次（generation）**与 `inFlightRemovals` `CompletableDeferred`：刷链前记录代次，刷链返回准备重新入队前必须校验代次未递增且无在途删除，否则直接丢弃；若删除在刷链期间发生，后续重下还会等待物理删除完成。
-- **API 35 `dataSync` 超时与旁车落盘**：`VideoDownloadService.onTimeout()` 立即调用 `pauseAllForTimeout()` + `stopSelf()` 避免系统抛 `ForegroundServiceDidNotStopInTimeException`；下载完成后写入 `DiskSidecarRecord` 元数据文件，使卸载重装后仍可从共享目录重建 Room 索引。
+- **API 35 `dataSync` 超时与旁车落盘**：`VideoDownloadService.onTimeout()` 立即调用 `pauseAllForTimeout()` + `stopSelf()` 避免系统抛 `ForegroundServiceDidNotStopInTimeException`；下载完成与 Media3 初始化投影时都会校验/补写 `DiskSidecarRecord` 元数据文件，使卸载重装后仍可从共享目录重建 Room 索引。仅当完整缓存确实位于当前存储根时才写旁车；临时文件先 `fd.sync()` 再原子重命名，发布失败保留旧索引并在下载记录/下载页标记 `STORAGE` 警告，后续启动自动重试；投影与删除通过同一代次互斥，避免已删记录被延迟任务复活。
 
 ### 5.3 图集下载引擎、错因分类与审计修复（`GalleryDownloadEngine` & `DownloadErrorClassifier`）
 

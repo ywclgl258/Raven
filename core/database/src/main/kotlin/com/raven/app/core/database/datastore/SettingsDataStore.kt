@@ -22,10 +22,11 @@ import com.raven.app.core.model.ComicLanguage
 import com.raven.app.core.model.SiteId
 import com.raven.app.core.model.StorageLocation
 import java.io.IOException
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.retryWhen
 import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.builtins.MapSerializer
 import kotlinx.serialization.builtins.serializer
@@ -37,13 +38,22 @@ import kotlinx.serialization.builtins.serializer
 class SettingsDataStore(
     private val dataStore: DataStore<Preferences>,
 ) {
-    val settings: Flow<AppSettings> = dataStore.data
-        .catch { cause ->
-            if (cause is IOException) emit(emptyPreferences()) else throw cause
-        }
-        .map(::mapPreferences)
+    private val persistedSettings: Flow<AppSettings> = dataStore.data.map(::mapPreferences)
 
-    suspend fun currentSettings(): AppSettings = settings.first()
+    private fun Flow<AppSettings>.retryTransientIo(): Flow<AppSettings> = retryWhen { cause, attempt ->
+        if (cause !is IOException) throw cause
+        delay((attempt + 1).coerceAtMost(30L) * 1_000L)
+        true
+    }
+
+    // Long-lived UI/policy collectors wait and retry instead of crashing or silently completing.
+    val settings: Flow<AppSettings> = persistedSettings.retryTransientIo()
+
+    // One-shot UI work uses the same non-crashing policy and is cancelled with its caller.
+    suspend fun currentSettings(): AppSettings = persistedSettings.retryTransientIo().first()
+
+    // Storage-root selection and backup snapshots must never substitute defaults on an I/O error.
+    suspend fun readPersistedSettings(): AppSettings = persistedSettings.first()
 
     suspend fun setActiveSiteId(siteId: SiteId) {
         dataStore.edit { prefs ->
@@ -368,7 +378,7 @@ class SettingsDataStore(
      * Never exports device-local storage roots, tutorial flags, credentials, or keys.
      */
     suspend fun exportPortableSettings(): Map<String, String> {
-        val current = currentSettings()
+        val current = readPersistedSettings()
         return buildMap {
             put(KEY_ACTIVE_SITE_ID, current.activeSiteId.value)
             current.startupDefaultSiteId?.value?.let { put(KEY_STARTUP_DEFAULT_SITE_ID, it) }

@@ -2,6 +2,7 @@ package com.raven.app.core.database
 
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
+import androidx.datastore.preferences.core.emptyPreferences
 import app.cash.turbine.test
 import com.raven.app.core.database.datastore.SettingsDataStore
 import com.raven.app.core.database.model.AppSettings
@@ -13,6 +14,7 @@ import com.raven.app.core.model.SiteId
 import com.raven.app.core.model.StorageLocation
 import java.io.IOException
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
@@ -205,14 +207,39 @@ class SettingsDataStoreTest {
     }
 
     @Test
-    fun `recovers to default settings on DataStore IOException`() = runTest {
+    fun `propagates transient DataStore IOException instead of substituting default settings`() = runTest {
         val failingStore = object : DataStore<Preferences> {
-            override val data: Flow<Preferences> = flow { throw IOException("simulated corruption") }
+            override val data: Flow<Preferences> = flow { throw IOException("simulated transient read failure") }
             override suspend fun updateData(transform: suspend (t: Preferences) -> Preferences): Preferences =
                 throw IOException("read-only")
         }
         val settingsStore = SettingsDataStore(failingStore)
+
+        val error = runCatching { settingsStore.readPersistedSettings() }.exceptionOrNull()
+
+        assertTrue(error is IOException)
+        assertEquals("simulated transient read failure", error?.message)
+        assertTrue(runCatching { settingsStore.exportPortableSettings() }.exceptionOrNull() is IOException)
+    }
+
+    @Test
+    fun `long-lived settings subscribers retry transient IOException without completing`() = runTest {
+        var reads = 0
+        val recoveringStore = object : DataStore<Preferences> {
+            override val data: Flow<Preferences> = flow {
+                reads += 1
+                if (reads == 1) throw IOException("temporary provider failure")
+                emit(emptyPreferences())
+            }
+            override suspend fun updateData(transform: suspend (t: Preferences) -> Preferences): Preferences =
+                throw IOException("read-only")
+        }
+        val settingsStore = SettingsDataStore(recoveringStore)
+
+        assertEquals(AppSettings(), settingsStore.settings.first())
+        assertEquals(2, reads)
         assertEquals(AppSettings(), settingsStore.currentSettings())
+        assertEquals(3, reads)
     }
 
     @Test

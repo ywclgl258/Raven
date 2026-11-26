@@ -71,6 +71,15 @@ sealed interface OfflineMediaHandle {
     ) : OfflineMediaHandle
 }
 
+internal fun shouldSkipStaleCompletedVideoSidecar(
+    record: DiskSidecarRecord,
+    existing: DownloadItem?,
+): Boolean = record.kind == DownloadKind.VIDEO &&
+    record.status == DownloadStatus.COMPLETED &&
+    existing?.status == DownloadStatus.COMPLETED &&
+    (existing.localPath.isNullOrBlank() || record.sourceRoot.isBlank() || existing.localPath == record.sourceRoot) &&
+    record.updatedAt <= existing.updatedAt
+
 /**
  * Unified domain facade coordinating [VideoDownloadEngine], [GalleryDownloadEngine], disk-recovered
  * sidecars ([StorageRootManager]), and [DownloadStateRepository] (Room).
@@ -316,30 +325,68 @@ class DownloadCoordinator(
      */
     suspend fun syncFromDisk(): List<DownloadItem> = withContext(dispatchers.io) {
         runCatching { videoDownloadEngine.projectAllToRepository() }
-        val sidecars = storageRootManager.scanDiskSidecars(
-            isVideoCached = { key, root -> downloadCaches.isCached(key, root) },
-            inspectComicFolder = { siteId, folder, root ->
-                galleryPageRepository.inspectDiskBookForRecovery(siteId, folder, root)
-            },
-        )
-        val projected = mutableListOf<DownloadItem>()
-        for (record in sidecars) {
-            val id = record.compositeDownloadId
-            val existing = downloadStateRepository.getById(id)
-            // Do not clobber an active in-progress/paused task with a disk scan snapshot.
-            if (existing != null && existing.status in setOf(
-                    DownloadStatus.DOWNLOADING,
-                    DownloadStatus.QUEUED,
-                    DownloadStatus.RETRY_WAIT,
-                )
-            ) {
-                continue
+        repeat(2) {
+            val scanGeneration = videoDownloadEngine.removalGeneration()
+            val sidecars = storageRootManager.scanDiskSidecars(
+                isVideoCached = { key, root -> downloadCaches.isCached(key, root) },
+                inspectComicFolder = { siteId, folder, root ->
+                    galleryPageRepository.inspectDiskBookForRecovery(siteId, folder, root)
+                },
+            )
+            val projected = mutableListOf<DownloadItem>()
+            var removalInterrupted = false
+            for (record in sidecars) {
+                videoDownloadEngine.withMutationLock {
+                    if (scanGeneration != videoDownloadEngine.removalGeneration()) {
+                        removalInterrupted = true
+                    } else {
+                        val id = record.compositeDownloadId
+                        val verifiedRecord = if (record.kind == DownloadKind.VIDEO) {
+                            val layout = storageRootManager.resolveSourceLayout(record.sourceRoot)
+                            val current = storageRootManager.readSidecar(
+                                storageRootManager.videoSidecarFile(
+                                    record.siteId,
+                                    record.mediaId,
+                                    record.quality,
+                                    layout,
+                                ),
+                            )
+                            current?.copy(
+                                cacheKey = current.cacheKey.ifBlank { id },
+                                status = if (downloadCaches.isCached(id, record.sourceRoot)) {
+                                    DownloadStatus.COMPLETED
+                                } else {
+                                    DownloadStatus.FAILED
+                                },
+                                sourceRoot = record.sourceRoot,
+                            )
+                        } else {
+                            record
+                        }
+                        if (verifiedRecord != null) {
+                            val existing = downloadStateRepository.getById(id)
+                            // Do not clobber an active in-progress/paused task with a disk scan snapshot.
+                            val activeTask = existing != null && existing.status in setOf(
+                                DownloadStatus.DOWNLOADING,
+                                DownloadStatus.QUEUED,
+                                DownloadStatus.RETRY_WAIT,
+                            )
+                            // Media3 projection is newer than a stale sidecar on the same root.
+                            // Preserve its metadata/warning; allow FAILED and root moves through.
+                            val staleCompletedSidecar = shouldSkipStaleCompletedVideoSidecar(verifiedRecord, existing)
+                            if (!activeTask && !staleCompletedSidecar) {
+                                val item = sidecarToDownloadItem(verifiedRecord, existing)
+                                downloadStateRepository.upsert(item)
+                                projected += item
+                            }
+                        }
+                    }
+                }
+                if (removalInterrupted) break
             }
-            val item = sidecarToDownloadItem(record, existing)
-            downloadStateRepository.upsert(item)
-            projected += item
+            if (!removalInterrupted) return@withContext projected
         }
-        projected
+        emptyList()
     }
 
     // ---- Offline Availability Lookup (for ShelfRepository / SmartShelf / Queue / Player / Reader) ----

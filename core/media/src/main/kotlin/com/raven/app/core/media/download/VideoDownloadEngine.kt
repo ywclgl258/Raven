@@ -36,6 +36,7 @@ import com.raven.app.core.sitespi.MediaTransportHook
 import com.raven.app.core.sitespi.SiteRegistry
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicLong
 import kotlin.math.roundToInt
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
@@ -62,6 +63,9 @@ import org.koin.core.context.GlobalContext
 class DeletionGenerationGuard {
     private val generations = ConcurrentHashMap<String, Long>()
     private val inFlightRemovals = ConcurrentHashMap<String, CompletableDeferred<Unit>>()
+    private val globalRemovalGeneration = AtomicLong(0L)
+
+    fun globalGeneration(): Long = globalRemovalGeneration.get()
 
     fun currentGeneration(id: String): Long = generations[id] ?: 0L
 
@@ -77,6 +81,7 @@ class DeletionGenerationGuard {
         val deferred = CompletableDeferred<Unit>()
         if (inFlightRemovals.putIfAbsent(id, deferred) != null) return null
         generations.compute(id) { _, current -> (current ?: 0L) + 1L }
+        globalRemovalGeneration.incrementAndGet()
         return deferred
     }
 
@@ -149,6 +154,7 @@ class VideoDownloadEngine(
     private val submittedIds = ConcurrentHashMap.newKeySet<String>()
     private val lastProjectedSnapshots = ConcurrentHashMap<String, ProjectedProgressSnapshot>()
     private val projectionMutex = Mutex()
+    private val mutationMutex = Mutex()
     private var progressPollJob: Job? = null
 
     private val _changes = MutableStateFlow(0L)
@@ -268,9 +274,6 @@ class VideoDownloadEngine(
                                 isVideo = true,
                                 detail = detail.ifBlank { null },
                             )
-                            applicationScope.launch(dispatchers.io) {
-                                runCatching { writeCompletedSidecar(download, meta) }
-                            }
                         }
                     } else if (download.state == Download.STATE_STOPPED || download.state == Download.STATE_REMOVING) {
                         lastProjectedSnapshots.remove(id)
@@ -530,6 +533,10 @@ class VideoDownloadEngine(
     fun isCached(cacheKey: String, sourceRoot: String = ""): Boolean =
         downloadCaches.isCached(cacheKey, sourceRoot)
 
+    internal fun removalGeneration(): Long = generationGuard.globalGeneration()
+
+    internal suspend fun <T> withMutationLock(block: suspend () -> T): T = mutationMutex.withLock { block() }
+
     suspend fun projectAllToRepository() = withContext(dispatchers.io) {
         val current = listDownloads()
         for (download in current) {
@@ -540,11 +547,25 @@ class VideoDownloadEngine(
     private suspend fun projectDownloadToRepository(download: Download, finalException: Exception?) {
         projectionMutex.withLock {
             val id = download.request.id
-            if (generationGuard.isRemoving(id)) return
-            val authoritative = runCatching { manager.downloadIndex.getDownload(id) }.getOrNull() ?: download
+            val generation = generationGuard.currentGeneration(id)
+            if (generationGuard.isStale(id, generation)) return
+            val authoritative = runCatching { manager.downloadIndex.getDownload(id) }.getOrNull() ?: return
+            if (generationGuard.isStale(id, generation)) return
             val meta = decodeMeta(authoritative) ?: return
             val existing = downloadStateRepository.getById(id)
             val status = mapMedia3State(authoritative)
+            var recoveryIndexError: String? = null
+            if (status == DownloadStatus.COMPLETED) {
+                mutationMutex.withLock {
+                    if (generationGuard.isStale(id, generation)) return
+                    try {
+                        writeCompletedSidecar(authoritative, meta)
+                    } catch (_: Exception) {
+                        // Keep the media completion state, but expose that reinstall recovery needs retry.
+                        recoveryIndexError = "下载已完成，但恢复索引保存失败，将在下次启动自动重试"
+                    }
+                }
+            }
             val classified = if (status == DownloadStatus.FAILED && finalException != null) {
                 DownloadErrorClassifier.classify(finalException, DownloadStage.DOWNLOADING_PAGE, clockMs())
             } else {
@@ -562,72 +583,92 @@ class VideoDownloadEngine(
                 },
             )
             val totalBytes = authoritative.contentLength.takeIf { it > 0L } ?: existing?.totalBytes
-            downloadStateRepository.upsert(
-                DownloadItem(
-                    id = id,
-                    siteId = meta.siteId,
-                    mediaId = meta.mediaId,
-                    url = meta.url,
-                    title = meta.title,
-                    coverUrl = meta.coverUrl,
-                    kind = DownloadKind.VIDEO,
-                    status = status,
-                    quality = meta.quality,
-                    groupName = existing?.groupName ?: meta.groupName,
-                    progressFraction = fraction,
-                    completedUnits = if (status == DownloadStatus.COMPLETED) 1 else 0,
-                    totalUnits = 1,
-                    downloadedBytes = authoritative.bytesDownloaded.coerceAtLeast(0L),
-                    totalBytes = totalBytes,
-                    errorCategory = classified?.category
-                        ?: if (status == DownloadStatus.FAILED) DownloadErrorCategory.NETWORK else null,
-                    errorMessage = classified?.message ?: if (status == DownloadStatus.FAILED) "视频下载失败" else null,
-                    priority = existing?.priority ?: meta.priority,
-                    storageLocation = existing?.storageLocation ?: storageRootManager.activeLocation(),
-                    localPath = existing?.localPath ?: storageRootManager.layout().root.absolutePath,
-                    createdAt = existing?.createdAt ?: meta.createdAt.takeIf { it > 0L } ?: authoritative.startTimeMs,
-                    updatedAt = clockMs(),
-                ),
-            )
+            mutationMutex.withLock {
+                if (generationGuard.isStale(id, generation)) return
+                downloadStateRepository.upsert(
+                    DownloadItem(
+                        id = id,
+                        siteId = meta.siteId,
+                        mediaId = meta.mediaId,
+                        url = meta.url,
+                        title = meta.title,
+                        coverUrl = meta.coverUrl,
+                        kind = DownloadKind.VIDEO,
+                        status = status,
+                        quality = meta.quality,
+                        groupName = existing?.groupName ?: meta.groupName,
+                        progressFraction = fraction,
+                        completedUnits = if (status == DownloadStatus.COMPLETED) 1 else 0,
+                        totalUnits = 1,
+                        downloadedBytes = authoritative.bytesDownloaded.coerceAtLeast(0L),
+                        totalBytes = totalBytes,
+                        errorCategory = classified?.category
+                            ?: if (status == DownloadStatus.FAILED) {
+                                DownloadErrorCategory.NETWORK
+                            } else {
+                                recoveryIndexError?.let { DownloadErrorCategory.STORAGE }
+                            },
+                        errorMessage = classified?.message
+                            ?: if (status == DownloadStatus.FAILED) "视频下载失败" else recoveryIndexError,
+                        priority = existing?.priority ?: meta.priority,
+                        storageLocation = existing?.storageLocation ?: storageRootManager.activeLocation(),
+                        localPath = existing?.localPath ?: storageRootManager.layout().root.absolutePath,
+                        createdAt = existing?.createdAt ?: meta.createdAt.takeIf { it > 0L } ?: authoritative.startTimeMs,
+                        updatedAt = clockMs(),
+                    ),
+                )
+            }
         }
     }
 
     private fun writeCompletedSidecar(download: Download, meta: VideoDownloadMeta) {
         val layout = storageRootManager.layout()
-        storageRootManager.writeVideoSidecar(
-            DiskSidecarRecord(
-                kind = DownloadKind.VIDEO,
-                siteId = meta.siteId,
-                mediaId = meta.mediaId,
-                quality = meta.quality,
-                cacheKey = download.request.id,
-                title = meta.title,
-                url = meta.url,
-                coverUrl = meta.coverUrl,
-                durationSeconds = meta.durationSeconds,
-                bytes = download.bytesDownloaded.coerceAtLeast(0L),
-                updatedAt = clockMs(),
-                status = DownloadStatus.COMPLETED,
-                sourceRoot = layout.root.absolutePath,
-            ),
-            layout = layout,
+        val rootPath = layout.root.absolutePath
+        // Media3's index survives root changes; never project an old download into a root that
+        // does not actually contain its complete cache spans.
+        if (!isCached(download.request.id, rootPath)) return
+        val target = storageRootManager.videoSidecarFile(meta.siteId, meta.mediaId, meta.quality, layout)
+        val existing = storageRootManager.readSidecar(target)
+        val record = DiskSidecarRecord(
+            kind = DownloadKind.VIDEO,
+            siteId = meta.siteId,
+            mediaId = meta.mediaId,
+            quality = meta.quality,
+            cacheKey = download.request.id,
+            title = meta.title,
+            url = meta.url,
+            coverUrl = meta.coverUrl,
+            durationSeconds = meta.durationSeconds,
+            bytes = download.bytesDownloaded.coerceAtLeast(0L),
+            updatedAt = clockMs(),
+            status = DownloadStatus.COMPLETED,
+            sourceRoot = rootPath,
         )
+        val unchanged = existing?.copy(
+            updatedAt = record.updatedAt,
+            versionCode = record.versionCode,
+            sourceRoot = record.sourceRoot,
+        ) == record
+        if (unchanged) return
+        storageRootManager.writeVideoSidecar(record, layout = layout)
     }
 
     private fun cleanupRemoved(id: String, deferred: CompletableDeferred<Unit>) {
         applicationScope.launch(dispatchers.io) {
             try {
-                runCatching { downloadCaches.removeDownload(id) }
-                val parts = id.split(':')
-                if (parts.size >= 3) {
-                    val siteId = runCatching { SiteId.of(parts.first()) }.getOrNull()
-                    val mediaId = parts.subList(1, parts.size - 1).joinToString(":")
-                    val quality = parts.last()
-                    if (siteId != null) {
-                        runCatching { storageRootManager.removeVideoSidecar(siteId, mediaId, quality) }
+                mutationMutex.withLock {
+                    runCatching { downloadCaches.removeDownload(id) }
+                    val parts = id.split(':')
+                    if (parts.size >= 3) {
+                        val siteId = runCatching { SiteId.of(parts.first()) }.getOrNull()
+                        val mediaId = parts.subList(1, parts.size - 1).joinToString(":")
+                        val quality = parts.last()
+                        if (siteId != null) {
+                            runCatching { storageRootManager.removeVideoSidecar(siteId, mediaId, quality) }
+                        }
                     }
+                    runCatching { downloadStateRepository.delete(id) }
                 }
-                runCatching { downloadStateRepository.delete(id) }
             } finally {
                 generationGuard.completeRemoval(id, deferred)
             }

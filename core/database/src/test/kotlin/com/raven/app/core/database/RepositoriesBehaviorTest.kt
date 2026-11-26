@@ -50,6 +50,9 @@ import com.raven.app.core.model.TimeBookmark
 import com.raven.app.core.model.UpdateInboxItem
 import com.raven.app.core.model.WatchProgress
 import java.io.IOException
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
@@ -403,6 +406,62 @@ class RepositoriesBehaviorTest {
         assertTrue(rollbackAttempt.isFailure)
         assertEquals(1, db.favorites.getAll().size)
         assertEquals("720p", settingsStore.currentSettings().preferredQuality)
+    }
+
+    @Test
+    fun `backup export waits for an in-flight restore instead of mixing snapshot generations`() = runTest {
+        val db = FakeRavenDb()
+        val restoreEntered = CompletableDeferred<Unit>()
+        val releaseRestore = CompletableDeferred<Unit>()
+        var activeOperations = 0
+        var maxActiveOperations = 0
+        val gatedTransactionRunner = object : DatabaseTransactionRunner {
+            override suspend fun <R> invoke(block: suspend () -> R): R {
+                activeOperations += 1
+                maxActiveOperations = maxOf(maxActiveOperations, activeOperations)
+                try {
+                    restoreEntered.complete(Unit)
+                    releaseRestore.await()
+                    return db.transactionRunner(block)
+                } finally {
+                    activeOperations -= 1
+                }
+            }
+        }
+        val repo = BackupDataRepository(
+            watchProgressDao = db.watchProgress,
+            readingProgressDao = db.readingProgress,
+            favoriteDao = db.favorites,
+            shelfDao = db.shelves,
+            shelfItemDao = db.shelfItems,
+            smartShelfDao = db.smartShelves,
+            pageBookmarkDao = db.pageBookmarks,
+            timeBookmarkDao = db.timeBookmarks,
+            imageFavoriteDao = db.imageFavorites,
+            tagSubscriptionDao = db.tagSubscriptions,
+            savedSearchDao = db.savedSearches,
+            updateInboxDao = db.updateInbox,
+            blockedTermDao = db.blockedTerms,
+            searchHistoryDao = db.searchHistory,
+            playbackPreferencesDao = db.playbackPreferences,
+            readerPreferencesDao = db.readerPreferences,
+            settingsDataStore = SettingsDataStore(InMemoryPreferencesDataStore()),
+            transactionRunner = gatedTransactionRunner,
+        )
+
+        val restore = async(start = CoroutineStart.UNDISPATCHED) {
+            repo.applyBackup(RavenBackupPayload(exportedAt = 1L))
+        }
+        restoreEntered.await()
+        val export = async(start = CoroutineStart.UNDISPATCHED) { repo.exportPayload() }
+
+        assertFalse(export.isCompleted)
+        assertEquals(1, maxActiveOperations)
+
+        releaseRestore.complete(Unit)
+        restore.await()
+        export.await()
+        assertEquals(1, maxActiveOperations)
     }
 
     @Test

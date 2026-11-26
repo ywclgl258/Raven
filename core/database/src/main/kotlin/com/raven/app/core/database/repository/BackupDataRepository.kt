@@ -31,6 +31,8 @@ import com.raven.app.core.model.RavenBackupPayload
 import com.raven.app.core.model.Shelf
 import com.raven.app.core.model.SiteId
 import com.raven.app.core.model.TagTranslationSource
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 /**
  * Exports [RavenBackupPayload] snapshots and atomically merges/applies incoming backups
@@ -61,13 +63,15 @@ class BackupDataRepository(
     private val clock: () -> Long = System::currentTimeMillis,
     private val tagTranslationDao: TagTranslationDao? = null,
 ) {
+    private val backupMutex = Mutex()
+
     fun summarize(payload: RavenBackupPayload): BackupSummary = BackupMerger.summarize(payload)
 
-    suspend fun exportPayload(appVersion: String = ""): RavenBackupPayload {
+    suspend fun exportPayload(appVersion: String = ""): RavenBackupPayload = backupMutex.withLock {
         val now = clock()
-        val appSettings = settingsDataStore.currentSettings()
+        val appSettings = settingsDataStore.readPersistedSettings()
         val portableSettings = settingsDataStore.exportPortableSettings()
-        return transactionRunner {
+        transactionRunner {
             readLocalSnapshot(
                 appVersion = appVersion,
                 now = now,
@@ -78,8 +82,8 @@ class BackupDataRepository(
     }
 
     /**
-     * Atomically merges [incoming] into local state inside a single Room transaction.
-     * Any failure rolls back all Room mutations completely and leaves [SettingsDataStore] untouched.
+     * Serializes backup import/export so Room and DataStore snapshots cannot cross operation
+     * generations. Room mutations still roll back together if the database transaction fails.
      */
     suspend fun applyBackup(
         incoming: RavenBackupPayload,
@@ -88,27 +92,29 @@ class BackupDataRepository(
         require(incoming.schemaVersion == RavenBackupPayload.CURRENT_SCHEMA_VERSION) {
             "Unsupported backup schemaVersion: ${incoming.schemaVersion}"
         }
-        val now = clock()
-        val appSettings = settingsDataStore.currentSettings()
-        val portableSettings = settingsDataStore.exportPortableSettings()
+        return backupMutex.withLock {
+            val now = clock()
+            val appSettings = settingsDataStore.readPersistedSettings()
+            val portableSettings = settingsDataStore.exportPortableSettings()
 
-        val merged = transactionRunner {
-            val local = readLocalSnapshot(
-                appVersion = appVersion,
-                now = now,
-                siteLanguages = appSettings.siteLanguages,
-                portableSettings = portableSettings,
+            val merged = transactionRunner {
+                val local = readLocalSnapshot(
+                    appVersion = appVersion,
+                    now = now,
+                    siteLanguages = appSettings.siteLanguages,
+                    portableSettings = portableSettings,
+                )
+                val combined = BackupMerger.merge(local = local, incoming = incoming, now = now)
+                writePayloadToDatabase(combined)
+                combined
+            }
+
+            settingsDataStore.applyBackupSettings(
+                settingsMap = merged.settings,
+                siteLanguages = merged.siteLanguages,
             )
-            val combined = BackupMerger.merge(local = local, incoming = incoming, now = now)
-            writePayloadToDatabase(combined)
-            combined
+            BackupMerger.summarize(merged)
         }
-
-        settingsDataStore.applyBackupSettings(
-            settingsMap = merged.settings,
-            siteLanguages = merged.siteLanguages,
-        )
-        return BackupMerger.summarize(merged)
     }
 
     private suspend fun readLocalSnapshot(

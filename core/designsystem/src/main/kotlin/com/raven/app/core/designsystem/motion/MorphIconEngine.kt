@@ -999,16 +999,16 @@ object MorphIconEngine {
     }
 
     /**
-     * Zero-allocation polar interpolation:
+     * Zero-allocation polar interpolation with progress clamped to the exact `[0, 1]` shape endpoints:
      * `P(t) = c(t) + exp(lnSigma * t) * R(theta * t) * ((1 - t) * aC + t * bT)`
-     * written directly into [outPts].
+     * written directly into [outPts]. Spring overshoot therefore never interpolates past either endpoint.
      */
     fun interpPolar(
         pair: AlignedMorphPair,
         t: Float,
         outPts: FloatArray,
     ) {
-        val safeT = if (t.isFinite()) t else 1f
+        val safeT = if (t.isFinite()) t.coerceIn(0f, 1f) else 1f
         val cx = pair.caX + (pair.cbX - pair.caX) * safeT
         val cy = pair.caY + (pair.cbY - pair.caY) * safeT
         val scale = exp(pair.lnSigma * safeT)
@@ -1053,7 +1053,7 @@ object MorphIconEngine {
         outBuffers: List<FloatArray>,
         t: Float,
     ): List<SampledStroke> {
-        val safeT = if (t.isFinite()) t else 1f
+        val safeT = if (t.isFinite()) t.coerceIn(0f, 1f) else 1f
         val count = min(plan.pairs.size, outBuffers.size)
         return List(count) { i ->
             val pair = plan.pairs[i]

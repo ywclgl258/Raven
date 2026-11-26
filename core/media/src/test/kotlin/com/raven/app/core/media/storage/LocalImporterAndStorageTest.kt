@@ -239,4 +239,25 @@ class LocalImporterAndStorageTest {
             assertTrue(startup.appliedPending)
             assertTrue(manager.canWriteDownloads)
         }
+
+    @Test
+    fun `sidecar overwrite keeps previous file and cleans temp when publish fails`() = runTest {
+        val manager = StorageRootManager(
+            context = null,
+            settingsDataStore = null,
+            privateRootOverride = tempFolder.newFolder("sidecar-private"),
+            sharedRootOverride = null,
+            dispatchers = CustomAppDispatchers(StandardTestDispatcher(testScheduler)),
+        )
+        val target = File(tempFolder.newFolder("sidecar-meta"), "record.json")
+        manager.atomicWriteText(target, "old-valid-content")
+
+        val failed = runCatching {
+            manager.atomicWriteText(target, "new-content") { _, _ -> false }
+        }
+
+        assertTrue(failed.isFailure)
+        assertEquals("old-valid-content", target.readText())
+        assertTrue(target.parentFile?.listFiles().orEmpty().none { it.extension == "part" })
+    }
 }
