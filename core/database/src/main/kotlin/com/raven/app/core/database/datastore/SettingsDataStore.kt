@@ -288,6 +288,10 @@ class SettingsDataStore(
         dataStore.edit { prefs -> prefs[Keys.AUTOPLAY_VIDEO] = enabled }
     }
 
+    suspend fun setAutoContinueQueue(enabled: Boolean) {
+        dataStore.edit { prefs -> prefs[Keys.AUTO_CONTINUE_QUEUE] = enabled }
+    }
+
     suspend fun setBackgroundAudioPlayback(enabled: Boolean) {
         dataStore.edit { prefs -> prefs[Keys.BACKGROUND_AUDIO_PLAYBACK] = enabled }
     }
@@ -554,6 +558,7 @@ class SettingsDataStore(
             tagDictUpdatedAt = prefs[Keys.TAG_DICT_UPDATED_AT] ?: 0L,
             blockTagsGlobally = prefs[Keys.BLOCK_TAGS_GLOBALLY] ?: true,
             autoplayVideo = prefs[Keys.AUTOPLAY_VIDEO] ?: true,
+            autoContinueQueue = prefs[Keys.AUTO_CONTINUE_QUEUE] ?: false,
             backgroundAudioPlayback = prefs[Keys.BACKGROUND_AUDIO_PLAYBACK] ?: false,
             readerTapZonesEnabled = prefs[Keys.READER_TAP_ZONES_ENABLED] ?: true,
             readerShowStatusBar = prefs[Keys.READER_SHOW_STATUS_BAR] ?: false,
@@ -600,6 +605,7 @@ class SettingsDataStore(
         val TAG_DICT_UPDATED_AT = longPreferencesKey(KEY_TAG_DICT_UPDATED_AT)
         val BLOCK_TAGS_GLOBALLY = booleanPreferencesKey(KEY_BLOCK_TAGS_GLOBALLY)
         val AUTOPLAY_VIDEO = booleanPreferencesKey(KEY_AUTOPLAY_VIDEO)
+        val AUTO_CONTINUE_QUEUE = booleanPreferencesKey(KEY_AUTO_CONTINUE_QUEUE)
         val BACKGROUND_AUDIO_PLAYBACK = booleanPreferencesKey(KEY_BACKGROUND_AUDIO_PLAYBACK)
         val READER_TAP_ZONES_ENABLED = booleanPreferencesKey(KEY_READER_TAP_ZONES_ENABLED)
         val READER_SHOW_STATUS_BAR = booleanPreferencesKey(KEY_READER_SHOW_STATUS_BAR)
@@ -653,6 +659,7 @@ class SettingsDataStore(
         const val KEY_TAG_DICT_UPDATED_AT: String = "tag_dict_updated_at"
         const val KEY_BLOCK_TAGS_GLOBALLY: String = "block_tags_globally"
         const val KEY_AUTOPLAY_VIDEO: String = "autoplay_video"
+        const val KEY_AUTO_CONTINUE_QUEUE: String = "auto_continue_queue"
         const val KEY_BACKGROUND_AUDIO_PLAYBACK: String = "background_audio_playback"
         const val KEY_READER_TAP_ZONES_ENABLED: String = "reader_tap_zones_enabled"
         const val KEY_READER_SHOW_STATUS_BAR: String = "reader_show_status_bar"

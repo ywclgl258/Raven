@@ -98,6 +98,8 @@ private data class PlayerLocalState(
     val localNotice: String? = null,
     val isRefreshingExpiredStream: Boolean = false,
     val autoFullscreenTriggeredForKey: String? = null,
+    val autoContinueDeadlineElapsedMs: Long? = null,
+    val autoContinueRemainingMs: Long = 0L,
     val castDevices: List<LanCastDevice> = emptyList(),
     val isScanningCast: Boolean = false,
     val activeCastDevice: LanCastDevice? = null,
@@ -168,6 +170,7 @@ class PlayerViewModel(
     private var lastSavedPositionMs: Long = -1L
     private var lastSavedCompleted: Boolean = false
     private var lastHandledEndedKey: String? = null
+    private var queueSwitchInFlightFromKey: String? = null
 
     private val dictRevisionFlow = tagDictionaryRepository?.observeRevision() ?: flowOf(0L)
 
@@ -290,10 +293,13 @@ class PlayerViewModel(
             return
         }
 
+        clearAutoContinueCountdown()
         val previousTarget = current
         loadJob?.cancel()
         metadataEnrichJob?.cancel()
         refreshStreamJob?.cancel()
+
+        val pendingQueueSwitch = queueSwitchInFlightFromKey
 
         loadJob = viewModelScope.launch {
             if (previousTarget != null && previousTarget.compositeKey != args.compositeKey) {
@@ -330,7 +336,13 @@ class PlayerViewModel(
             if (previousTarget != null && previousTarget.compositeKey != normalizedArgs.compositeKey) {
                 _sideEffects.tryEmit(PlayerSideEffect.ActiveMediaChanged(normalizedArgs))
             }
-            resolveAndLoadMedia(normalizedArgs)
+            try {
+                resolveAndLoadMedia(normalizedArgs)
+            } finally {
+                if (queueSwitchInFlightFromKey == pendingQueueSwitch) {
+                    queueSwitchInFlightFromKey = null
+                }
+            }
         }
     }
 
@@ -369,6 +381,7 @@ class PlayerViewModel(
                     playback.evaluateStallTick()
                 }
                 evaluateSleepTimerTick()
+                evaluateAutoContinueTick()
             }
         }
 
@@ -406,7 +419,10 @@ class PlayerViewModel(
 
     // ---- Transport Controls ----
 
-    fun play() = playback.play()
+    fun play() {
+        if (playback.state.value.isEnded) clearAutoContinueCountdown()
+        playback.play()
+    }
 
     fun pause() {
         playback.pause()
@@ -417,6 +433,7 @@ class PlayerViewModel(
     }
 
     fun togglePlayPause() {
+        if (playback.state.value.isEnded) clearAutoContinueCountdown()
         val wasPlaying = playback.state.value.isPlaying
         playback.togglePlayPause()
         if (wasPlaying) {
@@ -428,6 +445,7 @@ class PlayerViewModel(
     }
 
     fun seekTo(positionMs: Long) {
+        if (playback.state.value.isEnded) clearAutoContinueCountdown()
         val hadActiveLoop = playback.state.value.loopRange.isActive
         playback.seekTo(positionMs)
         if (hadActiveLoop && !playback.state.value.loopRange.isActive) {
@@ -1030,42 +1048,165 @@ class PlayerViewModel(
         open(nextArgs, forceReload = true)
     }
 
+    /** Persists the global auto-continue preference (off by default). */
+    fun updateAutoContinuePreference(enabled: Boolean) {
+        latestAppSettings.update { it.copy(autoContinueQueue = enabled) }
+        if (enabled) {
+            maybeStartAutoContinueCountdown()
+        } else {
+            clearAutoContinueCountdown()
+        }
+        viewModelScope.launch {
+            preferencesRepository.setAutoContinueQueue(enabled)
+        }
+    }
+
+    /**
+     * Selects any history/upcoming queue entry without stacking Activities. The queue index changes
+     * atomically before [open] flushes the old watch progress and resolves the new media in-place.
+     */
+    fun selectQueueItem(index: Int): Boolean {
+        val target = activeTarget.value ?: return false
+        val token = target.queueToken ?: return false
+        if (queueSwitchInFlightFromKey != null) return false
+        val previous = playbackQueueStore.sessionFor(token, target.siteId, target.mediaId) ?: return false
+        if (index !in previous.items.indices || index == previous.currentIndex) return false
+
+        clearAutoContinueCountdown()
+        val selected = playbackQueueStore.select(token, target.siteId, target.mediaId, index) ?: return false
+        return openSelectedQueueItem(previous, target, selected)
+    }
+
+    /**
+     * Removes an entry with stable token semantics. Removing the current entry opens its successor
+     * (or predecessor when it was last) through the same in-place flow; removing the sole entry ends
+     * the queue while leaving the current media playable.
+     */
+    fun removeQueueItem(index: Int): Boolean {
+        val target = activeTarget.value ?: return false
+        val token = target.queueToken ?: return false
+        if (queueSwitchInFlightFromKey != null) return false
+        val previous = playbackQueueStore.sessionFor(token, target.siteId, target.mediaId) ?: return false
+        if (index !in previous.items.indices) return false
+        val removesCurrent = index == previous.currentIndex
+        if (removesCurrent) clearAutoContinueCountdown()
+
+        val updated = playbackQueueStore.removeAt(token, index)
+        if (updated == null) {
+            return previous.items.size == 1 && playbackQueueStore.snapshot() == null
+        }
+        if (!removesCurrent) {
+            if (!updated.hasNext) clearAutoContinueCountdown()
+            return true
+        }
+        return openSelectedQueueItem(previous, target, updated)
+    }
+
     fun confirmAdvanceQueue(): Boolean {
         val target = activeTarget.value ?: return false
         val token = target.queueToken ?: return false
-        val previous = playbackQueueStore.sessionFor(token, target.siteId, target.mediaId) ?: return false
-        if (!previous.hasNext) return false
+        val current = playbackQueueStore.sessionFor(token, target.siteId, target.mediaId) ?: return false
+        if (!current.hasNext) return false
+        return selectQueueItem(current.currentIndex + 1)
+    }
 
-        val advanced = playbackQueueStore.advance(token, target.siteId, target.mediaId) ?: return false
-        val nextItem = advanced.currentItem ?: run {
-            playbackQueueStore.restore(previous, advanced)
+    private fun openSelectedQueueItem(
+        previous: PlaybackQueueSession,
+        target: PlayerLaunchArgs,
+        selected: PlaybackQueueSession,
+    ): Boolean {
+        val item = selected.currentItem ?: run {
+            playbackQueueStore.restore(previous, selected)
             return false
         }
-
-        if (nextItem.kind.isVideo) {
-            val nextArgs = PlayerLaunchArgs.fromMediaItem(
-                item = nextItem,
+        queueSwitchInFlightFromKey = target.compositeKey
+        if (item.kind.isVideo) {
+            val args = PlayerLaunchArgs.fromMediaItem(
+                item = item,
                 autoplay = true,
-                offlineOnly = advanced.offlineOnly,
-                queueToken = advanced.token,
+                offlineOnly = selected.offlineOnly,
+                queueToken = selected.token,
             )
-            open(nextArgs, forceReload = true)
+            open(args, forceReload = true)
         } else {
             viewModelScope.launch {
                 runCatching { persistWatchProgressInternal(target, force = true) }
             }
             _sideEffects.tryEmit(
                 PlayerSideEffect.OpenGalleryFromQueue(
-                    item = nextItem,
-                    offlineOnly = advanced.offlineOnly,
-                    queueToken = advanced.token,
+                    item = item,
+                    offlineOnly = selected.offlineOnly,
+                    queueToken = selected.token,
                 ),
             )
+            queueSwitchInFlightFromKey = null
         }
         return true
     }
 
+    fun cancelAutoContinueCountdown() {
+        if (clearAutoContinueCountdown()) postNotice("已取消自动连播")
+    }
+
+    private fun clearAutoContinueCountdown(): Boolean {
+        val local = localState.value
+        if (local.autoContinueDeadlineElapsedMs == null && local.autoContinueRemainingMs == 0L) return false
+        localState.update {
+            it.copy(autoContinueDeadlineElapsedMs = null, autoContinueRemainingMs = 0L)
+        }
+        return true
+    }
+
+    private fun maybeStartAutoContinueCountdown() {
+        if (!latestAppSettings.value.autoContinueQueue || queueSwitchInFlightFromKey != null) return
+        if (localState.value.autoContinueDeadlineElapsedMs != null) return
+        val target = activeTarget.value ?: return
+        val engine = playback.state.value
+        if (!engine.isEnded || engine.siteId != target.siteId || engine.mediaId != target.mediaId) return
+        val session = playbackQueueStore.sessionFor(target.queueToken, target.siteId, target.mediaId) ?: return
+        if (!session.hasNext) return
+        localState.update {
+            it.copy(
+                autoContinueDeadlineElapsedMs = elapsedRealtimeMs() + AUTO_CONTINUE_COUNTDOWN_MS,
+                autoContinueRemainingMs = AUTO_CONTINUE_COUNTDOWN_MS,
+            )
+        }
+    }
+
+    /** Evaluated only by [runForegroundTicker]; no background countdown coroutine is created. */
+    fun evaluateAutoContinueTick(nowElapsedMs: Long = elapsedRealtimeMs()): Boolean {
+        val deadline = localState.value.autoContinueDeadlineElapsedMs ?: return false
+        val target = activeTarget.value
+        val engine = playback.state.value
+        val session = target?.let {
+            playbackQueueStore.sessionFor(it.queueToken, it.siteId, it.mediaId)
+        }
+        if (!latestAppSettings.value.autoContinueQueue ||
+            target == null ||
+            !engine.isEnded ||
+            engine.siteId != target.siteId ||
+            engine.mediaId != target.mediaId ||
+            session?.hasNext != true
+        ) {
+            clearAutoContinueCountdown()
+            return false
+        }
+
+        val remaining = deadline - nowElapsedMs
+        if (remaining > 0L) {
+            if (localState.value.autoContinueRemainingMs != remaining) {
+                localState.update { it.copy(autoContinueRemainingMs = remaining) }
+            }
+            return false
+        }
+
+        // Clear before switching so repeated ticks cannot advance the queue twice.
+        clearAutoContinueCountdown()
+        return confirmAdvanceQueue()
+    }
+
     fun endQueue() {
+        clearAutoContinueCountdown()
         val target = activeTarget.value ?: return
         val token = target.queueToken ?: return
         playbackQueueStore.endIfCurrent(token, target.siteId, target.mediaId)
@@ -1144,6 +1285,7 @@ class PlayerViewModel(
                 ) {
                     lastHandledEndedKey = target.compositeKey
                     runCatchingCancellable { persistWatchProgressInternal(target, force = true) }
+                    maybeStartAutoContinueCountdown()
                 }
 
                 // 3. One-shot auto-fullscreen matching video aspect ratio (never on autoplay)
@@ -1608,7 +1750,7 @@ class PlayerViewModel(
     }
 
     private fun resolveSiteDisplayName(siteId: SiteId): String = when {
-        siteId.isLocal -> "本地片库"
+        siteId.isLocal -> "本地内容"
         else -> siteRegistry.get(siteId)?.descriptor?.displayName ?: siteId.value
     }
 
@@ -1722,10 +1864,14 @@ class PlayerViewModel(
                     token = session.token,
                     title = session.title,
                     currentIndex = session.currentIndex,
+                    items = session.items,
                     totalCount = session.items.size,
                     nextItem = session.nextItem,
                     remainingCount = session.remainingCount,
                     offlineOnly = session.offlineOnly,
+                    autoContinueEnabled = appSettings.autoContinueQueue,
+                    autoContinueCountdownActive = local.autoContinueDeadlineElapsedMs != null,
+                    autoContinueRemainingMs = local.autoContinueRemainingMs,
                 )
             }
         } else {
@@ -1856,6 +2002,7 @@ class PlayerViewModel(
         const val IDLE_FOREGROUND_TICK_MS: Long = 500L
         const val STALL_AND_SLEEP_TICK_MS: Long = 500L
         const val PROGRESS_SAVE_INTERVAL_MS: Long = 5_000L
+        const val AUTO_CONTINUE_COUNTDOWN_MS: Long = 5_000L
         const val PROGRESS_SAVE_DELTA_MS: Long = 2_000L
         const val MIN_SLEEP_MINUTES: Int = 1
         const val MAX_SLEEP_MINUTES: Int = 180

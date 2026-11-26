@@ -76,6 +76,8 @@ data class AppSettings(
     val blockTagsGlobally: Boolean = true,
     // Phase B / C playback, reader & background sync settings
     val autoplayVideo: Boolean = true,
+    /** Automatically advances sequential playback queues after a short foreground countdown. */
+    val autoContinueQueue: Boolean = false,
     val backgroundAudioPlayback: Boolean = false,
     val readerTapZonesEnabled: Boolean = true,
     val readerShowStatusBar: Boolean = false,

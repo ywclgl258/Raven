@@ -32,6 +32,8 @@ val libraryFeatureModule: Module = module {
             shelfRepository = get(),
             subscriptionRepository = get(),
             favoriteRepository = get(),
+            bookmarkRepository = get(),
+            localLibraryImporter = get(),
             downloadGateway = get(),
             preferencesRepository = get(),
             siteRegistry = get(),
@@ -109,6 +111,7 @@ val libraryFeatureModule: Module = module {
         LocalLibraryViewModel(
             localLibraryImporter = get(),
             shelfRepository = get(),
+            historyRepository = get(),
             dispatchers = get(),
         )
     }

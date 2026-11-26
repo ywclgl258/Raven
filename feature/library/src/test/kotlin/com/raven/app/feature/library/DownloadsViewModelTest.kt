@@ -373,4 +373,139 @@ class DownloadsViewModelTest {
             cancelAndIgnoreRemainingEvents()
         }
     }
+
+    @Test
+    fun `cleaning completed deletes only completed downloads and reports released bytes`() = runTest {
+        val harness = LibraryTestHarness(mainRule.dispatcher, tempFolder.newFolder("dl-clean-completed"))
+        harness.downloadStateRepository.upsertAll(
+            listOf(
+                sampleDownload(
+                    id = "done-a",
+                    title = "Done A",
+                    status = DownloadStatus.COMPLETED,
+                    downloadedBytes = 1_048_576L,
+                    totalBytes = 2_097_152L,
+                ),
+                sampleDownload(
+                    id = "done-b",
+                    title = "Done B",
+                    status = DownloadStatus.COMPLETED,
+                    downloadedBytes = 1_048_576L,
+                    totalBytes = null,
+                ),
+                sampleDownload(
+                    id = "active",
+                    title = "Active",
+                    status = DownloadStatus.DOWNLOADING,
+                    totalBytes = 8_388_608L,
+                ),
+                sampleDownload(
+                    id = "paused",
+                    title = "Paused",
+                    status = DownloadStatus.PAUSED,
+                ),
+                sampleDownload(
+                    id = "failed",
+                    title = "Failed",
+                    status = DownloadStatus.FAILED,
+                    errorCategory = DownloadErrorCategory.NETWORK,
+                ),
+                sampleDownload(
+                    id = "cancelled",
+                    title = "Cancelled",
+                    status = DownloadStatus.CANCELLED,
+                ),
+            ),
+        )
+
+        val vm = DownloadsViewModel(
+            downloadGateway = harness.downloadGateway,
+            siteRegistry = harness.siteRegistry,
+            dispatchers = harness.dispatchers,
+            mediaTagCacheRepository = harness.mediaTagCacheRepository,
+            preferencesRepository = harness.preferencesRepository,
+            tagDictionary = harness.runtimeDictionary,
+        )
+
+        vm.uiState.test {
+            awaitItem()
+            advanceUntilIdle()
+            val initial = expectMostRecentItem()
+            assertEquals(2, initial.completedCount)
+            assertEquals(3_145_728L, initial.totalCompletedBytes)
+
+            vm.deleteCompletedDownloads()
+            advanceUntilIdle()
+            val cleaned = expectMostRecentItem()
+
+            assertEquals(setOf("done-a", "done-b"), harness.downloadGateway.deletedIds.toSet())
+            assertEquals(0, cleaned.completedCount)
+            assertEquals(0L, cleaned.totalCompletedBytes)
+            assertEquals(4, cleaned.allCount)
+            assertEquals("已清理 2 个已完成下载，释放 3 MB", cleaned.message)
+
+            assertEquals(DownloadStatus.DOWNLOADING, harness.downloadStateRepository.getById("active")?.status)
+            assertEquals(DownloadStatus.PAUSED, harness.downloadStateRepository.getById("paused")?.status)
+            assertEquals(DownloadStatus.FAILED, harness.downloadStateRepository.getById("failed")?.status)
+            assertEquals(DownloadStatus.CANCELLED, harness.downloadStateRepository.getById("cancelled")?.status)
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    @Test
+    fun `batch retry requeues failed and cancelled items without touching active or completed downloads`() = runTest {
+        val harness = LibraryTestHarness(mainRule.dispatcher, tempFolder.newFolder("dl-retry-attention"))
+        harness.downloadStateRepository.upsertAll(
+            listOf(
+                sampleDownload(
+                    id = "failed",
+                    title = "Failed",
+                    status = DownloadStatus.FAILED,
+                    errorCategory = DownloadErrorCategory.NOT_FOUND,
+                ),
+                sampleDownload(
+                    id = "cancelled",
+                    title = "Cancelled",
+                    status = DownloadStatus.CANCELLED,
+                ),
+                sampleDownload(
+                    id = "active",
+                    title = "Active",
+                    status = DownloadStatus.DOWNLOADING,
+                ),
+                sampleDownload(
+                    id = "done",
+                    title = "Done",
+                    status = DownloadStatus.COMPLETED,
+                ),
+            ),
+        )
+
+        val vm = DownloadsViewModel(
+            downloadGateway = harness.downloadGateway,
+            siteRegistry = harness.siteRegistry,
+            dispatchers = harness.dispatchers,
+            mediaTagCacheRepository = harness.mediaTagCacheRepository,
+            preferencesRepository = harness.preferencesRepository,
+            tagDictionary = harness.runtimeDictionary,
+        )
+
+        vm.uiState.test {
+            awaitItem()
+            advanceUntilIdle()
+            assertEquals(2, expectMostRecentItem().attentionCount)
+
+            vm.retryAllFailed()
+            advanceUntilIdle()
+            val retriedState = expectMostRecentItem()
+
+            assertEquals(setOf("failed", "cancelled"), harness.downloadGateway.retriedIds.toSet())
+            assertEquals(DownloadStatus.QUEUED, harness.downloadStateRepository.getById("failed")?.status)
+            assertEquals(DownloadStatus.QUEUED, harness.downloadStateRepository.getById("cancelled")?.status)
+            assertEquals(DownloadStatus.DOWNLOADING, harness.downloadStateRepository.getById("active")?.status)
+            assertEquals(DownloadStatus.COMPLETED, harness.downloadStateRepository.getById("done")?.status)
+            assertEquals("已重新加入 2 个需处理任务", retriedState.message)
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
 }

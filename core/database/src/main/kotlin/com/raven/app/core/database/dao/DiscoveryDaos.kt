@@ -198,6 +198,9 @@ interface SearchHistoryDao {
     @Query("SELECT * FROM search_history WHERE site_id = :siteId ORDER BY searched_at DESC LIMIT :limit")
     fun observeBySite(siteId: String, limit: Int = MAX_PER_SITE): Flow<List<SearchHistoryEntity>>
 
+    @Query("SELECT * FROM search_history ORDER BY searched_at DESC LIMIT :limit")
+    fun observeAll(limit: Int = MAX_PER_SITE): Flow<List<SearchHistoryEntity>>
+
     @Query("SELECT * FROM search_history ORDER BY site_id ASC, searched_at DESC")
     suspend fun getAll(): List<SearchHistoryEntity>
 

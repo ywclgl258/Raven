@@ -604,4 +604,80 @@ class HomeViewModelTest {
                 cancelAndIgnoreRemainingEvents()
             }
         }
+
+    @Test
+    fun `continue reading filters blocked and completed, sorts by updatedAt, truncates to twelve, and resumes newest`() =
+        runTest(mainDispatcherRule.dispatcher) {
+            val harness = BrowseTestHarness(mainDispatcherRule.dispatcher)
+            (1..14).forEach { index ->
+                harness.historyRepository.saveReadingProgress(
+                    ReadingProgress(
+                        siteId = SiteId.NHENTAI,
+                        mediaId = "book$index",
+                        url = "https://nhentai.example/g/$index",
+                        title = "Manga Book $index",
+                        kind = MediaKind.COMIC,
+                        currentPage = 3,
+                        totalPages = 40,
+                        updatedAt = index * 100L,
+                        completed = false,
+                    ),
+                )
+            }
+            harness.historyRepository.saveReadingProgress(
+                ReadingProgress(
+                    siteId = SiteId.NHENTAI,
+                    mediaId = "blocked_book",
+                    url = "https://nhentai.example/g/blocked",
+                    title = "Gore Book",
+                    kind = MediaKind.COMIC,
+                    currentPage = 4,
+                    totalPages = 40,
+                    updatedAt = 5_000L,
+                    completed = false,
+                ),
+            )
+            harness.historyRepository.saveReadingProgress(
+                ReadingProgress(
+                    siteId = SiteId.NHENTAI,
+                    mediaId = "done_book",
+                    url = "https://nhentai.example/g/done",
+                    title = "Done Book",
+                    kind = MediaKind.COMIC,
+                    currentPage = 40,
+                    totalPages = 40,
+                    updatedAt = 4_500L,
+                    completed = false,
+                ),
+            )
+            harness.blockedTermsRepository.addTerm(SiteId.NHENTAI, "gore")
+
+            val (registry, _, _) = buildRegistry()
+            val vm = HomeViewModel(
+                siteRegistry = registry,
+                preferencesRepository = harness.preferencesRepository,
+                blockedTermsRepository = harness.blockedTermsRepository,
+                historyRepository = harness.historyRepository,
+                favoriteRepository = harness.favoriteRepository,
+                shelfRepository = harness.shelfRepository,
+                browsePositionRepository = harness.browsePositionRepository,
+                dispatchers = harness.dispatchers,
+            )
+
+            vm.uiState.test {
+                advanceUntilIdle()
+                vm.selectSite(SiteId.NHENTAI)
+                advanceUntilIdle()
+                val comic = expectMostRecentItem()
+
+                assertEquals((14 downTo 3).map { "book$it" }, comic.continueReading.map { it.mediaId })
+                assertEquals(12, comic.continueReading.size)
+                assertEquals("book14", comic.resumeReading?.mediaId)
+                assertEquals(comic.continueReading.first(), comic.resumeReading)
+                assertFalse(
+                    comic.continueReading.any { it.mediaId == "blocked_book" || it.mediaId == "done_book" },
+                )
+                cancelAndIgnoreRemainingEvents()
+            }
+        }
 }

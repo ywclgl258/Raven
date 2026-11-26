@@ -1,6 +1,7 @@
 package com.raven.app.core.designsystem.component
 
 import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.snap
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
@@ -43,6 +44,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.heading
@@ -53,6 +55,7 @@ import com.raven.app.core.designsystem.theme.LocalMotionReduced
 import com.raven.app.core.designsystem.theme.LocalRavenColors
 import com.raven.app.core.designsystem.theme.LocalRavenFeedback
 import com.raven.app.core.designsystem.theme.RavenFeedbackEffect
+import com.raven.app.core.designsystem.theme.RavenMotion
 import com.raven.app.core.designsystem.theme.RavenShapes
 import com.raven.app.core.designsystem.theme.ravenInteractiveLight
 import com.raven.app.core.designsystem.theme.tabular
@@ -167,6 +170,11 @@ fun RavenGroupedRow(
         animationSpec = if (motionReduced) snap() else tween(durationMillis = 120),
         label = "ravenGroupedRowPressHighlight",
     )
+    val iconScaleState = animateFloatAsState(
+        targetValue = if (pressed && enabled && onClick != null) 1.08f else 1.0f,
+        animationSpec = if (motionReduced) snap() else RavenMotion.responsiveSpringSpec(),
+        label = "ravenGroupedRowIconScale",
+    )
 
     val resolvedTitleColor = when {
         !enabled -> colors.inkTertiary
@@ -218,6 +226,11 @@ fun RavenGroupedRow(
             Box(
                 modifier = Modifier
                     .size(32.dp)
+                    .graphicsLayer {
+                        val s = iconScaleState.value
+                        scaleX = s
+                        scaleY = s
+                    }
                     .clip(RavenShapes.ControlShape)
                     .background(resolvedIconBg)
                     .border(
@@ -339,21 +352,30 @@ fun RavenGroupedSwitchRow(
                 },
             ),
         trailingContent = {
-            Switch(
-                checked = checked,
-                onCheckedChange = null,
-                enabled = enabled,
-                colors = SwitchDefaults.colors(
-                    checkedThumbColor = colors.inkPrimary,
-                    checkedTrackColor = colors.crimson,
-                    checkedBorderColor = Color.Transparent,
-                    uncheckedThumbColor = colors.inkSecondary,
-                    uncheckedTrackColor = colors.surface3,
-                    uncheckedBorderColor = colors.outlineSubtle,
-                    disabledCheckedTrackColor = colors.crimson.copy(alpha = 0.4f),
-                    disabledUncheckedTrackColor = colors.surface2,
+            Box(
+                modifier = Modifier.ravenBurstFeedback(
+                    trigger = checked,
+                    burstColor = colors.crimson,
+                    enabled = enabled,
                 ),
-            )
+                contentAlignment = Alignment.Center,
+            ) {
+                Switch(
+                    checked = checked,
+                    onCheckedChange = null,
+                    enabled = enabled,
+                    colors = SwitchDefaults.colors(
+                        checkedThumbColor = colors.inkPrimary,
+                        checkedTrackColor = colors.crimson,
+                        checkedBorderColor = Color.Transparent,
+                        uncheckedThumbColor = colors.inkSecondary,
+                        uncheckedTrackColor = colors.surface3,
+                        uncheckedBorderColor = colors.outlineSubtle,
+                        disabledCheckedTrackColor = colors.crimson.copy(alpha = 0.4f),
+                        disabledUncheckedTrackColor = colors.surface2,
+                    ),
+                )
+            }
         },
     )
 }

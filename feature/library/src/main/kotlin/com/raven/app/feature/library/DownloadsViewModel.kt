@@ -7,6 +7,7 @@ import com.raven.app.core.common.NaturalSortComparator
 import com.raven.app.core.common.TagDictionary
 import com.raven.app.core.database.repository.MediaTagCacheRepository
 import com.raven.app.core.database.repository.PreferencesRepository
+import com.raven.app.core.designsystem.component.RavenFormatters
 import com.raven.app.core.media.download.BatchEnqueueProgress
 import com.raven.app.core.media.download.DownloadNetworkPolicy
 import com.raven.app.core.media.reader.GalleryAudit
@@ -137,6 +138,7 @@ data class DownloadsUiState(
     val pausedCount: Int = 0,
     val failedCount: Int = 0,
     val totalCompletedBytes: Long = 0L,
+    val isCleaningCompleted: Boolean = false,
     val items: List<DownloadItem> = emptyList(),
     val siteOptions: List<SiteFilterOption> = emptyList(),
     val siteLabels: Map<SiteId, String> = emptyMap(),
@@ -181,6 +183,7 @@ private data class DownloadsControls(
     val integrityState: IntegrityAuditDialogState? = null,
     val isSyncingDisk: Boolean = false,
     val message: String? = null,
+    val isCleaningCompleted: Boolean = false,
 )
 
 private data class DownloadsSources(
@@ -343,6 +346,7 @@ class DownloadsViewModel(
             networkPolicy = source.networkPolicy,
             batchProgress = source.batchProgress,
             integrityState = ctrl.integrityState,
+            isCleaningCompleted = ctrl.isCleaningCompleted,
             isSyncingDisk = ctrl.isSyncingDisk,
             message = ctrl.message,
         )
@@ -461,22 +465,36 @@ class DownloadsViewModel(
     }
 
     fun retryAllFailed() {
-        val visibleFailedIds = uiState.value.items
-            .filter { it.status == DownloadStatus.FAILED }
-            .map { it.id }
-            .takeIf { it.isNotEmpty() }
+        val targets = uiState.value.allItems.filter { it.status.needsAttention() }
+        if (targets.isEmpty()) {
+            controls.update { it.copy(message = "当前没有可重试的需处理任务") }
+            return
+        }
         viewModelScope.launch(dispatchers.io) {
-            runCatching { downloadGateway.retryAllFailed(visibleFailedIds) }
-                .onSuccess { count ->
-                    controls.update {
-                        it.copy(
-                            message = if (count > 0) "已重新加入 $count 个失败任务" else "当前没有可重试的失败任务",
-                        )
+            var retried = 0
+            var skipped = 0
+            targets.forEach { item ->
+                try {
+                    if (downloadGateway.retryFailed(item.id)) {
+                        retried += 1
+                    } else {
+                        skipped += 1
                     }
+                } catch (ce: CancellationException) {
+                    throw ce
+                } catch (_: Throwable) {
+                    skipped += 1
                 }
-                .onFailure { e ->
-                    controls.update { it.copy(message = e.message ?: "批量重试失败") }
-                }
+            }
+            controls.update {
+                it.copy(
+                    message = when {
+                        retried > 0 && skipped > 0 -> "已重新加入 $retried 个需处理任务，$skipped 项暂时无法重试"
+                        retried > 0 -> "已重新加入 $retried 个需处理任务"
+                        else -> "当前没有可重试的需处理任务"
+                    },
+                )
+            }
         }
     }
 
@@ -639,6 +657,38 @@ class DownloadsViewModel(
             runCatching { downloadGateway.delete(item.id, item.localPath.orEmpty()) }
                 .onSuccess { controls.update { it.copy(message = "已删除「${item.title}」") } }
                 .onFailure { e -> controls.update { it.copy(message = e.message ?: "删除失败") } }
+        }
+    }
+
+    fun deleteCompletedDownloads() {
+        if (controls.value.isCleaningCompleted) return
+        val targets = uiState.value.allItems.filter { it.status == DownloadStatus.COMPLETED }
+        if (targets.isEmpty()) {
+            controls.update { it.copy(message = "当前没有可清理的已完成下载") }
+            return
+        }
+        viewModelScope.launch(dispatchers.io) {
+            controls.update { it.copy(isCleaningCompleted = true) }
+            var deletedCount = 0
+            var releasedBytes = 0L
+            var failedCount = 0
+            targets.forEach { item ->
+                try {
+                    downloadGateway.delete(item.id, item.localPath.orEmpty())
+                    deletedCount += 1
+                    releasedBytes += downloadBytes(item)
+                } catch (ce: CancellationException) {
+                    throw ce
+                } catch (_: Throwable) {
+                    failedCount += 1
+                }
+            }
+            controls.update {
+                it.copy(
+                    isCleaningCompleted = false,
+                    message = completedCleanupMessage(deletedCount, releasedBytes, failedCount),
+                )
+            }
         }
     }
 
@@ -910,6 +960,14 @@ private fun sortDownloads(items: List<DownloadItem>, sort: DownloadSort): List<D
 }
 
 private fun downloadBytes(item: DownloadItem): Long = (item.totalBytes ?: item.downloadedBytes).coerceAtLeast(0L)
+
+private fun completedCleanupMessage(deletedCount: Int, releasedBytes: Long, failedCount: Int): String = when {
+    deletedCount > 0 && failedCount > 0 ->
+        "已清理 $deletedCount 个已完成下载，释放 ${RavenFormatters.formatByteSize(releasedBytes)}；$failedCount 项删除失败"
+    deletedCount > 0 ->
+        "已清理 $deletedCount 个已完成下载，释放 ${RavenFormatters.formatByteSize(releasedBytes)}"
+    else -> "未能清理已完成下载，请稍后重试"
+}
 
 private fun downloadProgress(item: DownloadItem): Float = when {
     item.status == DownloadStatus.COMPLETED -> 1f

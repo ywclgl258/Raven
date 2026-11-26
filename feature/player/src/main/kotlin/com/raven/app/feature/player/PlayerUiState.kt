@@ -40,11 +40,22 @@ data class PlayerQueueUiState(
     val title: String,
     val currentIndex: Int,
     val totalCount: Int,
+    val items: List<MediaItem>,
     val nextItem: MediaItem?,
     val remainingCount: Int,
     val offlineOnly: Boolean,
+    val autoContinueEnabled: Boolean = false,
+    val autoContinueCountdownActive: Boolean = false,
+    val autoContinueRemainingMs: Long = 0L,
 ) {
     val hasNext: Boolean get() = nextItem != null
+
+    val autoContinueRemainingSeconds: Int
+        get() = if (autoContinueCountdownActive) {
+            ((autoContinueRemainingMs.coerceAtLeast(0L) + 999L) / 1_000L).toInt()
+        } else {
+            0
+        }
 }
 
 /**
@@ -96,6 +107,7 @@ sealed interface PlayerSheet {
     data object Tracks : PlayerSheet
     data object AbLoop : PlayerSheet
     data object SleepTimer : PlayerSheet
+    data object Queue : PlayerSheet
     data class BookmarkEditor(
         val editingBookmark: TimeBookmark? = null,
         val initialPositionMs: Long = 0L,

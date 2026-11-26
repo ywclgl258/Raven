@@ -14,6 +14,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -97,6 +98,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.raven.app.core.common.TagSuggestion
 import com.raven.app.core.database.model.ShelfWithSummary
 import com.raven.app.core.designsystem.component.RavenBottomSheet
+import com.raven.app.core.designsystem.component.RavenBloubPresence
 import com.raven.app.core.designsystem.component.RavenContentCrossfade
 import com.raven.app.core.designsystem.component.RavenEmptyState
 import com.raven.app.core.designsystem.component.RavenErrorState
@@ -107,6 +109,7 @@ import com.raven.app.core.designsystem.component.RavenGroupedDivider
 import com.raven.app.core.designsystem.component.RavenGroupedRow
 import com.raven.app.core.designsystem.component.RavenGroupedSection
 import com.raven.app.core.designsystem.component.RavenLoadingSkeleton
+import com.raven.app.core.designsystem.component.RavenMorphIcon
 import com.raven.app.core.designsystem.component.RavenPrimaryButton
 import com.raven.app.core.designsystem.component.RavenRankedVideoCard
 import com.raven.app.core.designsystem.component.RavenSearchField
@@ -115,6 +118,10 @@ import com.raven.app.core.designsystem.component.RavenSiteSwitcherPill
 import com.raven.app.core.designsystem.component.RavenStatusPill
 import com.raven.app.core.designsystem.component.RavenStatusTone
 import com.raven.app.core.designsystem.component.RavenVideoCard
+import com.raven.app.core.designsystem.component.ravenSquashPress
+import com.raven.app.core.designsystem.motion.BloubMood
+import com.raven.app.core.designsystem.motion.MorphSpringPreset
+import com.raven.app.core.designsystem.motion.RavenMorphIcons
 import com.raven.app.core.designsystem.theme.LocalMotionReduced
 import com.raven.app.core.designsystem.theme.LocalRavenColors
 import com.raven.app.core.designsystem.theme.LocalRavenFeedback
@@ -140,8 +147,9 @@ import org.koin.core.parameter.parametersOf
 
 /**
  * Unified Search destination supporting both **当前站点 (Single-Site)** and **跨站搜索 (Cross-Site)**
- * with TagDictionary suggestions, 30-item search history, Saved Searches, capability-driven
- * Advanced Filters sheet, and concurrent `Semaphore(3)` cross-site results with per-site status pills.
+ * with TagDictionary suggestions, a merged current-site + cross-site (`GLOBAL`) 30-item search
+ * history, Saved Searches, capability-driven Advanced Filters sheet, and concurrent
+ * `Semaphore(3)` cross-site results with per-site status pills, retry, and a full-span load-more footer.
  */
 @Composable
 fun SearchScreen(
@@ -254,6 +262,9 @@ fun SearchScreenContent(
     var actionTargetItem by remember { mutableStateOf<MediaItem?>(null) }
 
     val activeSite = uiState.activeSite
+    val siteShortNames = remember(uiState.allSites) {
+        uiState.allSites.associate { it.id to it.shortName }
+    }
     val isCustomSort = uiState.sort != uiState.nativeSorts.firstOrNull()
     val hasDateFilter = !uiState.advancedFilters.publishedFrom.isNullOrBlank() ||
         !uiState.advancedFilters.publishedTo.isNullOrBlank()
@@ -421,25 +432,31 @@ fun SearchScreenContent(
 
                     if (uiState.mode == SearchMode.SINGLE_SITE && uiState.hasAdvancedFilterSupport) {
                         val filterCount = uiState.activeAdvancedFilterCount
+                        val filterInteractionSource = remember { MutableInteractionSource() }
                         Box(
                             modifier = Modifier
                                 .size(48.dp)
                                 .clip(CircleShape)
                                 .background(if (filterCount > 0) colors.primaryCtaContainer else colors.surface2)
                                 .border(0.5.dp, colors.hairline, CircleShape)
-                                .ravenSpringPress()
-                                .clickable(role = Role.Button) {
+                                .ravenSquashPress(interactionSource = filterInteractionSource)
+                                .clickable(
+                                    interactionSource = filterInteractionSource,
+                                    indication = null,
+                                    role = Role.Button,
+                                ) {
                                     feedback.perform(RavenFeedbackEffect.TAP)
                                     showAdvancedSheet = true
                                 }
                                 .testTag("search_advanced_filter_button"),
                             contentAlignment = Alignment.Center,
                         ) {
-                            Icon(
-                                imageVector = Icons.Outlined.Tune,
-                                contentDescription = "高级筛选",
+                            RavenMorphIcon(
+                                glyph = if (filterCount > 0) RavenMorphIcons.FilterActive else RavenMorphIcons.FilterOutline,
                                 tint = if (filterCount > 0) colors.primaryCtaInk else colors.inkPrimary,
-                                modifier = Modifier.size(20.dp),
+                                size = 20.dp,
+                                springPreset = MorphSpringPreset.SNAPPY,
+                                contentDescription = "高级筛选",
                             )
                             if (filterCount > 0) {
                                 Box(
@@ -623,6 +640,7 @@ fun SearchScreenContent(
                         SearchDiscoveryPanel(
                             activeSite = activeSite,
                             searchHistory = uiState.searchHistory,
+                            siteShortNames = siteShortNames,
                             savedSearches = uiState.savedSearches,
                             trendingTags = uiState.trendingTags,
                             hotTagRanking = uiState.hotTagRanking,
@@ -1157,6 +1175,7 @@ private fun SearchDiscoveryPanel(
     activeSite: SiteDescriptor?,
     searchHistory: List<SearchHistoryEntry>,
     savedSearches: List<SavedSearch>,
+    siteShortNames: Map<SiteId, String>,
     trendingTags: List<SearchTrendingTag>,
     hotTagRanking: List<SearchTrendingTag>,
     hotWorksRanking: List<MediaItem>,
@@ -1316,6 +1335,7 @@ private fun SearchDiscoveryPanel(
                         verticalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
                         searchHistory.forEach { entry ->
+                            val historySiteKey = if (entry.siteId.isGlobal) "global" else entry.siteId.value
                             Row(
                                 modifier = Modifier
                                     .heightIn(min = 36.dp)
@@ -1324,10 +1344,20 @@ private fun SearchDiscoveryPanel(
                                     .border(0.5.dp, colors.hairline, RavenShapes.PillShape)
                                     .clickable { onSelectHistory(entry) }
                                     .padding(start = 12.dp, end = 6.dp, top = 6.dp, bottom = 6.dp)
-                                    .testTag("search_history_chip_${entry.query}"),
+                                    .testTag(
+                                        "search_history_chip_${historySiteKey}_" +
+                                            "${entry.scope.name.lowercase()}_${entry.query}",
+                                    ),
                                 verticalAlignment = Alignment.CenterVertically,
                                 horizontalArrangement = Arrangement.spacedBy(6.dp),
                             ) {
+                                Text(
+                                    text = historySiteLabel(entry, siteShortNames),
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = if (entry.siteId.isGlobal) colors.crimson else colors.inkSecondary,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
                                 Text(
                                     text = if (entry.scope != SearchScope.ALL) {
                                         "${entry.scope.displayLabel()}:${entry.query}"
@@ -1535,7 +1565,9 @@ private fun SingleSiteResultsBody(
                 )
             }
             "loading" -> {
-                ExploreLoadingGrid(isVideo = activeSite.primaryKind == MediaKind.VIDEO)
+                SearchActiveLoadingState(subtitle = "正在检索 ${activeSite.shortName}…") {
+                    ExploreLoadingGrid(isVideo = activeSite.primaryKind == MediaKind.VIDEO)
+                }
             }
             "error" -> {
                 RavenErrorState(
@@ -1619,6 +1651,45 @@ private fun SingleSiteResultsBody(
 }
 
 @Composable
+private fun SearchActiveLoadingState(
+    subtitle: String,
+    content: @Composable () -> Unit,
+) {
+    val colors = LocalRavenColors.current
+    Column(
+        modifier = Modifier.fillMaxSize(),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp, Alignment.CenterHorizontally),
+        ) {
+            RavenBloubPresence(
+                mood = BloubMood.SEARCHING,
+                size = 64.dp,
+            )
+            Text(
+                text = subtitle,
+                style = MaterialTheme.typography.bodyMedium,
+                color = colors.inkSecondary,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+        Box(
+            modifier = Modifier
+                .weight(1f)
+                .fillMaxWidth(),
+        ) {
+            content()
+        }
+    }
+}
+
+@Composable
 private fun CrossSiteResultsBody(
     uiState: SearchUiState,
     pluginResolver: (SiteId) -> SitePlugin?,
@@ -1683,10 +1754,13 @@ private fun CrossSiteResultsBody(
         val hasAnyDirectoryJumps = uiState.crossSiteDirectoryBuckets.any {
             it.status == CrossSiteStatus.SUCCESS && it.items.isNotEmpty()
         }
+        val hasAnyLoadableBuckets = uiState.crossSiteBuckets.any { it.hasMore || it.isLoadingMore }
 
         when {
             allLoading && uiState.crossSiteMediaItems.isEmpty() -> {
-                RavenLoadingSkeleton(rowCount = 5)
+                SearchActiveLoadingState(subtitle = "正在跨站并发搜索…") {
+                    RavenLoadingSkeleton(rowCount = 5)
+                }
             }
             uiState.crossSiteMediaItems.isEmpty() && !hasAnyDirectoryJumps && allCrossFailed -> {
                 RavenErrorState(
@@ -1694,7 +1768,10 @@ private fun CrossSiteResultsBody(
                     onRetry = onRetryAll,
                 )
             }
-            uiState.crossSiteMediaItems.isEmpty() && !hasAnyDirectoryJumps && !uiState.isCrossSiteSearching -> {
+            uiState.crossSiteMediaItems.isEmpty() &&
+                !hasAnyDirectoryJumps &&
+                !uiState.isCrossSiteSearching &&
+                !hasAnyLoadableBuckets -> {
                 RavenEmptyState(
                     title = "跨站搜索暂无结果",
                     message = "上方可点击失败站点胶囊单独重试，或切换更多来源站点。",
@@ -1802,11 +1879,159 @@ private fun CrossSiteResultsBody(
                                 )
                             }
                         }
+
+                        val footerBuckets = uiState.crossSiteBuckets.filter {
+                            it.hasMore || it.isLoadingMore
+                        }
+                        if (footerBuckets.isNotEmpty()) {
+                            item(
+                                key = "cross_pagination_footer",
+                                span = StaggeredGridItemSpan.FullLine,
+                            ) {
+                                CrossSitePaginationFooter(
+                                    buckets = footerBuckets,
+                                    onLoadMoreSite = onLoadMoreSite,
+                                )
+                            }
+                        }
                     }
                 }
             }
         }
     }
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun CrossSitePaginationFooter(
+    buckets: List<CrossSiteBucketState>,
+    onLoadMoreSite: (SiteId) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val colors = LocalRavenColors.current
+    val loadableBuckets = buckets.filter { it.hasMore }
+    val isLoadingAny = buckets.any { it.isLoadingMore }
+    val sourceNames = loadableBuckets.joinToString("、") { it.site.shortName }
+
+    Column(
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(horizontal = 4.dp, vertical = 10.dp)
+            .testTag("cross_site_pagination_footer"),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                text = when {
+                    loadableBuckets.isEmpty() -> "正在加载更多来源…"
+                    sourceNames.length > 24 -> "还可从 ${loadableBuckets.size} 个来源继续加载"
+                    else -> "还可从 $sourceNames 继续加载"
+                },
+                style = MaterialTheme.typography.labelMedium,
+                color = colors.inkSecondary,
+                modifier = Modifier.weight(1f),
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+            )
+            if (isLoadingAny) {
+                CircularProgressIndicator(
+                    modifier = Modifier.size(14.dp),
+                    strokeWidth = 1.8.dp,
+                    color = colors.crimson,
+                )
+            } else {
+                TextButton(
+                    onClick = { loadableBuckets.forEach { onLoadMoreSite(it.site.id) } },
+                    modifier = Modifier
+                        .heightIn(min = 48.dp)
+                        .testTag("cross_footer_load_all"),
+                ) {
+                    Text(
+                        text = if (loadableBuckets.size > 1) "全部加载" else "加载更多",
+                        style = MaterialTheme.typography.labelLarge,
+                        color = colors.crimson,
+                    )
+                }
+            }
+        }
+
+        val paginationError = buckets.firstNotNullOfOrNull { it.errorMessage }
+        if (!paginationError.isNullOrBlank()) {
+            Text(
+                text = paginationError,
+                style = MaterialTheme.typography.bodySmall,
+                color = colors.error,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.testTag("cross_footer_pagination_error"),
+            )
+        }
+
+        FlowRow(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            buckets.forEach { bucket ->
+                val hasPaginationError = bucket.errorMessage != null
+                val canLoadMore = bucket.hasMore && !bucket.isLoadingMore
+                Row(
+                    modifier = Modifier
+                        .heightIn(min = 44.dp)
+                        .clip(RavenShapes.PillShape)
+                        .background(colors.surface1)
+                        .border(
+                            width = 0.5.dp,
+                            color = if (hasPaginationError) colors.error.copy(alpha = 0.35f) else colors.hairline,
+                            shape = RavenShapes.PillShape,
+                        )
+                        .clickable(enabled = canLoadMore, role = Role.Button) {
+                            onLoadMoreSite(bucket.site.id)
+                        }
+                        .padding(horizontal = 12.dp, vertical = 6.dp)
+                        .testTag("cross_footer_load_more_${bucket.site.id.value}"),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    Text(
+                        text = bucket.site.shortName,
+                        style = MaterialTheme.typography.labelMedium,
+                        color = if (hasPaginationError) colors.error else colors.inkPrimary,
+                        maxLines = 1,
+                    )
+                    when {
+                        bucket.isLoadingMore -> CircularProgressIndicator(
+                            modifier = Modifier.size(12.dp),
+                            strokeWidth = 1.6.dp,
+                            color = colors.crimson,
+                        )
+                        hasPaginationError -> Text(
+                            text = "重试",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = colors.error,
+                        )
+                        else -> Text(
+                            text = "+更多",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = colors.crimson,
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+private fun historySiteLabel(
+    entry: SearchHistoryEntry,
+    siteShortNames: Map<SiteId, String>,
+): String = if (entry.siteId.isGlobal) {
+    "跨站"
+} else {
+    siteShortNames[entry.siteId] ?: entry.siteId.value
 }
 
 @Composable

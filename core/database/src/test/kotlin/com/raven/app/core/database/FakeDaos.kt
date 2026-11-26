@@ -809,6 +809,12 @@ internal class FakeSearchHistoryDao : SearchHistoryDao {
                 .take(limit)
         }
 
+    override fun observeAll(limit: Int): Flow<List<SearchHistoryEntity>> =
+        rows.map {
+            it.values.sortedByDescending(SearchHistoryEntity::searchedAt)
+                .take(limit)
+        }
+
     override suspend fun getAll(): List<SearchHistoryEntity> =
         rows.value.values.sortedWith(
             compareBy<SearchHistoryEntity> { it.siteId }.thenByDescending { it.searchedAt },

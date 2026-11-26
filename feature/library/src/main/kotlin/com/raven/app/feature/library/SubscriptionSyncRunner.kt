@@ -158,6 +158,44 @@ class SubscriptionSyncRunner(
         refreshTagSubscription(sub, settings, blockedBySite, cachedTags)
     }
 
+    /**
+     * Checks a specific logical subscription group (multiple per-site rows sharing slug + scope)
+     * with the same bounded concurrency and shared baseline state as [syncAll].
+     */
+    suspend fun syncTags(
+        subs: List<TagSubscription>,
+        onSourceStarted: (String) -> Unit = {},
+        onSourceFinished: (String, SourceCheckOutcome) -> Unit = { _, _ -> },
+    ): SubscriptionSyncSummary = withContext(dispatchers.io) {
+        if (subs.isEmpty()) return@withContext SubscriptionSyncSummary()
+
+        val settings = preferencesRepository.currentSettings()
+        val blockedBySite = blockedTermsRepository.observeAllGrouped().first()
+        val cachedTags = mediaTagCacheRepository?.observeAllTags()?.first().orEmpty()
+        val semaphore = Semaphore(MAX_CONCURRENT_CHECKS)
+
+        val outcomes = coroutineScope {
+            subs.map { sub ->
+                val sourceId = subscriptionSourceId(sub)
+                async(dispatchers.io) {
+                    semaphore.withPermit {
+                        onSourceStarted(sourceId)
+                        val outcome = refreshTagSubscription(sub, settings, blockedBySite, cachedTags)
+                        onSourceFinished(sourceId, outcome)
+                        outcome
+                    }
+                }
+            }.awaitAll()
+        }
+
+        SubscriptionSyncSummary(
+            totalSources = subs.size,
+            newlyDiscoveredCount = outcomes.sumOf { it.newlyDiscovered },
+            baselinedSourceCount = outcomes.count { it.establishedBaseline },
+            failedSourceCount = outcomes.count { it.failed },
+        )
+    }
+
     private suspend fun refreshTagSubscription(
         sub: TagSubscription,
         settings: AppSettings,

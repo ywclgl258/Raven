@@ -3,6 +3,7 @@ package com.raven.app.feature.reader
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.EnterTransition
 import androidx.compose.animation.ExitTransition
+import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.snap
@@ -16,6 +17,9 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsFocusedAsState
+import androidx.compose.foundation.interaction.collectIsHoveredAsState
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -49,24 +53,18 @@ import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.automirrored.rounded.MenuBook
 import androidx.compose.material.icons.automirrored.rounded.Sort
 import androidx.compose.material.icons.filled.Bookmark
-import androidx.compose.material.icons.filled.Favorite
-import androidx.compose.material.icons.filled.WatchLater
 import androidx.compose.material.icons.outlined.Archive
 import androidx.compose.material.icons.outlined.Block
 import androidx.compose.material.icons.outlined.BookmarkAdd
 import androidx.compose.material.icons.outlined.BookmarkBorder
+import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material.icons.outlined.DeleteOutline
-import androidx.compose.material.icons.outlined.Download
-import androidx.compose.material.icons.outlined.DownloadDone
-import androidx.compose.material.icons.outlined.FavoriteBorder
 import androidx.compose.material.icons.outlined.Lock
-import androidx.compose.material.icons.outlined.NotificationsActive
-import androidx.compose.material.icons.outlined.NotificationsNone
 import androidx.compose.material.icons.outlined.OfflinePin
 import androidx.compose.material.icons.outlined.Person
 import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material.icons.outlined.Translate
-import androidx.compose.material.icons.outlined.WatchLater
+import androidx.compose.material.icons.outlined.TravelExplore
 import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.PlayArrow
@@ -93,6 +91,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -100,12 +99,15 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextAlign
@@ -130,12 +132,16 @@ import com.raven.app.core.designsystem.component.RavenGroupedSection
 import com.raven.app.core.designsystem.component.RavenHorizontalShelf
 import com.raven.app.core.designsystem.component.RavenImage
 import com.raven.app.core.designsystem.component.RavenLoadingSkeleton
+import com.raven.app.core.designsystem.component.RavenMorphIcon
+import com.raven.app.core.designsystem.component.RavenMorphToggleIcon
 import com.raven.app.core.designsystem.component.RavenSectionHeader
 import com.raven.app.core.designsystem.component.RavenStatusPill
 import com.raven.app.core.designsystem.component.RavenStatusTone
 import com.raven.app.core.designsystem.component.RavenTopBar
 import com.raven.app.core.designsystem.component.RavenVideoCard
-import com.raven.app.core.designsystem.theme.LocalMotionReduced
+import com.raven.app.core.designsystem.component.ravenBurstFeedback
+import com.raven.app.core.designsystem.motion.MorphSpringPreset
+import com.raven.app.core.designsystem.motion.RavenMorphIcons
 import com.raven.app.core.designsystem.theme.LocalRavenColors
 import com.raven.app.core.designsystem.theme.LocalRavenFeedback
 import com.raven.app.core.designsystem.theme.LocalReduceTransparency
@@ -144,6 +150,7 @@ import com.raven.app.core.designsystem.theme.RavenShapes
 import com.raven.app.core.designsystem.theme.RavenTabularTextStyle
 import com.raven.app.core.designsystem.theme.ambientHeroGlow
 import com.raven.app.core.designsystem.theme.ravenFrostedSurface
+import com.raven.app.core.designsystem.theme.ravenInteractiveLight
 import com.raven.app.core.designsystem.theme.ravenSpringPress
 import com.raven.app.core.designsystem.theme.tabular
 import com.raven.app.core.model.AuthorRef
@@ -151,12 +158,22 @@ import com.raven.app.core.model.DownloadStatus
 import com.raven.app.core.model.GalleryDetail
 import com.raven.app.core.model.MediaItem
 import com.raven.app.core.model.GalleryPage
+import com.raven.app.core.model.ReadingProgress
 import com.raven.app.core.model.PageBookmark
 import com.raven.app.core.model.TagRef
 import java.util.Locale
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.launch
 
 private const val INITIAL_PREVIEW_PAGE_LIMIT = 60
+
+/** Tag sheet copy payload: readable translated label, with raw label / slug fallbacks. */
+internal fun tagClipboardText(translatedLabel: String, tag: TagRef): String =
+    translatedLabel.trim().ifBlank { tag.label.trim() }.ifBlank { tag.slug.trim() }
+
+/** Author sheet copy payload: display name, with the stable author id as fallback. */
+internal fun authorClipboardText(author: AuthorRef): String =
+    author.name.trim().ifBlank { author.id.trim() }
 
 /**
  * Full Raven Obsidian × Apple HIG Gallery Detail screen supporting online & local books,
@@ -175,6 +192,17 @@ fun GalleryDetailScreen(
     val colors = LocalRavenColors.current
     val context = LocalContext.current
     val snackbarHostState = remember { SnackbarHostState() }
+    @Suppress("DEPRECATION")
+    val clipboard = LocalClipboardManager.current
+    val clipboardScope = rememberCoroutineScope()
+    val copyToClipboard: (String, String) -> Unit = remember(clipboard, clipboardScope, snackbarHostState) {
+        { text: String, message: String ->
+            if (text.isNotBlank()) {
+                clipboard.setText(AnnotatedString(text))
+                clipboardScope.launch { snackbarHostState.showSnackbar(message) }
+            }
+        }
+    }
     var showAllPreviewPages by rememberSaveable(uiState.siteId.value, uiState.mediaId) {
         mutableStateOf(false)
     }
@@ -309,8 +337,9 @@ fun GalleryDetailScreen(
                                 )
                             },
                             onOpenAuthor = { author ->
-                                navigator.openAuthorFeed(activeDetail.item.siteId, author)
+                                navigator.openAuthorSearch(author, crossSite = true)
                             },
+                            onLongPressAuthor = viewModel::openAuthorActions,
                             onOpenTag = { tag ->
                                 navigator.openTagFeed(activeDetail.item.siteId, tag)
                             },
@@ -404,15 +433,36 @@ fun GalleryDetailScreen(
             state = activeTagAction,
             blockTagsGlobally = uiState.blockTagsGlobally,
             onDismiss = viewModel::dismissTagActions,
-            onBrowseTag = {
+            onSearchTag = { crossSite ->
                 viewModel.dismissTagActions()
-                navigator.openTagFeed(uiState.siteId, activeTagAction.tag)
+                navigator.openTagSearch(activeTagAction.tag, crossSite)
             },
-            onToggleFavorite = { viewModel.toggleTagFavorite(activeTagAction.tag) },
+            onCopyTag = { text ->
+                viewModel.dismissTagActions()
+                copyToClipboard(text, "已复制标签名「$text」")
+            },
             onToggleSubscription = { viewModel.toggleTagSubscription(activeTagAction.tag) },
             onToggleBlocked = { viewModel.toggleTagBlocked(activeTagAction.tag) },
             onSaveCustomTranslation = { chineseName ->
                 viewModel.saveCustomTagTranslation(activeTagAction.tag, chineseName)
+            },
+        )
+    }
+
+    // Author Long-Press Action Sheet
+    val activeAuthorAction = uiState.authorAction
+    if (activeAuthorAction != null) {
+        AuthorActionBottomSheet(
+            author = activeAuthorAction,
+            onDismiss = viewModel::dismissAuthorActions,
+            onCopyAuthorName = {
+                val text = authorClipboardText(activeAuthorAction)
+                viewModel.dismissAuthorActions()
+                copyToClipboard(text, "已复制作者名「$text」")
+            },
+            onSearchAuthor = { crossSite ->
+                viewModel.dismissAuthorActions()
+                navigator.openAuthorSearch(activeAuthorAction, crossSite)
             },
         )
     }
@@ -452,6 +502,7 @@ private fun GalleryDetailContent(
     onOpenReader: (startPage: Int, offlineOnly: Boolean) -> Unit,
     onOpenVideo: (com.raven.app.core.model.MediaItem) -> Unit,
     onOpenAuthor: (AuthorRef) -> Unit,
+    onLongPressAuthor: (AuthorRef) -> Unit,
     onOpenTag: (TagRef) -> Unit,
     onLongPressTag: (TagRef) -> Unit,
     onToggleWatchLater: () -> Unit,
@@ -495,6 +546,7 @@ private fun GalleryDetailContent(
                     detail = detail,
                     onOpenReader = onOpenReader,
                     onOpenAuthor = onOpenAuthor,
+                    onLongPressAuthor = onLongPressAuthor,
                     onToggleWatchLater = onToggleWatchLater,
                     onToggleFavorite = onToggleFavorite,
                     onOpenShelfPicker = onOpenShelfPicker,
@@ -558,7 +610,7 @@ private fun GalleryDetailContent(
                     ) {
                         RavenSectionHeader(
                             title = "标签",
-                            subtitle = "轻点搜索 · 长按收藏、订阅或屏蔽",
+                            subtitle = "轻点搜索 · 长按复制、订阅或屏蔽",
                         )
                         FlowRow(
                             modifier = Modifier
@@ -574,11 +626,11 @@ private fun GalleryDetailContent(
                                     formatTagLabel(tag)
                                 }
                                 val isBlocked = isTagBlocked(tag)
-                                val isFav = tag.slug.lowercase() in uiState.favoritedTagSlugs
+                                val isSubscribed = tag.slug.lowercase() in uiState.subscribedTagSlugs
                                 GalleryTagChip(
                                     label = label,
                                     namespace = tag.namespace,
-                                    isFavorited = isFav,
+                                    isSubscribed = isSubscribed,
                                     isBlocked = isBlocked,
                                     onClick = { onOpenTag(tag) },
                                     onLongClick = { onLongPressTag(tag) },
@@ -617,6 +669,8 @@ private fun GalleryDetailContent(
                         ),
                         onSelect = onOpenChapter,
                         onRefresh = onRefreshChapters,
+                        readState = uiState.chapterPickerReadState,
+                        onOpenNextUnread = onOpenChapter,
                     )
                 }
             }
@@ -690,29 +744,7 @@ private fun GalleryDetailContent(
                 }
             }
 
-            // 7. Related Galleries (respecting global/per-site blocked terms)
-            val relatedItems = uiState.filteredRelated
-            if (relatedItems.isNotEmpty()) {
-                item(key = "related") {
-                    RavenHorizontalShelf(
-                        title = "相关推荐",
-                        subtitle = "${relatedItems.size} 部作品",
-                    ) {
-                        items(
-                            items = relatedItems,
-                            key = { "rel_${it.compositeKey}" },
-                        ) { relatedItem ->
-                            RavenGalleryCard(
-                                item = relatedItem,
-                                onClick = { onOpenRelated(relatedItem) },
-                                modifier = Modifier.width(136.dp),
-                            )
-                        }
-                    }
-                }
-            }
-
-            // 8. Comments
+            // 7. Comments
             if (detail.comments.isNotEmpty()) {
                 item(key = "comments") {
                     RavenGroupedSection(
@@ -758,6 +790,28 @@ private fun GalleryDetailContent(
                     }
                 }
             }
+
+            // 8. Similar recommendations (respecting global/per-site blocked terms)
+            val relatedItems = uiState.filteredRelated
+            if (relatedItems.isNotEmpty()) {
+                item(key = "related") {
+                    RavenHorizontalShelf(
+                        title = "相似推荐",
+                        subtitle = "${relatedItems.size} 部作品",
+                    ) {
+                        items(
+                            items = relatedItems,
+                            key = { "rel_${it.compositeKey}" },
+                        ) { relatedItem ->
+                            RavenGalleryCard(
+                                item = relatedItem,
+                                onClick = { onOpenRelated(relatedItem) },
+                                modifier = Modifier.width(136.dp),
+                            )
+                        }
+                    }
+                }
+            }
         }
     }
 }
@@ -769,6 +823,7 @@ private fun GalleryHeroHeader(
     detail: GalleryDetail,
     onOpenReader: (startPage: Int, offlineOnly: Boolean) -> Unit,
     onOpenAuthor: (AuthorRef) -> Unit,
+    onLongPressAuthor: (AuthorRef) -> Unit,
     onToggleWatchLater: () -> Unit,
     onToggleFavorite: () -> Unit,
     onOpenShelfPicker: () -> Unit,
@@ -855,7 +910,11 @@ private fun GalleryHeroHeader(
                             .clip(RavenShapes.PillShape)
                             .background(colors.surface2)
                             .border(0.5.dp, colors.hairline, RavenShapes.PillShape)
-                            .clickable(role = Role.Button) { onOpenAuthor(primaryAuthor) }
+                            .combinedClickable(
+                                role = Role.Button,
+                                onClick = { onOpenAuthor(primaryAuthor) },
+                                onLongClick = { onLongPressAuthor(primaryAuthor) },
+                            )
                             .padding(horizontal = 10.dp, vertical = 5.dp),
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(5.dp),
@@ -946,6 +1005,7 @@ private fun GalleryHeroHeader(
                         selected = false,
                         leadingIcon = Icons.Outlined.Person,
                         onClick = { onOpenAuthor(author) },
+                        onLongClick = { onLongPressAuthor(author) },
                     )
                 }
             }
@@ -1033,21 +1093,41 @@ private fun GalleryHeroHeader(
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             FrostedHeroActionButton(
-                icon = if (uiState.isInWatchLater) Icons.Filled.WatchLater else Icons.Outlined.WatchLater,
                 label = if (uiState.isInWatchLater) "已稍后看" else "稍后看",
                 active = uiState.isInWatchLater,
                 feedbackEffect = if (uiState.isInWatchLater) RavenFeedbackEffect.TOGGLE_OFF else RavenFeedbackEffect.TOGGLE_ON,
                 onClick = onToggleWatchLater,
-                modifier = Modifier.weight(1f),
-            )
+                modifier = Modifier
+                    .weight(1f)
+                    .ravenBurstFeedback(trigger = uiState.isInWatchLater),
+            ) { tint, iconModifier ->
+                RavenMorphIcon(
+                    glyph = if (uiState.isInWatchLater) RavenMorphIcons.Check else RavenMorphIcons.Plus,
+                    contentDescription = if (uiState.isInWatchLater) "已稍后看" else "稍后看",
+                    tint = tint,
+                    size = 20.dp,
+                    springPreset = MorphSpringPreset.SNAPPY,
+                    modifier = iconModifier,
+                )
+            }
             FrostedHeroActionButton(
-                icon = if (uiState.isFavorite) Icons.Filled.Favorite else Icons.Outlined.FavoriteBorder,
                 label = if (uiState.isFavorite) "已收藏" else "收藏",
                 active = uiState.isFavorite,
                 feedbackEffect = if (uiState.isFavorite) RavenFeedbackEffect.TOGGLE_OFF else RavenFeedbackEffect.FAVORITE,
                 onClick = onToggleFavorite,
-                modifier = Modifier.weight(1f),
-            )
+                modifier = Modifier
+                    .weight(1f)
+                    .ravenBurstFeedback(trigger = uiState.isFavorite),
+            ) { tint, iconModifier ->
+                RavenMorphIcon(
+                    glyph = if (uiState.isFavorite) RavenMorphIcons.HeartFilled else RavenMorphIcons.HeartOutline,
+                    contentDescription = if (uiState.isFavorite) "已收藏" else "收藏",
+                    tint = tint,
+                    size = 20.dp,
+                    springPreset = MorphSpringPreset.BOUNCY,
+                    modifier = iconModifier,
+                )
+            }
             FrostedHeroActionButton(
                 icon = Icons.Outlined.BookmarkAdd,
                 label = if (inCustomShelf) "已入片单" else "片单",
@@ -1059,12 +1139,20 @@ private fun GalleryHeroHeader(
                 val isDownloaded = uiState.isOfflineComplete ||
                     uiState.activeDownload?.status == DownloadStatus.COMPLETED
                 FrostedHeroActionButton(
-                    icon = if (isDownloaded) Icons.Outlined.DownloadDone else Icons.Outlined.Download,
                     label = if (isDownloaded) "已下载" else "下载",
                     active = isDownloaded,
                     onClick = onOpenDownloadSheet,
                     modifier = Modifier.weight(1f),
-                )
+                ) { tint, iconModifier ->
+                    RavenMorphIcon(
+                        glyph = if (isDownloaded) RavenMorphIcons.DownloadDone else RavenMorphIcons.Download,
+                        contentDescription = if (isDownloaded) "已下载" else "下载",
+                        tint = tint,
+                        size = 20.dp,
+                        springPreset = MorphSpringPreset.SNAPPY,
+                        modifier = iconModifier,
+                    )
+                }
             }
             FrostedHeroActionButton(
                 icon = Icons.Outlined.Archive,
@@ -1087,6 +1175,33 @@ private fun FrostedHeroActionButton(
     modifier: Modifier = Modifier,
     enabled: Boolean = true,
     feedbackEffect: RavenFeedbackEffect = RavenFeedbackEffect.TAP,
+) {
+    FrostedHeroActionButton(
+        label = label,
+        active = active,
+        onClick = onClick,
+        modifier = modifier,
+        enabled = enabled,
+        feedbackEffect = feedbackEffect,
+    ) { tint, iconModifier ->
+        Icon(
+            imageVector = icon,
+            contentDescription = label,
+            tint = tint,
+            modifier = iconModifier.size(20.dp),
+        )
+    }
+}
+
+@Composable
+private fun FrostedHeroActionButton(
+    label: String,
+    active: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    enabled: Boolean = true,
+    feedbackEffect: RavenFeedbackEffect = RavenFeedbackEffect.TAP,
+    iconContent: @Composable (tint: Color, modifier: Modifier) -> Unit,
 ) {
     val colors = LocalRavenColors.current
     val reduceTransparency = LocalReduceTransparency.current
@@ -1134,16 +1249,12 @@ private fun FrostedHeroActionButton(
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(4.dp),
     ) {
-        Icon(
-            imageVector = icon,
-            contentDescription = label,
-            tint = tint,
-            modifier = Modifier
-                .size(20.dp)
-                .graphicsLayer {
-                    scaleX = iconScale
-                    scaleY = iconScale
-                },
+        iconContent(
+            tint,
+            Modifier.graphicsLayer {
+                scaleX = iconScale
+                scaleY = iconScale
+            },
         )
         Text(
             text = label,
@@ -1159,7 +1270,7 @@ private fun FrostedHeroActionButton(
 private fun GalleryTagChip(
     label: String,
     namespace: String,
-    isFavorited: Boolean,
+    isSubscribed: Boolean,
     isBlocked: Boolean,
     onClick: () -> Unit,
     onLongClick: () -> Unit,
@@ -1168,12 +1279,12 @@ private fun GalleryTagChip(
     val interactionSource = remember { MutableInteractionSource() }
     val borderColor = when {
         isBlocked -> colors.error.copy(alpha = 0.45f)
-        isFavorited -> colors.crimson.copy(alpha = 0.45f)
+        isSubscribed -> colors.crimson.copy(alpha = 0.45f)
         else -> colors.hairline
     }
     val containerColor = when {
         isBlocked -> colors.error.copy(alpha = 0.12f)
-        isFavorited -> colors.crimson.copy(alpha = 0.14f)
+        isSubscribed -> colors.crimson.copy(alpha = 0.14f)
         else -> colors.surface1
     }
 
@@ -1207,7 +1318,7 @@ private fun GalleryTagChip(
             style = MaterialTheme.typography.labelMedium,
             color = when {
                 isBlocked -> colors.error
-                isFavorited -> colors.crimson
+                isSubscribed -> colors.crimson
                 else -> colors.inkPrimary
             },
             maxLines = 1,
@@ -1608,14 +1719,91 @@ private fun SelectiveDownloadBottomSheet(
     }
 }
 
+@Composable
+private fun GalleryMorphGroupedRow(
+    title: String,
+    onClick: () -> Unit,
+    leadingIcon: @Composable () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val colors = LocalRavenColors.current
+    val motionReduced = LocalMotionReduced.current
+    val feedback = LocalRavenFeedback.current
+    val interactionSource = remember { MutableInteractionSource() }
+    val pressed by interactionSource.collectIsPressedAsState()
+    val hovered by interactionSource.collectIsHoveredAsState()
+    val focused by interactionSource.collectIsFocusedAsState()
+    val rowBackdropColor by animateColorAsState(
+        targetValue = when {
+            pressed -> colors.surface2.copy(alpha = 0.72f)
+            hovered || focused -> colors.surface2.copy(alpha = 0.42f)
+            else -> Color.Transparent
+        },
+        animationSpec = if (motionReduced) snap() else tween(durationMillis = 120),
+        label = "galleryMorphGroupedRowBackdrop",
+    )
+
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .heightIn(min = 56.dp)
+            .background(rowBackdropColor)
+            .ravenInteractiveLight(
+                interactionSource = interactionSource,
+                shape = RectangleShape,
+                enabled = true,
+                glowColor = colors.interactiveGlow,
+                highlightAlpha = 0.04f,
+            )
+            .clickable(
+                interactionSource = interactionSource,
+                indication = null,
+                enabled = true,
+                role = Role.Button,
+                onClick = {
+                    feedback.perform(RavenFeedbackEffect.TAP)
+                    onClick()
+                },
+            )
+            .padding(horizontal = 16.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(
+            modifier = Modifier
+                .size(32.dp)
+                .clip(RavenShapes.ControlShape)
+                .background(colors.surface2)
+                .border(
+                    width = 0.5.dp,
+                    brush = Brush.verticalGradient(
+                        colors = listOf(colors.lightRimTop, colors.hairline),
+                    ),
+                    shape = RavenShapes.ControlShape,
+                ),
+            contentAlignment = Alignment.Center,
+        ) {
+            leadingIcon()
+        }
+        Spacer(modifier = Modifier.width(12.dp))
+        Text(
+            text = title,
+            style = MaterialTheme.typography.bodyLarge,
+            color = colors.inkPrimary,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f),
+        )
+    }
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun TagActionBottomSheet(
     state: TagActionState,
     blockTagsGlobally: Boolean,
     onDismiss: () -> Unit,
-    onBrowseTag: () -> Unit,
-    onToggleFavorite: () -> Unit,
+    onSearchTag: (crossSite: Boolean) -> Unit,
+    onCopyTag: (text: String) -> Unit,
     onToggleSubscription: () -> Unit,
     onToggleBlocked: () -> Unit,
     onSaveCustomTranslation: (String) -> Unit,
@@ -1637,32 +1825,52 @@ private fun TagActionBottomSheet(
         if (state.tag.slug != state.translatedLabel) add(state.tag.slug)
     }.joinToString(" · ").takeIf(String::isNotBlank)
 
+    val copyText = tagClipboardText(state.translatedLabel, state.tag)
     RavenBottomSheet(
         onDismissRequest = onDismiss,
         title = state.translatedLabel,
         subtitle = subtitle,
         modifier = Modifier.testTag(ReaderTestTags.GALLERY_TAG_ACTION_SHEET),
     ) {
-        RavenGroupedSection {
+        RavenGroupedSection(title = "搜索标签") {
             RavenGroupedRow(
-                title = "浏览该标签作品",
+                title = "本站搜索该标签",
+                subtitle = "在当前搜索站点查找该标签作品",
                 icon = Icons.Outlined.Search,
                 showChevron = true,
-                onClick = onBrowseTag,
+                onClick = { onSearchTag(false) },
             )
             RavenGroupedDivider(insetWithIcon = true)
             RavenGroupedRow(
-                title = if (state.isFavorited) "取消收藏标签" else "收藏该标签",
-                icon = if (state.isFavorited) Icons.Filled.Favorite else Icons.Outlined.FavoriteBorder,
-                iconTint = if (state.isFavorited) colors.crimson else colors.inkPrimary,
-                onClick = onToggleFavorite,
+                title = "跨站搜索该标签",
+                subtitle = "在全部可搜索站点中查找该标签作品",
+                icon = Icons.Outlined.TravelExplore,
+                showChevron = true,
+                onClick = { onSearchTag(true) },
             )
             RavenGroupedDivider(insetWithIcon = true)
             RavenGroupedRow(
-                title = if (state.isSubscribed) "取消订阅标签更新" else "订阅该标签更新",
-                icon = if (state.isSubscribed) Icons.Outlined.NotificationsActive else Icons.Outlined.NotificationsNone,
-                iconTint = if (state.isSubscribed) colors.crimson else colors.inkPrimary,
+                title = "复制标签",
+                subtitle = "复制可读标签名「$copyText」到剪贴板",
+                icon = Icons.Outlined.ContentCopy,
+                enabled = copyText.isNotBlank(),
+                onClick = { onCopyTag(copyText) },
+            )
+            RavenGroupedDivider(insetWithIcon = true)
+            GalleryMorphGroupedRow(
+                title = if (state.isSubscribed) "取消订阅标签更新" else "订阅标签更新",
                 onClick = onToggleSubscription,
+                leadingIcon = {
+                    RavenMorphToggleIcon(
+                        active = state.isSubscribed,
+                        activeGlyph = RavenMorphIcons.BellActive,
+                        inactiveGlyph = RavenMorphIcons.BellOutline,
+                        activeTint = colors.crimson,
+                        inactiveTint = colors.inkPrimary,
+                        size = 18.dp,
+                        springPreset = MorphSpringPreset.BOUNCY,
+                    )
+                },
             )
             RavenGroupedDivider(insetWithIcon = true)
             RavenGroupedRow(
@@ -1766,8 +1974,51 @@ private fun TagActionBottomSheet(
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun GalleryChapterPickerSection(
+private fun AuthorActionBottomSheet(
+    author: AuthorRef,
+    onDismiss: () -> Unit,
+    onCopyAuthorName: () -> Unit,
+    onSearchAuthor: (crossSite: Boolean) -> Unit,
+) {
+    val displayName = authorClipboardText(author)
+    RavenBottomSheet(
+        onDismissRequest = onDismiss,
+        title = displayName.ifBlank { "作者" },
+        subtitle = author.role.takeIf { it.isNotBlank() } ?: "作者操作",
+        modifier = Modifier.testTag("gallery_author_action_sheet"),
+    ) {
+        RavenGroupedSection {
+            RavenGroupedRow(
+                title = "复制作者名",
+                subtitle = "复制「$displayName」到剪贴板",
+                icon = Icons.Outlined.ContentCopy,
+                enabled = displayName.isNotBlank(),
+                onClick = onCopyAuthorName,
+            )
+            RavenGroupedDivider(insetWithIcon = true)
+            RavenGroupedRow(
+                title = "本站搜索作者",
+                subtitle = "在当前搜索站点查找该作者作品",
+                icon = Icons.Outlined.Search,
+                showChevron = true,
+                onClick = { onSearchAuthor(false) },
+            )
+            RavenGroupedDivider(insetWithIcon = true)
+            RavenGroupedRow(
+                title = "跨站搜索作者",
+                subtitle = "在全部可搜索站点中查找该作者作品",
+                icon = Icons.Outlined.TravelExplore,
+                showChevron = true,
+                onClick = { onSearchAuthor(true) },
+            )
+        }
+    }
+}
+
+@Composable
+internal fun GalleryChapterPickerSection(
     chapters: List<MediaItem>,
     loading: Boolean,
     error: String?,
@@ -1776,6 +2027,11 @@ private fun GalleryChapterPickerSection(
     currentChapterHints: List<String>,
     onSelect: (MediaItem) -> Unit,
     onRefresh: () -> Unit,
+    title: String = "选集",
+    modifier: Modifier = Modifier,
+    fillAvailableHeight: Boolean = false,
+    readState: ChapterPickerReadState = ChapterPickerReadState(),
+    onOpenNextUnread: ((MediaItem) -> Unit)? = null,
 ) {
     val colors = LocalRavenColors.current
     var ascending by rememberSaveable { mutableStateOf(true) }
@@ -1791,21 +2047,25 @@ private fun GalleryChapterPickerSection(
     LaunchedEffect(currentIndex, ordered.size) {
         if (currentIndex > 0) gridState.scrollToItem(currentIndex)
     }
+    val completedCount = chapters.count { readState.isCompleted(it.id) }
 
     Column(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = modifier.fillMaxWidth(),
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(horizontal = 16.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Column(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(2.dp),
+            ) {
                 Text(
-                    text = "选集",
+                    text = title,
                     style = MaterialTheme.typography.titleMedium,
                     color = colors.inkPrimary,
                 )
@@ -1813,19 +2073,41 @@ private fun GalleryChapterPickerSection(
                     text = when {
                         loading -> "章节载入中…"
                         chapters.isEmpty() -> "暂无章节"
+                        completedCount > 0 -> "共 ${chapters.size} 章 · 已读 $completedCount 章"
                         else -> "共 ${chapters.size} 章 · 点击切换"
                     },
                     style = MaterialTheme.typography.labelMedium.tabular(),
                     color = colors.inkSecondary,
                 )
             }
-            RavenFilterChip(
-                label = if (ascending) "正序" else "倒序",
-                selected = false,
-                leadingIcon = Icons.AutoMirrored.Rounded.Sort,
-                onClick = { ascending = !ascending },
-                modifier = Modifier.testTag("chapter_sort_chip"),
-            )
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                if (onOpenNextUnread != null && chapters.isNotEmpty()) {
+                    RavenFilterChip(
+                        label = readState.nextUnreadChapter?.let { "下一未读" }
+                            ?: readState.nextUnreadBoundaryLabel
+                            ?: "下一未读",
+                        selected = false,
+                        leadingIcon = Icons.Rounded.PlayArrow,
+                        enabled = readState.nextUnreadChapter != null,
+                        onClick = {
+                            readState.nextUnreadChapter?.let { chapter ->
+                                onOpenNextUnread.invoke(chapter)
+                            }
+                        },
+                        modifier = Modifier.testTag("gallery_chapter_next_unread"),
+                    )
+                }
+                RavenFilterChip(
+                    label = if (ascending) "正序" else "倒序",
+                    selected = false,
+                    leadingIcon = Icons.AutoMirrored.Rounded.Sort,
+                    onClick = { ascending = !ascending },
+                    modifier = Modifier.testTag("chapter_sort_chip"),
+                )
+            }
         }
 
         when {
@@ -1875,7 +2157,13 @@ private fun GalleryChapterPickerSection(
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(horizontal = 16.dp)
-                    .heightIn(max = 520.dp),
+                    .then(
+                        if (fillAvailableHeight) {
+                            Modifier.weight(1f)
+                        } else {
+                            Modifier.heightIn(max = 520.dp)
+                        },
+                    ),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
@@ -1889,6 +2177,7 @@ private fun GalleryChapterPickerSection(
                     GalleryChapterTile(
                         title = chapter.title,
                         selected = selected,
+                        progress = readState.progressByMediaId[chapter.id],
                         onClick = { onSelect(chapter) },
                     )
                 }
@@ -1897,25 +2186,24 @@ private fun GalleryChapterPickerSection(
     }
 }
 
-private fun isMatchingSerialChapter(
-    chapter: MediaItem,
-    currentChapterId: String,
-    currentChapterUrl: String,
-    hints: List<String>,
-): Boolean =
-    chapter.id == currentChapterId ||
-        (currentChapterUrl.isNotBlank() && chapter.url == currentChapterUrl) ||
-        hints.any { hint -> hint.isNotBlank() && (chapter.id == hint || chapter.id.endsWith(":$hint")) }
 
 @Composable
 private fun GalleryChapterTile(
     title: String,
     selected: Boolean,
+    progress: ReadingProgress?,
     onClick: () -> Unit,
 ) {
     val colors = LocalRavenColors.current
     val container = if (selected) colors.crimson.copy(alpha = 0.16f) else colors.surface1
     val borderColor = if (selected) colors.crimson else colors.hairline
+    val progressLabel = chapterProgressLabel(progress)
+    val completed = progress?.completed == true
+    val markerColor = when {
+        selected -> colors.crimson
+        completed -> colors.success
+        else -> colors.inkSecondary
+    }
     Box(
         modifier = Modifier
             .fillMaxWidth()
@@ -1927,13 +2215,40 @@ private fun GalleryChapterTile(
             .padding(horizontal = 8.dp, vertical = 10.dp),
         contentAlignment = Alignment.Center,
     ) {
-        Text(
-            text = title,
-            style = MaterialTheme.typography.labelMedium,
-            color = if (selected) colors.crimson else colors.inkPrimary,
-            maxLines = 2,
-            overflow = TextOverflow.Ellipsis,
-            textAlign = androidx.compose.ui.text.style.TextAlign.Center,
-        )
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(2.dp),
+        ) {
+            Text(
+                text = title,
+                style = MaterialTheme.typography.labelMedium,
+                color = if (selected) colors.crimson else colors.inkPrimary,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+                textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+            )
+            if (progressLabel != null) {
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(3.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    if (completed) {
+                        Icon(
+                            imageVector = Icons.Rounded.Check,
+                            contentDescription = null,
+                            tint = markerColor,
+                            modifier = Modifier.size(11.dp),
+                        )
+                    }
+                    Text(
+                        text = progressLabel,
+                        style = MaterialTheme.typography.labelSmall.tabular(),
+                        color = markerColor,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+            }
+        }
     }
 }

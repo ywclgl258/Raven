@@ -4,17 +4,39 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.raven.app.core.common.TagDictionary
 import com.raven.app.core.database.domain.CompletionPolicy
+import com.raven.app.core.database.model.ShelfWithSummary
 import com.raven.app.core.database.repository.FavoriteRepository
 import com.raven.app.core.database.repository.HistoryRepository
 import com.raven.app.core.database.repository.MediaTagCacheRepository
 import com.raven.app.core.database.repository.ShelfRepository
+import com.raven.app.core.model.DownloadItem
 import com.raven.app.core.model.DownloadStatus
 import com.raven.app.core.model.SiteId
+import com.raven.app.core.model.TagRef
 import com.raven.app.core.sitespi.SiteRegistry
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
+
+private const val DAY_MILLIS: Long = 24L * 60L * 60L * 1000L
+
+/**
+ * Time window applied to local progress, favorites, completed downloads, and shelf activity
+ * before aggregating [StatsUiState]. Comparing timestamps to [startEpochMs] keeps the filter
+ * deterministic with an injected clock and avoids collecting a separate repository copy.
+ */
+enum class StatsTimeRange(
+    val label: String,
+    private val lookbackMs: Long?,
+) {
+    ALL("全部", null),
+    LAST_7_DAYS("近 7 天", 7L * DAY_MILLIS),
+    LAST_30_DAYS("近 30 天", 30L * DAY_MILLIS);
+
+    internal fun startEpochMs(nowMs: Long): Long? = lookbackMs?.let { nowMs - it }
+}
 
 /**
  * Per-site aggregated activity breakdown shown in [StatsScreen].
@@ -42,6 +64,9 @@ data class TagFrequencyStat(
 )
 
 data class StatsUiState(
+    val isLoading: Boolean = true,
+    val selectedRange: StatsTimeRange = StatsTimeRange.ALL,
+    val hasAnyData: Boolean = false,
     val totalWatchDurationMs: Long = 0L,
     val totalWatchedCount: Int = 0,
     val completedWatchCount: Int = 0,
@@ -56,9 +81,16 @@ data class StatsUiState(
     val topTags: List<TagFrequencyStat> = emptyList(),
 )
 
+private data class StatsLibrarySnapshot(
+    val shelves: List<ShelfWithSummary>,
+    val downloads: List<DownloadItem>,
+    val cachedTags: Map<String, List<TagRef>>,
+    val range: StatsTimeRange,
+)
+
 /**
- * Reactive personal analytics ViewModel aggregating watch duration, reading volume,
- * per-site distribution, offline storage footprint, and top recurring tags.
+ * Reactive personal analytics ViewModel aggregating watch progress duration, reading progress
+ * pages, per-site distribution, offline storage footprint, and top recurring tags.
  */
 class StatsViewModel(
     historyRepository: HistoryRepository,
@@ -68,7 +100,14 @@ class StatsViewModel(
     mediaTagCacheRepository: MediaTagCacheRepository,
     private val siteRegistry: SiteRegistry,
     private val tagDictionary: TagDictionary = TagDictionary.default,
+    private val clock: () -> Long = System::currentTimeMillis,
 ) : ViewModel() {
+
+    private val selectedRange = MutableStateFlow(StatsTimeRange.ALL)
+
+    fun selectRange(range: StatsTimeRange) {
+        selectedRange.value = range
+    }
 
     val uiState: StateFlow<StatsUiState> = combine(
         combine(
@@ -82,26 +121,45 @@ class StatsViewModel(
             shelfRepository.observeShelvesWithSummary(),
             downloadGateway.downloads,
             mediaTagCacheRepository.observeAllTags(),
-        ) { shelves, downloads, cachedTags ->
-            Triple(shelves, downloads, cachedTags)
+            selectedRange,
+        ) { shelves, downloads, cachedTags, range ->
+            StatsLibrarySnapshot(
+                shelves = shelves,
+                downloads = downloads,
+                cachedTags = cachedTags,
+                range = range,
+            )
         },
-    ) { (watches, readings, favorites), (shelves, downloads, cachedTags) ->
-        val completedDownloads = downloads.filter { it.status == DownloadStatus.COMPLETED }
+    ) { (watches, readings, favorites), library ->
+        val cutoff = library.range.startEpochMs(clock())
+
+        fun inRange(epochMs: Long): Boolean = cutoff == null || epochMs >= cutoff
+
+        val rangedWatches = watches.filter { inRange(it.updatedAt) }
+        val rangedReadings = readings.filter { inRange(it.updatedAt) }
+        val rangedFavorites = favorites.filter { inRange(it.addedAt) }
+        val allCompletedDownloads = library.downloads.filter { it.status == DownloadStatus.COMPLETED }
+        val completedDownloads = allCompletedDownloads.filter { inRange(it.updatedAt) }
+        val hasAnyData = watches.isNotEmpty() ||
+            readings.isNotEmpty() ||
+            favorites.isNotEmpty() ||
+            allCompletedDownloads.isNotEmpty()
+
         val involvedKeys = buildSet {
-            watches.forEach { add("${it.siteId.value}:${it.mediaId}") }
-            readings.forEach { add("${it.siteId.value}:${it.mediaId}") }
-            favorites.forEach { add("${it.siteId.value}:${it.targetId}") }
+            rangedWatches.forEach { add("${it.siteId.value}:${it.mediaId}") }
+            rangedReadings.forEach { add("${it.siteId.value}:${it.mediaId}") }
+            rangedFavorites.forEach { add("${it.siteId.value}:${it.targetId}") }
         }
 
         val siteIds = buildSet {
-            watches.forEach { add(it.siteId) }
-            readings.forEach { add(it.siteId) }
-            favorites.forEach { add(it.siteId) }
+            rangedWatches.forEach { add(it.siteId) }
+            rangedReadings.forEach { add(it.siteId) }
+            rangedFavorites.forEach { add(it.siteId) }
             completedDownloads.forEach { add(it.siteId) }
         }
-        val watchBySite = watches.groupBy { it.siteId }
-        val readBySite = readings.groupBy { it.siteId }
-        val favBySite = favorites.groupBy { it.siteId }
+        val watchBySite = rangedWatches.groupBy { it.siteId }
+        val readBySite = rangedReadings.groupBy { it.siteId }
+        val favBySite = rangedFavorites.groupBy { it.siteId }
         val dlBySite = completedDownloads.groupBy { it.siteId }
 
         val breakdowns = siteIds.map { siteId ->
@@ -121,7 +179,7 @@ class StatsViewModel(
 
         val tagCounts = HashMap<String, Pair<String, Int>>()
         for (key in involvedKeys) {
-            val refs = cachedTags[key].orEmpty()
+            val refs = library.cachedTags[key].orEmpty()
             val seenSlugs = HashSet<String>()
             for (tag in refs) {
                 val slug = tag.slug.trim().lowercase()
@@ -137,14 +195,19 @@ class StatsViewModel(
             .take(16)
 
         StatsUiState(
-            totalWatchDurationMs = watches.sumOf { it.positionMs.coerceAtLeast(0L) },
-            totalWatchedCount = watches.size,
-            completedWatchCount = watches.count { CompletionPolicy.isWatchCompleted(it) },
-            totalReadPages = readings.sumOf { it.currentPage.coerceAtLeast(0) },
-            totalReadCount = readings.size,
-            completedReadCount = readings.count { CompletionPolicy.isReadingCompleted(it) },
-            favoriteCount = favorites.size,
-            shelfCount = shelves.size,
+            isLoading = false,
+            selectedRange = library.range,
+            hasAnyData = hasAnyData,
+            totalWatchDurationMs = rangedWatches.sumOf { it.positionMs.coerceAtLeast(0L) },
+            totalWatchedCount = rangedWatches.size,
+            completedWatchCount = rangedWatches.count { CompletionPolicy.isWatchCompleted(it) },
+            totalReadPages = rangedReadings.sumOf { it.currentPage.coerceAtLeast(0) },
+            totalReadCount = rangedReadings.size,
+            completedReadCount = rangedReadings.count { CompletionPolicy.isReadingCompleted(it) },
+            favoriteCount = rangedFavorites.size,
+            shelfCount = library.shelves.count {
+                cutoff == null || it.shelf.modifiedAt >= cutoff
+            },
             downloadCompletedCount = completedDownloads.size,
             downloadTotalBytes = completedDownloads.sumOf { (it.totalBytes ?: it.downloadedBytes).coerceAtLeast(0L) },
             siteBreakdowns = breakdowns,

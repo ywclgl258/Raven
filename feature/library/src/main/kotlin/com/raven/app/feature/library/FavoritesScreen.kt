@@ -13,7 +13,9 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
@@ -22,6 +24,10 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.staggeredgrid.LazyVerticalStaggeredGrid
+import androidx.compose.foundation.lazy.staggeredgrid.StaggeredGridCells
+import androidx.compose.foundation.lazy.staggeredgrid.StaggeredGridItemSpan
+import androidx.compose.foundation.lazy.staggeredgrid.items as staggeredItems
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.outlined.BookmarkAdd
@@ -56,7 +62,9 @@ import com.raven.app.core.database.repository.FavoriteRepository
 import com.raven.app.core.database.repository.ShelfRepository
 import com.raven.app.core.designsystem.component.RavenCompactMediaRow
 import com.raven.app.core.designsystem.component.RavenEmptyState
+import com.raven.app.core.designsystem.component.RavenGalleryCard
 import com.raven.app.core.designsystem.component.RavenFilterChipRow
+import com.raven.app.core.designsystem.component.RavenVideoCard
 import com.raven.app.core.designsystem.component.RavenSearchField
 import com.raven.app.core.designsystem.component.RavenStatusPill
 import com.raven.app.core.designsystem.component.RavenStatusTone
@@ -67,6 +75,7 @@ import com.raven.app.core.designsystem.theme.ravenSpringPress
 import com.raven.app.core.designsystem.theme.tabular
 import com.raven.app.core.model.FavoriteItem
 import com.raven.app.core.model.FavoriteKind
+import com.raven.app.core.model.MediaItem
 import com.raven.app.core.model.SiteId
 import com.raven.app.core.sitespi.SitePlugin
 import com.raven.app.core.sitespi.SiteRegistry
@@ -308,6 +317,7 @@ fun FavoritesScreen(
     modifier: Modifier = Modifier,
     siteId: SiteId? = null,
     embedded: Boolean = false,
+    collectionLayout: LibraryCollectionLayout = defaultCollectionLayout(),
     viewModel: FavoritesViewModel = koinViewModel(
         key = "favorites_${siteId?.value.orEmpty()}",
         parameters = { parametersOf(FavoritesParams(siteId)) },
@@ -363,201 +373,20 @@ fun FavoritesScreen(
             },
         )
 
-        LazyColumn(
-            modifier = Modifier.weight(1f),
-            contentPadding = PaddingValues(top = 10.dp, bottom = 24.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp),
-        ) {
-            if (!uiState.message.isNullOrBlank()) {
-                item(key = "fav_msg") {
-                    LibraryFeedbackBanner(
-                        message = uiState.message.orEmpty(),
-                        tone = RavenStatusTone.ACCENT,
-                        onDismiss = viewModel::clearMessage,
-                        modifier = Modifier.padding(horizontal = 16.dp),
-                    )
-                }
-            }
-
-            item(key = "fav_search") {
-                RavenSearchField(
-                    query = uiState.searchQuery,
-                    onQueryChange = viewModel::updateSearchQuery,
-                    placeholder = "搜索收藏的作品、标签或作者…",
-                    modifier = Modifier.padding(horizontal = 16.dp),
-                )
-            }
-
-            item(key = "fav_kind_chips") {
-                RavenFilterChipRow(
-                    items = FavoriteKindFilter.entries,
-                    selectedItem = uiState.kindFilter,
-                    labelProvider = { it.label },
-                    onItemSelected = viewModel::selectKindFilter,
-                    keyProvider = { it.name },
-                )
-            }
-
-            if (uiState.siteOptions.isNotEmpty()) {
-                item(key = "fav_site_chips") {
-                    LibrarySiteFilterChips(
-                        options = uiState.siteOptions,
-                        selectedSiteId = uiState.siteFilter,
-                        onSelectSite = viewModel::selectSiteFilter,
-                    )
-                }
-            }
-
-            if (uiState.items.isEmpty()) {
-                item(key = "fav_empty") {
-                    RavenEmptyState(
-                        title = if (uiState.totalCount == 0) "暂无收藏内容" else "没有匹配的收藏",
-                        message = if (uiState.totalCount == 0) {
-                            "收藏喜欢的作品、标签或作者后，可在这里跨站统一检索并批量整理进片单。"
-                        } else {
-                            "尝试清除关键词或切换类型与站点筛选。"
-                        },
-                        icon = Icons.Outlined.FavoriteBorder,
-                    )
-                }
-            } else {
-                items(
-                    items = uiState.items,
-                    key = { it.compositeKey },
-                ) { fav ->
-                    val selected = fav.compositeKey in uiState.selectedKeys
-                    val siteLabel = uiState.siteLabels[fav.siteId] ?: fav.siteId.value
-                    val mediaItem = fav.toMediaItemOrNull()
-
-                    if (mediaItem != null) {
-                        RavenCompactMediaRow(
-                            item = mediaItem,
-                            onClick = {
-                                if (uiState.selectionMode) {
-                                    viewModel.toggleSelectItem(fav)
-                                } else {
-                                    navigator.openFavorite(fav, viewModel.pluginFor(fav.siteId))
-                                }
-                            },
-                            onLongClick = { viewModel.toggleSelectItem(fav) },
-                            subtitle = "$siteLabel · ${fav.kind.displayLabel()} · ${formatRelativeTime(fav.addedAt)}",
-                            trailingContent = {
-                                if (uiState.selectionMode) {
-                                    SelectCheckBadge(selected = selected)
-                                } else {
-                                    Row(verticalAlignment = Alignment.CenterVertically) {
-                                        IconButton(
-                                            onClick = { shelfPickerTargets = listOf(fav) },
-                                            modifier = Modifier.size(36.dp),
-                                        ) {
-                                            Icon(
-                                                imageVector = Icons.Outlined.BookmarkAdd,
-                                                contentDescription = "加入片单",
-                                                tint = colors.inkSecondary,
-                                                modifier = Modifier.size(18.dp),
-                                            )
-                                        }
-                                        IconButton(
-                                            onClick = { viewModel.removeFavorite(fav) },
-                                            modifier = Modifier.size(36.dp),
-                                        ) {
-                                            Icon(
-                                                imageVector = Icons.Outlined.DeleteOutline,
-                                                contentDescription = "取消收藏",
-                                                tint = colors.inkTertiary,
-                                                modifier = Modifier.size(18.dp),
-                                            )
-                                        }
-                                    }
-                                }
-                            },
-                            modifier = Modifier
-                                .animateItem()
-                                .padding(horizontal = 16.dp),
-                        )
-                    } else {
-                        // Tag / Author / Character favorite row
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(horizontal = 16.dp)
-                                .clip(RavenShapes.CardShape)
-                                .background(colors.surface1)
-                                .border(0.5.dp, colors.hairline, RavenShapes.CardShape)
-                                .ravenSpringPress()
-                                .clickable(role = Role.Button) {
-                                    if (uiState.selectionMode) {
-                                        viewModel.toggleSelectItem(fav)
-                                    } else {
-                                        navigator.openFavorite(fav, viewModel.pluginFor(fav.siteId))
-                                    }
-                                }
-                                .padding(12.dp),
-                            horizontalArrangement = Arrangement.spacedBy(12.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            Box(
-                                modifier = Modifier
-                                    .size(40.dp)
-                                    .clip(RavenShapes.ControlShape)
-                                    .background(colors.surface2),
-                                contentAlignment = Alignment.Center,
-                            ) {
-                                Icon(
-                                    imageVector = if (fav.kind == FavoriteKind.AUTHOR) {
-                                        Icons.Outlined.Person
-                                    } else {
-                                        Icons.Outlined.Tag
-                                    },
-                                    contentDescription = null,
-                                    tint = colors.crimson,
-                                    modifier = Modifier.size(20.dp),
-                                )
-                            }
-                            Column(
-                                modifier = Modifier.weight(1f),
-                                verticalArrangement = Arrangement.spacedBy(3.dp),
-                            ) {
-                                Text(
-                                    text = fav.title,
-                                    style = MaterialTheme.typography.titleSmall,
-                                    color = colors.inkPrimary,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis,
-                                )
-                                Row(
-                                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                                    verticalAlignment = Alignment.CenterVertically,
-                                ) {
-                                    RavenStatusPill(text = fav.kind.displayLabel())
-                                    Text(
-                                        text = "$siteLabel · ${formatRelativeTime(fav.addedAt)}",
-                                        style = MaterialTheme.typography.bodySmall.tabular(),
-                                        color = colors.inkSecondary,
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis,
-                                    )
-                                }
-                            }
-                            if (uiState.selectionMode) {
-                                SelectCheckBadge(selected = selected)
-                            } else {
-                                IconButton(
-                                    onClick = { viewModel.removeFavorite(fav) },
-                                    modifier = Modifier.size(36.dp),
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Outlined.DeleteOutline,
-                                        contentDescription = "取消收藏",
-                                        tint = colors.inkTertiary,
-                                        modifier = Modifier.size(18.dp),
-                                    )
-                                }
-                            }
-                        }
-                    }
-                }
-            }
+        if (collectionLayout == LibraryCollectionLayout.WATERFALL) {
+            FavoritesWaterfallContent(
+                uiState = uiState,
+                viewModel = viewModel,
+                navigator = navigator,
+                onAddToShelf = { shelfPickerTargets = listOf(it) },
+            )
+        } else {
+            FavoritesListContent(
+                uiState = uiState,
+                viewModel = viewModel,
+                navigator = navigator,
+                onAddToShelf = { shelfPickerTargets = listOf(it) },
+            )
         }
 
         val motionReduced = com.raven.app.core.designsystem.theme.LocalMotionReduced.current
@@ -612,5 +441,498 @@ fun FavoritesScreen(
             onConfirm = { viewModel.clearSiteFavorites(siteId) },
             onDismiss = { showClearConfirm = false },
         )
+    }
+}
+
+@Composable
+private fun ColumnScope.FavoritesListContent(
+    uiState: FavoritesUiState,
+    viewModel: FavoritesViewModel,
+    navigator: LibraryNavigator,
+    onAddToShelf: (FavoriteItem) -> Unit,
+) {
+    val colors = LocalRavenColors.current
+    LazyColumn(
+        modifier = Modifier.weight(1f),
+        contentPadding = PaddingValues(top = 10.dp, bottom = 24.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        if (!uiState.message.isNullOrBlank()) {
+            item(key = "fav_msg") {
+                LibraryFeedbackBanner(
+                    message = uiState.message.orEmpty(),
+                    tone = RavenStatusTone.ACCENT,
+                    onDismiss = viewModel::clearMessage,
+                    modifier = Modifier.padding(horizontal = 16.dp),
+                )
+            }
+        }
+
+        item(key = "fav_search") {
+            RavenSearchField(
+                query = uiState.searchQuery,
+                onQueryChange = viewModel::updateSearchQuery,
+                placeholder = "搜索收藏的作品、标签或作者…",
+                modifier = Modifier.padding(horizontal = 16.dp),
+            )
+        }
+
+        item(key = "fav_kind_chips") {
+            RavenFilterChipRow(
+                items = FavoriteKindFilter.entries,
+                selectedItem = uiState.kindFilter,
+                labelProvider = { it.label },
+                onItemSelected = viewModel::selectKindFilter,
+                keyProvider = { it.name },
+            )
+        }
+
+        if (uiState.siteOptions.isNotEmpty()) {
+            item(key = "fav_site_chips") {
+                LibrarySiteFilterChips(
+                    options = uiState.siteOptions,
+                    selectedSiteId = uiState.siteFilter,
+                    onSelectSite = viewModel::selectSiteFilter,
+                )
+            }
+        }
+
+        if (uiState.items.isEmpty()) {
+            item(key = "fav_empty") {
+                FavoritesEmptyState(uiState)
+            }
+        } else {
+            items(
+                items = uiState.items,
+                key = { it.compositeKey },
+            ) { fav ->
+                val selected = fav.compositeKey in uiState.selectedKeys
+                val siteLabel = uiState.siteLabels[fav.siteId] ?: fav.siteId.value
+                val mediaItem = fav.toMediaItemOrNull()
+
+                if (mediaItem != null) {
+                    RavenCompactMediaRow(
+                        item = mediaItem,
+                        onClick = {
+                            if (uiState.selectionMode) {
+                                viewModel.toggleSelectItem(fav)
+                            } else {
+                                navigator.openFavorite(fav, viewModel.pluginFor(fav.siteId))
+                            }
+                        },
+                        onLongClick = { viewModel.toggleSelectItem(fav) },
+                        subtitle = "$siteLabel · ${fav.kind.displayLabel()} · ${formatRelativeTime(fav.addedAt)}",
+                        trailingContent = {
+                            if (uiState.selectionMode) {
+                                SelectCheckBadge(selected = selected)
+                            } else {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    IconButton(
+                                        onClick = { onAddToShelf(fav) },
+                                        modifier = Modifier.size(36.dp),
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Outlined.BookmarkAdd,
+                                            contentDescription = "加入片单",
+                                            tint = colors.inkSecondary,
+                                            modifier = Modifier.size(18.dp),
+                                        )
+                                    }
+                                    IconButton(
+                                        onClick = { viewModel.removeFavorite(fav) },
+                                        modifier = Modifier.size(36.dp),
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Outlined.DeleteOutline,
+                                            contentDescription = "取消收藏",
+                                            tint = colors.inkTertiary,
+                                            modifier = Modifier.size(18.dp),
+                                        )
+                                    }
+                                }
+                            }
+                        },
+                        modifier = Modifier
+                            .animateItem()
+                            .padding(horizontal = 16.dp),
+                    )
+                } else {
+                    // Tag / Author / Character favorite row
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp)
+                            .clip(RavenShapes.CardShape)
+                            .background(colors.surface1)
+                            .border(0.5.dp, colors.hairline, RavenShapes.CardShape)
+                            .ravenSpringPress()
+                            .clickable(role = Role.Button) {
+                                if (uiState.selectionMode) {
+                                    viewModel.toggleSelectItem(fav)
+                                } else {
+                                    navigator.openFavorite(fav, viewModel.pluginFor(fav.siteId))
+                                }
+                            }
+                            .padding(12.dp),
+                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(40.dp)
+                                .clip(RavenShapes.ControlShape)
+                                .background(colors.surface2),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Icon(
+                                imageVector = if (fav.kind == FavoriteKind.AUTHOR) {
+                                    Icons.Outlined.Person
+                                } else {
+                                    Icons.Outlined.Tag
+                                },
+                                contentDescription = null,
+                                tint = colors.crimson,
+                                modifier = Modifier.size(20.dp),
+                            )
+                        }
+                        Column(
+                            modifier = Modifier.weight(1f),
+                            verticalArrangement = Arrangement.spacedBy(3.dp),
+                        ) {
+                            Text(
+                                text = fav.title,
+                                style = MaterialTheme.typography.titleSmall,
+                                color = colors.inkPrimary,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                            Row(
+                                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                RavenStatusPill(text = fav.kind.displayLabel())
+                                Text(
+                                    text = "$siteLabel · ${formatRelativeTime(fav.addedAt)}",
+                                    style = MaterialTheme.typography.bodySmall.tabular(),
+                                    color = colors.inkSecondary,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                            }
+                        }
+                        if (uiState.selectionMode) {
+                            SelectCheckBadge(selected = selected)
+                        } else {
+                            IconButton(
+                                onClick = { viewModel.removeFavorite(fav) },
+                                modifier = Modifier.size(36.dp),
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Outlined.DeleteOutline,
+                                    contentDescription = "取消收藏",
+                                    tint = colors.inkTertiary,
+                                    modifier = Modifier.size(18.dp),
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ColumnScope.FavoritesWaterfallContent(
+    uiState: FavoritesUiState,
+    viewModel: FavoritesViewModel,
+    navigator: LibraryNavigator,
+    onAddToShelf: (FavoriteItem) -> Unit,
+) {
+    BoxWithConstraints(
+        modifier = Modifier
+            .weight(1f)
+            .fillMaxWidth(),
+    ) {
+        val columns = computeCollectionWaterfallColumns(maxWidth.value.toInt())
+        LazyVerticalStaggeredGrid(
+            columns = StaggeredGridCells.Fixed(columns),
+            modifier = Modifier
+                .fillMaxSize()
+                .testTag("favorites_waterfall_grid"),
+            contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 10.dp, bottom = 24.dp),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            verticalItemSpacing = 10.dp,
+        ) {
+            if (!uiState.message.isNullOrBlank()) {
+                item(key = "fav_msg", span = StaggeredGridItemSpan.FullLine) {
+                    LibraryFeedbackBanner(
+                        message = uiState.message.orEmpty(),
+                        tone = RavenStatusTone.ACCENT,
+                        onDismiss = viewModel::clearMessage,
+                    )
+                }
+            }
+
+            item(key = "fav_search", span = StaggeredGridItemSpan.FullLine) {
+                RavenSearchField(
+                    query = uiState.searchQuery,
+                    onQueryChange = viewModel::updateSearchQuery,
+                    placeholder = "搜索收藏的作品、标签或作者…",
+                )
+            }
+
+            item(key = "fav_kind_chips", span = StaggeredGridItemSpan.FullLine) {
+                RavenFilterChipRow(
+                    items = FavoriteKindFilter.entries,
+                    selectedItem = uiState.kindFilter,
+                    labelProvider = { it.label },
+                    onItemSelected = viewModel::selectKindFilter,
+                    keyProvider = { it.name },
+                    contentPadding = PaddingValues(horizontal = 0.dp),
+                )
+            }
+
+            if (uiState.siteOptions.isNotEmpty()) {
+                item(key = "fav_site_chips", span = StaggeredGridItemSpan.FullLine) {
+                    LibrarySiteFilterChips(
+                        options = uiState.siteOptions,
+                        selectedSiteId = uiState.siteFilter,
+                        onSelectSite = viewModel::selectSiteFilter,
+                        contentPadding = PaddingValues(horizontal = 0.dp),
+                    )
+                }
+            }
+
+            if (uiState.items.isEmpty()) {
+                item(key = "fav_empty", span = StaggeredGridItemSpan.FullLine) {
+                    FavoritesEmptyState(uiState)
+                }
+            } else {
+                staggeredItems(
+                    items = uiState.items,
+                    key = { it.compositeKey },
+                ) { fav ->
+                    val selected = fav.compositeKey in uiState.selectedKeys
+                    val siteLabel = uiState.siteLabels[fav.siteId] ?: fav.siteId.value
+                    val mediaItem = fav.toMediaItemOrNull()
+
+                    if (mediaItem != null) {
+                        FavoriteMediaWaterfallCard(
+                            fav = fav,
+                            mediaItem = mediaItem,
+                            siteLabel = siteLabel,
+                            selectionMode = uiState.selectionMode,
+                            selected = selected,
+                            onClick = {
+                                if (uiState.selectionMode) {
+                                    viewModel.toggleSelectItem(fav)
+                                } else {
+                                    navigator.openFavorite(fav, viewModel.pluginFor(fav.siteId))
+                                }
+                            },
+                            onLongClick = { viewModel.toggleSelectItem(fav) },
+                            onAddToShelf = { onAddToShelf(fav) },
+                            onRemove = { viewModel.removeFavorite(fav) },
+                        )
+                    } else {
+                        FavoriteShortWaterfallCard(
+                            fav = fav,
+                            siteLabel = siteLabel,
+                            selectionMode = uiState.selectionMode,
+                            selected = selected,
+                            onClick = {
+                                if (uiState.selectionMode) {
+                                    viewModel.toggleSelectItem(fav)
+                                } else {
+                                    navigator.openFavorite(fav, viewModel.pluginFor(fav.siteId))
+                                }
+                            },
+                            onRemove = { viewModel.removeFavorite(fav) },
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun FavoritesEmptyState(uiState: FavoritesUiState) {
+    RavenEmptyState(
+        title = if (uiState.totalCount == 0) "暂无收藏内容" else "没有匹配的收藏",
+        message = if (uiState.totalCount == 0) {
+            "收藏喜欢的作品、标签或作者后，可在这里跨站统一检索并批量整理进片单。"
+        } else {
+            "尝试清除关键词或切换类型与站点筛选。"
+        },
+        icon = Icons.Outlined.FavoriteBorder,
+    )
+}
+
+@Composable
+private fun FavoriteMediaWaterfallCard(
+    fav: FavoriteItem,
+    mediaItem: MediaItem,
+    siteLabel: String,
+    selectionMode: Boolean,
+    selected: Boolean,
+    onClick: () -> Unit,
+    onLongClick: () -> Unit,
+    onAddToShelf: () -> Unit,
+    onRemove: () -> Unit,
+) {
+    val colors = LocalRavenColors.current
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag("favorites_waterfall_card_${fav.compositeKey}"),
+        verticalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        Box(modifier = Modifier.fillMaxWidth()) {
+            if (fav.kind == FavoriteKind.VIDEO) {
+                RavenVideoCard(
+                    item = mediaItem,
+                    onClick = onClick,
+                    modifier = Modifier.fillMaxWidth(),
+                    onLongClick = onLongClick,
+                    subtitleOverride = "$siteLabel · ${fav.kind.displayLabel()} · ${formatRelativeTime(fav.addedAt)}",
+                )
+            } else {
+                RavenGalleryCard(
+                    item = mediaItem,
+                    onClick = onClick,
+                    modifier = Modifier.fillMaxWidth(),
+                    onLongClick = onLongClick,
+                )
+            }
+            if (selectionMode) {
+                SelectCheckBadge(
+                    selected = selected,
+                    modifier = Modifier
+                        .align(Alignment.TopEnd)
+                        .padding(7.dp),
+                )
+            }
+        }
+        if (!selectionMode) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.End,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                IconButton(
+                    onClick = onAddToShelf,
+                    modifier = Modifier
+                        .size(34.dp)
+                        .testTag("favorites_waterfall_shelf_${fav.compositeKey}"),
+                ) {
+                    Icon(
+                        imageVector = Icons.Outlined.BookmarkAdd,
+                        contentDescription = "加入片单",
+                        tint = colors.inkSecondary,
+                        modifier = Modifier.size(18.dp),
+                    )
+                }
+                IconButton(
+                    onClick = onRemove,
+                    modifier = Modifier
+                        .size(34.dp)
+                        .testTag("favorites_waterfall_delete_${fav.compositeKey}"),
+                ) {
+                    Icon(
+                        imageVector = Icons.Outlined.DeleteOutline,
+                        contentDescription = "取消收藏",
+                        tint = colors.inkTertiary,
+                        modifier = Modifier.size(18.dp),
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun FavoriteShortWaterfallCard(
+    fav: FavoriteItem,
+    siteLabel: String,
+    selectionMode: Boolean,
+    selected: Boolean,
+    onClick: () -> Unit,
+    onRemove: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val colors = LocalRavenColors.current
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .clip(RavenShapes.CardShape)
+            .background(colors.surface1)
+            .border(0.5.dp, colors.hairline, RavenShapes.CardShape)
+            .ravenSpringPress()
+            .clickable(role = Role.Button, onClick = onClick)
+            .padding(12.dp)
+            .testTag("favorites_waterfall_card_${fav.compositeKey}"),
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(
+            modifier = Modifier
+                .size(40.dp)
+                .clip(RavenShapes.ControlShape)
+                .background(colors.surface2),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(
+                imageVector = if (fav.kind == FavoriteKind.AUTHOR) {
+                    Icons.Outlined.Person
+                } else {
+                    Icons.Outlined.Tag
+                },
+                contentDescription = null,
+                tint = colors.crimson,
+                modifier = Modifier.size(20.dp),
+            )
+        }
+        Column(
+            modifier = Modifier.weight(1f),
+            verticalArrangement = Arrangement.spacedBy(3.dp),
+        ) {
+            Text(
+                text = fav.title,
+                style = MaterialTheme.typography.titleSmall,
+                color = colors.inkPrimary,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                RavenStatusPill(text = fav.kind.displayLabel())
+                Text(
+                    text = "$siteLabel · ${formatRelativeTime(fav.addedAt)}",
+                    style = MaterialTheme.typography.bodySmall.tabular(),
+                    color = colors.inkSecondary,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+        }
+        if (selectionMode) {
+            SelectCheckBadge(selected = selected)
+        } else {
+            IconButton(
+                onClick = onRemove,
+                modifier = Modifier.size(36.dp),
+            ) {
+                Icon(
+                    imageVector = Icons.Outlined.DeleteOutline,
+                    contentDescription = "取消收藏",
+                    tint = colors.inkTertiary,
+                    modifier = Modifier.size(18.dp),
+                )
+            }
+        }
     }
 }

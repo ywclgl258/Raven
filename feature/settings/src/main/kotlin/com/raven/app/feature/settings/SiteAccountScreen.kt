@@ -1,5 +1,8 @@
 package com.raven.app.feature.settings
 
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.snap
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
@@ -35,6 +38,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
@@ -47,11 +51,18 @@ import com.raven.app.core.designsystem.component.RavenEmptyState
 import com.raven.app.core.designsystem.component.RavenGroupedDivider
 import com.raven.app.core.designsystem.component.RavenGroupedRow
 import com.raven.app.core.designsystem.component.RavenGroupedSection
+import com.raven.app.core.designsystem.component.RavenMorphToggleIcon
 import com.raven.app.core.designsystem.component.RavenStatusPill
 import com.raven.app.core.designsystem.component.RavenStatusTone
 import com.raven.app.core.designsystem.component.RavenTopBar
+import com.raven.app.core.designsystem.component.ravenBurstFeedback
+import com.raven.app.core.designsystem.motion.MorphSpringPreset
+import com.raven.app.core.designsystem.motion.RavenMorphIcons
+import com.raven.app.core.designsystem.theme.LocalMotionReduced
 import com.raven.app.core.designsystem.theme.LocalRavenColors
+import com.raven.app.core.designsystem.theme.RavenMotion
 import com.raven.app.core.designsystem.theme.RavenShapes
+import com.raven.app.core.designsystem.theme.RavenTabularTextStyle
 import com.raven.app.core.model.RavenRoute
 import com.raven.app.core.sitespi.AuthMode
 import org.koin.androidx.compose.koinViewModel
@@ -190,16 +201,9 @@ fun SiteAccountScreenContent(
                                     color = colors.inkSecondary,
                                 )
                             }
-                            RavenStatusPill(
-                                text = if (uiState.authState.isAuthenticated) "已登录" else "未登录",
-                                tone = if (uiState.authState.isAuthenticated) {
-                                    RavenStatusTone.SUCCESS
-                                } else if (uiState.requiresAuthGate) {
-                                    RavenStatusTone.WARNING
-                                } else {
-                                    RavenStatusTone.NEUTRAL
-                                },
-                                icon = if (uiState.authState.isAuthenticated) Icons.Outlined.VerifiedUser else Icons.Outlined.Lock,
+                            AccountAuthStatusPill(
+                                isAuthenticated = uiState.authState.isAuthenticated,
+                                requiresAuthGate = uiState.requiresAuthGate,
                             )
                         }
 
@@ -432,5 +436,79 @@ fun SiteAccountScreenContent(
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun AccountAuthStatusPill(
+    isAuthenticated: Boolean,
+    requiresAuthGate: Boolean,
+    modifier: Modifier = Modifier,
+) {
+    val colors = LocalRavenColors.current
+    val motionReduced = LocalMotionReduced.current
+    val tone = when {
+        isAuthenticated -> RavenStatusTone.SUCCESS
+        requiresAuthGate -> RavenStatusTone.WARNING
+        else -> RavenStatusTone.NEUTRAL
+    }
+    val accent = when (tone) {
+        RavenStatusTone.SUCCESS -> colors.success
+        RavenStatusTone.WARNING -> colors.warning
+        else -> colors.inkSecondary
+    }
+    val colorSpec = if (motionReduced) {
+        snap<Color>()
+    } else {
+        tween<Color>(
+            durationMillis = RavenMotion.CHIP_TRANSITION_DURATION_MS,
+            easing = RavenMotion.HarmonyDecelerationEasing,
+        )
+    }
+    val container by animateColorAsState(
+        targetValue = if (tone == RavenStatusTone.NEUTRAL) colors.surface2 else accent.copy(alpha = 0.14f),
+        animationSpec = colorSpec,
+        label = "accountAuthPillContainer",
+    )
+    val borderColor by animateColorAsState(
+        targetValue = if (tone == RavenStatusTone.NEUTRAL) colors.hairline else accent.copy(alpha = 0.30f),
+        animationSpec = colorSpec,
+        label = "accountAuthPillBorder",
+    )
+    val contentColor by animateColorAsState(
+        targetValue = if (tone == RavenStatusTone.NEUTRAL) colors.inkPrimary else accent,
+        animationSpec = colorSpec,
+        label = "accountAuthPillContent",
+    )
+
+    Row(
+        modifier = modifier
+            .ravenBurstFeedback(
+                trigger = isAuthenticated,
+                burstColor = colors.success,
+            )
+            .clip(RavenShapes.PillShape)
+            .background(container)
+            .border(0.5.dp, borderColor, RavenShapes.PillShape)
+            .padding(horizontal = 9.dp, vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        RavenMorphToggleIcon(
+            active = isAuthenticated,
+            activeGlyph = RavenMorphIcons.Verified,
+            inactiveGlyph = RavenMorphIcons.LockClosed,
+            activeTint = colors.success,
+            inactiveTint = if (requiresAuthGate) colors.warning else colors.inkPrimary,
+            size = 13.dp,
+            strokeWidth = 1.6.dp,
+            springPreset = MorphSpringPreset.SNAPPY,
+        )
+        Text(
+            text = if (isAuthenticated) "已登录" else "未登录",
+            style = RavenTabularTextStyle,
+            color = contentColor,
+            maxLines = 1,
+        )
     }
 }

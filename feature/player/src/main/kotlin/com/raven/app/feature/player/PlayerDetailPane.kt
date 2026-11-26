@@ -33,26 +33,19 @@ import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.OpenInNew
-import androidx.compose.material.icons.outlined.BookmarkAdd
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.Block
-import androidx.compose.material.icons.rounded.Bookmark
 import androidx.compose.material.icons.rounded.Cast
-import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.CollectionsBookmark
 import androidx.compose.material.icons.rounded.Close
-import androidx.compose.material.icons.rounded.Download
 import androidx.compose.material.icons.rounded.ExpandLess
 import androidx.compose.material.icons.rounded.ExpandMore
 import androidx.compose.material.icons.rounded.Favorite
-import androidx.compose.material.icons.rounded.FavoriteBorder
 import androidx.compose.material.icons.rounded.Person
 import androidx.compose.material.icons.rounded.Share
 import androidx.compose.material.icons.rounded.SkipNext
-import androidx.compose.material.icons.rounded.WatchLater
-import androidx.compose.material.icons.outlined.WatchLater
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
@@ -68,6 +61,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
@@ -90,10 +84,14 @@ import com.raven.app.core.designsystem.component.RavenGroupedDivider
 import com.raven.app.core.designsystem.component.RavenGroupedSection
 import com.raven.app.core.designsystem.component.RavenImage
 import com.raven.app.core.designsystem.component.RavenLoadingSkeleton
+import com.raven.app.core.designsystem.component.RavenMorphIcon
 import com.raven.app.core.designsystem.component.RavenSectionHeader
 import com.raven.app.core.designsystem.component.RavenStatusPill
 import com.raven.app.core.designsystem.component.RavenStatusTone
 import com.raven.app.core.designsystem.component.RavenVideoCard
+import com.raven.app.core.designsystem.component.ravenBurstFeedback
+import com.raven.app.core.designsystem.motion.MorphSpringPreset
+import com.raven.app.core.designsystem.motion.RavenMorphIcons
 import com.raven.app.core.designsystem.theme.LocalMotionReduced
 import com.raven.app.core.designsystem.theme.LocalRavenColors
 import com.raven.app.core.designsystem.theme.LocalRavenFeedback
@@ -186,6 +184,7 @@ internal fun PlayerDetailPane(
     onOpenExternalPlayers: () -> Unit,
     onConfirmQueueNext: () -> Unit,
     onEndQueue: () -> Unit,
+    onOpenQueue: () -> Unit,
     onSeekTo: (Long) -> Unit,
     onAuthorClick: (AuthorRef) -> Unit,
     onTagClick: (TagRef) -> Unit,
@@ -219,12 +218,13 @@ internal fun PlayerDetailPane(
     ) {
         // 1. Sequential Queue Next confirmation card
         val queue = uiState.queue
-        if (queue != null && queue.hasNext) {
+        if (queue != null) {
             item(key = "queue_next_card") {
                 SequentialQueueNextCard(
                     queue = queue,
                     onConfirmNext = onConfirmQueueNext,
                     onEndQueue = onEndQueue,
+                    onOpenQueue = onOpenQueue,
                     modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 14.dp),
                 )
             }
@@ -238,7 +238,7 @@ internal fun PlayerDetailPane(
                     .padding(
                         start = 16.dp,
                         end = 16.dp,
-                        top = if (queue != null && queue.hasNext) 0.dp else 14.dp,
+                        top = if (queue != null) 0.dp else 14.dp,
                     ),
                 verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
@@ -598,10 +598,12 @@ private fun SequentialQueueNextCard(
     queue: PlayerQueueUiState,
     onConfirmNext: () -> Unit,
     onEndQueue: () -> Unit,
+    onOpenQueue: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val colors = LocalRavenColors.current
-    val nextItem = queue.nextItem ?: return
+    val nextItem = queue.nextItem
+    val displayItem = nextItem ?: queue.items.getOrNull(queue.currentIndex) ?: return
 
     Column(
         modifier = modifier
@@ -610,6 +612,7 @@ private fun SequentialQueueNextCard(
             .background(colors.surface1)
             .border(0.5.dp, colors.crimson.copy(alpha = 0.35f), RavenShapes.CardShape)
             .padding(14.dp)
+            .clickable(role = Role.Button, onClick = onOpenQueue)
             .testTag(PlayerTestTags.PLAYER_QUEUE_CARD),
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
@@ -623,7 +626,7 @@ private fun SequentialQueueNextCard(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 RavenStatusPill(
-                    text = "顺序队列 ${queue.currentIndex + 1}/${queue.totalCount}",
+                    text = "播放队列 ${queue.currentIndex + 1}/${queue.totalCount}",
                     tone = RavenStatusTone.ACCENT,
                 )
                 if (queue.offlineOnly) {
@@ -656,9 +659,9 @@ private fun SequentialQueueNextCard(
                     .background(colors.surface2),
             ) {
                 RavenImage(
-                    url = nextItem.coverUrl,
-                    siteId = nextItem.siteId,
-                    contentDescription = nextItem.title,
+                    url = displayItem.coverUrl,
+                    siteId = displayItem.siteId,
+                    contentDescription = displayItem.title,
                     contentScale = ContentScale.Crop,
                     modifier = Modifier.fillMaxSize(),
                 )
@@ -668,43 +671,45 @@ private fun SequentialQueueNextCard(
                 verticalArrangement = Arrangement.spacedBy(2.dp),
             ) {
                 Text(
-                    text = "下一项 · ${queue.title}",
+                    text = if (nextItem != null) "下一项 · ${queue.title}" else "当前项 · ${queue.title}",
                     style = MaterialTheme.typography.labelSmall,
                     color = colors.inkSecondary,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
                 Text(
-                    text = nextItem.title,
+                    text = displayItem.title,
                     style = MaterialTheme.typography.titleSmall,
                     color = colors.inkPrimary,
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis,
                 )
             }
-            Button(
-                onClick = onConfirmNext,
-                shape = RavenShapes.PillShape,
-                contentPadding = PaddingValues(horizontal = 14.dp, vertical = 8.dp),
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = colors.primaryCtaContainer,
-                    contentColor = colors.primaryCtaInk,
-                ),
-                modifier = Modifier
-                    .heightIn(min = 40.dp)
-                    .ravenSpringPress()
-                    .testTag(PlayerTestTags.PLAYER_QUEUE_NEXT_BUTTON),
-            ) {
-                Icon(
-                    imageVector = Icons.Rounded.SkipNext,
-                    contentDescription = null,
-                    modifier = Modifier.size(16.dp),
-                )
-                Spacer(modifier = Modifier.width(4.dp))
-                Text(
-                    text = "下一项",
-                    style = MaterialTheme.typography.labelLarge,
-                )
+            if (nextItem != null) {
+                Button(
+                    onClick = onConfirmNext,
+                    shape = RavenShapes.PillShape,
+                    contentPadding = PaddingValues(horizontal = 14.dp, vertical = 8.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = colors.primaryCtaContainer,
+                        contentColor = colors.primaryCtaInk,
+                    ),
+                    modifier = Modifier
+                        .heightIn(min = 40.dp)
+                        .ravenSpringPress()
+                        .testTag(PlayerTestTags.PLAYER_QUEUE_NEXT_BUTTON),
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.SkipNext,
+                        contentDescription = null,
+                        modifier = Modifier.size(16.dp),
+                    )
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text(
+                        text = "下一项",
+                        style = MaterialTheme.typography.labelLarge,
+                    )
+                }
             }
         }
     }
@@ -786,27 +791,44 @@ private fun PlayerActionStrip(
         verticalAlignment = Alignment.CenterVertically,
     ) {
         DetailActionButton(
-            icon = if (uiState.inWatchLater) Icons.Rounded.WatchLater else Icons.Outlined.WatchLater,
             label = "稍后看",
             active = uiState.inWatchLater,
             feedbackEffect = if (uiState.inWatchLater) RavenFeedbackEffect.TOGGLE_OFF else RavenFeedbackEffect.TOGGLE_ON,
             onClick = onToggleWatchLater,
             modifier = Modifier
                 .weight(1f)
+                .ravenBurstFeedback(trigger = uiState.inWatchLater)
                 .testTag(PlayerTestTags.PLAYER_ACTION_WATCH_LATER),
-        )
+        ) { tint, iconModifier ->
+            RavenMorphIcon(
+                glyph = if (uiState.inWatchLater) RavenMorphIcons.Check else RavenMorphIcons.Plus,
+                contentDescription = "稍后看",
+                tint = tint,
+                size = 20.dp,
+                springPreset = MorphSpringPreset.SNAPPY,
+                modifier = iconModifier,
+            )
+        }
         DetailActionButton(
-            icon = if (uiState.isFavorite) Icons.Rounded.Favorite else Icons.Rounded.FavoriteBorder,
             label = if (uiState.isFavorite) "已收藏" else "收藏",
             active = uiState.isFavorite,
             feedbackEffect = if (uiState.isFavorite) RavenFeedbackEffect.TOGGLE_OFF else RavenFeedbackEffect.FAVORITE,
             onClick = onToggleFavorite,
             modifier = Modifier
                 .weight(1f)
+                .ravenBurstFeedback(trigger = uiState.isFavorite)
                 .testTag(PlayerTestTags.PLAYER_ACTION_FAVORITE),
-        )
+        ) { tint, iconModifier ->
+            RavenMorphIcon(
+                glyph = if (uiState.isFavorite) RavenMorphIcons.HeartFilled else RavenMorphIcons.HeartOutline,
+                contentDescription = if (uiState.isFavorite) "已收藏" else "收藏",
+                tint = tint,
+                size = 20.dp,
+                springPreset = MorphSpringPreset.BOUNCY,
+                modifier = iconModifier,
+            )
+        }
         DetailActionButton(
-            icon = if (uiState.isOfflineDownloaded) Icons.Rounded.CheckCircle else Icons.Rounded.Download,
             label = downloadLabel,
             active = uiState.isOfflineDownloaded,
             enabled = !uiState.isLocal,
@@ -814,16 +836,33 @@ private fun PlayerActionStrip(
             modifier = Modifier
                 .weight(1f)
                 .testTag(PlayerTestTags.PLAYER_ACTION_DOWNLOAD),
-        )
+        ) { tint, iconModifier ->
+            RavenMorphIcon(
+                glyph = if (uiState.isOfflineDownloaded) RavenMorphIcons.DownloadDone else RavenMorphIcons.Download,
+                contentDescription = downloadLabel,
+                tint = tint,
+                size = 20.dp,
+                springPreset = MorphSpringPreset.SNAPPY,
+                modifier = iconModifier,
+            )
+        }
         DetailActionButton(
-            icon = if (uiState.timeBookmarks.isNotEmpty()) Icons.Rounded.Bookmark else Icons.Outlined.BookmarkAdd,
             label = "书签",
             active = uiState.timeBookmarks.isNotEmpty(),
             onClick = onOpenAddBookmark,
             modifier = Modifier
                 .weight(1f)
                 .testTag(PlayerTestTags.PLAYER_ACTION_BOOKMARK),
-        )
+        ) { tint, iconModifier ->
+            RavenMorphIcon(
+                glyph = if (uiState.timeBookmarks.isNotEmpty()) RavenMorphIcons.BookmarkFilled else RavenMorphIcons.BookmarkOutline,
+                contentDescription = "书签",
+                tint = tint,
+                size = 20.dp,
+                springPreset = MorphSpringPreset.SNAPPY,
+                modifier = iconModifier,
+            )
+        }
         DetailActionButton(
             icon = Icons.Rounded.Share,
             label = "分享",
@@ -868,6 +907,33 @@ private fun DetailActionButton(
     active: Boolean = false,
     enabled: Boolean = true,
     feedbackEffect: RavenFeedbackEffect = RavenFeedbackEffect.TAP,
+) {
+    DetailActionButton(
+        label = label,
+        onClick = onClick,
+        modifier = modifier,
+        active = active,
+        enabled = enabled,
+        feedbackEffect = feedbackEffect,
+    ) { tint, iconModifier ->
+        Icon(
+            imageVector = icon,
+            contentDescription = label,
+            tint = tint,
+            modifier = iconModifier.size(20.dp),
+        )
+    }
+}
+
+@Composable
+private fun DetailActionButton(
+    label: String,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    active: Boolean = false,
+    enabled: Boolean = true,
+    feedbackEffect: RavenFeedbackEffect = RavenFeedbackEffect.TAP,
+    iconContent: @Composable (tint: Color, modifier: Modifier) -> Unit,
 ) {
     val colors = LocalRavenColors.current
     val motionReduced = LocalMotionReduced.current
@@ -914,17 +980,13 @@ private fun DetailActionButton(
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(4.dp, Alignment.CenterVertically),
     ) {
-        Icon(
-            imageVector = icon,
-            contentDescription = label,
-            tint = tint,
-            modifier = Modifier
-                .size(20.dp)
-                .graphicsLayer {
-                    val s = iconScaleState.value
-                    scaleX = s
-                    scaleY = s
-                },
+        iconContent(
+            tint,
+            Modifier.graphicsLayer {
+                val s = iconScaleState.value
+                scaleX = s
+                scaleY = s
+            },
         )
         Text(
             text = label,

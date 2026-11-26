@@ -26,6 +26,10 @@ class SearchHistoryRepository(
         searchHistoryDao.observeBySite(siteId.value, limit)
             .map { rows -> rows.map { it.toDomain() } }
 
+    fun observeAll(limit: Int = maxEntriesPerSite): Flow<List<SearchHistoryEntry>> =
+        searchHistoryDao.observeAll(limit)
+            .map { rows -> rows.map { it.toDomain() } }
+
     suspend fun recordSearch(
         siteId: SiteId,
         query: String,

@@ -1,9 +1,16 @@
 package com.raven.app.feature.browse
 
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.snap
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsFocusedAsState
+import androidx.compose.foundation.interaction.collectIsHoveredAsState
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -18,8 +25,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.outlined.BookmarkAdd
-import androidx.compose.material.icons.outlined.BookmarkRemove
 import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.outlined.LibraryAdd
 import androidx.compose.material.icons.outlined.Lock
@@ -47,6 +52,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
@@ -62,12 +70,20 @@ import com.raven.app.core.designsystem.component.RavenGroupedDivider
 import com.raven.app.core.designsystem.component.RavenGroupedRow
 import com.raven.app.core.designsystem.component.RavenGroupedSection
 import com.raven.app.core.designsystem.component.RavenImage
+import com.raven.app.core.designsystem.component.RavenMorphToggleIcon
 import com.raven.app.core.designsystem.component.RavenShelfOption
 import com.raven.app.core.designsystem.component.RavenShelfPickerSheet
 import com.raven.app.core.designsystem.component.RavenStatusPill
 import com.raven.app.core.designsystem.component.RavenStatusTone
+import com.raven.app.core.designsystem.component.ravenBurstFeedback
+import com.raven.app.core.designsystem.motion.MorphSpringPreset
+import com.raven.app.core.designsystem.motion.RavenMorphIcons
+import com.raven.app.core.designsystem.theme.LocalMotionReduced
 import com.raven.app.core.designsystem.theme.LocalRavenColors
+import com.raven.app.core.designsystem.theme.LocalRavenFeedback
+import com.raven.app.core.designsystem.theme.RavenFeedbackEffect
 import com.raven.app.core.designsystem.theme.RavenShapes
+import com.raven.app.core.designsystem.theme.ravenInteractiveLight
 import com.raven.app.core.designsystem.theme.ravenSpringPress
 import com.raven.app.core.designsystem.theme.tabular
 import com.raven.app.core.model.MediaItem
@@ -571,11 +587,24 @@ internal fun MediaCardActionSheet(
                 },
             )
             RavenGroupedDivider(insetWithIcon = true)
-            RavenGroupedRow(
+            BrowseMorphGroupedRow(
                 title = if (isInWatchLater) "移出稍后看" else "加入稍后看",
                 subtitle = if (isInWatchLater) "当前已在稍后看书架中" else "保存到内置稍后看书架",
-                icon = if (isInWatchLater) Icons.Outlined.BookmarkRemove else Icons.Outlined.BookmarkAdd,
-                iconTint = if (isInWatchLater) colors.crimson else colors.inkPrimary,
+                iconBadgeModifier = Modifier.ravenBurstFeedback(
+                    trigger = isInWatchLater,
+                    burstColor = colors.crimson,
+                ),
+                leadingIcon = {
+                    RavenMorphToggleIcon(
+                        active = isInWatchLater,
+                        activeGlyph = RavenMorphIcons.BookmarkFilled,
+                        inactiveGlyph = RavenMorphIcons.BookmarkOutline,
+                        activeTint = colors.crimson,
+                        inactiveTint = colors.inkPrimary,
+                        size = 18.dp,
+                        springPreset = MorphSpringPreset.BOUNCY,
+                    )
+                },
                 onClick = {
                     onToggleWatchLater()
                     onDismiss()
@@ -607,6 +636,96 @@ internal fun MediaCardActionSheet(
                     },
                 )
             }
+        }
+    }
+}
+
+@Composable
+private fun BrowseMorphGroupedRow(
+    title: String,
+    subtitle: String,
+    onClick: () -> Unit,
+    leadingIcon: @Composable () -> Unit,
+    modifier: Modifier = Modifier,
+    iconBadgeModifier: Modifier = Modifier,
+) {
+    val colors = LocalRavenColors.current
+    val motionReduced = LocalMotionReduced.current
+    val feedback = LocalRavenFeedback.current
+    val interactionSource = remember { MutableInteractionSource() }
+    val pressed by interactionSource.collectIsPressedAsState()
+    val hovered by interactionSource.collectIsHoveredAsState()
+    val focused by interactionSource.collectIsFocusedAsState()
+    val rowBackdropColor by animateColorAsState(
+        targetValue = when {
+            pressed -> colors.surface2.copy(alpha = 0.72f)
+            hovered || focused -> colors.surface2.copy(alpha = 0.42f)
+            else -> Color.Transparent
+        },
+        animationSpec = if (motionReduced) snap() else tween(durationMillis = 120),
+        label = "browseMorphGroupedRowBackdrop",
+    )
+
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .heightIn(min = 56.dp)
+            .background(rowBackdropColor)
+            .ravenInteractiveLight(
+                interactionSource = interactionSource,
+                shape = RectangleShape,
+                enabled = true,
+                glowColor = colors.interactiveGlow,
+                highlightAlpha = 0.04f,
+            )
+            .clickable(
+                interactionSource = interactionSource,
+                indication = null,
+                enabled = true,
+                role = Role.Button,
+                onClick = {
+                    feedback.perform(RavenFeedbackEffect.TAP)
+                    onClick()
+                },
+            )
+            .padding(horizontal = 16.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(
+            modifier = iconBadgeModifier
+                .size(32.dp)
+                .clip(RavenShapes.ControlShape)
+                .background(colors.surface2)
+                .border(
+                    width = 0.5.dp,
+                    brush = Brush.verticalGradient(
+                        colors = listOf(colors.lightRimTop, colors.hairline),
+                    ),
+                    shape = RavenShapes.ControlShape,
+                ),
+            contentAlignment = Alignment.Center,
+        ) {
+            leadingIcon()
+        }
+        Spacer(modifier = Modifier.width(12.dp))
+        Column(
+            modifier = Modifier.weight(1f),
+            verticalArrangement = Arrangement.spacedBy(2.dp),
+        ) {
+            Text(
+                text = title,
+                style = MaterialTheme.typography.bodyLarge,
+                color = colors.inkPrimary,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Text(
+                text = subtitle,
+                style = MaterialTheme.typography.bodySmall,
+                color = colors.inkSecondary,
+                maxLines = 3,
+                overflow = TextOverflow.Ellipsis,
+            )
         }
     }
 }

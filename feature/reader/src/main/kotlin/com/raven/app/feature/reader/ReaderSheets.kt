@@ -4,6 +4,8 @@ import android.graphics.Bitmap
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.EnterTransition
 import androidx.compose.animation.ExitTransition
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.snap
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
@@ -14,6 +16,10 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsFocusedAsState
+import androidx.compose.foundation.interaction.collectIsHoveredAsState
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -41,13 +47,12 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.MenuBook
 import androidx.compose.material.icons.filled.Bookmark
-import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.outlined.Archive
 import androidx.compose.material.icons.outlined.BookmarkBorder
 import androidx.compose.material.icons.outlined.Brightness6
 import androidx.compose.material.icons.outlined.Crop
 import androidx.compose.material.icons.outlined.DeleteOutline
-import androidx.compose.material.icons.outlined.FavoriteBorder
+import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.outlined.HighQuality
 import androidx.compose.material.icons.outlined.SaveAlt
 import androidx.compose.material.icons.outlined.ScreenLockPortrait
@@ -82,6 +87,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.testTag
@@ -100,13 +108,20 @@ import com.raven.app.core.designsystem.component.RavenGroupedSection
 import com.raven.app.core.designsystem.component.RavenGroupedSliderRow
 import com.raven.app.core.designsystem.component.RavenGroupedSwitchRow
 import com.raven.app.core.designsystem.component.RavenImage
+import com.raven.app.core.designsystem.component.RavenMorphIcon
+import com.raven.app.core.designsystem.component.ravenBurstFeedback
+import com.raven.app.core.designsystem.motion.MorphSpringPreset
+import com.raven.app.core.designsystem.motion.RavenMorphIcons
 import com.raven.app.core.designsystem.theme.LocalMotionReduced
 import com.raven.app.core.designsystem.theme.LocalRavenColors
+import com.raven.app.core.designsystem.theme.LocalRavenFeedback
 import com.raven.app.core.designsystem.theme.LocalReduceTransparency
+import com.raven.app.core.designsystem.theme.RavenFeedbackEffect
 import com.raven.app.core.designsystem.theme.RavenMotion
 import com.raven.app.core.designsystem.theme.RavenShapes
 import com.raven.app.core.designsystem.theme.RavenTabularTextStyle
 import com.raven.app.core.designsystem.theme.ravenFrostedSurface
+import com.raven.app.core.designsystem.theme.ravenInteractiveLight
 import com.raven.app.core.designsystem.theme.ravenSpringPress
 import com.raven.app.core.designsystem.theme.tabular
 import com.raven.app.core.media.download.PlaybackQueueSession
@@ -115,6 +130,7 @@ import com.raven.app.core.model.GalleryPage
 import com.raven.app.core.model.PageBookmark
 import com.raven.app.core.model.ReaderFit
 import com.raven.app.core.model.ReaderMode
+import com.raven.app.core.model.MediaItem
 import com.raven.app.core.model.SiteId
 import kotlin.math.roundToInt
 
@@ -184,6 +200,66 @@ internal fun ReaderThumbnailsSheet(
                         onClick = { onSelectPage(pageNumber) },
                     )
                 }
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+internal fun ReaderChaptersSheet(
+    uiState: ReaderUiState,
+    onSelectChapter: (MediaItem) -> Unit,
+    onRefresh: () -> Unit,
+    onOpenDetail: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val detail = uiState.detail ?: return
+    val currentChapterHints = remember(detail.item, uiState.mediaId) {
+        listOfNotNull(
+            uiState.mediaId,
+            detail.item.id,
+            detail.item.extra["chapterId"],
+            detail.item.extra["chapterUuid"],
+            detail.item.extra["chapterHid"],
+        )
+    }
+
+    RavenBottomSheet(
+        onDismissRequest = onDismiss,
+        title = "选话",
+        subtitle = detail.item.title,
+        contentPadding = PaddingValues(0.dp),
+        modifier = Modifier.testTag(ReaderTestTags.READER_CHAPTERS_SHEET),
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .fillMaxHeight(0.85f),
+        ) {
+            GalleryChapterPickerSection(
+                chapters = uiState.chapters,
+                loading = uiState.isChapterListLoading,
+                error = uiState.chapterListError,
+                currentChapterId = detail.item.id,
+                currentChapterUrl = detail.item.extra["chapterUrl"].orEmpty(),
+                currentChapterHints = currentChapterHints,
+                onSelect = onSelectChapter,
+                onRefresh = onRefresh,
+                title = "章节列表",
+                fillAvailableHeight = true,
+                modifier = Modifier.weight(1f),
+            )
+            RavenGroupedSection(
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
+            ) {
+                RavenGroupedRow(
+                    title = "返回作品详情",
+                    subtitle = "查看作品简介、收藏与下载",
+                    icon = Icons.Outlined.Info,
+                    showChevron = true,
+                    onClick = onOpenDetail,
+                )
             }
         }
     }
@@ -335,11 +411,12 @@ internal fun ReaderBookmarksSheet(
         subtitle = "当前位于第 $currentPage 页",
         trailingAction = {
             TextButton(onClick = onToggleCurrentPageBookmark) {
-                Icon(
-                    imageVector = if (isCurrentPageBookmarked) Icons.Filled.Bookmark else Icons.Outlined.BookmarkBorder,
+                RavenMorphIcon(
+                    glyph = if (isCurrentPageBookmarked) RavenMorphIcons.BookmarkFilled else RavenMorphIcons.BookmarkOutline,
                     contentDescription = null,
                     tint = colors.crimson,
-                    modifier = Modifier.size(18.dp),
+                    size = 18.dp,
+                    springPreset = MorphSpringPreset.SNAPPY,
                 )
                 Spacer(modifier = Modifier.width(4.dp))
                 Text(
@@ -744,20 +821,33 @@ internal fun ReaderSettingsSheet(
 
             // 5. Current Page & Export Actions (Inline CBZ range selector)
             RavenGroupedSection(title = "当前页与导出") {
-                RavenGroupedRow(
+                ReaderMorphGroupedRow(
                     title = if (uiState.isCurrentPageBookmarked) "取消本页书签" else "添加本页书签",
                     subtitle = "第 ${uiState.currentPage} 页",
-                    icon = if (uiState.isCurrentPageBookmarked) Icons.Filled.Bookmark else Icons.Outlined.BookmarkBorder,
-                    iconTint = if (uiState.isCurrentPageBookmarked) colors.crimson else colors.inkPrimary,
                     onClick = onToggleBookmark,
+                    leadingIcon = {
+                        RavenMorphIcon(
+                            glyph = if (uiState.isCurrentPageBookmarked) RavenMorphIcons.BookmarkFilled else RavenMorphIcons.BookmarkOutline,
+                            tint = if (uiState.isCurrentPageBookmarked) colors.crimson else colors.inkPrimary,
+                            size = 18.dp,
+                            springPreset = MorphSpringPreset.SNAPPY,
+                        )
+                    },
                 )
                 RavenGroupedDivider(insetWithIcon = true)
-                RavenGroupedRow(
+                ReaderMorphGroupedRow(
                     title = if (uiState.isCurrentPageImageFavorited) "取消收藏当前单图" else "收藏当前单图",
                     subtitle = "将第 ${uiState.currentPage} 页加入单图收藏库",
-                    icon = if (uiState.isCurrentPageImageFavorited) Icons.Filled.Favorite else Icons.Outlined.FavoriteBorder,
-                    iconTint = if (uiState.isCurrentPageImageFavorited) colors.crimson else colors.inkPrimary,
                     onClick = onToggleImageFavorite,
+                    iconBadgeModifier = Modifier.ravenBurstFeedback(trigger = uiState.isCurrentPageImageFavorited),
+                    leadingIcon = {
+                        RavenMorphIcon(
+                            glyph = if (uiState.isCurrentPageImageFavorited) RavenMorphIcons.HeartFilled else RavenMorphIcons.HeartOutline,
+                            tint = if (uiState.isCurrentPageImageFavorited) colors.crimson else colors.inkPrimary,
+                            size = 18.dp,
+                            springPreset = MorphSpringPreset.BOUNCY,
+                        )
+                    },
                 )
                 RavenGroupedDivider(insetWithIcon = true)
                 RavenGroupedRow(
@@ -870,6 +960,96 @@ internal fun ReaderSettingsSheet(
             }
 
             Spacer(modifier = Modifier.height(12.dp))
+        }
+    }
+}
+
+@Composable
+private fun ReaderMorphGroupedRow(
+    title: String,
+    subtitle: String,
+    onClick: () -> Unit,
+    leadingIcon: @Composable () -> Unit,
+    modifier: Modifier = Modifier,
+    iconBadgeModifier: Modifier = Modifier,
+) {
+    val colors = LocalRavenColors.current
+    val motionReduced = LocalMotionReduced.current
+    val feedback = LocalRavenFeedback.current
+    val interactionSource = remember { MutableInteractionSource() }
+    val pressed by interactionSource.collectIsPressedAsState()
+    val hovered by interactionSource.collectIsHoveredAsState()
+    val focused by interactionSource.collectIsFocusedAsState()
+    val rowBackdropColor by animateColorAsState(
+        targetValue = when {
+            pressed -> colors.surface2.copy(alpha = 0.72f)
+            hovered || focused -> colors.surface2.copy(alpha = 0.42f)
+            else -> Color.Transparent
+        },
+        animationSpec = if (motionReduced) snap() else tween(durationMillis = 120),
+        label = "readerMorphGroupedRowBackdrop",
+    )
+
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .heightIn(min = 56.dp)
+            .background(rowBackdropColor)
+            .ravenInteractiveLight(
+                interactionSource = interactionSource,
+                shape = RectangleShape,
+                enabled = true,
+                glowColor = colors.interactiveGlow,
+                highlightAlpha = 0.04f,
+            )
+            .clickable(
+                interactionSource = interactionSource,
+                indication = null,
+                enabled = true,
+                role = Role.Button,
+                onClick = {
+                    feedback.perform(RavenFeedbackEffect.TAP)
+                    onClick()
+                },
+            )
+            .padding(horizontal = 16.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(
+            modifier = iconBadgeModifier
+                .size(32.dp)
+                .clip(RavenShapes.ControlShape)
+                .background(colors.surface2)
+                .border(
+                    width = 0.5.dp,
+                    brush = Brush.verticalGradient(
+                        colors = listOf(colors.lightRimTop, colors.hairline),
+                    ),
+                    shape = RavenShapes.ControlShape,
+                ),
+            contentAlignment = Alignment.Center,
+        ) {
+            leadingIcon()
+        }
+        Spacer(modifier = Modifier.width(12.dp))
+        Column(
+            modifier = Modifier.weight(1f),
+            verticalArrangement = Arrangement.spacedBy(2.dp),
+        ) {
+            Text(
+                text = title,
+                style = MaterialTheme.typography.bodyLarge,
+                color = colors.inkPrimary,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Text(
+                text = subtitle,
+                style = MaterialTheme.typography.bodySmall,
+                color = colors.inkSecondary,
+                maxLines = 3,
+                overflow = TextOverflow.Ellipsis,
+            )
         }
     }
 }

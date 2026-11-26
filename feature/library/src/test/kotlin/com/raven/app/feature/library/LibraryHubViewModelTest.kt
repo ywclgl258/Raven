@@ -4,12 +4,19 @@ import app.cash.turbine.test
 import com.raven.app.core.model.DownloadKind
 import com.raven.app.core.model.DownloadStatus
 import com.raven.app.core.model.MediaKind
+import com.raven.app.core.model.ReadingProgress
+import com.raven.app.core.model.SavedSearch
+import com.raven.app.core.model.SearchScope
 import com.raven.app.core.model.Shelf
+import com.raven.app.core.model.ShelfItem
 import com.raven.app.core.model.SiteId
 import com.raven.app.core.model.SmartShelfRule
+import com.raven.app.core.model.TagSubscription
 import com.raven.app.core.model.WatchProgress
 import com.raven.app.core.sitespi.ResolvedLink
+import java.io.File
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
@@ -170,6 +177,114 @@ class LibraryHubViewModelTest {
             assertEquals("556677", (resolved?.link as ResolvedLink.Gallery).id)
 
             assertNull(vm.resolveLinkText("https://unknown-site.invalid/foo"))
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    @Test
+    fun `hub metrics expose offline bytes and saved searches while local removal purges references`() = runTest {
+        val harness = LibraryTestHarness(mainRule.dispatcher, tempFolder.newFolder("hub3"))
+        harness.downloadStateRepository.upsertAll(
+            listOf(
+                sampleDownload(
+                    id = "dl-complete-1",
+                    status = DownloadStatus.COMPLETED,
+                    downloadedBytes = 1_048_576L,
+                ),
+                sampleDownload(
+                    id = "dl-complete-2",
+                    status = DownloadStatus.COMPLETED,
+                    downloadedBytes = 0L,
+                    totalBytes = 2_097_152L,
+                ),
+                sampleDownload(
+                    id = "dl-active",
+                    status = DownloadStatus.DOWNLOADING,
+                    downloadedBytes = 4_096L,
+                ),
+            ),
+        )
+        harness.subscriptionRepository.subscribe(
+            TagSubscription(
+                siteId = SiteId.R34V,
+                slug = "cyberpunk",
+                label = "赛博朋克",
+                url = "https://rule34video.com/tags/cyberpunk/",
+                scope = SearchScope.TAG,
+            ),
+        )
+        harness.subscriptionRepository.saveSavedSearch(
+            SavedSearch(
+                id = "ss-mecha",
+                name = "机甲追踪",
+                query = "mecha",
+                siteIds = listOf(SiteId.R34V),
+                createdAt = harness.nowMs,
+            ),
+        )
+
+        val incomingDir = tempFolder.newFolder("hub3-book")
+        File(incomingDir, "page1.png").writeBytes(minimalValidPngBytes(5))
+        val book = harness.localLibraryImporter.importLocalDirectory(incomingDir, title = "本地漫画")
+        val shelf = harness.shelfRepository.createShelf("混合片单")
+        harness.shelfRepository.addItem(
+            shelf.id,
+            ShelfItem(
+                shelfId = shelf.id,
+                siteId = SiteId.LOCAL,
+                mediaId = book.id,
+                url = "ravenlocal://${book.id}",
+                kind = MediaKind.COMIC,
+                title = book.title,
+            ),
+        )
+        harness.historyRepository.saveReadingProgress(
+            ReadingProgress(
+                siteId = SiteId.LOCAL,
+                mediaId = book.id,
+                url = "ravenlocal://${book.id}",
+                title = book.title,
+                kind = MediaKind.COMIC,
+                currentPage = 1,
+                totalPages = 1,
+                updatedAt = harness.nowMs,
+            ),
+        )
+
+        val vm = LibraryHubViewModel(
+            shelfRepository = harness.shelfRepository,
+            historyRepository = harness.historyRepository,
+            favoriteRepository = harness.favoriteRepository,
+            bookmarkRepository = harness.bookmarkRepository,
+            subscriptionRepository = harness.subscriptionRepository,
+            downloadGateway = harness.downloadGateway,
+            localLibraryImporter = harness.localLibraryImporter,
+            siteRegistry = harness.siteRegistry,
+            dispatchers = harness.dispatchers,
+            clockMs = harness.clock,
+        )
+
+        vm.uiState.test {
+            awaitItem()
+            advanceUntilIdle()
+            val state = expectMostRecentItem()
+            assertEquals(2, state.completedDownloadCount)
+            assertEquals(3_145_728L, state.completedDownloadBytes)
+            assertEquals(1, state.activeDownloadCount)
+            assertEquals(1, state.subscriptionCount)
+            assertEquals(1, state.savedSearchCount)
+            assertEquals(1, state.localBooks.size)
+            assertEquals(1, state.shelves.first { it.shelf.id == shelf.id }.itemCount)
+            assertEquals(1, state.historyCount)
+
+            vm.removeLocalBook(book.id)
+            advanceUntilIdle()
+            val afterRemoval = expectMostRecentItem()
+            assertEquals(0, afterRemoval.localBooks.size)
+            assertEquals(0, afterRemoval.historyCount)
+            assertTrue(afterRemoval.message?.contains("清理关联片单") == true)
+            assertTrue(harness.shelfRepository.observeShelfItems(shelf.id).first().isEmpty())
+            assertNull(harness.historyRepository.getReadingProgress(SiteId.LOCAL, book.id))
             cancelAndIgnoreRemainingEvents()
         }
     }

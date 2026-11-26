@@ -3,7 +3,7 @@
 > **多源原生媒体浏览、影院级播放与沉浸式阅读 Android 客户端**  
 > Package: `com.raven.app`（Debug: `com.raven.app.debug`） · 当前版本 `0.6.0`（`versionCode = 10`，唯一源为 [release.properties](release.properties)） · Kotlin `2.3.21` · Jetpack Compose · Material 3 Adaptive · Media3 `1.11.1` · Room `2.8.5` · Koin `4.2.2`
 
-Raven（**渡鸦**）是一款采用 **17 模块 Clean Architecture** 构建的原生 Android 多源媒体应用，将 **Dark Obsidian（纯黑曜石 OLED）× Apple HIG Precision（苹果级克制与精致）× Netflix Cinema（流媒体影院氛围）** 设计语言贯通至 24 个视频、漫画、连载漫画与写真站点，提供统一的沉浸浏览、离线下载、个人片库、全能播放器与四模式阅读器体验。
+Raven（**渡鸦**）是一款采用 **17 模块 Clean Architecture** 构建的原生 Android 多源媒体应用，将 **Dark Obsidian（纯黑曜石 OLED）× Apple HIG Precision（苹果级克制与精致）× Netflix Cinema（流媒体影院氛围）** 设计语言贯通至 24 个视频、漫画、连载漫画与写真站点，提供统一的沉浸浏览、离线下载、个人资料库、全能播放器与四模式阅读器体验。
 
 ---
 
@@ -29,12 +29,12 @@ Raven（**渡鸦**）是一款采用 **17 模块 Clean Architecture** 构建的�
 - **Dark Obsidian × Apple HIG × Netflix Cinema 设计系统**
   - 纯黑曜石画布 `#09090B` + 三级暗色表面阶梯（`#121216` / `#1B1B22` / `#24242D`）+ `0.5dp` Translucent Hairline + 唯一品牌点缀色 **Raven Crimson `#FF4D58`**。
   - **视频站点首页**：全出血 Hero Banner 轮播 + 顶部毛玻璃/暗色顶栏 + 继续观看（`2.5dp` 绯红进度条）+ Top 10 排行 + 横向片单货架。
-  - **漫画与写真站点首页**：无边框原生宽高比瀑布流（`2–6` 列自适应）+ 顶部续读卡片 + 单行语言筛选栏。
+  - **漫画与写真站点首页**：无边框原生宽高比瀑布流（`2–6` 列自适应）+ 置顶续读卡 + 多本未读完“继续阅读”横排 + 单行语言筛选栏。
   - **Apple HIG 分组内嵌列表 & 单屏表单**：设置、高级筛选、播放偏好与阅读覆盖全面采用圆角分组卡片与单屏 `ModalBottomSheet`，彻底杜绝递归弹窗。
   - **自适应导航壳**：手机 `< 600dp` 采用极简底部导航栏，平板 `>= 600dp` 切换左侧持久 `NavigationRail`，大屏 `>= 1200dp` 展开 `NavigationDrawer`；支持无痕模式提示条、应用 PIN/生物识别锁（`RavenAppLockOverlay`）与隐私防截屏保护（`FLAG_SECURE`）。
 - **3-Activity 无堆栈泄漏边界**
   - `MainActivity`（`singleTop`）：承载 27 路由 Type-Safe Compose `NavHost`、`ACTION_SEND` 分享链接识别与底部确认卡片、SAF 文档读写与硬件音量键翻页。
-  - `PlayerActivity`（`singleTop` + API 26+ PiP）：独立画中画播放壳，相关视频与队列切换全程 **in-place** 切换，支持手势调光/音量/快进、倍速、A-B 循环、睡眠定时器、本地预览帧与清晰度自动降级。
+  - `PlayerActivity`（`singleTop` + API 26+ PiP）：独立画中画播放壳，相关视频与队列切换全程 **in-place** 切换，支持完整队列面板/任意跳转/移除、可取消的自动连播倒计时、手势调光/音量/快进、倍速、A-B 循环、睡眠定时器与清晰度自动降级。
   - `SiteAuthActivity`（`FLAG_SECURE`）：隔离式 WebView 官方登录状态机，禁用 JS 桥接与本地文件访问、强制拒绝无效 SSL 证书、退出彻底清空 WebView 缓存与 Cookie。
 - **全链路安全、离线与数据迁移**
   - `SessionVault`（AndroidKeyStore AES-256-GCM）统一加密隔离全部登录态，凭据绝不发往媒体 CDN 或更新服务器。
@@ -48,10 +48,10 @@ Raven（**渡鸦**）是一款采用 **17 模块 Clean Architecture** 构建的�
 | 层级 | 模块 | 核心职责 |
 |---|---|---|
 | **App Shell** | `:app` | `RavenApplication`（13 模块 Koin 根 + 单例 Coil 3 + `RavenBackgroundMaintenanceWorker`）、`MainActivity`（27 路由 `NavHost` + `RavenAppLockOverlay`）、`PlayerActivity`（PiP）、自适应图标与网络安全配置 |
-| **Feature UI** | `:feature:browse` | 影院/瀑布流首页、发现、单站/跨站搜索与高级筛选、站点切换抽屉、站点功能与目录 |
-| | `:feature:library` | 我的（Profile）、观看与阅读统计（`StatsScreen`）、片库总览、自定义/智能片单、收藏、历史、单图收藏、本地导入、下载中心、标签订阅与全局更新收件箱 |
-| | `:feature:player` | Media3 视频详情与播放器界面、可视化手势 HUD、分组控制 Sheet、音轨字幕切换、局域网投屏（`LanCastManager`）、队列连播与 PiP 宿主 |
-| | `:feature:reader` | 图集详情（含内嵌视频与片单加入）与 4 模式沉浸阅读器（条漫 / 左到右 / 右到左 / 双页）、三区翻页、宽图拆分、缩放裁边、缩略图总览、书签与 CBZ/图片导出 |
+| **Feature UI** | `:feature:browse` | 影院/瀑布流首页、多本继续阅读、发现高级与日期筛选、全站最近搜索、单站/跨站搜索与来源分页、站点切换搜索、站点功能与目录 |
+| | `:feature:library` | 我的（内容/订阅/本地/账号分组入口）、资料库总览与统计、订阅设置与订阅更新（单/多/全站点标签组、瀑布流/列表切换）、下载与收藏（统一瀑布流/列表切换）、自定义/智能片单、历史、单图收藏、本地导入与关联清理、标签订阅与全局更新收件箱 |
+| | `:feature:player` | Media3 视频详情与播放器界面、完整播放队列与任意切项、自动连播倒计时、可视化手势 HUD、分组控制 Sheet、音轨字幕切换、局域网投屏（`LanCastManager`）与 PiP 宿主 |
+| | `:feature:reader` | 图集详情（内嵌视频、片单、底部相似推荐、标签/作者长按菜单）与 4 模式沉浸阅读器（条漫 / 左到右 / 右到左 / 双页）、连载选话/已读标记/下一未读、三区翻页、宽图拆分、缩放裁边、缩略图总览、书签与 CBZ/图片导出 |
 | | `:feature:settings` | Apple HIG 分组设置、多站点账号管理、`SiteAuthActivity`、屏蔽词、存储迁移、重复作品清理、加密备份恢复、WebDAV 云同步、隐私锁与 GitHub Release 签名校验更新器 |
 | **Site Plugins** | `:sites:video` | 7 个视频站点插件（独立多绑定 `SitePlugin`） |
 | | `:sites:comic` | 12 个漫画站点插件（普通漫画 7 + 连载漫画 5，独立多绑定 `SitePlugin`） |

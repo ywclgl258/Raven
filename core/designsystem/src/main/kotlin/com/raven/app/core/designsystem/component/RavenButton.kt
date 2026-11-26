@@ -30,8 +30,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -57,6 +55,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import com.raven.app.core.designsystem.motion.MorphSpringPreset
+import com.raven.app.core.designsystem.motion.RavenMorphIcons
 import com.raven.app.core.designsystem.theme.LocalMotionReduced
 import com.raven.app.core.designsystem.theme.LocalRavenColors
 import com.raven.app.core.designsystem.theme.LocalRavenFeedback
@@ -184,6 +184,7 @@ fun RavenPrimaryButton(
                 }
             }
             .ravenSpringPress(interactionSource = interactionSource, enabled = interactive)
+            .ravenBurstFeedback(trigger = success, burstColor = colors.success)
             .ravenInteractiveLight(
                 interactionSource = interactionSource,
                 shape = RavenShapes.ButtonShape,
@@ -769,10 +770,12 @@ private fun RavenButtonContent(
                 Spacer(modifier = Modifier.width(8.dp))
             }
             2 -> Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(
-                    imageVector = Icons.Rounded.Check,
-                    contentDescription = null,
-                    modifier = Modifier.size(iconSize),
+                RavenMorphIcon(
+                    glyph = RavenMorphIcons.Check,
+                    tint = indicatorColor,
+                    size = iconSize,
+                    strokeWidth = 2.dp,
+                    springPreset = MorphSpringPreset.BOUNCY,
                 )
                 Spacer(modifier = Modifier.width(6.dp))
             }

@@ -1,18 +1,12 @@
 package com.raven.app.core.designsystem.component
 
 import androidx.compose.animation.AnimatedContent
-import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.LinearEasing
-import androidx.compose.animation.core.Spring
-import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.snap
-import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
-import androidx.compose.animation.scaleIn
-import androidx.compose.animation.scaleOut
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -38,9 +32,6 @@ import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.rounded.Add
-import androidx.compose.material.icons.rounded.Check
-import androidx.compose.material.icons.rounded.Pause
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -77,6 +68,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import com.raven.app.core.designsystem.motion.MorphSpringPreset
+import com.raven.app.core.designsystem.motion.RavenMorphIcons
 import com.raven.app.core.designsystem.theme.LocalMotionReduced
 import com.raven.app.core.designsystem.theme.LocalRavenColors
 import com.raven.app.core.designsystem.theme.LocalRavenFeedback
@@ -173,27 +166,6 @@ fun RavenHeroBanner(
         ) { pageIndex ->
             val item = items[pageIndex]
             val saved = isInWatchLater(item)
-            val watchLaterIconTint by animateColorAsState(
-                targetValue = if (saved) colors.crimson else colors.secondaryCtaInk,
-                animationSpec = if (motionReduced) {
-                    snap()
-                } else {
-                    tween(durationMillis = RavenMotion.CHIP_TRANSITION_DURATION_MS)
-                },
-                label = "heroWatchLaterIconTint",
-            )
-            val watchLaterIconScaleState = animateFloatAsState(
-                targetValue = if (saved) 1.12f else 1.0f,
-                animationSpec = if (motionReduced) {
-                    snap()
-                } else {
-                    spring(
-                        dampingRatio = Spring.DampingRatioMediumBouncy,
-                        stiffness = Spring.StiffnessMedium,
-                    )
-                },
-                label = "heroWatchLaterIconScale",
-            )
 
             Box(
                 modifier = Modifier
@@ -335,6 +307,7 @@ fun RavenHeroBanner(
                                 .weight(1f)
                                 .heightIn(min = 48.dp)
                                 .ravenSpringPress(interactionSource = watchLaterInteraction)
+                                .ravenBurstFeedback(trigger = saved, burstColor = colors.crimson)
                                 .clickable(
                                     interactionSource = watchLaterInteraction,
                                     indication = null,
@@ -362,31 +335,17 @@ fun RavenHeroBanner(
                                 horizontalArrangement = Arrangement.Center,
                                 verticalAlignment = Alignment.CenterVertically,
                             ) {
-                                AnimatedContent(
-                                    targetState = saved,
-                                    transitionSpec = {
-                                        if (motionReduced) {
-                                            fadeIn(snap()) togetherWith fadeOut(snap())
-                                        } else {
-                                            (fadeIn(tween(140)) + scaleIn(initialScale = 0.8f, animationSpec = RavenMotion.interactiveSpringSpec()))
-                                                .togetherWith(fadeOut(tween(100)) + scaleOut(targetScale = 0.8f))
-                                        }
-                                    },
-                                    label = "heroWatchLaterIcon",
-                                ) { isSaved ->
-                                    Icon(
-                                        imageVector = if (isSaved) Icons.Rounded.Check else Icons.Rounded.Add,
-                                        contentDescription = null,
-                                        tint = watchLaterIconTint,
-                                        modifier = Modifier
-                                            .size(18.dp)
-                                            .graphicsLayer {
-                                                val s = watchLaterIconScaleState.value
-                                                scaleX = s
-                                                scaleY = s
-                                            },
-                                    )
-                                }
+                                RavenMorphToggleIcon(
+                                    active = saved,
+                                    activeGlyph = RavenMorphIcons.Check,
+                                    inactiveGlyph = RavenMorphIcons.Plus,
+                                    activeTint = colors.crimson,
+                                    inactiveTint = colors.secondaryCtaInk,
+                                    size = 18.dp,
+                                    strokeWidth = 2.dp,
+                                    springPreset = MorphSpringPreset.BOUNCY,
+                                    scaleKick = true,
+                                )
                                 Spacer(modifier = Modifier.width(6.dp))
                                 AnimatedContent(
                                     targetState = saved,
@@ -510,25 +469,13 @@ fun RavenHeroBanner(
                             .border(0.5.dp, colors.rimHighlight, CircleShape),
                         contentAlignment = Alignment.Center,
                     ) {
-                        AnimatedContent(
-                            targetState = paused,
-                            transitionSpec = {
-                                if (motionReduced) {
-                                    fadeIn(snap()) togetherWith fadeOut(snap())
-                                } else {
-                                    (fadeIn(tween(140)) + scaleIn(initialScale = 0.78f))
-                                        .togetherWith(fadeOut(tween(100)) + scaleOut(targetScale = 0.78f))
-                                }
-                            },
-                            label = "heroPauseIcon",
-                        ) { isPaused ->
-                            Icon(
-                                imageVector = if (isPaused) Icons.Rounded.PlayArrow else Icons.Rounded.Pause,
-                                contentDescription = null,
-                                tint = colors.inkPrimary,
-                                modifier = Modifier.size(16.dp),
-                            )
-                        }
+                        RavenMorphIcon(
+                            glyph = if (paused) RavenMorphIcons.Play else RavenMorphIcons.Pause,
+                            tint = colors.inkPrimary,
+                            size = 16.dp,
+                            strokeWidth = 1.8.dp,
+                            springPreset = MorphSpringPreset.SNAPPY,
+                        )
                     }
                 }
             }

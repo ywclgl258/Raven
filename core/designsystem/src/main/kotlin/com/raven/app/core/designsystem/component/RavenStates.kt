@@ -4,11 +4,13 @@ import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.EnterTransition
 import androidx.compose.animation.ExitTransition
 import androidx.compose.animation.SizeTransform
+import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.snap
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -33,7 +35,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.outlined.ErrorOutline
 import androidx.compose.material.icons.outlined.Inbox
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material3.Icon
@@ -63,6 +64,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import com.raven.app.core.designsystem.motion.BloubMood
 import com.raven.app.core.designsystem.theme.LocalMotionReduced
 import com.raven.app.core.designsystem.theme.LocalRavenColors
 import com.raven.app.core.designsystem.theme.LocalRavenFeedback
@@ -94,8 +96,10 @@ fun RavenStatusPill(
     tone: RavenStatusTone = RavenStatusTone.NEUTRAL,
     icon: ImageVector? = null,
     tabular: Boolean = true,
+    pulsing: Boolean = false,
 ) {
     val colors = LocalRavenColors.current
+    val motionReduced = LocalMotionReduced.current
     val accent = when (tone) {
         RavenStatusTone.NEUTRAL -> colors.inkSecondary
         RavenStatusTone.ACCENT -> colors.crimson
@@ -103,18 +107,43 @@ fun RavenStatusPill(
         RavenStatusTone.WARNING -> colors.warning
         RavenStatusTone.ERROR -> colors.error
     }
-    val container = when (tone) {
-        RavenStatusTone.NEUTRAL -> colors.surface2
-        else -> accent.copy(alpha = 0.14f)
+    val colorSpec = if (motionReduced) {
+        snap<Color>()
+    } else {
+        tween<Color>(
+            durationMillis = RavenMotion.CHIP_TRANSITION_DURATION_MS,
+            easing = RavenMotion.HarmonyDecelerationEasing,
+        )
     }
-    val borderColor = when (tone) {
-        RavenStatusTone.NEUTRAL -> colors.hairline
-        else -> accent.copy(alpha = 0.30f)
-    }
-    val contentColor = when (tone) {
-        RavenStatusTone.NEUTRAL -> colors.inkPrimary
-        else -> accent
-    }
+    val animatedAccent by animateColorAsState(
+        targetValue = accent,
+        animationSpec = colorSpec,
+        label = "ravenStatusPillAccent",
+    )
+    val container by animateColorAsState(
+        targetValue = when (tone) {
+            RavenStatusTone.NEUTRAL -> colors.surface2
+            else -> accent.copy(alpha = 0.14f)
+        },
+        animationSpec = colorSpec,
+        label = "ravenStatusPillContainer",
+    )
+    val borderColor by animateColorAsState(
+        targetValue = when (tone) {
+            RavenStatusTone.NEUTRAL -> colors.hairline
+            else -> accent.copy(alpha = 0.30f)
+        },
+        animationSpec = colorSpec,
+        label = "ravenStatusPillBorder",
+    )
+    val contentColor by animateColorAsState(
+        targetValue = when (tone) {
+            RavenStatusTone.NEUTRAL -> colors.inkPrimary
+            else -> accent
+        },
+        animationSpec = colorSpec,
+        label = "ravenStatusPillContent",
+    )
 
     Row(
         modifier = modifier
@@ -125,6 +154,12 @@ fun RavenStatusPill(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(4.dp),
     ) {
+        if (pulsing) {
+            RavenLivingBrandDot(
+                size = 6.dp,
+                color = animatedAccent,
+            )
+        }
         if (icon != null) {
             Icon(
                 imageVector = icon,
@@ -156,7 +191,7 @@ fun RavenEmptyState(
     onActionClick: (() -> Unit)? = null,
 ) {
     val colors = LocalRavenColors.current
-    val feedback = LocalRavenFeedback.current
+    val isDefaultIcon = icon == Icons.Outlined.Inbox
 
     Column(
         modifier = modifier
@@ -166,26 +201,33 @@ fun RavenEmptyState(
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        Box(
-            modifier = Modifier
-                .size(56.dp)
-                .clip(CircleShape)
-                .background(colors.surface2)
-                .border(
-                    width = 0.75.dp,
-                    brush = Brush.verticalGradient(
-                        colors = listOf(colors.lightRimTop, colors.hairline),
-                    ),
-                    shape = CircleShape,
-                ),
-            contentAlignment = Alignment.Center,
-        ) {
-            Icon(
-                imageVector = icon,
-                contentDescription = null,
-                tint = colors.inkSecondary,
-                modifier = Modifier.size(26.dp),
+        Box(contentAlignment = Alignment.Center) {
+            RavenBloubPresence(
+                mood = BloubMood.EMPTY,
+                size = 72.dp,
             )
+            if (!isDefaultIcon) {
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.BottomEnd)
+                        .size(24.dp)
+                        .clip(CircleShape)
+                        .background(colors.surface2)
+                        .border(
+                            width = 0.75.dp,
+                            color = colors.lightRimTop,
+                            shape = CircleShape,
+                        ),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(
+                        imageVector = icon,
+                        contentDescription = null,
+                        tint = colors.inkPrimary,
+                        modifier = Modifier.size(14.dp),
+                    )
+                }
+            }
         }
 
         Text(
@@ -239,27 +281,11 @@ fun RavenErrorState(
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        Box(
-            modifier = Modifier
-                .size(56.dp)
-                .clip(CircleShape)
-                .background(colors.error.copy(alpha = 0.14f))
-                .border(
-                    width = 0.75.dp,
-                    brush = Brush.verticalGradient(
-                        colors = listOf(colors.error.copy(alpha = 0.42f), colors.error.copy(alpha = 0.20f)),
-                    ),
-                    shape = CircleShape,
-                ),
-            contentAlignment = Alignment.Center,
-        ) {
-            Icon(
-                imageVector = Icons.Outlined.ErrorOutline,
-                contentDescription = null,
-                tint = colors.error,
-                modifier = Modifier.size(26.dp),
-            )
-        }
+        RavenBloubPresence(
+            mood = BloubMood.ERROR,
+            size = 64.dp,
+            accentColor = colors.error,
+        )
 
         Text(
             text = title,

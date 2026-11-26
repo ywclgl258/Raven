@@ -299,7 +299,7 @@ class BackupValidator(
         }
 
         // 11. Update inbox
-        checkRule(payload.updateInbox.size <= MAX_INBOX_ITEMS) { "更新收件箱超过上限 ($MAX_INBOX_ITEMS)" }
+        checkRule(payload.updateInbox.size <= MAX_INBOX_ITEMS) { "订阅更新超过上限 ($MAX_INBOX_ITEMS)" }
         for (inboxItem in payload.updateInbox) {
             checkRule(inboxItem.id.isNotBlank() && inboxItem.id.length <= MAX_ID_LENGTH) { "收件箱条目 ID 无效" }
             validateMediaItem(inboxItem.item)

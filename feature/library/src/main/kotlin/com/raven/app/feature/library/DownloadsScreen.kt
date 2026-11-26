@@ -14,6 +14,8 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
@@ -28,13 +30,17 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.staggeredgrid.LazyVerticalStaggeredGrid
+import androidx.compose.foundation.lazy.staggeredgrid.StaggeredGridCells
+import androidx.compose.foundation.lazy.staggeredgrid.StaggeredGridItemSpan
+import androidx.compose.foundation.lazy.staggeredgrid.items as staggeredItems
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.automirrored.rounded.Sort
-import androidx.compose.material.icons.outlined.Build
 import androidx.compose.material.icons.outlined.DeleteOutline
+import androidx.compose.material.icons.outlined.DeleteSweep
 import androidx.compose.material.icons.outlined.Download
 import androidx.compose.material.icons.outlined.FilterList
 import androidx.compose.material.icons.outlined.Folder
@@ -74,6 +80,7 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.Dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.raven.app.core.designsystem.component.RavenBottomSheet
 import com.raven.app.core.designsystem.component.RavenCrimsonProgressBar
@@ -89,11 +96,13 @@ import com.raven.app.core.designsystem.component.RavenSearchField
 import com.raven.app.core.designsystem.component.RavenStatusPill
 import com.raven.app.core.designsystem.component.RavenStatusTone
 import com.raven.app.core.designsystem.component.RavenTopBar
+import com.raven.app.core.designsystem.motion.RavenMorphIcons
 import com.raven.app.core.designsystem.theme.LocalRavenColors
 import com.raven.app.core.designsystem.theme.RavenShapes
 import com.raven.app.core.designsystem.theme.ravenSpringPress
 import com.raven.app.core.designsystem.theme.tabular
 import com.raven.app.core.model.DownloadItem
+import com.raven.app.core.media.download.BatchEnqueueProgress
 import com.raven.app.core.model.DownloadKind
 import com.raven.app.core.model.DownloadStatus
 import com.raven.app.core.model.SiteId
@@ -104,12 +113,14 @@ import kotlin.math.roundToInt
 /**
  * Unified Downloads Center (`DownloadsScreen`) managing Video (Media3) & Gallery/Comic downloads.
  */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun DownloadsScreen(
     navigator: LibraryNavigator,
     modifier: Modifier = Modifier,
     siteId: SiteId? = null,
     embedded: Boolean = false,
+    collectionLayout: LibraryCollectionLayout = defaultCollectionLayout(),
     viewModel: DownloadsViewModel = koinViewModel(
         key = "downloads_${siteId?.value.orEmpty()}",
         parameters = { parametersOf(DownloadsParams(siteId)) },
@@ -121,6 +132,7 @@ fun DownloadsScreen(
     var activeMenuTarget by remember { mutableStateOf<DownloadItem?>(null) }
     var groupEditTarget by remember { mutableStateOf<DownloadItem?>(null) }
     var deleteConfirmTarget by remember { mutableStateOf<DownloadItem?>(null) }
+    var showCleanCompletedConfirm by rememberSaveable { mutableStateOf(false) }
     var showLayoutSheet by rememberSaveable { mutableStateOf(false) }
     var showGroupManager by rememberSaveable { mutableStateOf(false) }
     var showGroupCreator by rememberSaveable { mutableStateOf(false) }
@@ -168,379 +180,26 @@ fun DownloadsScreen(
             },
         )
 
-        LazyColumn(
-            modifier = Modifier.fillMaxSize(),
-            contentPadding = PaddingValues(top = 10.dp, bottom = 28.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp),
-        ) {
-            // Network policy warning banner
-            if (!uiState.networkPolicy.isConnected) {
-                item(key = "dl_net_offline") {
-                    LibraryFeedbackBanner(
-                        message = "当前无网络连接，下载任务将在恢复连接后自动继续",
-                        tone = RavenStatusTone.WARNING,
-                        modifier = Modifier.padding(horizontal = 16.dp),
-                    )
-                }
-            } else if (uiState.networkPolicy.unmeteredOnly && uiState.networkPolicy.isMetered) {
-                item(key = "dl_net_metered") {
-                    LibraryFeedbackBanner(
-                        message = "当前为移动计费网络，已按「仅 Wi-Fi 下载」策略暂停传输",
-                        tone = RavenStatusTone.WARNING,
-                        modifier = Modifier.padding(horizontal = 16.dp),
-                    )
-                }
-            }
-
-            // Active batch enqueue banner
-            if (uiState.batchProgress.isRunning || uiState.batchProgress.errors.isNotEmpty()) {
-                item(key = "dl_batch_banner") {
-                    val bp = uiState.batchProgress
-                    Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 16.dp)
-                            .clip(RavenShapes.CardShape)
-                            .background(colors.surface1)
-                            .border(0.5.dp, colors.hairline, RavenShapes.CardShape)
-                            .padding(12.dp),
-                        verticalArrangement = Arrangement.spacedBy(6.dp),
-                    ) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            Text(
-                                text = if (bp.isRunning) {
-                                    "正在批量加入下载（${bp.processed} / ${bp.total}）"
-                                } else {
-                                    "批量加入完成（成功 ${bp.added} / ${bp.total}）"
-                                },
-                                style = MaterialTheme.typography.labelLarge.tabular(),
-                                color = colors.inkPrimary,
-                            )
-                            if (bp.isRunning) {
-                                TextButton(onClick = viewModel::cancelBatchEnqueue) {
-                                    Text("取消", color = colors.error)
-                                }
-                            }
-                        }
-                        if (bp.total > 0) {
-                            LinearProgressIndicator(
-                                progress = { (bp.processed.toFloat() / bp.total.toFloat()).coerceIn(0f, 1f) },
-                                color = colors.crimson,
-                                trackColor = colors.surface3,
-                                modifier = Modifier.fillMaxWidth(),
-                            )
-                        }
-                        if (bp.errors.isNotEmpty()) {
-                            Text(
-                                text = bp.errors.take(2).joinToString("\n"),
-                                style = MaterialTheme.typography.bodySmall,
-                                color = colors.error,
-                            )
-                        }
-                    }
-                }
-            }
-
-            if (!uiState.message.isNullOrBlank()) {
-                item(key = "dl_msg") {
-                    LibraryFeedbackBanner(
-                        message = uiState.message.orEmpty(),
-                        tone = RavenStatusTone.ACCENT,
-                        onDismiss = viewModel::clearMessage,
-                        modifier = Modifier.padding(horizontal = 16.dp),
-                    )
-                }
-            }
-
-            // Always-visible search plus dedicated filter and presentation controls.
-            item(key = "dl_search_and_view") {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 16.dp),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    RavenSearchField(
-                        query = uiState.searchQuery,
-                        onQueryChange = viewModel::updateSearchQuery,
-                        placeholder = "搜索标题、标签、站点或分组…",
-                        modifier = Modifier.weight(1f),
-                    )
-                    IconButton(
-                        onClick = viewModel::toggleFiltersExpanded,
-                        modifier = Modifier
-                            .size(48.dp)
-                            .clip(CircleShape)
-                            .background(
-                                if (uiState.filtersExpanded || uiState.activeExtraFilterCount > 0) {
-                                    colors.crimson.copy(alpha = 0.16f)
-                                } else {
-                                    colors.surface2
-                                },
-                            )
-                            .border(0.5.dp, colors.hairline, CircleShape)
-                            .testTag("downloads_filter_toggle_button"),
-                    ) {
-                        Icon(
-                            imageVector = Icons.Outlined.FilterList,
-                            contentDescription = "筛选，已启用 ${uiState.activeExtraFilterCount} 项",
-                            tint = if (uiState.activeExtraFilterCount > 0) colors.crimson else colors.inkPrimary,
-                        )
-                    }
-                    IconButton(
-                        onClick = { showLayoutSheet = true },
-                        modifier = Modifier
-                            .size(48.dp)
-                            .clip(CircleShape)
-                            .background(colors.surface2)
-                            .border(0.5.dp, colors.hairline, CircleShape)
-                            .testTag("downloads_layout_button"),
-                    ) {
-                        Icon(
-                            imageVector = Icons.AutoMirrored.Rounded.Sort,
-                            contentDescription = "排列与分组",
-                            tint = if (uiState.sort != DownloadSort.RECENT || uiState.groupMode != DownloadGroupMode.NONE) {
-                                colors.crimson
-                            } else {
-                                colors.inkPrimary
-                            },
-                        )
-                    }
-                }
-            }
-
-            // Status filter tabs: 全部 / 进行中 / 已完成 / 需处理
-            item(key = "dl_status_tabs") {
-                RavenFilterChipRow(
-                    items = DownloadStatusTab.entries,
-                    selectedItem = uiState.selectedTab,
-                    labelProvider = { tab -> "${tab.label} ${uiState.countForTab(tab)}" },
-                    onItemSelected = viewModel::selectTab,
-                    keyProvider = { it.name },
-                    modifier = Modifier.testTag("downloads_status_tabs"),
-                )
-            }
-
-            // Batch Controls Row (Pause All / Resume All / Retry Failed)
-            if (uiState.activeTransferCount > 0 || uiState.pausedCount > 0 || uiState.failedCount > 0) {
-                item(key = "dl_batch_controls") {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 16.dp),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    ) {
-                        if (uiState.activeTransferCount > 0) {
-                            OutlinedButton(
-                                onClick = viewModel::pauseAll,
-                                shape = RavenShapes.PillShape,
-                                border = BorderStroke(0.5.dp, colors.outlineSubtle),
-                                colors = ButtonDefaults.outlinedButtonColors(
-                                    containerColor = colors.surface1,
-                                    contentColor = colors.inkPrimary,
-                                ),
-                                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
-                                modifier = Modifier.testTag("downloads_pause_all_button"),
-                            ) {
-                                Icon(Icons.Outlined.Pause, contentDescription = null, modifier = Modifier.size(16.dp))
-                                Spacer(modifier = Modifier.width(4.dp))
-                                Text("全部暂停", style = MaterialTheme.typography.labelMedium)
-                            }
-                        }
-                        if (uiState.pausedCount > 0) {
-                            OutlinedButton(
-                                onClick = viewModel::resumeAll,
-                                shape = RavenShapes.PillShape,
-                                border = BorderStroke(0.5.dp, colors.outlineSubtle),
-                                colors = ButtonDefaults.outlinedButtonColors(
-                                    containerColor = colors.surface1,
-                                    contentColor = colors.inkPrimary,
-                                ),
-                                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
-                                modifier = Modifier.testTag("downloads_resume_all_button"),
-                            ) {
-                                Icon(Icons.Outlined.PlayArrow, contentDescription = null, modifier = Modifier.size(16.dp))
-                                Spacer(modifier = Modifier.width(4.dp))
-                                Text("全部继续", style = MaterialTheme.typography.labelMedium)
-                            }
-                        }
-                        if (uiState.failedCount > 0) {
-                            OutlinedButton(
-                                onClick = viewModel::retryAllFailed,
-                                shape = RavenShapes.PillShape,
-                                border = BorderStroke(0.5.dp, colors.crimson.copy(alpha = 0.45f)),
-                                colors = ButtonDefaults.outlinedButtonColors(
-                                    containerColor = colors.crimson.copy(alpha = 0.10f),
-                                    contentColor = colors.crimson,
-                                ),
-                                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
-                                modifier = Modifier.testTag("downloads_retry_all_button"),
-                            ) {
-                                Icon(Icons.Outlined.Refresh, contentDescription = null, modifier = Modifier.size(16.dp))
-                                Spacer(modifier = Modifier.width(4.dp))
-                                Text("重试失败 (${uiState.failedCount})", style = MaterialTheme.typography.labelMedium)
-                            }
-                        }
-                    }
-                }
-            }
-
-            // Collapsible Type / Site / Group filters + search
-            item(key = "dl_collapsible_filters") {
-                val motionReduced = com.raven.app.core.designsystem.theme.LocalMotionReduced.current
-                AnimatedVisibility(
-                    visible = uiState.filtersExpanded,
-                    enter = if (motionReduced) {
-                        EnterTransition.None
-                    } else {
-                        expandVertically(tween(200, easing = com.raven.app.core.designsystem.theme.RavenMotion.HarmonyDecelerationEasing)) +
-                            fadeIn(tween(160))
-                    },
-                    exit = if (motionReduced) {
-                        ExitTransition.None
-                    } else {
-                        shrinkVertically(tween(170, easing = com.raven.app.core.designsystem.theme.RavenMotion.HarmonyDecelerationEasing)) +
-                            fadeOut(tween(120))
-                    },
-                ) {
-                    Column(
-                        verticalArrangement = Arrangement.spacedBy(8.dp),
-                        modifier = Modifier.testTag("downloads_extra_filters"),
-                    ) {
-                        RavenFilterChipRow(
-                            items = DownloadKindFilter.entries,
-                            selectedItem = uiState.kindFilter,
-                            labelProvider = { it.label },
-                            onItemSelected = viewModel::selectKindFilter,
-                            keyProvider = { it.name },
-                        )
-                        LibrarySiteFilterChips(
-                            options = uiState.siteOptions,
-                            selectedSiteId = uiState.siteFilter,
-                            onSelectSite = viewModel::selectSiteFilter,
-                        )
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(horizontal = 16.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            Text(
-                                text = "自定义分组",
-                                style = MaterialTheme.typography.labelLarge,
-                                color = colors.inkPrimary,
-                            )
-                            Spacer(modifier = Modifier.weight(1f))
-                            TextButton(
-                                onClick = { showGroupManager = true },
-                                modifier = Modifier.testTag("downloads_open_group_manager"),
-                            ) {
-                                Text("管理 ${uiState.availableGroups.size}", color = colors.crimson)
-                            }
-                        }
-                        if (uiState.availableGroups.isNotEmpty()) {
-                            val groupOptions: List<String?> = remember(uiState.availableGroups) {
-                                listOf(null) + uiState.availableGroups
-                            }
-                            RavenFilterChipRow(
-                                items = groupOptions,
-                                selectedItem = uiState.groupFilter,
-                                labelProvider = { it ?: "全部分组" },
-                                onItemSelected = viewModel::selectGroupFilter,
-                                keyProvider = { it ?: "_all_groups" },
-                            )
-                        } else {
-                            Text(
-                                text = "可从单项菜单设置分组，或在管理中批量创建。",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = colors.inkTertiary,
-                                modifier = Modifier.padding(horizontal = 16.dp),
-                            )
-                        }
-                        DownloadsTagPanel(
-                            availableTagCount = uiState.availableTags.size,
-                            visibleTags = uiState.visibleTags,
-                            namespaces = uiState.tagNamespaces,
-                            selectedNamespace = uiState.selectedTagNamespace,
-                            selectedTagKeys = uiState.selectedTagKeys,
-                            selectedTags = uiState.availableTags.filter { it.key in uiState.selectedTagKeys },
-                            matchAll = uiState.tagMatchAll,
-                            onToggleTag = viewModel::toggleTag,
-                            onSelectNamespace = viewModel::selectTagNamespace,
-                            onToggleMatchAll = viewModel::toggleTagMatchAll,
-                            onClearTags = viewModel::clearTagFilters,
-                        )
-                        if (uiState.activeExtraFilterCount > 0 || uiState.searchQuery.isNotBlank()) {
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(horizontal = 16.dp),
-                                horizontalArrangement = Arrangement.End,
-                            ) {
-                                TextButton(onClick = viewModel::resetExtraFilters) {
-                                    Text("清除筛选", color = colors.crimson)
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-
-            if (uiState.items.isEmpty()) {
-                item(key = "dl_empty") {
-                    RavenEmptyState(
-                        title = if (uiState.allCount == 0) "还没有下载任务" else "当前分类下暂无下载项",
-                        message = if (uiState.allCount == 0) {
-                            "在视频详情页、漫画详情页或片单「离线准备」中可以将作品缓存到本地离线观看。"
-                        } else {
-                            "切换上方状态标签或清除筛选条件即可查看其他下载任务。"
-                        },
-                        icon = Icons.Outlined.Download,
-                    )
-                }
-            } else {
-                uiState.sections.forEach { section ->
-                    if (uiState.groupMode != DownloadGroupMode.NONE) {
-                        item(key = "dl_section_header_${section.key}") {
-                            DownloadSectionHeader(
-                                section = section,
-                                onToggle = { viewModel.toggleSection(section.key) },
-                            )
-                        }
-                    }
-                    if (!section.isCollapsed) {
-                        items(
-                            items = section.items,
-                            key = { "${section.key}:${it.id}" },
-                        ) { item ->
-                            DownloadItemCard(
-                                item = item,
-                                siteLabel = uiState.siteLabels[item.siteId] ?: item.siteId.value,
-                                onPrimaryClick = {
-                                    when (item.status) {
-                                        DownloadStatus.COMPLETED -> openDownloadedItem(navigator, item)
-                                        DownloadStatus.DOWNLOADING,
-                                        DownloadStatus.QUEUED,
-                                        DownloadStatus.RETRY_WAIT -> viewModel.pause(item.id)
-                                        DownloadStatus.PAUSED -> viewModel.resume(item.id)
-                                        DownloadStatus.FAILED,
-                                        DownloadStatus.CANCELLED -> viewModel.retry(item.id)
-                                    }
-                                },
-                                onMenuClick = { activeMenuTarget = item },
-                                modifier = Modifier
-                                    .animateItem()
-                                    .padding(horizontal = 16.dp),
-                            )
-                        }
-                    }
-                }
-            }
+        if (collectionLayout == LibraryCollectionLayout.WATERFALL) {
+            DownloadsWaterfallContent(
+                uiState = uiState,
+                viewModel = viewModel,
+                navigator = navigator,
+                onMenuTarget = { activeMenuTarget = it },
+                onOpenLayoutSheet = { showLayoutSheet = true },
+                onOpenGroupManager = { showGroupManager = true },
+                onCleanCompleted = { showCleanCompletedConfirm = true },
+            )
+        } else {
+            DownloadsListContent(
+                uiState = uiState,
+                viewModel = viewModel,
+                navigator = navigator,
+                onMenuTarget = { activeMenuTarget = it },
+                onOpenLayoutSheet = { showLayoutSheet = true },
+                onOpenGroupManager = { showGroupManager = true },
+                onCleanCompleted = { showCleanCompletedConfirm = true },
+            )
         }
     }
 
@@ -686,7 +345,902 @@ fun DownloadsScreen(
             onDismiss = { deleteConfirmTarget = null },
         )
     }
+
+    // Clean Completed Confirmation
+    if (showCleanCompletedConfirm) {
+        LibraryConfirmBottomSheet(
+            title = "清理 ${uiState.completedCount} 个已完成下载？",
+            message = "将删除全部已完成下载记录及其本地缓存文件，预计释放 " +
+                "${RavenFormatters.formatByteSize(uiState.totalCompletedBytes)}。" +
+                "进行中、已暂停与需处理的任务不受影响。",
+            confirmLabel = "清理已完成",
+            onConfirm = { viewModel.deleteCompletedDownloads() },
+            onDismiss = { showCleanCompletedConfirm = false },
+        )
+    }
 }
+
+@Composable
+private fun DownloadsListContent(
+    uiState: DownloadsUiState,
+    viewModel: DownloadsViewModel,
+    navigator: LibraryNavigator,
+    onMenuTarget: (DownloadItem) -> Unit,
+    onOpenLayoutSheet: () -> Unit,
+    onOpenGroupManager: () -> Unit,
+    onCleanCompleted: () -> Unit,
+) {
+    LazyColumn(
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(top = 10.dp, bottom = 28.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        if (!uiState.networkPolicy.isConnected) {
+            item(key = "dl_net_offline") {
+                DownloadsNetworkPolicyBanners(uiState)
+            }
+        } else if (uiState.networkPolicy.unmeteredOnly && uiState.networkPolicy.isMetered) {
+            item(key = "dl_net_metered") {
+                DownloadsNetworkPolicyBanners(uiState)
+            }
+        }
+
+        if (uiState.batchProgress.isRunning || uiState.batchProgress.errors.isNotEmpty()) {
+            item(key = "dl_batch_banner") {
+                DownloadsBatchProgressBanner(
+                    progress = uiState.batchProgress,
+                    onCancel = viewModel::cancelBatchEnqueue,
+                )
+            }
+        }
+
+        if (!uiState.message.isNullOrBlank()) {
+            item(key = "dl_msg") {
+                DownloadsMessageBanner(
+                    message = uiState.message,
+                    onDismiss = viewModel::clearMessage,
+                )
+            }
+        }
+
+        item(key = "dl_search_and_view") {
+            DownloadsSearchAndPresentationRow(
+                uiState = uiState,
+                onQueryChange = viewModel::updateSearchQuery,
+                onToggleFilters = viewModel::toggleFiltersExpanded,
+                onOpenLayoutSheet = onOpenLayoutSheet,
+            )
+        }
+
+        item(key = "dl_status_tabs") {
+            DownloadsStatusFilterTabs(
+                uiState = uiState,
+                onSelectTab = viewModel::selectTab,
+                modifier = Modifier.testTag("downloads_status_tabs"),
+            )
+        }
+
+        if (uiState.hasBatchControls()) {
+            item(key = "dl_batch_controls") {
+                DownloadsBatchControls(
+                    uiState = uiState,
+                    onPauseAll = viewModel::pauseAll,
+                    onResumeAll = viewModel::resumeAll,
+                    onRetryAll = viewModel::retryAllFailed,
+                    onCleanCompleted = onCleanCompleted,
+                )
+            }
+        }
+
+        item(key = "dl_collapsible_filters") {
+            DownloadsExtraFiltersPanel(
+                uiState = uiState,
+                viewModel = viewModel,
+                onOpenGroupManager = onOpenGroupManager,
+            )
+        }
+
+        if (uiState.items.isEmpty()) {
+            item(key = "dl_empty") {
+                DownloadsEmptyState(
+                    uiState = uiState,
+                    onSearch = navigator::openSearch,
+                    onResetFilters = viewModel::resetExtraFilters,
+                )
+            }
+        } else {
+            uiState.sections.forEach { section ->
+                if (uiState.groupMode != DownloadGroupMode.NONE) {
+                    item(key = "dl_section_header_${section.key}") {
+                        DownloadSectionHeader(
+                            section = section,
+                            onToggle = { viewModel.toggleSection(section.key) },
+                        )
+                    }
+                }
+                if (!section.isCollapsed) {
+                    items(
+                        items = section.items,
+                        key = { "${section.key}:${it.id}" },
+                    ) { item ->
+                        DownloadItemCard(
+                            item = item,
+                            siteLabel = uiState.siteLabels[item.siteId] ?: item.siteId.value,
+                            onPrimaryClick = { handleDownloadPrimaryAction(navigator, viewModel, item) },
+                            onMenuClick = { onMenuTarget(item) },
+                            modifier = Modifier
+                                .animateItem()
+                                .padding(horizontal = 16.dp),
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun DownloadsWaterfallContent(
+    uiState: DownloadsUiState,
+    viewModel: DownloadsViewModel,
+    navigator: LibraryNavigator,
+    onMenuTarget: (DownloadItem) -> Unit,
+    onOpenLayoutSheet: () -> Unit,
+    onOpenGroupManager: () -> Unit,
+    onCleanCompleted: () -> Unit,
+) {
+    BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
+        val columns = computeCollectionWaterfallColumns(maxWidth.value.toInt())
+
+        LazyVerticalStaggeredGrid(
+            columns = StaggeredGridCells.Fixed(columns),
+            modifier = Modifier
+                .fillMaxSize()
+                .testTag("downloads_waterfall_grid"),
+            contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 10.dp, bottom = 28.dp),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            verticalItemSpacing = 10.dp,
+        ) {
+            if (!uiState.networkPolicy.isConnected) {
+                item(key = "dl_net_offline", span = StaggeredGridItemSpan.FullLine) {
+                    DownloadsNetworkPolicyBanners(uiState, horizontalPadding = 0.dp)
+                }
+            } else if (uiState.networkPolicy.unmeteredOnly && uiState.networkPolicy.isMetered) {
+                item(key = "dl_net_metered", span = StaggeredGridItemSpan.FullLine) {
+                    DownloadsNetworkPolicyBanners(uiState, horizontalPadding = 0.dp)
+                }
+            }
+
+            if (uiState.batchProgress.isRunning || uiState.batchProgress.errors.isNotEmpty()) {
+                item(key = "dl_batch_banner", span = StaggeredGridItemSpan.FullLine) {
+                    DownloadsBatchProgressBanner(
+                        progress = uiState.batchProgress,
+                        onCancel = viewModel::cancelBatchEnqueue,
+                        horizontalPadding = 0.dp,
+                    )
+                }
+            }
+
+            if (!uiState.message.isNullOrBlank()) {
+                item(key = "dl_msg", span = StaggeredGridItemSpan.FullLine) {
+                    DownloadsMessageBanner(
+                        message = uiState.message,
+                        onDismiss = viewModel::clearMessage,
+                        horizontalPadding = 0.dp,
+                    )
+                }
+            }
+
+            item(key = "dl_search_and_view", span = StaggeredGridItemSpan.FullLine) {
+                DownloadsSearchAndPresentationRow(
+                    uiState = uiState,
+                    onQueryChange = viewModel::updateSearchQuery,
+                    onToggleFilters = viewModel::toggleFiltersExpanded,
+                    onOpenLayoutSheet = onOpenLayoutSheet,
+                    horizontalPadding = 0.dp,
+                )
+            }
+
+            item(key = "dl_status_tabs", span = StaggeredGridItemSpan.FullLine) {
+                DownloadsStatusFilterTabs(
+                    uiState = uiState,
+                    onSelectTab = viewModel::selectTab,
+                    modifier = Modifier.testTag("downloads_status_tabs"),
+                    horizontalPadding = 0.dp,
+                )
+            }
+
+            if (uiState.hasBatchControls()) {
+                item(key = "dl_batch_controls", span = StaggeredGridItemSpan.FullLine) {
+                    DownloadsBatchControls(
+                        uiState = uiState,
+                        onPauseAll = viewModel::pauseAll,
+                        onResumeAll = viewModel::resumeAll,
+                        onRetryAll = viewModel::retryAllFailed,
+                        onCleanCompleted = onCleanCompleted,
+                        horizontalPadding = 0.dp,
+                    )
+                }
+            }
+
+            item(key = "dl_collapsible_filters", span = StaggeredGridItemSpan.FullLine) {
+                DownloadsExtraFiltersPanel(
+                    uiState = uiState,
+                    viewModel = viewModel,
+                    onOpenGroupManager = onOpenGroupManager,
+                    horizontalPadding = 0.dp,
+                )
+            }
+
+            if (uiState.items.isEmpty()) {
+                item(key = "dl_empty", span = StaggeredGridItemSpan.FullLine) {
+                    DownloadsEmptyState(
+                        uiState = uiState,
+                        onSearch = navigator::openSearch,
+                        onResetFilters = viewModel::resetExtraFilters,
+                    )
+                }
+            } else {
+                uiState.sections.forEach { section ->
+                    if (uiState.groupMode != DownloadGroupMode.NONE) {
+                        item(key = "dl_section_header_${section.key}", span = StaggeredGridItemSpan.FullLine) {
+                            DownloadSectionHeader(
+                                section = section,
+                                onToggle = { viewModel.toggleSection(section.key) },
+                            )
+                        }
+                    }
+                    if (!section.isCollapsed) {
+                        staggeredItems(
+                            items = section.items,
+                            key = { "${section.key}:${it.id}" },
+                        ) { item ->
+                            DownloadPosterCard(
+                                item = item,
+                                siteLabel = uiState.siteLabels[item.siteId] ?: item.siteId.value,
+                                onPrimaryClick = { handleDownloadPrimaryAction(navigator, viewModel, item) },
+                                onMenuClick = { onMenuTarget(item) },
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun DownloadsNetworkPolicyBanners(
+    uiState: DownloadsUiState,
+    horizontalPadding: Dp = 16.dp,
+) {
+    if (!uiState.networkPolicy.isConnected) {
+        LibraryFeedbackBanner(
+            message = "当前无网络连接，下载任务将在恢复连接后自动继续",
+            tone = RavenStatusTone.WARNING,
+            modifier = Modifier.padding(horizontal = horizontalPadding),
+        )
+    } else if (uiState.networkPolicy.unmeteredOnly && uiState.networkPolicy.isMetered) {
+        LibraryFeedbackBanner(
+            message = "当前为移动计费网络，已按「仅 Wi-Fi 下载」策略暂停传输",
+            tone = RavenStatusTone.WARNING,
+            modifier = Modifier.padding(horizontal = horizontalPadding),
+        )
+    }
+}
+
+@Composable
+private fun DownloadsBatchProgressBanner(
+    progress: BatchEnqueueProgress,
+    onCancel: () -> Unit,
+    horizontalPadding: Dp = 16.dp,
+) {
+    val colors = LocalRavenColors.current
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = horizontalPadding)
+            .clip(RavenShapes.CardShape)
+            .background(colors.surface1)
+            .border(0.5.dp, colors.hairline, RavenShapes.CardShape)
+            .padding(12.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                text = if (progress.isRunning) {
+                    "正在批量加入下载（${progress.processed} / ${progress.total}）"
+                } else {
+                    "批量加入完成（成功 ${progress.added} / ${progress.total}）"
+                },
+                style = MaterialTheme.typography.labelLarge.tabular(),
+                color = colors.inkPrimary,
+            )
+            if (progress.isRunning) {
+                TextButton(onClick = onCancel) {
+                    Text("取消", color = colors.error)
+                }
+            }
+        }
+        if (progress.total > 0) {
+            LinearProgressIndicator(
+                progress = { (progress.processed.toFloat() / progress.total.toFloat()).coerceIn(0f, 1f) },
+                color = colors.crimson,
+                trackColor = colors.surface3,
+                modifier = Modifier.fillMaxWidth(),
+            )
+        }
+        if (progress.errors.isNotEmpty()) {
+            Text(
+                text = progress.errors.take(2).joinToString("\n"),
+                style = MaterialTheme.typography.bodySmall,
+                color = colors.error,
+            )
+        }
+    }
+}
+
+@Composable
+private fun DownloadsMessageBanner(
+    message: String?,
+    onDismiss: () -> Unit,
+    horizontalPadding: Dp = 16.dp,
+) {
+    LibraryFeedbackBanner(
+        message = message.orEmpty(),
+        tone = RavenStatusTone.ACCENT,
+        onDismiss = onDismiss,
+        modifier = Modifier.padding(horizontal = horizontalPadding),
+    )
+}
+
+@Composable
+private fun DownloadsSearchAndPresentationRow(
+    uiState: DownloadsUiState,
+    onQueryChange: (String) -> Unit,
+    onToggleFilters: () -> Unit,
+    onOpenLayoutSheet: () -> Unit,
+    horizontalPadding: Dp = 16.dp,
+) {
+    val colors = LocalRavenColors.current
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = horizontalPadding),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        RavenSearchField(
+            query = uiState.searchQuery,
+            onQueryChange = onQueryChange,
+            placeholder = "搜索标题、标签、站点或分组…",
+            modifier = Modifier.weight(1f),
+        )
+        IconButton(
+            onClick = onToggleFilters,
+            modifier = Modifier
+                .size(48.dp)
+                .clip(CircleShape)
+                .background(
+                    if (uiState.filtersExpanded || uiState.activeExtraFilterCount > 0) {
+                        colors.crimson.copy(alpha = 0.16f)
+                    } else {
+                        colors.surface2
+                    },
+                )
+                .border(0.5.dp, colors.hairline, CircleShape)
+                .testTag("downloads_filter_toggle_button"),
+        ) {
+            Icon(
+                imageVector = Icons.Outlined.FilterList,
+                contentDescription = "筛选，已启用 ${uiState.activeExtraFilterCount} 项",
+                tint = if (uiState.activeExtraFilterCount > 0) colors.crimson else colors.inkPrimary,
+            )
+        }
+        IconButton(
+            onClick = onOpenLayoutSheet,
+            modifier = Modifier
+                .size(48.dp)
+                .clip(CircleShape)
+                .background(colors.surface2)
+                .border(0.5.dp, colors.hairline, CircleShape)
+                .testTag("downloads_layout_button"),
+        ) {
+            Icon(
+                imageVector = Icons.AutoMirrored.Rounded.Sort,
+                contentDescription = "排列与分组",
+                tint = if (uiState.sort != DownloadSort.RECENT || uiState.groupMode != DownloadGroupMode.NONE) {
+                    colors.crimson
+                } else {
+                    colors.inkPrimary
+                },
+            )
+        }
+    }
+}
+
+@Composable
+private fun DownloadsStatusFilterTabs(
+    uiState: DownloadsUiState,
+    onSelectTab: (DownloadStatusTab) -> Unit,
+    modifier: Modifier = Modifier,
+    horizontalPadding: Dp = 16.dp,
+) {
+    RavenFilterChipRow(
+        items = DownloadStatusTab.entries,
+        selectedItem = uiState.selectedTab,
+        labelProvider = { tab -> "${tab.label} ${uiState.countForTab(tab)}" },
+        onItemSelected = onSelectTab,
+        keyProvider = { it.name },
+        contentPadding = PaddingValues(horizontal = horizontalPadding),
+        modifier = modifier,
+    )
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun DownloadsBatchControls(
+    uiState: DownloadsUiState,
+    onPauseAll: () -> Unit,
+    onResumeAll: () -> Unit,
+    onRetryAll: () -> Unit,
+    onCleanCompleted: () -> Unit,
+    horizontalPadding: Dp = 16.dp,
+) {
+    val colors = LocalRavenColors.current
+    FlowRow(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = horizontalPadding),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        if (uiState.activeTransferCount > 0) {
+            OutlinedButton(
+                onClick = onPauseAll,
+                shape = RavenShapes.PillShape,
+                border = BorderStroke(0.5.dp, colors.outlineSubtle),
+                colors = ButtonDefaults.outlinedButtonColors(
+                    containerColor = colors.surface1,
+                    contentColor = colors.inkPrimary,
+                ),
+                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
+                modifier = Modifier.testTag("downloads_pause_all_button"),
+            ) {
+                Icon(Icons.Outlined.Pause, contentDescription = null, modifier = Modifier.size(16.dp))
+                Spacer(modifier = Modifier.width(4.dp))
+                Text("全部暂停", style = MaterialTheme.typography.labelMedium)
+            }
+        }
+        if (uiState.pausedCount > 0) {
+            OutlinedButton(
+                onClick = onResumeAll,
+                shape = RavenShapes.PillShape,
+                border = BorderStroke(0.5.dp, colors.outlineSubtle),
+                colors = ButtonDefaults.outlinedButtonColors(
+                    containerColor = colors.surface1,
+                    contentColor = colors.inkPrimary,
+                ),
+                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
+                modifier = Modifier.testTag("downloads_resume_all_button"),
+            ) {
+                Icon(Icons.Outlined.PlayArrow, contentDescription = null, modifier = Modifier.size(16.dp))
+                Spacer(modifier = Modifier.width(4.dp))
+                Text("全部继续", style = MaterialTheme.typography.labelMedium)
+            }
+        }
+        if (uiState.attentionCount > 0) {
+            OutlinedButton(
+                onClick = onRetryAll,
+                shape = RavenShapes.PillShape,
+                border = BorderStroke(0.5.dp, colors.crimson.copy(alpha = 0.45f)),
+                colors = ButtonDefaults.outlinedButtonColors(
+                    containerColor = colors.crimson.copy(alpha = 0.10f),
+                    contentColor = colors.crimson,
+                ),
+                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
+                modifier = Modifier.testTag("downloads_retry_all_button"),
+            ) {
+                Icon(Icons.Outlined.Refresh, contentDescription = null, modifier = Modifier.size(16.dp))
+                Spacer(modifier = Modifier.width(4.dp))
+                Text("重试需处理 (${uiState.attentionCount})", style = MaterialTheme.typography.labelMedium)
+            }
+        }
+        if (uiState.completedCount > 0) {
+            OutlinedButton(
+                onClick = onCleanCompleted,
+                enabled = !uiState.isCleaningCompleted,
+                shape = RavenShapes.PillShape,
+                border = BorderStroke(0.5.dp, colors.error.copy(alpha = 0.45f)),
+                colors = ButtonDefaults.outlinedButtonColors(
+                    containerColor = colors.error.copy(alpha = 0.10f),
+                    contentColor = colors.error,
+                ),
+                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
+                modifier = Modifier.testTag("downloads_clean_completed_button"),
+            ) {
+                Icon(
+                    Icons.Outlined.DeleteSweep,
+                    contentDescription = null,
+                    modifier = Modifier.size(16.dp),
+                )
+                Spacer(modifier = Modifier.width(4.dp))
+                Text(
+                    text = if (uiState.isCleaningCompleted) {
+                        "清理中…"
+                    } else {
+                        "清理已完成 (${uiState.completedCount})"
+                    },
+                    style = MaterialTheme.typography.labelMedium,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun DownloadsExtraFiltersPanel(
+    uiState: DownloadsUiState,
+    viewModel: DownloadsViewModel,
+    onOpenGroupManager: () -> Unit,
+    horizontalPadding: Dp = 16.dp,
+) {
+    val colors = LocalRavenColors.current
+    val motionReduced = com.raven.app.core.designsystem.theme.LocalMotionReduced.current
+    AnimatedVisibility(
+        visible = uiState.filtersExpanded,
+        enter = if (motionReduced) {
+            EnterTransition.None
+        } else {
+            expandVertically(tween(200, easing = com.raven.app.core.designsystem.theme.RavenMotion.HarmonyDecelerationEasing)) +
+                fadeIn(tween(160))
+        },
+        exit = if (motionReduced) {
+            ExitTransition.None
+        } else {
+            shrinkVertically(tween(170, easing = com.raven.app.core.designsystem.theme.RavenMotion.HarmonyDecelerationEasing)) +
+                fadeOut(tween(120))
+        },
+    ) {
+        Column(
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+            modifier = Modifier.testTag("downloads_extra_filters"),
+        ) {
+            RavenFilterChipRow(
+                items = DownloadKindFilter.entries,
+                selectedItem = uiState.kindFilter,
+                labelProvider = { it.label },
+                onItemSelected = viewModel::selectKindFilter,
+                keyProvider = { it.name },
+                contentPadding = PaddingValues(horizontal = horizontalPadding),
+            )
+            LibrarySiteFilterChips(
+                options = uiState.siteOptions,
+                selectedSiteId = uiState.siteFilter,
+                onSelectSite = viewModel::selectSiteFilter,
+                contentPadding = PaddingValues(horizontal = horizontalPadding),
+            )
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = horizontalPadding),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    text = "自定义分组",
+                    style = MaterialTheme.typography.labelLarge,
+                    color = colors.inkPrimary,
+                )
+                Spacer(modifier = Modifier.weight(1f))
+                TextButton(
+                    onClick = onOpenGroupManager,
+                    modifier = Modifier.testTag("downloads_open_group_manager"),
+                ) {
+                    Text("管理 ${uiState.availableGroups.size}", color = colors.crimson)
+                }
+            }
+            if (uiState.availableGroups.isNotEmpty()) {
+                val groupOptions: List<String?> = remember(uiState.availableGroups) {
+                    listOf(null) + uiState.availableGroups
+                }
+                RavenFilterChipRow(
+                    items = groupOptions,
+                    selectedItem = uiState.groupFilter,
+                    labelProvider = { it ?: "全部分组" },
+                    onItemSelected = viewModel::selectGroupFilter,
+                    keyProvider = { it ?: "_all_groups" },
+                    contentPadding = PaddingValues(horizontal = horizontalPadding),
+                )
+            } else {
+                Text(
+                    text = "可从单项菜单设置分组，或在管理中批量创建。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = colors.inkTertiary,
+                    modifier = Modifier.padding(horizontal = horizontalPadding),
+                )
+            }
+            DownloadsTagPanel(
+                availableTagCount = uiState.availableTags.size,
+                visibleTags = uiState.visibleTags,
+                namespaces = uiState.tagNamespaces,
+                selectedNamespace = uiState.selectedTagNamespace,
+                selectedTagKeys = uiState.selectedTagKeys,
+                selectedTags = uiState.availableTags.filter { it.key in uiState.selectedTagKeys },
+                matchAll = uiState.tagMatchAll,
+                onToggleTag = viewModel::toggleTag,
+                onSelectNamespace = viewModel::selectTagNamespace,
+                onToggleMatchAll = viewModel::toggleTagMatchAll,
+                onClearTags = viewModel::clearTagFilters,
+            )
+            if (uiState.activeExtraFilterCount > 0 || uiState.searchQuery.isNotBlank()) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = horizontalPadding),
+                    horizontalArrangement = Arrangement.End,
+                ) {
+                    TextButton(onClick = viewModel::resetExtraFilters) {
+                        Text("清除筛选", color = colors.crimson)
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun DownloadsEmptyState(
+    uiState: DownloadsUiState,
+    onSearch: () -> Unit,
+    onResetFilters: () -> Unit,
+) {
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag("downloads_empty_state"),
+    ) {
+        RavenEmptyState(
+            title = if (uiState.allCount == 0) "还没有下载任务" else "当前分类下暂无下载项",
+            message = if (uiState.allCount == 0) {
+                "在视频详情页、漫画详情页或片单「离线准备」中可以将作品缓存到本地离线观看。"
+            } else {
+                "切换上方状态标签或清除筛选条件即可查看其他下载任务。"
+            },
+            icon = Icons.Outlined.Download,
+            actionLabel = if (uiState.allCount == 0) "去搜索作品" else "清除筛选",
+            onActionClick = if (uiState.allCount == 0) onSearch else onResetFilters,
+        )
+    }
+}
+
+private fun DownloadsUiState.hasBatchControls(): Boolean =
+    activeTransferCount > 0 || pausedCount > 0 || attentionCount > 0 || completedCount > 0
+
+private fun handleDownloadPrimaryAction(
+    navigator: LibraryNavigator,
+    viewModel: DownloadsViewModel,
+    item: DownloadItem,
+) {
+    when (item.status) {
+        DownloadStatus.COMPLETED -> openDownloadedItem(navigator, item)
+        DownloadStatus.DOWNLOADING,
+        DownloadStatus.QUEUED,
+        DownloadStatus.RETRY_WAIT -> viewModel.pause(item.id)
+        DownloadStatus.PAUSED -> viewModel.resume(item.id)
+        DownloadStatus.FAILED,
+        DownloadStatus.CANCELLED -> viewModel.retry(item.id)
+    }
+}
+
+@Composable
+private fun DownloadPosterCard(
+    item: DownloadItem,
+    siteLabel: String,
+    onPrimaryClick: () -> Unit,
+    onMenuClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val colors = LocalRavenColors.current
+    val tone = when (item.status) {
+        DownloadStatus.COMPLETED -> RavenStatusTone.SUCCESS
+        DownloadStatus.DOWNLOADING -> RavenStatusTone.ACCENT
+        DownloadStatus.QUEUED, DownloadStatus.PAUSED, DownloadStatus.RETRY_WAIT -> RavenStatusTone.WARNING
+        DownloadStatus.FAILED, DownloadStatus.CANCELLED -> RavenStatusTone.ERROR
+    }
+    val detailLine = remember(item) { downloadDetailLine(item) }
+
+    Column(
+        modifier = modifier
+            .fillMaxWidth()
+            .clip(RavenShapes.CardShape)
+            .background(colors.surface1)
+            .border(0.5.dp, colors.hairline, RavenShapes.CardShape)
+            .ravenSpringPress()
+            .clickable(role = Role.Button, onClick = onPrimaryClick)
+            .testTag("download_card_${item.id}"),
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(6.dp),
+        ) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .aspectRatio(if (item.kind == DownloadKind.VIDEO) 16f / 9f else 3f / 4f)
+                    .clip(RavenShapes.ControlShape)
+                    .background(colors.surface2)
+                    .border(0.5.dp, colors.hairline, RavenShapes.ControlShape),
+            ) {
+                RavenImage(
+                    url = item.coverUrl,
+                    siteId = item.siteId,
+                    contentDescription = item.title,
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier.fillMaxSize(),
+                )
+                RavenStatusPill(
+                    text = item.status.displayLabel(),
+                    tone = tone,
+                    modifier = Modifier
+                        .align(Alignment.TopStart)
+                        .padding(7.dp),
+                )
+                if (item.status != DownloadStatus.COMPLETED) {
+                    if (item.progressFraction > 0f) {
+                        RavenCrimsonProgressBar(
+                            fraction = item.progressFraction,
+                            trackHeight = 3.dp,
+                            modifier = Modifier
+                                .align(Alignment.BottomCenter)
+                                .fillMaxWidth(),
+                        )
+                    } else if (item.status == DownloadStatus.DOWNLOADING) {
+                        LinearProgressIndicator(
+                            color = colors.crimson,
+                            trackColor = colors.inkPrimary.copy(alpha = 0.22f),
+                            modifier = Modifier
+                                .align(Alignment.BottomCenter)
+                                .fillMaxWidth()
+                                .height(3.dp),
+                        )
+                    }
+                }
+            }
+        }
+
+        Column(
+            modifier = Modifier.padding(start = 10.dp, end = 10.dp, bottom = 8.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            Text(
+                text = item.title,
+                style = MaterialTheme.typography.titleSmall,
+                color = colors.inkPrimary,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Text(
+                text = "$siteLabel · ${item.kind.displayLabel()}",
+                style = MaterialTheme.typography.bodySmall,
+                color = colors.inkSecondary,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            if (detailLine.isNotEmpty()) {
+                Text(
+                    text = detailLine,
+                    style = MaterialTheme.typography.bodySmall.tabular(),
+                    color = colors.inkSecondary,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            if (item.status == DownloadStatus.RETRY_WAIT) {
+                Text(
+                    text = formatRetryCountdown(item.retryAtEpochMs),
+                    style = MaterialTheme.typography.labelSmall.tabular(),
+                    color = colors.warning,
+                )
+            } else if (item.status == DownloadStatus.FAILED) {
+                val errText = buildString {
+                    item.errorCategory?.let { append("${it.displayLabel()}：") }
+                    append(item.errorMessage?.takeIf { it.isNotBlank() } ?: "下载失败")
+                }
+                Text(
+                    text = errText,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = colors.error,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                if (item.groupName.isNotBlank()) {
+                    RavenStatusPill(text = item.groupName)
+                }
+                Spacer(modifier = Modifier.weight(1f))
+                IconButton(
+                    onClick = onPrimaryClick,
+                    modifier = Modifier
+                        .size(34.dp)
+                        .clip(CircleShape)
+                        .background(colors.surface2),
+                ) {
+                    Icon(
+                        imageVector = when (item.status) {
+                            DownloadStatus.COMPLETED -> Icons.Outlined.OfflinePin
+                            DownloadStatus.DOWNLOADING,
+                            DownloadStatus.QUEUED,
+                            DownloadStatus.RETRY_WAIT -> Icons.Outlined.Pause
+                            DownloadStatus.PAUSED -> Icons.Outlined.PlayArrow
+                            DownloadStatus.FAILED,
+                            DownloadStatus.CANCELLED -> Icons.Outlined.Refresh
+                        },
+                        contentDescription = "执行快捷操作",
+                        tint = if (item.status == DownloadStatus.COMPLETED) colors.success else colors.inkPrimary,
+                        modifier = Modifier.size(18.dp),
+                    )
+                }
+                IconButton(
+                    onClick = onMenuClick,
+                    modifier = Modifier.size(34.dp),
+                ) {
+                    Icon(
+                        imageVector = Icons.Outlined.MoreVert,
+                        contentDescription = "更多选项",
+                        tint = colors.inkSecondary,
+                        modifier = Modifier.size(18.dp),
+                    )
+                }
+            }
+        }
+    }
+}
+
+private fun downloadDetailLine(item: DownloadItem): String = buildList {
+    if (item.kind != DownloadKind.VIDEO && item.totalUnits > 0) {
+        val pagePct = ((item.completedUnits.toFloat() / item.totalUnits.toFloat()) * 100f)
+            .roundToInt()
+            .coerceIn(0, 100)
+        if (item.status != DownloadStatus.COMPLETED) {
+            add("${item.completedUnits} / ${item.totalUnits} 页 ($pagePct%)")
+        } else {
+            add("${item.completedUnits} / ${item.totalUnits} 页")
+        }
+    } else if (item.status != DownloadStatus.COMPLETED) {
+        if (item.progressFraction > 0f) {
+            add("${(item.progressFraction * 100f).roundToInt().coerceIn(0, 100)}%")
+        } else if (item.status == DownloadStatus.DOWNLOADING) {
+            add("正在连接…")
+        }
+    }
+    item.quality?.takeIf { it.isNotBlank() }?.let { add(it) }
+    val totalBytes = item.totalBytes?.takeIf { it > 0L }
+    if (item.status != DownloadStatus.COMPLETED && item.downloadedBytes > 0L && totalBytes != null) {
+        add("${RavenFormatters.formatByteSize(item.downloadedBytes)} / ${RavenFormatters.formatByteSize(totalBytes)}")
+    } else if (item.status != DownloadStatus.COMPLETED && item.downloadedBytes > 0L) {
+        add("已下载 ${RavenFormatters.formatByteSize(item.downloadedBytes)}")
+    } else {
+        val sizeBytes = totalBytes ?: item.downloadedBytes
+        if (sizeBytes > 0L) add(RavenFormatters.formatByteSize(sizeBytes))
+    }
+}.joinToString(" · ")
+
+internal fun computeCollectionWaterfallColumns(widthDp: Int): Int = when {
+    widthDp >= 840 -> 4
+    widthDp >= 600 -> 3
+    else -> 2
+}
+
+internal fun defaultCollectionLayout(): LibraryCollectionLayout = LibraryCollectionLayout.WATERFALL
 
 @Composable
 private fun DownloadItemCard(
@@ -761,34 +1315,7 @@ private fun DownloadItemCard(
                     }
                 }
 
-                val detailLine = buildList {
-                    if (item.kind != DownloadKind.VIDEO && item.totalUnits > 0) {
-                        val pagePct = ((item.completedUnits.toFloat() / item.totalUnits.toFloat()) * 100f)
-                            .roundToInt()
-                            .coerceIn(0, 100)
-                        if (item.status != DownloadStatus.COMPLETED) {
-                            add("${item.completedUnits} / ${item.totalUnits} 页 ($pagePct%)")
-                        } else {
-                            add("${item.completedUnits} / ${item.totalUnits} 页")
-                        }
-                    } else if (item.status != DownloadStatus.COMPLETED) {
-                        if (item.progressFraction > 0f) {
-                            add("${(item.progressFraction * 100f).roundToInt().coerceIn(0, 100)}%")
-                        } else if (item.status == DownloadStatus.DOWNLOADING) {
-                            add("正在连接…")
-                        }
-                    }
-                    item.quality?.takeIf { it.isNotBlank() }?.let { add(it) }
-                    val totalBytes = item.totalBytes?.takeIf { it > 0L }
-                    if (item.status != DownloadStatus.COMPLETED && item.downloadedBytes > 0L && totalBytes != null) {
-                        add("${RavenFormatters.formatByteSize(item.downloadedBytes)} / ${RavenFormatters.formatByteSize(totalBytes)}")
-                    } else if (item.status != DownloadStatus.COMPLETED && item.downloadedBytes > 0L) {
-                        add("已下载 ${RavenFormatters.formatByteSize(item.downloadedBytes)}")
-                    } else {
-                        val sizeBytes = totalBytes ?: item.downloadedBytes
-                        if (sizeBytes > 0L) add(RavenFormatters.formatByteSize(sizeBytes))
-                    }
-                }.joinToString(" · ")
+                val detailLine = remember(item) { downloadDetailLine(item) }
 
                 if (detailLine.isNotEmpty()) {
                     Text(
@@ -1155,10 +1682,10 @@ private fun GalleryIntegrityAuditSheet(
                 state.audit != null -> {
                     val audit = state.audit
                     RavenGroupedSection(title = "校验报告") {
-                        RavenGroupedRow(
+                        LibraryMorphGroupedRow(
                             title = "整体状态",
                             value = if (audit.isComplete) "完整无损" else "发现缺页或损坏",
-                            icon = if (audit.isComplete) Icons.Outlined.Verified else Icons.Outlined.Build,
+                            glyph = if (audit.isComplete) RavenMorphIcons.Verified else RavenMorphIcons.Build,
                             iconTint = if (audit.isComplete) colors.success else colors.warning,
                         )
                         RavenGroupedDivider(insetWithIcon = true)

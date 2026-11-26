@@ -74,6 +74,8 @@ import com.raven.app.core.model.SearchScope
 import com.raven.app.core.model.SiteDescriptor
 import com.raven.app.core.model.SiteId
 import com.raven.app.core.model.StorageLocation
+import com.raven.app.core.sitespi.AuthMode
+import com.raven.app.core.sitespi.AuthProvider
 import com.raven.app.core.sitespi.FeedSource
 import com.raven.app.core.sitespi.LinkResolver
 import com.raven.app.core.sitespi.ResolvedLink
@@ -295,7 +297,11 @@ internal class FakeLibrarySitePlugin(
     private val feedHandler: (suspend (FeedRequest) -> FeedPage)? = null,
     private val searchHandler: (suspend (FeedRequest) -> FeedPage)? = null,
     private val linkHandler: ((String) -> ResolvedLink?)? = null,
+    authMode: AuthMode = AuthMode.None,
 ) : SitePlugin {
+    override val authProvider: AuthProvider = object : AuthProvider {
+        override val mode: AuthMode = authMode
+    }
     override val feedSource: FeedSource? = if (feedHandler != null) {
         object : FeedSource {
             override suspend fun loadHome(language: ComicLanguage): HomeFeed = HomeFeed(siteId = descriptor.id)
@@ -439,6 +445,7 @@ internal fun defaultTestPlugins(): List<SitePlugin> = listOf(
                 ?: return@FakeLibrarySitePlugin null
             ResolvedLink.Gallery(siteId = SiteId.NHENTAI, id = id, canonicalUrl = url)
         },
+        authMode = AuthMode.CookieImport(setOf("sessionid")),
     ),
     FakeLibrarySitePlugin(
         descriptor = SiteDescriptor(
@@ -466,6 +473,22 @@ internal fun sampleMedia(
     durationSeconds = if (kind == MediaKind.VIDEO) 600 else null,
     pageCount = if (kind != MediaKind.VIDEO) 24 else null,
 )
+
+/**
+ * Seeds a minimal valid local-library manifest so [LocalLibraryImporter.books] reports one item.
+ */
+internal fun seedLocalBook(
+    rootDir: File,
+    id: String = "a".repeat(64),
+    title: String = "Local Book",
+): File {
+    val bookDir = File(rootDir, id).apply { mkdirs() }
+    File(bookDir, "1.image").writeBytes(byteArrayOf(1))
+    File(bookDir, "book.json").writeText(
+        """{"id":"$id","title":"$title","files":["1.image"],"bytes":1,"importedAt":1000,"kind":"COMIC"}""",
+    )
+    return bookDir
+}
 
 internal fun sampleDownload(
     id: String,

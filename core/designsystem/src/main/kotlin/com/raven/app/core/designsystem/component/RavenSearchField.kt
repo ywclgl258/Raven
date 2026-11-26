@@ -8,9 +8,9 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
 import androidx.compose.animation.scaleOut
-import com.raven.app.core.designsystem.theme.ravenSpringPress
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -25,7 +25,6 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Close
-import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -56,6 +55,8 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.raven.app.core.designsystem.motion.MorphSpringPreset
+import com.raven.app.core.designsystem.motion.RavenMorphIcons
 import com.raven.app.core.designsystem.theme.LocalMotionReduced
 import com.raven.app.core.designsystem.theme.LocalRavenColors
 import com.raven.app.core.designsystem.theme.RavenMotion
@@ -158,11 +159,12 @@ fun RavenSearchField(
             .testTag("raven_search_field"),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Icon(
-            imageVector = Icons.Rounded.Search,
-            contentDescription = null,
+        RavenMorphIcon(
+            glyph = if (focused) RavenMorphIcons.SearchActive else RavenMorphIcons.SearchOutline,
             tint = searchIconTint,
-            modifier = Modifier.size(20.dp),
+            size = 20.dp,
+            strokeWidth = 1.9.dp,
+            springPreset = MorphSpringPreset.SNAPPY,
         )
 
         Spacer(modifier = Modifier.width(10.dp))
@@ -260,6 +262,7 @@ fun RavenSearchField(
                 )
             },
         ) {
+            val clearInteraction = remember { MutableInteractionSource() }
             IconButton(
                 onClick = {
                     haptic.performHapticFeedback(HapticFeedbackType.ContextClick)
@@ -274,9 +277,10 @@ fun RavenSearchField(
                         onQueryChange("")
                     }
                 },
+                interactionSource = clearInteraction,
                 modifier = Modifier
                     .defaultMinSize(minWidth = 48.dp, minHeight = 48.dp)
-                    .ravenSpringPress()
+                    .ravenSquashPress(interactionSource = clearInteraction)
                     .testTag("raven_search_clear"),
             ) {
                 Icon(

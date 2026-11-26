@@ -196,6 +196,48 @@ class PlaybackQueueStore(
         writeLocked(active.copy(currentIndex = active.currentIndex + 1))
     }
 
+    /**
+     * Selects any queue entry by [index], provided [token] and `(siteId, mediaId)` still match the
+     * active item. Returns the updated session, or `null` for stale/invalid selections. Selecting
+     * the current index is a successful no-op and never changes the persisted session.
+     */
+    fun select(
+        token: String,
+        siteId: SiteId,
+        mediaId: String,
+        index: Int,
+    ): PlaybackQueueSession? = synchronized(lock) {
+        val active = sessionFor(token, siteId, mediaId) ?: return null
+        if (index !in active.items.indices) return null
+        if (index == active.currentIndex) return active
+        writeLocked(active.copy(currentIndex = index))
+    }
+
+    /**
+     * Removes [index] atomically while keeping [token] stable. Removing an entry before the current
+     * one shifts `currentIndex` left; removing after it leaves playback untouched. Removing the
+     * current entry selects the next entry shifting into that index, or the previous entry when the
+     * removed item was last. Removing the sole entry ends the session and returns `null`.
+     *
+     * Callers presenting a different `currentItem` after current-entry removal must open that item
+     * in-place before treating the operation as complete.
+     */
+    fun removeAt(token: String, index: Int): PlaybackQueueSession? = synchronized(lock) {
+        val active = _currentSession.value?.takeIf { it.token == token } ?: return null
+        if (index !in active.items.indices) return null
+        if (active.items.size == 1) {
+            end(token)
+            return null
+        }
+        val remaining = active.items.toMutableList().apply { removeAt(index) }
+        val updatedIndex = when {
+            index < active.currentIndex -> active.currentIndex - 1
+            index == active.currentIndex -> active.currentIndex.coerceAtMost(remaining.lastIndex)
+            else -> active.currentIndex
+        }
+        writeLocked(active.copy(items = remaining, currentIndex = updatedIndex))
+    }
+
     fun end(token: String) {
         synchronized(lock) {
             if (_currentSession.value?.token != token) return

@@ -27,8 +27,6 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.outlined.CheckBox
-import androidx.compose.material.icons.outlined.CheckBoxOutlineBlank
 import androidx.compose.material.icons.outlined.DeleteOutline
 import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.ExpandMore
@@ -66,6 +64,8 @@ import com.raven.app.core.designsystem.component.RavenFormatters
 import com.raven.app.core.designsystem.component.RavenGroupedDivider
 import com.raven.app.core.designsystem.component.RavenGroupedRow
 import com.raven.app.core.designsystem.component.RavenGroupedSection
+import com.raven.app.core.designsystem.motion.MorphSpringPreset
+import com.raven.app.core.designsystem.motion.RavenMorphIcons
 import com.raven.app.core.designsystem.theme.LocalRavenColors
 import com.raven.app.core.designsystem.theme.RavenShapes
 import com.raven.app.core.designsystem.theme.tabular
@@ -522,14 +522,16 @@ internal fun DownloadGroupCreateSheet(
                             )
                             .testTag("create_group_item_${item.id}"),
                     ) {
-                        RavenGroupedRow(
+                        LibraryMorphGroupedRow(
                             title = item.title,
                             subtitle = listOf(
                                 siteLabels[item.siteId] ?: item.siteId.value,
                                 item.groupName.ifBlank { "未分组" },
                             ).joinToString(" · "),
-                            icon = if (selected) Icons.Outlined.CheckBox else Icons.Outlined.CheckBoxOutlineBlank,
+                            glyph = if (selected) RavenMorphIcons.CheckBoxChecked else RavenMorphIcons.CheckBoxEmpty,
                             iconTint = if (selected) colors.crimson else colors.inkSecondary,
+                            springPreset = MorphSpringPreset.BOUNCY,
+                            burstTrigger = selected,
                         )
                     }
                     if (index < items.lastIndex) RavenGroupedDivider(insetWithIcon = true)

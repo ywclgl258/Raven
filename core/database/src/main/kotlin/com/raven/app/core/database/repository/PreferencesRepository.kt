@@ -125,6 +125,8 @@ class PreferencesRepository(
 
     suspend fun setAutoplayVideo(enabled: Boolean) = settingsDataStore.setAutoplayVideo(enabled)
 
+    suspend fun setAutoContinueQueue(enabled: Boolean) = settingsDataStore.setAutoContinueQueue(enabled)
+
     suspend fun setBackgroundAudioPlayback(enabled: Boolean) =
         settingsDataStore.setBackgroundAudioPlayback(enabled)
 

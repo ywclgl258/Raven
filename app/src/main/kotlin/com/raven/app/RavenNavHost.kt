@@ -136,6 +136,20 @@ internal fun readerParentDetail(
     )
 }
 
+/** Search destination used by Gallery Detail tag actions; canonical slug is preferred over translations. */
+internal fun tagSearchRoute(tag: TagRef, crossSite: Boolean): RavenRoute.Search =
+    RavenRoute.Search(
+        initialQuery = tag.slug.trim().ifBlank { tag.label.trim() }.takeIf { it.isNotEmpty() },
+        crossSite = crossSite,
+    )
+
+/** Search destination used by Gallery Detail author taps and long-press actions. */
+internal fun authorSearchRoute(author: AuthorRef, crossSite: Boolean): RavenRoute.Search =
+    RavenRoute.Search(
+        initialQuery = author.name.trim().ifBlank { author.id.trim() }.takeIf { it.isNotEmpty() },
+        crossSite = crossSite,
+    )
+
 internal data class ReaderNavigationPlan(
     val popCurrentReader: Boolean,
     val popStaleParentDetail: Boolean,
@@ -492,6 +506,12 @@ fun RavenAppShell(
                 }
             }
 
+            override fun openSiteAccount(siteId: SiteId) {
+                navController.navigate(RavenRoute.SiteAccount(siteId = siteId.value)) {
+                    launchSingleTop = true
+                }
+            }
+
             override fun openSearch(initialQuery: String?, crossSite: Boolean) {
                 openSearchRoute(initialQuery, crossSite)
             }
@@ -632,6 +652,18 @@ fun RavenAppShell(
                 navController.navigate(
                     MainActivityIntentContract.resolveAuthorFeedRoute(siteRegistry, siteId, author),
                 )
+            }
+
+            override fun openTagSearch(tag: TagRef, crossSite: Boolean) {
+                navController.navigate(tagSearchRoute(tag, crossSite)) {
+                    launchSingleTop = true
+                }
+            }
+
+            override fun openAuthorSearch(author: AuthorRef, crossSite: Boolean) {
+                navController.navigate(authorSearchRoute(author, crossSite)) {
+                    launchSingleTop = true
+                }
             }
 
             override fun openSiteAccount(siteId: SiteId) {

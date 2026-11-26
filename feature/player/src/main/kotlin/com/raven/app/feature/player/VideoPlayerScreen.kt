@@ -554,6 +554,8 @@ fun VideoPlayerScreen(
                 onOpenExternalPlayers = { activeSheet = PlayerSheet.ExternalPlayers },
                 onConfirmQueueNext = { viewModel.confirmAdvanceQueue() },
                 onEndQueue = { viewModel.endQueue() },
+                onOpenQueue = { activeSheet = PlayerSheet.Queue },
+                onCancelAutoContinue = { viewModel.cancelAutoContinueCountdown() },
                 onDismissNotice = { viewModel.clearNotice() },
             )
 
@@ -580,6 +582,7 @@ fun VideoPlayerScreen(
             onOpenExternalPlayers = { activeSheet = PlayerSheet.ExternalPlayers },
             onConfirmQueueNext = { viewModel.confirmAdvanceQueue() },
             onEndQueue = { viewModel.endQueue() },
+            onOpenQueue = { activeSheet = PlayerSheet.Queue },
             onSeekTo = { positionMs -> viewModel.seekTo(positionMs) },
             onAuthorClick = { author ->
                 uiState.siteId?.let { siteId -> navigator.openAuthorFeed(siteId, author) }
@@ -707,6 +710,10 @@ fun VideoPlayerScreen(
             onClearLoop = { viewModel.clearLoop() },
             onSetSleepTimer = { minutes -> viewModel.setSleepTimerMinutes(minutes) },
             onCancelSleepTimer = { viewModel.cancelSleepTimer() },
+            onSelectQueueItem = { index -> viewModel.selectQueueItem(index) },
+            onRemoveQueueItem = { index -> viewModel.removeQueueItem(index) },
+            onUpdateAutoContinue = { enabled -> viewModel.updateAutoContinuePreference(enabled) },
+            onCancelAutoContinue = { viewModel.cancelAutoContinueCountdown() },
             onLockScreen = {
                 viewModel.setLocked(true)
                 controlsVisible = false

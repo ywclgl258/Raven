@@ -197,7 +197,7 @@ fun RavenBottomSheet(
 
 - `<600dp`：底栏，5 个入口不变。
 - `600–1199dp`：Rail；设置/详情子页可配合分栏。
-- `>=1200dp`：Permanent Drawer；标签、片库分组、站点切换可利用纵向空间。
+- `>=1200dp`：Permanent Drawer；标签、资料库分组、站点切换可利用纵向空间。
 - 折叠屏展开态：按窗口宽度实时切换，不按设备型号写死。
 
 ### 6.3 Sheet/Dialog 适配

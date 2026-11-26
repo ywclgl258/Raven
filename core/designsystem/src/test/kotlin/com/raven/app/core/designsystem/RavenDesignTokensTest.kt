@@ -200,7 +200,7 @@ class RavenDesignTokensTest {
     fun `top destinations, adaptive rail breakpoint, and language labels stay consistent`() {
         val destinations = RavenTopDestination.entries
         assertEquals(5, destinations.size)
-        assertEquals(listOf("首页", "发现", "搜索", "片库", "我的"), destinations.map { it.label })
+        assertEquals(listOf("首页", "发现", "搜索", "鸦巢", "我的"), destinations.map { it.label })
         assertEquals(5, destinations.map { it.testTag }.toSet().size)
         assertTrue(destinations.all { it.testTag.isNotBlank() })
 

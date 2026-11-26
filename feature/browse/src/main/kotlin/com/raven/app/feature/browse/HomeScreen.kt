@@ -929,6 +929,61 @@ private fun GalleryMasonryHome(
                                 }
                             }
 
+                            val additionalReading = if (resume != null) {
+                                uiState.continueReading.drop(1)
+                            } else {
+                                emptyList()
+                            }
+                            if (additionalReading.isNotEmpty()) {
+                                item(
+                                    key = "gallery_continue_reading_shelf",
+                                    span = StaggeredGridItemSpan.FullLine,
+                                ) {
+                                    RavenHorizontalShelf(
+                                        title = "继续阅读",
+                                        subtitle = "更多未读完的作品",
+                                        actionLabel = "历史记录",
+                                        onActionClick = navigator::openHistory,
+                                        modifier = Modifier.testTag("home_continue_reading_shelf"),
+                                    ) {
+                                        items(
+                                            items = additionalReading,
+                                            key = { "cr_${it.compositeKey}" },
+                                        ) { progress ->
+                                            val readingItem = MediaItem(
+                                                siteId = progress.siteId,
+                                                id = progress.mediaId,
+                                                url = progress.url,
+                                                kind = progress.kind,
+                                                title = progress.title,
+                                                coverUrl = progress.coverUrl,
+                                                pageCount = progress.totalPages,
+                                            )
+                                            val siteLabel = uiState.allSites
+                                                .firstOrNull { it.id == progress.siteId }
+                                                ?.displayName
+                                            val badge = listOfNotNull(siteLabel, progress.kind.displayLabel())
+                                                .joinToString(" · ")
+                                            RavenGalleryCard(
+                                                item = readingItem,
+                                                onClick = {
+                                                    navigator.openReader(
+                                                        siteId = progress.siteId,
+                                                        mediaId = progress.mediaId,
+                                                        url = progress.url,
+                                                        startPage = progress.currentPage.coerceAtLeast(1),
+                                                    )
+                                                },
+                                                onLongClick = { onItemLongClick(readingItem) },
+                                                progressFraction = progress.progressFraction,
+                                                badgeText = badge,
+                                                modifier = Modifier.width(148.dp),
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+
                             val restoredPos = uiState.restoredPosition
                             if (restoredPos != null) {
                                 item(
@@ -940,7 +995,8 @@ private fun GalleryMasonryHome(
                                         onJump = {
                                             val itemIdx = uiState.primaryItems.indexOfFirst { it.id == restoredPos.workId }
                                             if (itemIdx >= 0) {
-                                                val headerCount = (if (uiState.resumeReading != null) 1 else 0) + 1
+                                                val headerCount = (if (uiState.resumeReading != null) 1 else 0) +
+                                                    (if (additionalReading.isNotEmpty()) 1 else 0) + 1
                                                 coroutineScope.launch {
                                                     gridState.animateScrollToItem(headerCount + itemIdx)
                                                 }

@@ -9,6 +9,7 @@ import com.raven.app.core.database.repository.BlockedTermsRepository
 import com.raven.app.core.database.repository.MediaTagCacheRepository
 import com.raven.app.core.database.repository.PreferencesRepository
 import com.raven.app.core.database.repository.SubscriptionRepository
+import com.raven.app.core.model.SearchScope
 import com.raven.app.core.model.InboxSourceKind
 import com.raven.app.core.model.SavedSearch
 import com.raven.app.core.model.SiteId
@@ -29,8 +30,31 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
 enum class SubscriptionsTab(val label: String) {
-    MANAGE("订阅管理"),
-    FEED("聚合动态"),
+    SETTINGS("订阅设置"),
+    FEED("订阅动态"),
+}
+
+/**
+ * Site coverage of a logical subscription group derived from per-site [TagSubscription] rows.
+ */
+enum class SubscriptionCoverage(val label: String) {
+    SINGLE("单站点"),
+    MULTI("多站点"),
+    ALL("全站点"),
+}
+
+data class SubscriptionGroup(
+    val key: String,
+    val slug: String,
+    val label: String,
+    val scope: SearchScope,
+    val coverage: SubscriptionCoverage,
+    val subscriptions: List<TagSubscription>,
+    val siteCount: Int,
+    val unreadCount: Int,
+) {
+    val siteIds: Set<SiteId> get() = subscriptions.mapTo(linkedSetOf()) { it.siteId }
+    val sourceIds: Set<String> get() = subscriptions.mapTo(linkedSetOf()) { SubscriptionSyncRunner.subscriptionSourceId(it) }
 }
 
 enum class InboxSourceFilter(val label: String, val kind: InboxSourceKind?) {
@@ -49,16 +73,18 @@ data class InboxRefreshProgress(
 )
 
 data class SubscriptionsUiState(
-    val selectedTab: SubscriptionsTab = SubscriptionsTab.MANAGE,
+    val selectedTab: SubscriptionsTab = SubscriptionsTab.SETTINGS,
     val selectedSiteId: SiteId? = null,
-    val subscriptions: List<TagSubscription> = emptyList(),
-    val visibleSubscriptions: List<TagSubscription> = emptyList(),
+    val subscriptionGroups: List<SubscriptionGroup> = emptyList(),
+    val visibleSubscriptionGroups: List<SubscriptionGroup> = emptyList(),
+    val onlineTagSearchSites: List<SiteFilterOption> = emptyList(),
     val savedSearches: List<SavedSearch> = emptyList(),
     val aggregatedTagFeed: List<UpdateInboxItem> = emptyList(),
+    val inboxItems: List<UpdateInboxItem> = emptyList(),
     val inboxUnreadOnly: Boolean = false,
     val inboxSourceFilter: InboxSourceFilter = InboxSourceFilter.ALL,
     val inboxSiteFilter: SiteId? = null,
-    val inboxItems: List<UpdateInboxItem> = emptyList(),
+    val inboxSearchQuery: String = "",
     val totalInboxCount: Int = 0,
     val unreadCount: Int = 0,
     val unreadTagCount: Int = 0,
@@ -79,13 +105,14 @@ data class SubscriptionsParams(
 )
 
 private data class SubscriptionsControls(
-    val selectedTab: SubscriptionsTab = SubscriptionsTab.MANAGE,
+    val selectedTab: SubscriptionsTab = SubscriptionsTab.SETTINGS,
     val selectedSiteId: SiteId? = null,
     val inboxUnreadOnly: Boolean = false,
     val inboxSourceFilter: InboxSourceFilter = InboxSourceFilter.ALL,
     val inboxSiteFilter: SiteId? = null,
-    val refreshProgress: InboxRefreshProgress = InboxRefreshProgress(),
+    val inboxSearchQuery: String = "",
     val checkingSourceIds: Set<String> = emptySet(),
+    val refreshProgress: InboxRefreshProgress = InboxRefreshProgress(),
     val message: String? = null,
 )
 
@@ -110,6 +137,19 @@ class SubscriptionsViewModel(
         mediaTagCacheRepository = mediaTagCacheRepository,
     ),
 ) : ViewModel() {
+    private val onlineTagSearchSites: List<SiteFilterOption> = siteRegistry.allPlugins()
+        .filter { plugin ->
+            plugin.searchSource != null && SearchScope.TAG in plugin.descriptor.searchScopes
+        }
+        .map { plugin ->
+            SiteFilterOption(
+                siteId = plugin.id,
+                label = plugin.descriptor.shortName.ifBlank { plugin.descriptor.displayName },
+                primaryKind = plugin.descriptor.primaryKind,
+            )
+        }
+
+    private val onlineTagSearchSiteIds: Set<SiteId> = onlineTagSearchSites.mapTo(linkedSetOf()) { it.siteId }
 
     private val controls = MutableStateFlow(
         SubscriptionsControls(
@@ -148,10 +188,15 @@ class SubscriptionsViewModel(
             compareBy<TagSubscription> { it.siteId.value }.thenBy { it.sortOrder },
         )
         val activeSiteFilter = ctrl.selectedSiteId
-        val visibleSubs = if (activeSiteFilter == null) {
-            sortedSubs
+        val allGroups = deriveSubscriptionGroups(
+            subscriptions = sortedSubs,
+            inbox = allInbox.sortedByDescending { it.discoveredAt },
+            eligibleSiteIds = onlineTagSearchSiteIds,
+        )
+        val visibleGroups = if (activeSiteFilter == null) {
+            allGroups
         } else {
-            sortedSubs.filter { it.siteId == activeSiteFilter }
+            allGroups.filter { activeSiteFilter in it.siteIds }
         }
 
         val sortedInbox = allInbox.sortedByDescending { it.discoveredAt }
@@ -161,13 +206,19 @@ class SubscriptionsViewModel(
                 (activeSiteFilter == null || entry.item.siteId == activeSiteFilter)
         }
 
+        val inboxQuery = ctrl.inboxSearchQuery.trim()
         val filteredInbox = sortedInbox.filter { entry ->
             val matchesUnread = !ctrl.inboxUnreadOnly || !entry.isRead
             val matchesSource = ctrl.inboxSourceFilter.kind == null ||
                 entry.sourceKind == ctrl.inboxSourceFilter.kind
             val matchesSite = ctrl.inboxSiteFilter == null ||
                 entry.item.siteId == ctrl.inboxSiteFilter
-            matchesUnread && matchesSource && matchesSite
+            val matchesQuery = inboxQuery.isEmpty() ||
+                entry.item.title.contains(inboxQuery, ignoreCase = true) ||
+                entry.sourceLabel.contains(inboxQuery, ignoreCase = true) ||
+                entry.item.siteId.value.contains(inboxQuery, ignoreCase = true) ||
+                siteRegistry.displayNameFor(entry.item.siteId).contains(inboxQuery, ignoreCase = true)
+            matchesUnread && matchesSource && matchesSite && matchesQuery
         }
 
         val allPresentSites = buildList {
@@ -179,14 +230,16 @@ class SubscriptionsViewModel(
         SubscriptionsUiState(
             selectedTab = ctrl.selectedTab,
             selectedSiteId = activeSiteFilter,
-            subscriptions = sortedSubs,
-            visibleSubscriptions = visibleSubs,
+            subscriptionGroups = allGroups,
+            visibleSubscriptionGroups = visibleGroups,
+            onlineTagSearchSites = onlineTagSearchSites,
             savedSearches = savedSearches,
             aggregatedTagFeed = tagFeed,
+            inboxItems = filteredInbox,
             inboxUnreadOnly = ctrl.inboxUnreadOnly,
             inboxSourceFilter = ctrl.inboxSourceFilter,
             inboxSiteFilter = ctrl.inboxSiteFilter,
-            inboxItems = filteredInbox,
+            inboxSearchQuery = ctrl.inboxSearchQuery,
             totalInboxCount = sortedInbox.size,
             unreadCount = sortedInbox.count { !it.isRead },
             unreadTagCount = sortedInbox.count { !it.isRead && it.sourceKind == InboxSourceKind.TAG_SUBSCRIPTION },
@@ -226,43 +279,13 @@ class SubscriptionsViewModel(
         controls.update { it.copy(inboxSiteFilter = siteId) }
     }
 
+    fun updateInboxSearchQuery(query: String) {
+        controls.update { it.copy(inboxSearchQuery = query) }
+    }
+
+
     fun clearMessage() {
         controls.update { it.copy(message = null) }
-    }
-
-    // ---- Tag Subscription Management ----
-
-    fun moveSubscriptionUp(sub: TagSubscription) = moveSubscriptionBy(sub, delta = -1)
-
-    fun moveSubscriptionDown(sub: TagSubscription) = moveSubscriptionBy(sub, delta = 1)
-
-    private fun moveSubscriptionBy(sub: TagSubscription, delta: Int) {
-        viewModelScope.launch(dispatchers.io) {
-            val siteSubs = subscriptionRepository.observeSubscriptions(sub.siteId).first()
-            val fromIndex = siteSubs.indexOfFirst { it.slug == sub.slug && it.scope == sub.scope }
-            val toIndex = fromIndex + delta
-            if (fromIndex in siteSubs.indices && toIndex in siteSubs.indices) {
-                subscriptionRepository.moveSubscription(sub.siteId, fromIndex, toIndex)
-            }
-        }
-    }
-
-    fun unsubscribe(sub: TagSubscription) {
-        viewModelScope.launch(dispatchers.io) {
-            val sourceId = subscriptionSourceId(sub)
-            subscriptionRepository.unsubscribe(sub.siteId, sub.slug, sub.scope)
-            subscriptionRepository.clearInboxBySource(InboxSourceKind.TAG_SUBSCRIPTION, sourceId)
-            syncRunner.clearSourceBaseline(sourceId)
-            controls.update { it.copy(message = "已取消订阅「${sub.label}」") }
-        }
-    }
-
-    fun deleteSavedSearch(id: String) {
-        viewModelScope.launch(dispatchers.io) {
-            subscriptionRepository.deleteSavedSearch(id)
-            syncRunner.clearSourceBaseline(id)
-            controls.update { it.copy(message = "已删除保存的搜索") }
-        }
     }
 
     // ---- Inbox Read / Delete Operations ----
@@ -280,14 +303,11 @@ class SubscriptionsViewModel(
     }
 
     fun markAllRead() {
-        val filterKind = controls.value.inboxSourceFilter.kind
+        val unreadIds = uiState.value.inboxItems.filterNot { it.isRead }.map { it.id }
+        if (unreadIds.isEmpty()) return
         viewModelScope.launch(dispatchers.io) {
-            if (filterKind == null) {
-                subscriptionRepository.markAllRead()
-            } else {
-                subscriptionRepository.markAllReadBySourceKind(filterKind)
-            }
-            controls.update { it.copy(message = "已全部标为已读") }
+            subscriptionRepository.markRead(unreadIds)
+            controls.update { it.copy(message = "已将当前筛选的 ${unreadIds.size} 条更新标为已读") }
         }
     }
 
@@ -304,30 +324,158 @@ class SubscriptionsViewModel(
         }
     }
 
-    // ---- Single-Tag & Global Concurrent Refresh (Semaphore(3) + First-Check Baseline) ----
+    // ---- Logical Subscription Group Management ----
 
-    fun checkSingleTag(sub: TagSubscription) {
-        val sourceId = subscriptionSourceId(sub)
+    fun createSubscriptionGroup(
+        slug: String,
+        label: String,
+        coverage: SubscriptionCoverage,
+        selectedSiteIds: Set<SiteId>,
+    ) {
+        persistSubscriptionGroup(
+            existingGroup = null,
+            slug = slug,
+            label = label,
+            coverage = coverage,
+            selectedSiteIds = selectedSiteIds,
+        )
+    }
+
+    fun updateSubscriptionGroup(
+        group: SubscriptionGroup,
+        label: String,
+        coverage: SubscriptionCoverage,
+        selectedSiteIds: Set<SiteId>,
+    ) {
+        persistSubscriptionGroup(
+            existingGroup = group,
+            slug = group.slug,
+            label = label,
+            coverage = coverage,
+            selectedSiteIds = selectedSiteIds,
+        )
+    }
+
+    fun deleteSubscriptionGroup(group: SubscriptionGroup) {
         viewModelScope.launch(dispatchers.io) {
-            controls.update { it.copy(checkingSourceIds = it.checkingSourceIds + sourceId) }
+            group.subscriptions.forEach { sub ->
+                subscriptionRepository.unsubscribe(sub.siteId, sub.slug, sub.scope)
+                syncRunner.clearSourceBaseline(subscriptionSourceId(sub))
+            }
+            controls.update { it.copy(message = "已删除订阅「${group.label}」") }
+        }
+    }
+
+    fun checkSubscriptionGroup(group: SubscriptionGroup) {
+        val sourceIds = group.sourceIds
+        if (sourceIds.isEmpty()) return
+        viewModelScope.launch(dispatchers.io) {
+            controls.update { it.copy(checkingSourceIds = it.checkingSourceIds + sourceIds) }
             try {
-                val outcome = syncRunner.syncSingleTag(sub)
-                controls.update {
-                    it.copy(
-                        checkingSourceIds = it.checkingSourceIds - sourceId,
-                        message = when {
-                            outcome.failed -> "检查「${sub.label}」更新失败，请稍后重试"
-                            outcome.establishedBaseline -> "已为「${sub.label}」建立基线，后续新发布将自动提醒"
-                            outcome.newlyDiscovered > 0 -> "「${sub.label}」发现 ${outcome.newlyDiscovered} 条新内容"
-                            else -> "「${sub.label}」暂无新内容"
-                        },
-                    )
-                }
+                val summary = syncRunner.syncTags(group.subscriptions)
+                controls.update { it.copy(message = groupCheckMessage(group.label, summary)) }
             } catch (ce: CancellationException) {
                 throw ce
             } finally {
-                controls.update { it.copy(checkingSourceIds = it.checkingSourceIds - sourceId) }
+                controls.update { it.copy(checkingSourceIds = it.checkingSourceIds - sourceIds) }
             }
+        }
+    }
+
+    private fun persistSubscriptionGroup(
+        existingGroup: SubscriptionGroup?,
+        slug: String,
+        label: String,
+        coverage: SubscriptionCoverage,
+        selectedSiteIds: Set<SiteId>,
+    ) {
+        val cleanSlug = (existingGroup?.slug ?: slug).trim()
+        if (cleanSlug.isEmpty()) {
+            controls.update { it.copy(message = "标签 Slug 不能为空") }
+            return
+        }
+        val cleanLabel = label.trim().ifBlank { cleanSlug }
+        val scope = existingGroup?.scope ?: SearchScope.TAG
+        viewModelScope.launch(dispatchers.io) {
+            try {
+                val allRows = subscriptionRepository.observeAllSubscriptions().first()
+                val currentRows = existingGroup?.subscriptions
+                    ?: allRows.filter { it.slug == cleanSlug && it.scope == scope }
+                val targetSiteIds = when (coverage) {
+                    SubscriptionCoverage.ALL -> onlineTagSearchSiteIds
+                    SubscriptionCoverage.SINGLE -> selectedSiteIds.take(1).toSet()
+                    SubscriptionCoverage.MULTI -> selectedSiteIds
+                }
+                val validationMessage = when {
+                    targetSiteIds.isEmpty() && coverage == SubscriptionCoverage.ALL ->
+                        "当前没有支持在线标签搜索的站点"
+                    targetSiteIds.isEmpty() -> "请至少选择一个站点"
+                    coverage == SubscriptionCoverage.SINGLE && targetSiteIds.size != 1 ->
+                        "单站点订阅只能选择一个站点"
+                    coverage == SubscriptionCoverage.MULTI && targetSiteIds.size < 2 ->
+                        "多站点订阅至少选择两个站点"
+                    else -> null
+                }
+                if (validationMessage != null) {
+                    controls.update { it.copy(message = validationMessage) }
+                    return@launch
+                }
+
+                val currentSiteIds = currentRows.mapTo(linkedSetOf()) { it.siteId }
+                currentRows
+                    .filter { it.siteId !in targetSiteIds }
+                    .forEach { sub ->
+                        subscriptionRepository.unsubscribe(sub.siteId, sub.slug, sub.scope)
+                        syncRunner.clearSourceBaseline(subscriptionSourceId(sub))
+                    }
+                (targetSiteIds - currentSiteIds).forEach { siteId ->
+                    val baseUrl = siteRegistry.get(siteId)?.descriptor?.baseUrl.orEmpty()
+                    subscriptionRepository.subscribe(
+                        TagSubscription(
+                            siteId = siteId,
+                            slug = cleanSlug,
+                            label = cleanLabel,
+                            url = baseUrl,
+                            scope = scope,
+                        ),
+                    )
+                }
+                currentRows
+                    .filter { it.siteId in targetSiteIds && it.label != cleanLabel }
+                    .forEach { sub ->
+                        subscriptionRepository.renameSubscription(
+                            siteId = sub.siteId,
+                            slug = sub.slug,
+                            scope = sub.scope,
+                            newLabel = cleanLabel,
+                        )
+                    }
+                val action = when {
+                    existingGroup != null -> "已更新订阅"
+                    currentSiteIds.isNotEmpty() -> "已合并订阅"
+                    else -> "已添加订阅"
+                }
+                controls.update { it.copy(message = "$action「$cleanLabel」") }
+            } catch (ce: CancellationException) {
+                throw ce
+            } catch (_: Throwable) {
+                controls.update { it.copy(message = "保存订阅失败，请稍后重试") }
+            }
+        }
+    }
+
+    private fun groupCheckMessage(label: String, summary: SubscriptionSyncSummary): String = buildString {
+        when {
+            summary.totalSources > 0 && summary.failedSourceCount == summary.totalSources ->
+                append("检查「$label」更新失败，请稍后重试")
+            summary.newlyDiscoveredCount > 0 ->
+                append("「$label」发现 ${summary.newlyDiscoveredCount} 条新内容")
+            summary.baselinedSourceCount > 0 ->
+                append("已为「$label」建立基线，后续新发布将自动提醒")
+            else -> append("「$label」暂无新内容")
+        }
+        if (summary.failedSourceCount > 0 && summary.failedSourceCount < summary.totalSources) {
+            append("（${summary.failedSourceCount} 个站点检查失败）")
         }
     }
 
@@ -418,6 +566,54 @@ class SubscriptionsViewModel(
                 ),
             )
         }
+    }
+
+    private fun deriveSubscriptionGroups(
+        subscriptions: List<TagSubscription>,
+        inbox: List<UpdateInboxItem>,
+        eligibleSiteIds: Set<SiteId>,
+    ): List<SubscriptionGroup> {
+        if (subscriptions.isEmpty()) return emptyList()
+        return subscriptions
+            .groupBy { it.scope to it.slug }
+            .map { (key, rows) ->
+                val scope = key.first
+                val slug = key.second
+                val sortedRows = rows.sortedWith(
+                    compareBy<TagSubscription> { it.siteId.value }
+                        .thenBy { it.sortOrder }
+                        .thenBy { it.label },
+                )
+                val label = sortedRows.firstOrNull { it.label.isNotBlank() }?.label ?: slug
+                val siteIds = sortedRows.mapTo(linkedSetOf()) { it.siteId }
+                val sourceIds = sortedRows.mapTo(linkedSetOf()) { SubscriptionSyncRunner.subscriptionSourceId(it) }
+                val unreadCount = inbox.count { entry ->
+                    entry.sourceKind == InboxSourceKind.TAG_SUBSCRIPTION &&
+                        entry.sourceId in sourceIds &&
+                        !entry.isRead
+                }
+                val coverage = when {
+                    siteIds.size <= 1 -> SubscriptionCoverage.SINGLE
+                    eligibleSiteIds.size > 1 && siteIds.containsAll(eligibleSiteIds) -> SubscriptionCoverage.ALL
+                    else -> SubscriptionCoverage.MULTI
+                }
+                SubscriptionGroup(
+                    key = "${scope.name}:$slug",
+                    slug = slug,
+                    label = label,
+                    scope = scope,
+                    coverage = coverage,
+                    subscriptions = sortedRows,
+                    siteCount = siteIds.size,
+                    unreadCount = unreadCount,
+                )
+            }
+            .sortedWith(
+                compareBy<SubscriptionGroup> { group -> group.subscriptions.minOf { it.sortOrder } }
+                    .thenBy { it.label.lowercase() }
+                    .thenBy { it.scope.name }
+                    .thenBy { it.slug },
+            )
     }
 
     private fun filterInboxEntries(

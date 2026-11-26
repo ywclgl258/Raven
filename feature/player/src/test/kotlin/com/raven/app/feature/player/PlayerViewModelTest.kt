@@ -494,6 +494,140 @@ class PlayerViewModelTest {
     }
 
     @Test
+    fun queueArbitrarySelectionAndRemovalReuseInPlacePlaybackAndProgress() = runTest {
+        val harness = PlayerTestHarness(mainDispatcherRule.dispatcher)
+        val (registry, _) = buildRegistry()
+        val q1 = sampleVideoItem(SiteId.R34V, "q-select-1")
+        val q2 = sampleVideoItem(SiteId.R34V, "q-select-2")
+        val q3 = sampleVideoItem(SiteId.R34V, "q-select-3")
+        val session = harness.playbackQueueStore.start("Queue", "shelf", listOf(q1, q2, q3))
+        val vm = harness.createViewModel(
+            registry,
+            initialArgs = PlayerLaunchArgs.fromMediaItem(q1, queueToken = session.token),
+        )
+
+        vm.uiState.test {
+            advanceUntilIdle()
+            val initial = expectMostRecentItem()
+            assertEquals(listOf(q1, q2, q3), initial.queue?.items)
+
+            harness.playbackPort.simulatePosition(72_000L)
+            assertTrue(vm.selectQueueItem(2))
+            // A second request before the new target starts cannot double-switch the source.
+            assertFalse(vm.selectQueueItem(0))
+            advanceUntilIdle()
+            val upcoming = expectMostRecentItem()
+            assertEquals("q-select-3", upcoming.mediaId)
+            assertEquals(2, upcoming.queue?.currentIndex)
+            assertEquals(session.token, upcoming.queue?.token)
+            assertEquals(72_000L, harness.historyRepository.getWatchProgress(SiteId.R34V, "q-select-1")?.positionMs)
+
+            // History entries reopen in-place and resume their own persisted progress.
+            assertTrue(vm.selectQueueItem(0))
+            advanceUntilIdle()
+            assertEquals("q-select-1", expectMostRecentItem().mediaId)
+            assertEquals(72_000L, harness.playbackPort.onlineLoads.last().startPositionMs)
+
+            assertTrue(vm.selectQueueItem(1))
+            advanceUntilIdle()
+            assertEquals("q-select-2", expectMostRecentItem().mediaId)
+
+            val loadsBeforeHistoryRemoval = harness.playbackPort.onlineLoads.size
+            assertTrue(vm.removeQueueItem(0))
+            advanceUntilIdle()
+            val afterHistoryRemoval = expectMostRecentItem()
+            assertEquals("q-select-2", afterHistoryRemoval.mediaId)
+            assertEquals(0, afterHistoryRemoval.queue?.currentIndex)
+            assertEquals(listOf("q-select-2", "q-select-3"), afterHistoryRemoval.queue?.items?.map { it.id })
+            assertEquals(loadsBeforeHistoryRemoval, harness.playbackPort.onlineLoads.size)
+
+            // Removing current selects its successor with the same token and flushes progress.
+            assertTrue(vm.removeQueueItem(0))
+            advanceUntilIdle()
+            val replacement = expectMostRecentItem()
+            assertEquals("q-select-3", replacement.mediaId)
+            assertEquals(session.token, replacement.queue?.token)
+            assertEquals(0, replacement.queue?.currentIndex)
+
+            val loadsBeforeSoleRemoval = harness.playbackPort.onlineLoads.size
+            assertTrue(vm.removeQueueItem(0))
+            advanceUntilIdle()
+            val afterSoleRemoval = expectMostRecentItem()
+            assertNull(afterSoleRemoval.queue)
+            assertEquals("q-select-3", afterSoleRemoval.mediaId)
+            assertEquals(loadsBeforeSoleRemoval, harness.playbackPort.onlineLoads.size)
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    @Test
+    fun queueAutoContinuePersistsCountsDownCancelsAndAdvancesOnlyOnce() = runTest {
+        val harness = PlayerTestHarness(mainDispatcherRule.dispatcher)
+        val (registry, _) = buildRegistry()
+        val q1 = sampleVideoItem(SiteId.R34V, "q-auto-1")
+        val q2 = sampleVideoItem(SiteId.R34V, "q-auto-2")
+        val q3 = sampleVideoItem(SiteId.R34V, "q-auto-3")
+        val session = harness.playbackQueueStore.start("Queue", "shelf", listOf(q1, q2, q3))
+        val vm = harness.createViewModel(
+            registry,
+            initialArgs = PlayerLaunchArgs.fromMediaItem(q1, queueToken = session.token),
+        )
+
+        vm.uiState.test {
+            advanceUntilIdle()
+            assertFalse(expectMostRecentItem().queue?.autoContinueEnabled == true)
+            assertFalse(harness.preferencesRepository.currentSettings().autoContinueQueue)
+
+            vm.updateAutoContinuePreference(true)
+            advanceUntilIdle()
+            assertTrue(harness.preferencesRepository.currentSettings().autoContinueQueue)
+            harness.playbackPort.simulateEnded()
+            advanceUntilIdle()
+            val ended = expectMostRecentItem()
+            assertTrue(ended.queue?.autoContinueCountdownActive == true)
+            assertEquals(PlayerViewModel.AUTO_CONTINUE_COUNTDOWN_MS, ended.queue?.autoContinueRemainingMs)
+            assertEquals(5, ended.queue?.autoContinueRemainingSeconds)
+
+            harness.elapsedMs += 2_000L
+            assertFalse(vm.evaluateAutoContinueTick())
+            advanceUntilIdle()
+            assertEquals(3_000L, expectMostRecentItem().queue?.autoContinueRemainingMs)
+
+            vm.cancelAutoContinueCountdown()
+            advanceUntilIdle()
+            assertFalse(expectMostRecentItem().queue?.autoContinueCountdownActive == true)
+            harness.elapsedMs += 10_000L
+            assertFalse(vm.evaluateAutoContinueTick())
+            advanceUntilIdle()
+            assertEquals("q-auto-1", vm.uiState.value.mediaId)
+            assertEquals(0, harness.playbackQueueStore.snapshot()?.currentIndex)
+
+            // Re-arm on the same ended item, then let the monotonic deadline expire.
+            vm.updateAutoContinuePreference(true)
+            advanceUntilIdle()
+            assertTrue(expectMostRecentItem().queue?.autoContinueCountdownActive == true)
+            harness.elapsedMs += PlayerViewModel.AUTO_CONTINUE_COUNTDOWN_MS
+            val loadsBeforeAdvance = harness.playbackPort.onlineLoads.size
+            assertTrue(vm.evaluateAutoContinueTick())
+            assertFalse(vm.evaluateAutoContinueTick())
+            assertFalse(vm.confirmAdvanceQueue())
+            advanceUntilIdle()
+            val advanced = expectMostRecentItem()
+            assertEquals("q-auto-2", advanced.mediaId)
+            assertEquals(1, advanced.queue?.currentIndex)
+            assertEquals(loadsBeforeAdvance + 1, harness.playbackPort.onlineLoads.size)
+
+            vm.updateAutoContinuePreference(false)
+            advanceUntilIdle()
+            assertFalse(harness.preferencesRepository.currentSettings().autoContinueQueue)
+            harness.playbackPort.simulateEnded()
+            advanceUntilIdle()
+            assertFalse(expectMostRecentItem().queue?.autoContinueCountdownActive == true)
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    @Test
     fun timeBookmarkCrudAndJumpOperateReactively() = runTest {
         val harness = PlayerTestHarness(mainDispatcherRule.dispatcher)
         val (registry, _) = buildRegistry()

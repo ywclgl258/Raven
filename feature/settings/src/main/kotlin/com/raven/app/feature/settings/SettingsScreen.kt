@@ -585,7 +585,7 @@ fun SettingsScreenContent(
                     RavenGroupedDivider(insetWithIcon = true)
                     RavenGroupedRow(
                         title = "统一缓存仪表盘",
-                        subtitle = "全部临时缓存合计（绝不删除离线片库或收藏数据）",
+                        subtitle = "全部临时缓存合计（绝不删除离线下载或收藏数据）",
                         value = RavenFormatters.formatByteSize(uiState.totalCacheBytes),
                         icon = Icons.Outlined.DeleteSweep,
                         enabled = !uiState.readingCache.isClearing && !uiState.mediaCache.isClearing,
@@ -841,7 +841,7 @@ fun SettingsScreenContent(
                     RavenGroupedDivider(insetWithIcon = true)
                     RavenGroupedRow(
                         title = if (uiState.hasAppPin) "修改或清除解锁 PIN" else "设置应用锁 PIN",
-                        subtitle = if (uiState.hasAppPin) "修改数字解锁码或清除并关闭应用锁" else "设置 4 至 8 位数字密码保护本地片库与浏览记录",
+                        subtitle = if (uiState.hasAppPin) "修改数字解锁码或清除并关闭应用锁" else "设置 4 至 8 位数字密码保护本地资料库与浏览记录",
                         value = if (uiState.hasAppPin) "已配置" else "未设置",
                         icon = Icons.Outlined.Security,
                         showChevron = true,

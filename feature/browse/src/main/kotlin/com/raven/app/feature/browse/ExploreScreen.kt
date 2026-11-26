@@ -38,7 +38,9 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.Sort
 import androidx.compose.material.icons.outlined.Category
+import androidx.compose.material.icons.outlined.DateRange
 import androidx.compose.material.icons.outlined.FolderOpen
+import androidx.compose.material.icons.outlined.Tune
 import androidx.compose.material.icons.outlined.Translate
 import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.Close
@@ -91,6 +93,8 @@ import com.raven.app.core.database.model.ShelfWithSummary
 import com.raven.app.core.designsystem.theme.LocalMotionReduced
 import com.raven.app.core.designsystem.theme.LocalRavenColors
 import com.raven.app.core.designsystem.theme.RavenMotion
+import com.raven.app.core.model.AdvancedFilterField
+import com.raven.app.core.model.AdvancedSearchFilters
 import com.raven.app.core.model.ComicLanguage
 import com.raven.app.core.model.FeedSort
 import com.raven.app.core.model.MediaItem
@@ -106,6 +110,8 @@ private enum class ExploreSheetKind {
     CATEGORY,
     SORT,
     LANGUAGE,
+    ADVANCED,
+    DATE,
     DIRECTORY,
 }
 
@@ -134,6 +140,9 @@ fun ExploreScreen(
         onSelectSort = viewModel::selectSort,
         onSelectLanguage = viewModel::selectLanguage,
         onClearFilters = viewModel::clearFilters,
+        onApplyAdvancedFilters = viewModel::applyAdvancedFilters,
+        onResetAdvancedFilters = viewModel::resetAdvancedFilters,
+        onApplyDateRange = viewModel::setDateRange,
         onRefresh = viewModel::refresh,
         onLoadNextPage = viewModel::loadNextPage,
         onToggleWatchLater = viewModel::toggleWatchLater,
@@ -158,6 +167,9 @@ fun ExploreScreenContent(
     onSelectSort: (FeedSort) -> Unit,
     onSelectLanguage: (ComicLanguage) -> Unit,
     onClearFilters: () -> Unit,
+    onApplyAdvancedFilters: (AdvancedSearchFilters, ComicLanguage) -> Unit,
+    onResetAdvancedFilters: () -> Unit,
+    onApplyDateRange: (String?, String?) -> Unit,
     onRefresh: () -> Unit,
     onLoadNextPage: () -> Unit,
     onToggleWatchLater: (MediaItem) -> Unit,
@@ -175,6 +187,18 @@ fun ExploreScreenContent(
     var showSiteSwitcher by rememberSaveable { mutableStateOf(false) }
     var activeSheet by rememberSaveable { mutableStateOf(ExploreSheetKind.NONE) }
     var actionTargetItem by remember { mutableStateOf<MediaItem?>(null) }
+
+    val advancedFilters = uiState.filter.advancedFilters
+    val advancedFilterCount = advancedFilters.activeFilterCount(uiState.filter.language)
+    val hasDateFilter = !advancedFilters.publishedFrom.isNullOrBlank() ||
+        !advancedFilters.publishedTo.isNullOrBlank()
+    val dateChipLabel = if (hasDateFilter) {
+        val fromLabel = advancedFilters.publishedFrom.orEmpty().ifBlank { "更早" }
+        val toLabel = advancedFilters.publishedTo.orEmpty().ifBlank { "今天" }
+        "$fromLabel ~ $toLabel"
+    } else {
+        "日期"
+    }
 
     val activeSite = uiState.activeSite
 
@@ -228,7 +252,9 @@ fun ExploreScreenContent(
             ) {
                 if (uiState.availableSections.isNotEmpty()) {
                     item(key = "filter_category") {
-                        val sectionLabel = uiState.selectedSectionSpec?.title ?: "分类"
+                        val sectionLabel = uiState.selectedSectionSpec?.title
+                            ?: uiState.requestedSectionSpec?.title
+                            ?: "分类"
                         RavenFilterChip(
                             label = sectionLabel,
                             selected = uiState.selectedSectionSpec != null,
@@ -249,6 +275,27 @@ fun ExploreScreenContent(
                             leadingIcon = Icons.AutoMirrored.Rounded.Sort,
                             onClick = { activeSheet = ExploreSheetKind.SORT },
                             modifier = Modifier.testTag("explore_sort_chip"),
+                        )
+                    }
+                }
+
+                if (uiState.supportsAdvancedFilters) {
+                    item(key = "filter_advanced") {
+                        RavenFilterChip(
+                            label = if (advancedFilterCount > 0) "高级 · $advancedFilterCount" else "高级",
+                            selected = advancedFilterCount > 0,
+                            leadingIcon = Icons.Outlined.Tune,
+                            onClick = { activeSheet = ExploreSheetKind.ADVANCED },
+                            modifier = Modifier.testTag("explore_advanced_chip"),
+                        )
+                    }
+                    item(key = "filter_date") {
+                        RavenFilterChip(
+                            label = dateChipLabel,
+                            selected = hasDateFilter,
+                            leadingIcon = Icons.Outlined.DateRange,
+                            onClick = { activeSheet = ExploreSheetKind.DATE },
+                            modifier = Modifier.testTag("explore_date_chip"),
                         )
                     }
                 }
@@ -492,7 +539,7 @@ fun ExploreScreenContent(
                     RavenGroupedSection {
                         val isDefault = uiState.selectedSectionSpec == null
                         RavenGroupedRow(
-                            title = "默认全部",
+                            title = uiState.requestedSectionSpec?.let { "默认（${it.title}）" } ?: "默认全部",
                             trailingContent = if (isDefault) {
                                 {
                                     Icon(
@@ -599,6 +646,29 @@ fun ExploreScreenContent(
                     }
                 }
             }
+        }
+        ExploreSheetKind.ADVANCED -> {
+            if (activeSite != null) {
+                AdvancedSearchFilterSheet(
+                    site = activeSite,
+                    supportedFilters = uiState.supportedFilters,
+                    supportsExcludeTags = AdvancedFilterField.EXCLUDE_TAGS in uiState.supportedFilters,
+                    supportsLanguageFilter = uiState.supportsLanguageFilter,
+                    initialFilters = uiState.filter.advancedFilters,
+                    initialLanguage = uiState.filter.language,
+                    onApply = onApplyAdvancedFilters,
+                    onReset = onResetAdvancedFilters,
+                    onDismiss = { activeSheet = ExploreSheetKind.NONE },
+                )
+            }
+        }
+        ExploreSheetKind.DATE -> {
+            SearchDateRangeSheet(
+                initialFrom = uiState.filter.advancedFilters.publishedFrom,
+                initialTo = uiState.filter.advancedFilters.publishedTo,
+                onApply = onApplyDateRange,
+                onDismiss = { activeSheet = ExploreSheetKind.NONE },
+            )
         }
         ExploreSheetKind.DIRECTORY -> {
             if (activeSite != null) {

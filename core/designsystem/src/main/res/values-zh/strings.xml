@@ -3,7 +3,7 @@
     <string name="raven_nav_home">首页</string>
     <string name="raven_nav_explore">发现</string>
     <string name="raven_nav_search">搜索</string>
-    <string name="raven_nav_library">片库</string>
+    <string name="raven_nav_library">鸦巢</string>
     <string name="raven_nav_profile">我的</string>
     <string name="raven_retry">重试</string>
     <string name="raven_load_failed">加载失败</string>

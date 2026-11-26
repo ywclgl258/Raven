@@ -64,10 +64,12 @@ data class LibraryHubUiState(
     val historyCount: Int = 0,
     val favoriteCount: Int = 0,
     val completedDownloadCount: Int = 0,
+    val completedDownloadBytes: Long = 0L,
     val activeDownloadCount: Int = 0,
     val unreadInboxCount: Int = 0,
     val imageFavoriteCount: Int = 0,
     val subscriptionCount: Int = 0,
+    val savedSearchCount: Int = 0,
     val shelves: List<ShelfWithSummary> = emptyList(),
     val smartShelves: List<SmartShelfSummary> = emptyList(),
     val localBooks: List<LocalBook> = emptyList(),
@@ -81,6 +83,7 @@ private data class LibraryMetricCounts(
     val historyCount: Int,
     val favoriteCount: Int,
     val completedDownloadCount: Int,
+    val completedDownloadBytes: Long,
     val activeDownloadCount: Int,
     val unreadInboxCount: Int,
 )
@@ -88,6 +91,7 @@ private data class LibraryMetricCounts(
 private data class LibrarySecondaryCounts(
     val imageFavoriteCount: Int,
     val subscriptionCount: Int,
+    val savedSearchCount: Int,
 )
 
 private data class LibraryShelfData(
@@ -120,10 +124,14 @@ class LibraryHubViewModel(
         downloadGateway.downloads,
         subscriptionRepository.observeUnreadCount(),
     ) { watches, readings, favorites, downloads, unreadCount ->
+        val completedDownloads = downloads.filter { it.status == DownloadStatus.COMPLETED }
         LibraryMetricCounts(
             historyCount = watches.size + readings.size,
             favoriteCount = favorites.size,
-            completedDownloadCount = downloads.count { it.status == DownloadStatus.COMPLETED },
+            completedDownloadCount = completedDownloads.size,
+            completedDownloadBytes = completedDownloads.sumOf { item ->
+                item.downloadedBytes.takeIf { it > 0L } ?: item.totalBytes ?: 0L
+            },
             activeDownloadCount = downloads.count { it.status.isActiveTransfer() },
             unreadInboxCount = unreadCount,
         )
@@ -132,10 +140,12 @@ class LibraryHubViewModel(
     private val secondaryCountsFlow = combine(
         bookmarkRepository.observeImageFavorites(),
         subscriptionRepository.observeAllSubscriptions(),
-    ) { imageFavorites, subscriptions ->
+        subscriptionRepository.observeSavedSearches(),
+    ) { imageFavorites, subscriptions, savedSearches ->
         LibrarySecondaryCounts(
             imageFavoriteCount = imageFavorites.size,
             subscriptionCount = subscriptions.size,
+            savedSearchCount = savedSearches.size,
         )
     }
 
@@ -206,10 +216,12 @@ class LibraryHubViewModel(
             historyCount = metrics.historyCount,
             favoriteCount = metrics.favoriteCount,
             completedDownloadCount = metrics.completedDownloadCount,
+            completedDownloadBytes = metrics.completedDownloadBytes,
             activeDownloadCount = metrics.activeDownloadCount,
             unreadInboxCount = metrics.unreadInboxCount,
             imageFavoriteCount = secondary.imageFavoriteCount,
             subscriptionCount = secondary.subscriptionCount,
+            savedSearchCount = secondary.savedSearchCount,
             shelves = sortedShelves,
             smartShelves = smartSummaries,
             localBooks = controls.localBooks,
@@ -401,9 +413,14 @@ class LibraryHubViewModel(
     fun removeLocalBook(bookId: String) {
         viewModelScope.launch(dispatchers.io) {
             runCatching {
-                localLibraryImporter.removeBook(bookId)
+                deleteLocalBookCompletely(
+                    bookId = bookId,
+                    localLibraryImporter = localLibraryImporter,
+                    shelfRepository = shelfRepository,
+                    historyRepository = historyRepository,
+                )
             }.onSuccess {
-                transientMessage.value = "已移除本地内容"
+                transientMessage.value = "已移除本地内容，并清理关联片单与历史记录"
             }.onFailure { error ->
                 transientMessage.value = error.message ?: "移除本地内容失败"
             }

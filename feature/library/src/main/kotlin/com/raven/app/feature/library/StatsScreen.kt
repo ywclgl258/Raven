@@ -2,6 +2,7 @@ package com.raven.app.feature.library
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
@@ -14,6 +15,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
+import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowRight
 import androidx.compose.material.icons.outlined.BarChart
 import androidx.compose.material.icons.outlined.Download
 import androidx.compose.material.icons.outlined.FavoriteBorder
@@ -29,18 +31,21 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.raven.app.core.designsystem.component.RavenCrimsonProgressBar
 import com.raven.app.core.designsystem.component.RavenEmptyState
+import com.raven.app.core.designsystem.component.RavenFilterChip
+import com.raven.app.core.designsystem.component.RavenFilterChipRow
 import com.raven.app.core.designsystem.component.RavenFormatters
 import com.raven.app.core.designsystem.component.RavenGroupedDivider
 import com.raven.app.core.designsystem.component.RavenGroupedRow
 import com.raven.app.core.designsystem.component.RavenGroupedSection
+import com.raven.app.core.designsystem.component.RavenLoadingSkeleton
 import com.raven.app.core.designsystem.component.RavenStatusPill
-import com.raven.app.core.designsystem.component.RavenStatusTone
 import com.raven.app.core.designsystem.component.RavenTopBar
 import com.raven.app.core.designsystem.theme.LocalRavenColors
 import com.raven.app.core.designsystem.theme.RavenShapes
@@ -85,150 +90,244 @@ fun StatsScreen(
             contentPadding = PaddingValues(top = 12.dp, bottom = 32.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
-            item(key = "stats_overview_cards") {
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 16.dp),
-                    verticalArrangement = Arrangement.spacedBy(10.dp),
-                ) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+            item(key = "stats_range_filters") {
+                RavenFilterChipRow(
+                    items = StatsTimeRange.entries,
+                    selectedItem = uiState.selectedRange,
+                    labelProvider = { it.label },
+                    onItemSelected = viewModel::selectRange,
+                    keyProvider = { it.name },
+                    modifier = Modifier.testTag("stats_range_filters"),
+                )
+            }
+
+            if (uiState.isLoading) {
+                item(key = "stats_loading") {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("stats_loading"),
+                        verticalArrangement = Arrangement.spacedBy(10.dp),
                     ) {
-                        StatMetricCard(
-                            label = "累计观看",
-                            value = formatWatchHoursMinutes(uiState.totalWatchDurationMs),
-                            caption = "${uiState.totalWatchedCount} 部 · ${uiState.completedWatchCount} 部看完",
-                            icon = Icons.Outlined.Movie,
-                            modifier = Modifier.weight(1f),
-                        )
-                        StatMetricCard(
-                            label = "累计阅读",
-                            value = "${uiState.totalReadPages} 页",
-                            caption = "${uiState.totalReadCount} 本 · ${uiState.completedReadCount} 本读完",
-                            icon = Icons.Outlined.MenuBook,
-                            modifier = Modifier.weight(1f),
-                        )
-                    }
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(10.dp),
-                    ) {
-                        StatMetricCard(
-                            label = "收藏与片单",
-                            value = "${uiState.favoriteCount} 收藏",
-                            caption = "${uiState.shelfCount} 个片单 / 书架",
-                            icon = Icons.Outlined.FavoriteBorder,
-                            modifier = Modifier.weight(1f),
-                        )
-                        StatMetricCard(
-                            label = "离线占用",
-                            value = RavenFormatters.formatByteSize(uiState.downloadTotalBytes).ifBlank { "0 B" },
-                            caption = "${uiState.downloadCompletedCount} 项已完成下载",
-                            icon = Icons.Outlined.Download,
-                            modifier = Modifier.weight(1f),
+                        RavenLoadingSkeleton(rowCount = 4)
+                        Text(
+                            text = "正在汇总本地观看、阅读、下载与收藏记录…",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = colors.inkSecondary,
+                            modifier = Modifier.padding(horizontal = 24.dp),
                         )
                     }
                 }
-            }
-
-            if (uiState.siteBreakdowns.isEmpty() && uiState.topTags.isEmpty()) {
-                item(key = "stats_empty") {
-                    RavenEmptyState(
-                        title = "暂无行为统计数据",
-                        message = "开始观看视频、阅读漫画或收藏作品后，系统会自动汇总各站点分布与高频标签。",
-                        icon = Icons.Outlined.BarChart,
-                    )
-                }
-            }
-
-            if (uiState.siteBreakdowns.isNotEmpty()) {
-                item(key = "stats_site_breakdown") {
-                    val maxInteractions = uiState.siteBreakdowns.maxOf { it.totalInteractions }.coerceAtLeast(1)
-                    RavenGroupedSection(
-                        title = "各站点活跃分布",
-                        modifier = Modifier.padding(horizontal = 16.dp),
+            } else {
+                item(key = "stats_overview_cards") {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp),
+                        verticalArrangement = Arrangement.spacedBy(10.dp),
                     ) {
-                        uiState.siteBreakdowns.forEachIndexed { index, stat ->
-                            if (index > 0) RavenGroupedDivider()
-                            Column(
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(10.dp),
+                        ) {
+                            StatMetricCard(
+                                label = "观看进度",
+                                value = formatWatchHoursMinutes(uiState.totalWatchDurationMs),
+                                caption = "${uiState.totalWatchedCount} 部 · ${uiState.completedWatchCount} 部已看完",
+                                icon = Icons.Outlined.Movie,
+                                modifier = Modifier.weight(1f),
+                            )
+                            StatMetricCard(
+                                label = "阅读进度",
+                                value = "${uiState.totalReadPages} 页",
+                                caption = "${uiState.totalReadCount} 本 · ${uiState.completedReadCount} 本已读完",
+                                icon = Icons.Outlined.MenuBook,
+                                modifier = Modifier.weight(1f),
+                            )
+                        }
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(10.dp),
+                        ) {
+                            StatMetricCard(
+                                label = "收藏与片单",
+                                value = "${uiState.favoriteCount} 收藏",
+                                caption = "${uiState.shelfCount} 个片单 / 书架",
+                                icon = Icons.Outlined.FavoriteBorder,
+                                modifier = Modifier.weight(1f),
+                            )
+                            StatMetricCard(
+                                label = "离线占用",
+                                value = RavenFormatters.formatByteSize(uiState.downloadTotalBytes).ifBlank { "0 B" },
+                                caption = "${uiState.downloadCompletedCount} 项已完成下载",
+                                icon = Icons.Outlined.Download,
+                                modifier = Modifier.weight(1f),
+                            )
+                        }
+                        Text(
+                            text = "统计口径：观看为当前播放进度时长之和，阅读为当前页数之和，并非累计播放或累计阅读。收藏按收藏时间、下载按最后更新时间计入所选范围。",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = colors.inkTertiary,
+                        )
+                    }
+                }
+
+                if (uiState.siteBreakdowns.isEmpty() && uiState.topTags.isEmpty()) {
+                    item(key = "stats_empty") {
+                        val rangeEmpty = uiState.selectedRange != StatsTimeRange.ALL && uiState.hasAnyData
+                        val actionLabel = if (rangeEmpty) "查看历史" else "去搜索"
+                        val action: () -> Unit = if (rangeEmpty) {
+                            { navigator.openHistory() }
+                        } else {
+                            { navigator.openSearch() }
+                        }
+                        RavenEmptyState(
+                            title = if (rangeEmpty) "当前范围暂无行为统计数据" else "暂无行为统计数据",
+                            message = if (rangeEmpty) {
+                                "本地已有观看、阅读、收藏或下载记录，但所选时间范围内没有更新。切换时间范围，或查看完整历史。"
+                            } else {
+                                "开始观看视频、阅读漫画或收藏作品后，系统会自动汇总各站点分布与高频标签。"
+                            },
+                            icon = Icons.Outlined.BarChart,
+                            actionLabel = actionLabel,
+                            onActionClick = action,
+                        )
+                    }
+                }
+
+                if (uiState.siteBreakdowns.isNotEmpty()) {
+                    item(key = "stats_site_breakdown") {
+                        val maxInteractions = uiState.siteBreakdowns
+                            .maxOf { it.totalInteractions }
+                            .coerceAtLeast(1)
+                        RavenGroupedSection(
+                            title = "各站点活跃分布",
+                            footer = "点击站点进入站点功能；进度时长为当前播放位置之和，当前页为阅读位置之和。",
+                            modifier = Modifier.padding(horizontal = 16.dp),
+                        ) {
+                            uiState.siteBreakdowns.forEachIndexed { index, stat ->
+                                if (index > 0) RavenGroupedDivider()
+                                Column(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clickable(
+                                            role = Role.Button,
+                                            onClick = { navigator.openSiteFunctions(stat.siteId) },
+                                        )
+                                        .padding(horizontal = 14.dp, vertical = 12.dp)
+                                        .testTag("stats_site_row_${stat.siteId.value}"),
+                                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                                ) {
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                    ) {
+                                        Column(
+                                            modifier = Modifier.weight(1f),
+                                            verticalArrangement = Arrangement.spacedBy(2.dp),
+                                        ) {
+                                            Text(
+                                                text = stat.siteName,
+                                                style = MaterialTheme.typography.titleSmall,
+                                                color = colors.inkPrimary,
+                                                maxLines = 1,
+                                                overflow = TextOverflow.Ellipsis,
+                                            )
+                                            Text(
+                                                text = "视频 ${stat.watchedCount} 部 · 图册 ${stat.readCount} 部 · 收藏 ${stat.favoriteCount}",
+                                                style = MaterialTheme.typography.bodySmall.tabular(),
+                                                color = colors.inkSecondary,
+                                                maxLines = 1,
+                                                overflow = TextOverflow.Ellipsis,
+                                            )
+                                        }
+                                        Text(
+                                            text = "${stat.totalInteractions} 项",
+                                            style = MaterialTheme.typography.bodySmall.tabular(),
+                                            color = colors.inkSecondary,
+                                        )
+                                        Icon(
+                                            imageVector = Icons.AutoMirrored.Rounded.KeyboardArrowRight,
+                                            contentDescription = null,
+                                            tint = colors.inkTertiary,
+                                        )
+                                    }
+                                    RavenCrimsonProgressBar(
+                                        fraction = (stat.totalInteractions.toFloat() / maxInteractions.toFloat()).coerceIn(0.05f, 1f),
+                                    )
+                                    FlowRow(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                        verticalArrangement = Arrangement.spacedBy(6.dp),
+                                    ) {
+                                        if (stat.watchedCount > 0) {
+                                            RavenStatusPill(
+                                                text = "进度时长合计 ${formatWatchHoursMinutes(stat.watchDurationMs)}",
+                                            )
+                                        }
+                                        if (stat.readCount > 0) {
+                                            RavenStatusPill(text = "当前页合计 ${stat.readPages} 页")
+                                        }
+                                        if (stat.completedDownloads > 0) {
+                                            RavenStatusPill(text = "已完成下载 ${stat.completedDownloads} 项")
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                if (uiState.topTags.isNotEmpty()) {
+                    item(key = "stats_top_tags") {
+                        RavenGroupedSection(
+                            title = "高频偏好标签（点击按标签搜索）",
+                            modifier = Modifier.padding(horizontal = 16.dp),
+                        ) {
+                            FlowRow(
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .padding(horizontal = 14.dp, vertical = 12.dp),
-                                verticalArrangement = Arrangement.spacedBy(6.dp),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                verticalArrangement = Arrangement.spacedBy(8.dp),
                             ) {
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.SpaceBetween,
-                                    verticalAlignment = Alignment.CenterVertically,
-                                ) {
-                                    Text(
-                                        text = stat.siteName,
-                                        style = MaterialTheme.typography.titleSmall,
-                                        color = colors.inkPrimary,
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis,
-                                    )
-                                    Text(
-                                        text = "视频 ${stat.watchedCount} · 图册 ${stat.readCount} · 收藏 ${stat.favoriteCount}",
-                                        style = MaterialTheme.typography.bodySmall.tabular(),
-                                        color = colors.inkSecondary,
+                                uiState.topTags.forEach { tag ->
+                                    RavenFilterChip(
+                                        label = "${tag.label} · ${tag.count}",
+                                        selected = false,
+                                        onClick = {
+                                            navigator.openSearch(initialQuery = tag.slug, crossSite = false)
+                                        },
+                                        modifier = Modifier.testTag("stats_tag_${tag.slug}"),
                                     )
                                 }
-                                RavenCrimsonProgressBar(
-                                    fraction = (stat.totalInteractions.toFloat() / maxInteractions.toFloat()).coerceIn(0.05f, 1f),
-                                )
                             }
                         }
                     }
                 }
-            }
 
-            if (uiState.topTags.isNotEmpty()) {
-                item(key = "stats_top_tags") {
+                item(key = "stats_quick_nav") {
                     RavenGroupedSection(
-                        title = "高频偏好标签（已本地翻译）",
+                        title = "快捷管理",
                         modifier = Modifier.padding(horizontal = 16.dp),
                     ) {
-                        FlowRow(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(horizontal = 14.dp, vertical = 12.dp),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                            verticalArrangement = Arrangement.spacedBy(8.dp),
-                        ) {
-                            uiState.topTags.forEach { tag ->
-                                RavenStatusPill(
-                                    text = "${tag.label} · ${tag.count}",
-                                    tone = RavenStatusTone.NEUTRAL,
-                                )
-                            }
-                        }
+                        RavenGroupedRow(
+                            title = "前往下载与收藏",
+                            subtitle = RavenFormatters.formatByteSize(uiState.downloadTotalBytes),
+                            icon = Icons.Outlined.Download,
+                            showChevron = true,
+                            onClick = { navigator.openDownloads() },
+                        )
+                        RavenGroupedDivider(insetWithIcon = true)
+                        RavenGroupedRow(
+                            title = "查看完整历史记录",
+                            subtitle = "观看 ${uiState.totalWatchedCount} 项 · 阅读 ${uiState.totalReadCount} 项",
+                            icon = Icons.Outlined.MenuBook,
+                            showChevron = true,
+                            onClick = navigator::openHistory,
+                        )
                     }
-                }
-            }
-
-            item(key = "stats_quick_nav") {
-                RavenGroupedSection(
-                    title = "快捷管理",
-                    modifier = Modifier.padding(horizontal = 16.dp),
-                ) {
-                    RavenGroupedRow(
-                        title = "前往下载与收藏",
-                        subtitle = RavenFormatters.formatByteSize(uiState.downloadTotalBytes),
-                        icon = Icons.Outlined.Download,
-                        showChevron = true,
-                        onClick = { navigator.openDownloads() },
-                    )
-                    RavenGroupedDivider(insetWithIcon = true)
-                    RavenGroupedRow(
-                        title = "查看完整历史记录",
-                        subtitle = "观看 ${uiState.totalWatchedCount} 项 · 阅读 ${uiState.totalReadCount} 项",
-                        icon = Icons.Outlined.MenuBook,
-                        showChevron = true,
-                        onClick = navigator::openHistory,
-                    )
                 }
             }
         }

@@ -10,7 +10,7 @@
 |---|---|
 | **应用形态** | Kotlin `2.3.21` + Jetpack Compose + 17 模块 Clean Architecture 原生 Android 客户端（`compileSdk = 36` / `targetSdk = 36` / `minSdk = 24` / JDK 17 / Gradle Wrapper `9.1.0` / AGP `9.0.1`） |
 | **包名边界** | 正式版 `applicationId = com.raven.app`；开发版 Debug `applicationId = com.raven.app.debug`（可并存，禁止混发） |
-| **版本元数据唯一源** | 根目录 [release.properties](release.properties) 统一提供 `versionName`、`versionCode`、`releaseCertificate`；当前源码为 `0.7.0` / `versionCode = 11`。**每次正式发布必须严格递增 `versionCode` 并更新 `versionName`** |
+| **版本元数据唯一源** | 根目录 [release.properties](release.properties) 统一提供 `versionName`、`versionCode`、`releaseCertificate`；当前源码为 `0.8.0` / `versionCode = 12`。**每次正式发布必须严格递增 `versionCode` 并更新 `versionName`** |
 | **工具链红线** | Android 模块严禁启用 `org.jetbrains.kotlin.android` 与 `kotlin-kapt`（AGP 9 内置 Kotlin）；仅 `:core:database` 使用 KSP；依赖禁止越过 API 36 / Kotlin 2.3 上限（详见 [docs/ONBOARDING.md](docs/ONBOARDING.md)） |
 | **视觉与交互不变量** | 严格遵循 **Dark Obsidian（`#09090B`）× Apple HIG Precision × Netflix Cinema** 体系，唯一品牌强调色 **Raven Crimson `#FF4D58`**；严禁硬编码 `Color(0x...)` 或引入旧版粉红 `#FF8DB4`；严禁套娃 `AlertDialog` |
 | **运行时代码红线** | 严禁全局可变 `SiteRegistry.current` 与 `:sites:*` 外跨模块 `when (siteId)`；严禁 `Thread.sleep` 与每请求新建 `OkHttpClient`；`Regex(...)` 中字面量 `}` / `]` 必须显式转义为 `\}` / `\]`（规避 Android ART ICU `PatternNative` 崩溃）；**视频自动播放绝不自动全屏**；凭据统一由 `SessionVault` 加密，严禁外泄至 CDN/更新器/备份 |

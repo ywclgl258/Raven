@@ -46,6 +46,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.raven.app.core.designsystem.component.RavenContentCrossfade
+import com.raven.app.core.designsystem.component.RavenFormatters
 import com.raven.app.core.designsystem.component.RavenTopBar
 import com.raven.app.core.designsystem.theme.LocalMotionReduced
 import com.raven.app.core.designsystem.theme.LocalRavenColors
@@ -66,6 +67,13 @@ private enum class CollectionTab(val label: String, val tabKey: String) {
             entries.firstOrNull { it.tabKey.equals(raw, ignoreCase = true) } ?: DOWNLOADS
     }
 }
+
+internal fun LibraryCollectionLayout.toggled(): LibraryCollectionLayout =
+    if (this == LibraryCollectionLayout.WATERFALL) {
+        LibraryCollectionLayout.LIST
+    } else {
+        LibraryCollectionLayout.WATERFALL
+    }
 
 /**
  * 「下载与收藏」：把下载中心与收藏整合为一个一级入口。
@@ -94,6 +102,7 @@ fun DownloadsFavoritesScreen(
     var selectedTab by rememberSaveable(siteId?.value, initialTab) {
         mutableStateOf(CollectionTab.fromKey(initialTab))
     }
+    var collectionLayout by rememberSaveable { mutableStateOf(defaultCollectionLayout()) }
     var showClearSiteConfirm by rememberSaveable { mutableStateOf(false) }
 
     Column(
@@ -103,9 +112,11 @@ fun DownloadsFavoritesScreen(
             .testTag("downloads_favorites_screen"),
     ) {
         RavenTopBar(
+            modifier = Modifier.testTag("downloads_favorites_top_bar"),
             title = "下载与收藏",
             subtitle = buildString {
                 append("已下载 ${downloadsState.completedCount}")
+                append(" · 离线占用 ${RavenFormatters.formatByteSize(downloadsState.totalCompletedBytes)}")
                 if (downloadsState.activeTransferCount > 0) append(" · 进行中 ${downloadsState.activeTransferCount}")
                 append(" · 收藏 ${favoritesState.totalCount}")
             },
@@ -122,6 +133,10 @@ fun DownloadsFavoritesScreen(
                 }
             },
             actions = {
+                LibraryCollectionLayoutButton(
+                    layout = collectionLayout,
+                    onToggle = { collectionLayout = collectionLayout.toggled() },
+                )
                 when (selectedTab) {
                     CollectionTab.DOWNLOADS -> IconButton(
                         onClick = downloadsViewModel::syncFromDisk,
@@ -186,12 +201,14 @@ fun DownloadsFavoritesScreen(
                         navigator = navigator,
                         siteId = siteId,
                         embedded = true,
+                        collectionLayout = collectionLayout,
                         viewModel = downloadsViewModel,
                     )
                     CollectionTab.FAVORITES -> FavoritesScreen(
                         navigator = navigator,
                         siteId = siteId,
                         embedded = true,
+                        collectionLayout = collectionLayout,
                         viewModel = favoritesViewModel,
                     )
                 }

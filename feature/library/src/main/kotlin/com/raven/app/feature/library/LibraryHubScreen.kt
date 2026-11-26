@@ -26,8 +26,8 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.AutoAwesome
+import androidx.compose.material.icons.outlined.BarChart
 import androidx.compose.material.icons.outlined.BookmarkBorder
 import androidx.compose.material.icons.outlined.Collections
 import androidx.compose.material.icons.outlined.DeleteOutline
@@ -73,6 +73,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.raven.app.core.database.model.ShelfWithSummary
+import com.raven.app.core.designsystem.component.RavenAnimatedCounter
 import com.raven.app.core.designsystem.component.RavenBottomSheet
 import com.raven.app.core.designsystem.component.RavenEmptyState
 import com.raven.app.core.designsystem.component.RavenFilterChipRow
@@ -81,10 +82,14 @@ import com.raven.app.core.designsystem.component.RavenGroupedDivider
 import com.raven.app.core.designsystem.component.RavenGroupedRow
 import com.raven.app.core.designsystem.component.RavenGroupedSection
 import com.raven.app.core.designsystem.component.RavenImage
+import com.raven.app.core.designsystem.component.RavenMorphIconButton
 import com.raven.app.core.designsystem.component.RavenSectionHeader
 import com.raven.app.core.designsystem.component.RavenStatusPill
 import com.raven.app.core.designsystem.component.RavenStatusTone
 import com.raven.app.core.designsystem.component.RavenTopBar
+import com.raven.app.core.designsystem.component.ravenBurstFeedback
+import com.raven.app.core.designsystem.component.ravenSquashPress
+import com.raven.app.core.designsystem.motion.RavenMorphIcons
 import com.raven.app.core.designsystem.theme.LocalRavenColors
 import com.raven.app.core.designsystem.theme.RavenShapes
 import com.raven.app.core.designsystem.theme.ravenSpringPress
@@ -100,7 +105,7 @@ import com.raven.app.core.model.SmartShelfRule
 import org.koin.androidx.compose.koinViewModel
 
 /**
- * 「片库」 Asset & Management Hub (`LibraryHubScreen`).
+ * 「鸦巢」 Asset & Management Hub (`LibraryHubScreen`).
  */
 @Composable
 fun LibraryHubScreen(
@@ -204,34 +209,28 @@ fun LibraryHubScreenContent(
             .testTag("library_hub_screen"),
     ) {
         RavenTopBar(
-            title = "片库",
-            subtitle = "片单、智能聚合与本地资产",
+            title = "鸦巢",
+            subtitle = "片单、下载、收藏与本地内容",
             actions = {
-                IconButton(
+                RavenMorphIconButton(
+                    glyph = RavenMorphIcons.Link,
+                    contentDescription = "从链接打开",
                     onClick = { showOpenLinkSheet = true },
+                    tint = colors.inkPrimary,
                     modifier = Modifier.testTag("library_open_link_button"),
-                ) {
-                    Icon(
-                        imageVector = Icons.Outlined.Link,
-                        contentDescription = "从链接打开",
-                        tint = colors.inkPrimary,
-                    )
-                }
-                IconButton(
+                )
+                RavenMorphIconButton(
+                    glyph = RavenMorphIcons.Plus,
+                    contentDescription = "新建片单",
                     onClick = {
                         when (uiState.selectedTab) {
                             LibraryHubTab.SMART_SHELVES -> showCreateSmartShelfSheet = true
                             else -> showCreateShelfSheet = true
                         }
                     },
+                    tint = colors.inkPrimary,
                     modifier = Modifier.testTag("library_create_action_button"),
-                ) {
-                    Icon(
-                        imageVector = Icons.Outlined.Add,
-                        contentDescription = "新建片单",
-                        tint = colors.inkPrimary,
-                    )
-                }
+                )
             },
         )
 
@@ -260,6 +259,7 @@ fun LibraryHubScreenContent(
             item(key = "hub_downloads_favorites") {
                 LibraryDownloadsFavoritesCard(
                     completedDownloads = uiState.completedDownloadCount,
+                    completedDownloadBytes = uiState.completedDownloadBytes,
                     activeDownloads = uiState.activeDownloadCount,
                     favorites = uiState.favoriteCount,
                     onOpenDownloads = { navigator.openDownloads() },
@@ -286,7 +286,7 @@ fun LibraryHubScreenContent(
                         modifier = Modifier.weight(1f),
                     )
                     LibraryMetricTile(
-                        title = "更新",
+                        title = "订阅更新",
                         count = uiState.unreadInboxCount,
                         icon = Icons.Outlined.NotificationsActive,
                         highlightBadgeCount = uiState.unreadInboxCount,
@@ -302,7 +302,13 @@ fun LibraryHubScreenContent(
                 RavenFilterChipRow(
                     items = LibraryHubTab.entries,
                     selectedItem = uiState.selectedTab,
-                    labelProvider = { it.label },
+                    labelProvider = { tab ->
+                        when (tab) {
+                            LibraryHubTab.SHELVES -> "${tab.label} (${uiState.shelves.size})"
+                            LibraryHubTab.SMART_SHELVES -> "${tab.label} (${uiState.smartShelves.size})"
+                            LibraryHubTab.LOCAL -> "${tab.label} (${uiState.localBooks.size})"
+                        }
+                    },
                     onItemSelected = onSelectTab,
                     keyProvider = { it.name },
                     modifier = Modifier.testTag("library_hub_tabs"),
@@ -477,7 +483,7 @@ fun LibraryHubScreenContent(
                     RavenGroupedDivider(insetWithIcon = true)
                     RavenGroupedRow(
                         title = "标签订阅",
-                        subtitle = "管理各站点关注的标签与作者动态",
+                        subtitle = "标签与作者动态 · ${uiState.savedSearchCount} 个保存搜索",
                         value = "${uiState.subscriptionCount} 个",
                         icon = Icons.Outlined.Subscriptions,
                         showChevron = true,
@@ -493,6 +499,15 @@ fun LibraryHubScreenContent(
                         showChevron = true,
                         onClick = navigator::openLocalLibrary,
                         modifier = Modifier.testTag("shortcut_local_library"),
+                    )
+                    RavenGroupedDivider(insetWithIcon = true)
+                    RavenGroupedRow(
+                        title = "观看与阅读统计",
+                        subtitle = "时长、页数、站点分布与标签偏好",
+                        icon = Icons.Outlined.BarChart,
+                        showChevron = true,
+                        onClick = navigator::openStats,
+                        modifier = Modifier.testTag("shortcut_stats"),
                     )
                     RavenGroupedDivider(insetWithIcon = true)
                     RavenGroupedRow(
@@ -717,7 +732,9 @@ private fun ShelfSummaryCard(
         Row(verticalAlignment = Alignment.CenterVertically) {
             IconButton(
                 onClick = onTogglePinClick,
-                modifier = Modifier.size(40.dp),
+                modifier = Modifier
+                    .size(40.dp)
+                    .ravenBurstFeedback(trigger = shelf.isPinned, burstColor = colors.crimson),
             ) {
                 Icon(
                     imageVector = Icons.Outlined.PushPin,
@@ -1166,6 +1183,7 @@ internal fun OpenFromLinkBottomSheet(
 @Composable
 private fun LibraryDownloadsFavoritesCard(
     completedDownloads: Int,
+    completedDownloadBytes: Long,
     activeDownloads: Int,
     favorites: Int,
     onOpenDownloads: () -> Unit,
@@ -1210,10 +1228,14 @@ private fun LibraryDownloadsFavoritesCard(
                     color = colors.inkPrimary,
                 )
                 Text(
-                    text = if (activeDownloads > 0) {
-                        "$activeDownloads 项正在下载 · 已完成 $completedDownloads 项"
-                    } else {
+                    text = if (completedDownloads == 0 && activeDownloads == 0) {
                         "离线内容与收藏作品的统一入口"
+                    } else {
+                        buildString {
+                            if (activeDownloads > 0) append("$activeDownloads 项正在下载 · ")
+                            append("已完成 $completedDownloads 项")
+                            append(" · 离线占用 ${RavenFormatters.formatByteSize(completedDownloadBytes)}")
+                        }
                     },
                     style = MaterialTheme.typography.labelMedium,
                     color = colors.inkSecondary,
@@ -1269,7 +1291,7 @@ private fun DownloadsFavoritesEntryButton(
             .then(
                 if (filled) Modifier else Modifier.border(0.5.dp, colors.hairline, RavenShapes.ControlShape),
             )
-            .ravenSpringPress()
+            .ravenSquashPress()
             .clickable(role = Role.Button, onClick = onClick)
             .padding(horizontal = 14.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -1287,11 +1309,11 @@ private fun DownloadsFavoritesEntryButton(
                 style = MaterialTheme.typography.labelLarge,
                 color = content,
             )
-            Text(
-                text = "$count 项",
-                style = MaterialTheme.typography.titleMedium.tabular(),
-                fontWeight = FontWeight.Bold,
+            RavenAnimatedCounter(
+                count = count,
+                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
                 color = content,
+                formatter = { "$it 项" },
             )
         }
         Spacer(modifier = Modifier.weight(1f))

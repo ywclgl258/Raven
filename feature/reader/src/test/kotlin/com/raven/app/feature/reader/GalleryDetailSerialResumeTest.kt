@@ -20,6 +20,8 @@ import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
@@ -122,6 +124,99 @@ class GalleryDetailSerialResumeTest {
         assertFalse(viewModel.uiState.value.chaptersLoading)
     }
 
+    @Test
+    fun `serial chapter history maps read markers and next unread reactively`() = runTest(mainDispatcherRule.dispatcher) {
+        val harness = ReaderTestHarness(mainDispatcherRule.dispatcher, tempFolder.newFolder())
+        val chapters = chapters()
+        val current = serialDetail(chapters[0])
+        saveProgress(harness, chapters[0], page = 7)
+        saveProgress(harness, chapters[1], page = 48, completed = true)
+        val loader = FakeReaderPageLoader(
+            detailLoader = { _, _, _, _ ->
+                OfflineGallerySnapshot(current, emptyList(), emptyList(), "", false)
+            },
+        )
+        val viewModel = viewModel(harness, current, loader, feedSource { FeedPage(items = chapters) })
+
+        advanceUntilIdle()
+
+        val state = viewModel.uiState.value
+        assertEquals(chapters, state.chapters)
+        val currentProgress = state.readingProgressByMediaId[chapters[0].id]
+        assertNotNull(currentProgress)
+        assertEquals(7, currentProgress?.currentPage)
+        assertFalse(currentProgress?.completed == true)
+        assertTrue(state.readingProgressByMediaId.getValue(chapters[1].id).completed)
+        assertEquals("读到 7 页", state.chapterPickerReadState.progressLabel(chapters[0].id))
+        assertEquals("已读", state.chapterPickerReadState.progressLabel(chapters[1].id))
+        assertEquals(chapters[2].id, state.nextUnreadChapter?.id)
+        assertEquals(chapters[2].id, state.chapterPickerReadState.nextUnreadChapter?.id)
+        assertFalse(state.allChaptersCompleted)
+        assertNull(state.nextUnreadBoundaryLabel)
+
+        // New history arrivals update the map and next-unread target without rebuilding the VM.
+        saveProgress(harness, chapters[2], page = 48, completed = true)
+        advanceUntilIdle()
+        val laterState = viewModel.uiState.value
+        assertNull(laterState.nextUnreadChapter)
+        assertFalse(laterState.allChaptersCompleted)
+        assertEquals("后续章节已读完", laterState.nextUnreadBoundaryLabel)
+
+        saveProgress(harness, chapters[0], page = 48, completed = true)
+        advanceUntilIdle()
+        val finishedState = viewModel.uiState.value
+        assertTrue(finishedState.allChaptersCompleted)
+        assertEquals("全部章节已读完", finishedState.nextUnreadBoundaryLabel)
+        assertEquals("全部章节已读完", finishedState.chapterPickerReadState.nextUnreadBoundaryLabel)
+    }
+
+    @Test
+    fun `next unread starts after the current chapter and stops at the later boundary`() =
+        runTest(mainDispatcherRule.dispatcher) {
+            val harness = ReaderTestHarness(mainDispatcherRule.dispatcher, tempFolder.newFolder())
+            val chapters = chapters()
+            val current = serialDetail(chapters[1])
+            saveProgress(harness, chapters[0], page = 5)
+            saveProgress(harness, chapters[1], page = 10)
+            val loader = FakeReaderPageLoader(
+                detailLoader = { _, _, _, _ ->
+                    OfflineGallerySnapshot(current, emptyList(), emptyList(), "", false)
+                },
+            )
+            val viewModel = viewModel(harness, current, loader, feedSource { FeedPage(items = chapters) })
+
+            advanceUntilIdle()
+
+            // Chapter 17 is unfinished but sits before the current chapter, so chapter 19 wins.
+            assertEquals(chapters[2].id, viewModel.uiState.value.nextUnreadChapter?.id)
+            assertFalse(viewModel.uiState.value.allChaptersCompleted)
+
+            saveProgress(harness, chapters[2], page = 48, completed = true)
+            advanceUntilIdle()
+
+            assertNull(viewModel.uiState.value.nextUnreadChapter)
+            assertFalse(viewModel.uiState.value.allChaptersCompleted)
+            assertEquals("后续章节已读完", viewModel.uiState.value.nextUnreadBoundaryLabel)
+        }
+
+    @Test
+    fun `chapter progress markers distinguish completed and unfinished chapters`() {
+        val chapter = chapters()[1]
+        assertNull(chapterProgressLabel(null))
+        assertEquals("读到 7 页", chapterProgressLabel(progressOf(chapter, page = 7)))
+        assertEquals("已读", chapterProgressLabel(progressOf(chapter, page = 48, completed = true)))
+    }
+
+    @Test
+    fun `shared chapter picker read state defaults keep other callers unchanged`() {
+        val chapter = chapters()[0]
+        val readState = ChapterPickerReadState()
+        assertNull(readState.nextUnreadChapter)
+        assertNull(readState.nextUnreadBoundaryLabel)
+        assertNull(readState.progressLabel(chapter.id))
+        assertFalse(readState.isCompleted(chapter.id))
+    }
+
     private fun viewModel(
         harness: ReaderTestHarness,
         detail: GalleryDetail,
@@ -161,18 +256,31 @@ class GalleryDetailSerialResumeTest {
         override suspend fun loadFeed(request: FeedRequest): FeedPage = load()
     }
 
-    private suspend fun saveProgress(harness: ReaderTestHarness, chapter: MediaItem, page: Int) {
+    private fun progressOf(
+        chapter: MediaItem,
+        page: Int,
+        completed: Boolean = false,
+        nowMs: Long = 0L,
+    ): ReadingProgress = ReadingProgress(
+        siteId = chapter.siteId,
+        mediaId = chapter.id,
+        url = chapter.url,
+        title = chapter.title,
+        kind = MediaKind.SERIAL_COMIC,
+        currentPage = if (completed) 48 else page,
+        totalPages = 48,
+        updatedAt = nowMs,
+        completed = completed,
+    )
+
+    private suspend fun saveProgress(
+        harness: ReaderTestHarness,
+        chapter: MediaItem,
+        page: Int,
+        completed: Boolean = false,
+    ) {
         harness.historyRepository.saveReadingProgress(
-            ReadingProgress(
-                siteId = chapter.siteId,
-                mediaId = chapter.id,
-                url = chapter.url,
-                title = chapter.title,
-                kind = MediaKind.SERIAL_COMIC,
-                currentPage = page,
-                totalPages = 48,
-                updatedAt = harness.nowMs,
-            ),
+            progressOf(chapter, page = page, completed = completed, nowMs = harness.nowMs),
         )
     }
 

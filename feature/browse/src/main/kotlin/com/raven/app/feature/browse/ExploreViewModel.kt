@@ -16,6 +16,8 @@ import com.raven.app.core.database.repository.MediaTagCacheRepository
 import com.raven.app.core.database.repository.PreferencesRepository
 import com.raven.app.core.database.repository.ShelfRepository
 import com.raven.app.core.database.repository.TagDictionaryRepository
+import com.raven.app.core.model.AdvancedFilterField
+import com.raven.app.core.model.AdvancedSearchFilters
 import com.raven.app.core.model.ComicLanguage
 import com.raven.app.core.model.FeedRequest
 import com.raven.app.core.model.FeedSort
@@ -59,10 +61,13 @@ data class ExploreUiState(
     val siteOpenCounts: Map<SiteId, Int> = emptyMap(),
     val startupDefaultSiteId: SiteId? = null,
     val filter: ExploreFilterState = ExploreFilterState(),
+    val requestedSectionSpec: SiteSectionSpec? = null,
     val availableSections: List<SiteSectionSpec> = emptyList(),
     val availableSorts: List<FeedSort> = listOf(FeedSort.NEWEST),
+    val supportedFilters: Set<AdvancedFilterField> = emptySet(),
     val directorySections: List<SiteSectionSpec> = emptyList(),
     val supportsLanguageFilter: Boolean = false,
+    val supportsAdvancedFilters: Boolean = false,
     val effectiveMediaKind: MediaKind = MediaKind.VIDEO,
     val items: List<MediaItem> = emptyList(),
     val watchProgressMap: Map<String, Float> = emptyMap(),
@@ -105,6 +110,9 @@ data class ExploreUiState(
                         ComicLanguage.CHINESE_AND_JAPANESE -> "中＋日"
                     },
                 )
+            }
+            if (!filter.advancedFilters.isEmpty) {
+                add("高级筛选")
             }
         }
 }
@@ -216,14 +224,18 @@ class ExploreViewModel(
         val plugin = siteRegistry.get(key.siteId)
         val descriptor = plugin?.descriptor
         val supportsLang = descriptor?.hasCapability(SiteCapability.LANGUAGE_FILTER) == true
+        val declaredFeedSections = descriptor?.sections?.filterNot { it.isDirectory }.orEmpty()
         val feedSections = settings.sortSectionsByUsage(
             key.siteId,
-            descriptor?.sections?.filterNot { it.isDirectory }.orEmpty(),
+            declaredFeedSections,
         ) { it.id }
         val directorySections = settings.sortSectionsByUsage(
             key.siteId,
             buildDirectorySections(plugin),
         ) { it.id }
+        val requestedSectionSpec = declaredFeedSections.firstOrNull { spec ->
+            !key.filter.section.isNullOrBlank() && spec.id == key.filter.section
+        } ?: declaredFeedSections.firstOrNull()
         val request = buildFeedRequest(plugin, key.siteId, key.filter, page = 1, cursor = null)
         val availableSorts = plugin?.feedSource?.supportedSorts(request)
             ?.takeIf { it.isNotEmpty() }
@@ -263,10 +275,13 @@ class ExploreViewModel(
             siteOpenCounts = settings.siteOpenCounts,
             startupDefaultSiteId = settings.startupDefaultSiteId,
             filter = key.filter,
+            requestedSectionSpec = requestedSectionSpec,
             availableSections = feedSections,
             availableSorts = availableSorts,
+            supportedFilters = descriptor?.supportedFilters.orEmpty(),
             directorySections = directorySections,
             supportsLanguageFilter = supportsLang,
+            supportsAdvancedFilters = descriptor?.hasCapability(SiteCapability.ADVANCED_SEARCH) == true,
             effectiveMediaKind = effectiveKind,
             items = filteredItems,
             watchProgressMap = local.watchProgressMap,
@@ -341,6 +356,31 @@ class ExploreViewModel(
     fun selectLanguage(language: ComicLanguage) {
         mutateActiveFilter(alsoSetLanguage = language) { current ->
             current.copy(language = language)
+        }
+    }
+
+    fun applyAdvancedFilters(filters: AdvancedSearchFilters, language: ComicLanguage = ComicLanguage.ALL) {
+        mutateActiveFilter(alsoSetLanguage = language) { current ->
+            current.copy(advancedFilters = filters, language = language)
+        }
+    }
+
+    fun resetAdvancedFilters() {
+        mutateActiveFilter(alsoSetLanguage = ComicLanguage.ALL) { current ->
+            current.copy(advancedFilters = AdvancedSearchFilters(), language = ComicLanguage.ALL)
+        }
+    }
+
+    fun setDateRange(publishedFrom: String?, publishedTo: String?) {
+        val cleanFrom = publishedFrom?.trim()?.takeIf { it.isNotEmpty() }
+        val cleanTo = publishedTo?.trim()?.takeIf { it.isNotEmpty() }
+        mutateActiveFilter { current ->
+            current.copy(
+                advancedFilters = current.advancedFilters.copy(
+                    publishedFrom = cleanFrom,
+                    publishedTo = cleanTo,
+                ),
+            )
         }
     }
 

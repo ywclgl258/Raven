@@ -33,15 +33,12 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.AutoStories
-import androidx.compose.material.icons.outlined.Home
 import androidx.compose.material.icons.outlined.Lock
 import androidx.compose.material.icons.outlined.MenuBook
 import androidx.compose.material.icons.outlined.Movie
 import androidx.compose.material.icons.outlined.PhotoLibrary
-import androidx.compose.material.icons.outlined.PushPin
 import androidx.compose.material.icons.rounded.ExpandLess
 import androidx.compose.material.icons.rounded.ExpandMore
-import androidx.compose.material.icons.rounded.Home
 import androidx.compose.material.icons.rounded.PushPin
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -67,6 +64,11 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.raven.app.core.designsystem.component.RavenBottomSheet
+import com.raven.app.core.designsystem.component.RavenMorphIcon
+import com.raven.app.core.designsystem.component.RavenMorphToggleIcon
+import com.raven.app.core.designsystem.component.RavenSearchField
+import com.raven.app.core.designsystem.motion.MorphSpringPreset
+import com.raven.app.core.designsystem.motion.RavenMorphIcons
 import com.raven.app.core.designsystem.theme.LocalMotionReduced
 import com.raven.app.core.designsystem.theme.RavenMotion
 import com.raven.app.core.designsystem.component.RavenStatusPill
@@ -79,6 +81,11 @@ import com.raven.app.core.model.MediaKind
 import com.raven.app.core.model.SiteCapability
 import com.raven.app.core.model.SiteDescriptor
 import com.raven.app.core.model.SiteId
+
+private fun SiteDescriptor.matchesSwitcherFilter(normalizedQuery: String): Boolean =
+    shortName.contains(normalizedQuery, ignoreCase = true) ||
+        displayName.contains(normalizedQuery, ignoreCase = true) ||
+        defaultHost.contains(normalizedQuery, ignoreCase = true)
 
 /**
  * Modal bottom sheet presenting all live sites from [SiteRegistry] grouped by
@@ -195,23 +202,33 @@ fun SiteSwitcherDrawerContent(
 ) {
     val colors = LocalRavenColors.current
     var pinnedExpanded by rememberSaveable { mutableStateOf(true) }
+    var siteFilterQuery by rememberSaveable { mutableStateOf("") }
 
     val pinnedSet = remember(pinnedSiteIds) { pinnedSiteIds.toSet() }
     val sitesById = remember(sites) { sites.associateBy { it.id } }
     val startupDefaultSiteName = remember(startupDefaultSiteId, sitesById) {
         startupDefaultSiteId?.let { id -> sitesById[id]?.shortName ?: id.value }
     }
-    val pinnedSites = remember(pinnedSiteIds, sitesById, siteOpenCounts) {
+    val normalizedFilter = siteFilterQuery.trim()
+    val visibleSites = remember(sites, normalizedFilter) {
+        if (normalizedFilter.isEmpty()) {
+            sites
+        } else {
+            sites.filter { it.matchesSwitcherFilter(normalizedFilter) }
+        }
+    }
+    val pinnedSites = remember(pinnedSiteIds, sitesById, siteOpenCounts, normalizedFilter) {
         val resolved = pinnedSiteIds.mapNotNull { sitesById[it] }
+            .filter { normalizedFilter.isEmpty() || it.matchesSwitcherFilter(normalizedFilter) }
         if (siteOpenCounts.isEmpty()) resolved
         else resolved.sortedByDescending { siteOpenCounts[it.id] ?: 0 }
     }
-    val orderedGroups = remember(sites, siteOpenCounts) {
+    val orderedGroups = remember(visibleSites, siteOpenCounts) {
         val baseGroups = listOf(
-            SiteSwitcherGroupSpec(MediaKind.VIDEO, "视频", Icons.Outlined.Movie, sites.filter { it.primaryKind == MediaKind.VIDEO }),
-            SiteSwitcherGroupSpec(MediaKind.COMIC, "漫画", Icons.Outlined.MenuBook, sites.filter { it.primaryKind == MediaKind.COMIC }),
-            SiteSwitcherGroupSpec(MediaKind.SERIAL_COMIC, "连载漫画", Icons.Outlined.AutoStories, sites.filter { it.primaryKind == MediaKind.SERIAL_COMIC }),
-            SiteSwitcherGroupSpec(MediaKind.PHOTO, "写真", Icons.Outlined.PhotoLibrary, sites.filter { it.primaryKind == MediaKind.PHOTO }),
+            SiteSwitcherGroupSpec(MediaKind.VIDEO, "视频", Icons.Outlined.Movie, visibleSites.filter { it.primaryKind == MediaKind.VIDEO }),
+            SiteSwitcherGroupSpec(MediaKind.COMIC, "漫画", Icons.Outlined.MenuBook, visibleSites.filter { it.primaryKind == MediaKind.COMIC }),
+            SiteSwitcherGroupSpec(MediaKind.SERIAL_COMIC, "连载漫画", Icons.Outlined.AutoStories, visibleSites.filter { it.primaryKind == MediaKind.SERIAL_COMIC }),
+            SiteSwitcherGroupSpec(MediaKind.PHOTO, "写真", Icons.Outlined.PhotoLibrary, visibleSites.filter { it.primaryKind == MediaKind.PHOTO }),
         ).mapNotNull { spec ->
             if (spec.sites.isEmpty()) null
             else {
@@ -228,6 +245,11 @@ fun SiteSwitcherDrawerContent(
             }
         }
     }
+    val showPinnedSection = if (normalizedFilter.isEmpty()) {
+        pinnedSites.isNotEmpty() || editPinsMode
+    } else {
+        pinnedSites.isNotEmpty()
+    }
 
     BoxWithConstraints(
         modifier = modifier.testTag("site_switcher_content"),
@@ -240,6 +262,21 @@ fun SiteSwitcherDrawerContent(
                 .padding(bottom = 16.dp),
             verticalArrangement = Arrangement.spacedBy(14.dp),
         ) {
+            if (sites.size > 12) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("site_switcher_filter"),
+                ) {
+                    RavenSearchField(
+                        query = siteFilterQuery,
+                        onQueryChange = { siteFilterQuery = it },
+                        placeholder = "搜索站点名称或域名",
+                        onClear = { siteFilterQuery = "" },
+                    )
+                }
+            }
+
             StartupDefaultSiteActionBar(
                 startupDefaultSiteName = startupDefaultSiteName,
                 hasCustomStartupSite = startupDefaultSiteId != null,
@@ -248,7 +285,7 @@ fun SiteSwitcherDrawerContent(
                 onResetDefault = { onSelectStartupDefaultSite(null) },
             )
 
-            if (pinnedSites.isNotEmpty() || editPinsMode) {
+            if (showPinnedSection) {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Row(
                         modifier = Modifier
@@ -343,6 +380,18 @@ fun SiteSwitcherDrawerContent(
                 }
             }
 
+            if (normalizedFilter.isNotEmpty() && visibleSites.isEmpty()) {
+                Text(
+                    text = "没有匹配「$normalizedFilter」的站点",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = colors.inkTertiary,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 4.dp, vertical = 8.dp)
+                        .testTag("site_switcher_no_results"),
+                )
+            }
+
             orderedGroups.forEach { group ->
                 SiteSwitcherGroupSection(
                     title = group.title,
@@ -401,11 +450,16 @@ private fun StartupDefaultSiteActionBar(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-        Icon(
-            imageVector = if (startupSiteMode || hasCustomStartupSite) Icons.Rounded.Home else Icons.Outlined.Home,
-            contentDescription = null,
-            tint = if (startupSiteMode || hasCustomStartupSite) colors.crimson else colors.inkSecondary,
-            modifier = Modifier.size(18.dp),
+        val startupActive = startupSiteMode || hasCustomStartupSite
+        RavenMorphToggleIcon(
+            active = startupActive,
+            activeGlyph = RavenMorphIcons.HomeActive,
+            inactiveGlyph = RavenMorphIcons.HomeOutline,
+            activeTint = colors.crimson,
+            inactiveTint = colors.inkSecondary,
+            size = 18.dp,
+            springPreset = MorphSpringPreset.SNAPPY,
+            scaleKick = false,
         )
         Column(
             modifier = Modifier.weight(1f),
@@ -552,7 +606,9 @@ private fun SiteSwitcherCompactGrid(
                                 else -> onSelectSite(site.id)
                             }
                         },
-                        onLongClick = { onTogglePinSite(site.id) },
+                        onLongClick = {
+                            if (!startupSiteMode) onTogglePinSite(site.id)
+                        },
                         modifier = Modifier.weight(1f),
                     )
                 }
@@ -653,11 +709,12 @@ private fun SiteSwitcherTile(
                 modifier = Modifier.weight(1f),
             )
             if (editPinsMode || isPinned) {
-                Icon(
-                    imageVector = if (isPinned) Icons.Rounded.PushPin else Icons.Outlined.PushPin,
+                RavenMorphIcon(
+                    glyph = if (isPinned) RavenMorphIcons.PinFilled else RavenMorphIcons.PinOutline,
                     contentDescription = if (isPinned) "已置顶" else "置顶",
                     tint = if (isPinned) colors.crimson else colors.inkTertiary,
-                    modifier = Modifier.size(14.dp),
+                    size = 14.dp,
+                    springPreset = MorphSpringPreset.SNAPPY,
                 )
             } else if (requiresAuth && site.networkProfile.requiresAuthGate) {
                 Icon(

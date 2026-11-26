@@ -224,6 +224,26 @@ private data class SearchDbContext(
     val dictRevision: Long = 0L,
 )
 
+/**
+ * 合并全站最近搜索：同一关键词 + 范围只保留最新一条，按 searchedAt 倒序后截断。
+ * GLOBAL 记录在同秒并列时优先，确保跨站搜索仍可一键恢复。
+ */
+internal fun mergeSearchHistoryEntries(
+    entries: List<SearchHistoryEntry>,
+    limit: Int = 30,
+): List<SearchHistoryEntry> {
+    val merged = LinkedHashMap<Pair<String, SearchScope>, SearchHistoryEntry>()
+    entries
+        .sortedWith(
+            compareByDescending<SearchHistoryEntry> { it.searchedAt }
+                .thenByDescending { it.siteId.isGlobal },
+        )
+        .forEach { entry ->
+            merged.putIfAbsent(entry.query to entry.scope, entry)
+        }
+    return merged.values.take(limit)
+}
+
 private data class SiteDiscoverySnapshot(
     val works: List<MediaItem> = emptyList(),
     val isLoading: Boolean = false,
@@ -315,8 +335,12 @@ class SearchViewModel(
     }
 
     private val dbContextFlow = activeSiteIdFlow.flatMapLatest { siteId ->
+        val mergedHistoryFlow = searchHistoryRepository
+            .observeAll(limit = MAX_HISTORY_CHIPS)
+            .map { entries -> mergeSearchHistoryEntries(entries, limit = MAX_HISTORY_CHIPS) }
+
         val topFour = combine(
-            searchHistoryRepository.observeBySite(siteId, limit = MAX_HISTORY_CHIPS),
+            mergedHistoryFlow,
             subscriptionRepository.observeSavedSearches(),
             blockedTermsRepository.observeAllGrouped(),
             blockedTermsRepository.observeEffectiveTermsBySite(siteId),
@@ -815,13 +839,40 @@ class SearchViewModel(
     }
 
     fun selectHistoryEntry(entry: SearchHistoryEntry) {
+        val targetMode = if (entry.siteId == SiteId.GLOBAL) {
+            SearchMode.CROSS_SITE
+        } else {
+            SearchMode.SINGLE_SITE
+        }
+        singleSearchJob?.cancel()
+        singlePaginateJob?.cancel()
+        crossSearchJob?.cancel()
+        cancelAllCrossSiteJobs()
         inputState.update {
             it.copy(
+                mode = targetMode,
                 query = entry.query,
                 scope = entry.scope,
+                sort = FeedSort.DEFAULT,
+                languageOverride = null,
+                advancedFilters = AdvancedSearchFilters(),
+                crossSiteFilterSiteId = null,
             )
         }
-        submitSearch()
+        if (targetMode == SearchMode.CROSS_SITE) {
+            submitSearch(overrideMode = SearchMode.CROSS_SITE)
+        } else {
+            val siteId = entry.siteId
+            if (siteRegistry.get(siteId) == null) {
+                submitSearch(overrideMode = SearchMode.SINGLE_SITE)
+            } else {
+                singleSiteState.value = SingleSiteResultState(siteId = siteId)
+                viewModelScope.launch {
+                    preferencesRepository.selectActiveSiteAndRecordOpen(siteId)
+                    submitSearch(overrideMode = SearchMode.SINGLE_SITE, overrideSingleSiteId = siteId)
+                }
+            }
+        }
     }
 
     fun removeHistoryEntry(entry: SearchHistoryEntry) {
@@ -834,6 +885,7 @@ class SearchViewModel(
         viewModelScope.launch {
             val siteId = resolveActiveSiteId(preferencesRepository.currentSettings().activeSiteId)
             searchHistoryRepository.clearSite(siteId)
+            searchHistoryRepository.clearSite(SiteId.GLOBAL)
         }
     }
 
@@ -951,8 +1003,9 @@ class SearchViewModel(
                 .filter { it in searchableIdSet }
                 .ifEmpty { searchableDescriptors.map { it.id } }
 
+            val historySiteId = if (mode == SearchMode.CROSS_SITE) SiteId.GLOBAL else activeSiteId
             if (trimmedQuery.isNotEmpty() && !settings.incognitoMode) {
-                searchHistoryRepository.recordSearch(activeSiteId, trimmedQuery, currentInput.scope)
+                searchHistoryRepository.recordSearch(historySiteId, trimmedQuery, currentInput.scope)
             }
 
             when (mode) {
@@ -1059,7 +1112,7 @@ class SearchViewModel(
         val query = inputState.value.submittedQuery.trim()
         if (query.isEmpty()) return
         val existing = crossSiteState.value.bucketsBySite[siteId] ?: return
-        if (!existing.hasMore || existing.isLoadingMore || existing.status != CrossSiteStatus.SUCCESS) return
+        if (!existing.hasMore || existing.isLoadingMore) return
         val plugin = siteRegistry.get(siteId) ?: return
         val searchSource = plugin.searchSource ?: return
         val requestedSort = crossSiteState.value.fetchedSort

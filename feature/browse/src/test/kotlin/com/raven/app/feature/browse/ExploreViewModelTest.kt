@@ -1,6 +1,8 @@
 package com.raven.app.feature.browse
 
 import app.cash.turbine.test
+import com.raven.app.core.model.AdvancedFilterField
+import com.raven.app.core.model.AdvancedSearchFilters
 import com.raven.app.core.model.ComicLanguage
 import com.raven.app.core.model.FeedPage
 import com.raven.app.core.model.FeedSort
@@ -310,6 +312,122 @@ class ExploreViewModelTest {
                     listOf("top_rated", "popular", "latest"),
                     reordered.availableSections.map { it.id },
                 )
+                cancelAndIgnoreRemainingEvents()
+            }
+        }
+
+    @Test
+    fun `advanced and date filters persist, filter items, reset, and expose requested default section`() =
+        runTest(mainDispatcherRule.dispatcher) {
+            val harness = BrowseTestHarness(mainDispatcherRule.dispatcher)
+            val sections = listOf(
+                SiteSectionSpec(id = "latest", title = "最新更新", defaultSort = FeedSort.NEWEST),
+                SiteSectionSpec(id = "popular", title = "热门视频", defaultSort = FeedSort.VIEWS),
+            )
+            val plugin = FakeSitePlugin(
+                descriptor = SiteDescriptor(
+                    id = SiteId.R34V,
+                    displayName = "Rule34Video",
+                    shortName = "R34V",
+                    primaryKind = MediaKind.VIDEO,
+                    defaultHost = "rule34video.com",
+                    capabilities = setOf(
+                        SiteCapability.EXPLORE,
+                        SiteCapability.ADVANCED_SEARCH,
+                        SiteCapability.LANGUAGE_FILTER,
+                    ),
+                    sections = sections,
+                    supportedFilters = setOf(
+                        AdvancedFilterField.INCLUDE_TAGS,
+                        AdvancedFilterField.CATEGORY,
+                        AdvancedFilterField.PAGES,
+                    ),
+                ),
+                feedHandler = { req ->
+                    FeedPage(
+                        items = listOf(
+                            sampleMediaItem(
+                                SiteId.R34V,
+                                "old_${req.page}",
+                                MediaKind.VIDEO,
+                                dateLabel = "2024-06-01",
+                            ),
+                            sampleMediaItem(
+                                SiteId.R34V,
+                                "new_${req.page}",
+                                MediaKind.VIDEO,
+                                dateLabel = "2025-06-01",
+                            ),
+                        ),
+                        hasMore = false,
+                    )
+                },
+            )
+
+            val vm = ExploreViewModel(
+                siteRegistry = SiteRegistry(listOf(plugin)),
+                preferencesRepository = harness.preferencesRepository,
+                blockedTermsRepository = harness.blockedTermsRepository,
+                historyRepository = harness.historyRepository,
+                shelfRepository = harness.shelfRepository,
+                browsePositionRepository = harness.browsePositionRepository,
+                dispatchers = harness.dispatchers,
+            )
+
+            vm.uiState.test {
+                advanceUntilIdle()
+                val initial = expectMostRecentItem()
+                assertTrue(initial.supportsAdvancedFilters)
+                assertEquals("latest", initial.requestedSectionSpec?.id)
+                assertEquals("最新更新", initial.requestedSectionSpec?.title)
+                assertNull(initial.selectedSectionSpec)
+                assertEquals(setOf("old_1", "new_1"), initial.items.map { it.id }.toSet())
+
+                val filters = AdvancedSearchFilters(
+                    includeTags = listOf("full_color"),
+                    minPages = 20,
+                    publishedFrom = "2024-01-01",
+                    publishedTo = "2024-12-31",
+                )
+                vm.applyAdvancedFilters(filters, ComicLanguage.CHINESE)
+                advanceUntilIdle()
+                val advanced = expectMostRecentItem()
+                assertEquals(filters, advanced.filter.advancedFilters)
+                assertEquals(ComicLanguage.CHINESE, advanced.filter.language)
+                assertEquals(listOf("old_1"), advanced.items.map { it.id })
+                val persisted = harness.preferencesRepository.currentSettings().exploreFilterFor(SiteId.R34V)
+                assertEquals(filters, persisted.advancedFilters)
+                assertEquals(ComicLanguage.CHINESE, persisted.language)
+                assertEquals(filters, plugin.feedRequests.last().advancedFilters)
+
+                vm.setDateRange("2025-01-01", "2025-06-30")
+                advanceUntilIdle()
+                val dated = expectMostRecentItem()
+                assertEquals("2025-01-01", dated.filter.advancedFilters.publishedFrom)
+                assertEquals("2025-06-30", dated.filter.advancedFilters.publishedTo)
+                assertEquals(listOf("full_color"), dated.filter.advancedFilters.includeTags)
+                assertEquals(20, dated.filter.advancedFilters.minPages)
+                assertEquals(listOf("new_1"), dated.items.map { it.id })
+                val persistedDated = harness.preferencesRepository.currentSettings().exploreFilterFor(SiteId.R34V)
+                assertEquals("2025-01-01", persistedDated.advancedFilters.publishedFrom)
+
+                vm.selectSection(sections[1])
+                advanceUntilIdle()
+                assertEquals("popular", expectMostRecentItem().requestedSectionSpec?.id)
+                vm.selectSection(null)
+                advanceUntilIdle()
+                val backToDefault = expectMostRecentItem()
+                assertNull(backToDefault.selectedSectionSpec)
+                assertEquals("latest", backToDefault.requestedSectionSpec?.id)
+
+                vm.resetAdvancedFilters()
+                advanceUntilIdle()
+                val reset = expectMostRecentItem()
+                assertTrue(reset.filter.advancedFilters.isEmpty)
+                assertEquals(ComicLanguage.ALL, reset.filter.language)
+                assertEquals(setOf("old_1", "new_1"), reset.items.map { it.id }.toSet())
+                val persistedReset = harness.preferencesRepository.currentSettings().exploreFilterFor(SiteId.R34V)
+                assertTrue(persistedReset.advancedFilters.isEmpty)
                 cancelAndIgnoreRemainingEvents()
             }
         }

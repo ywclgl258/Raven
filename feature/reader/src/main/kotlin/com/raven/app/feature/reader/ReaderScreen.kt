@@ -6,7 +6,6 @@ import androidx.compose.animation.EnterTransition
 import androidx.compose.animation.ExitTransition
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.Animatable
-import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.snap
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.expandVertically
@@ -52,12 +51,10 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.outlined.SkipNext
 import androidx.compose.material.icons.outlined.SkipPrevious
-import androidx.compose.material.icons.filled.Bookmark
-import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.outlined.AutoStories
-import androidx.compose.material.icons.outlined.BookmarkBorder
 import androidx.compose.material.icons.outlined.Brightness6
-import androidx.compose.material.icons.outlined.FavoriteBorder
+import androidx.compose.material.icons.outlined.Info
+import androidx.compose.material.icons.outlined.List
 import androidx.compose.material.icons.outlined.GridView
 import androidx.compose.material.icons.outlined.Lock
 import androidx.compose.material.icons.outlined.Tune
@@ -121,7 +118,12 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.raven.app.core.designsystem.component.RavenContentCrossfade
 import com.raven.app.core.designsystem.component.RavenErrorState
 import com.raven.app.core.designsystem.component.RavenFormatters
+import com.raven.app.core.designsystem.component.RavenMorphIcon
+import com.raven.app.core.designsystem.component.RavenMorphToggleIcon
 import com.raven.app.core.designsystem.component.RavenTopBar
+import com.raven.app.core.designsystem.component.ravenBurstFeedback
+import com.raven.app.core.designsystem.motion.MorphSpringPreset
+import com.raven.app.core.designsystem.motion.RavenMorphIcons
 import com.raven.app.core.designsystem.theme.LocalMotionReduced
 import com.raven.app.core.designsystem.theme.LocalRavenColors
 import com.raven.app.core.designsystem.theme.LocalRavenFeedback
@@ -154,8 +156,8 @@ import kotlin.math.roundToInt
  * - Per-page aspect ratio preservation across mode switches & orientation changes
  * - Hardware volume-key paging (normal/reversed + long-press first/last jump)
  * - Corner [ReaderStatusBar], bottom scrubber w/ floating target page pill & 5 quick buttons
+ * - Previous/next chapter controls, sortable chapter picker, and direct work-detail navigation
  * - 85%-height Thumbnail Overview sheet, Bookmarks sheet, Single-screen Grouped Settings sheet
- * - 750ms debounced reading progress save + dispose/stop flush & Sequential Queue continuation card.
  */
 @Composable
 fun ReaderScreen(
@@ -484,7 +486,7 @@ fun ReaderScreen(
                     color = colors.crimson,
                 )
                 Text(
-                    text = "正在打开下一话…",
+                    text = "正在打开所选话…",
                     style = MaterialTheme.typography.labelLarge,
                     color = colors.inkPrimary,
                 )
@@ -549,16 +551,16 @@ fun ReaderScreen(
                 },
                 actions = {
                     if (uiState.detail != null) {
-                        val bookmarkScaleState = animateFloatAsState(
-                            targetValue = if (uiState.isCurrentPageBookmarked) 1.15f else 1.0f,
-                            animationSpec = if (motionReduced) snap() else RavenMotion.interactiveSpringSpec(),
-                            label = "readerBookmarkScale",
-                        )
-                        val bookmarkTint by animateColorAsState(
-                            targetValue = if (uiState.isCurrentPageBookmarked) colors.crimson else colors.inkPrimary,
-                            animationSpec = if (motionReduced) snap() else tween(durationMillis = 150),
-                            label = "readerBookmarkTint",
-                        )
+                        IconButton(
+                            onClick = navigator::navigateBack,
+                            modifier = Modifier.testTag(ReaderTestTags.READER_OPEN_DETAIL),
+                        ) {
+                            Icon(
+                                imageVector = Icons.Outlined.Info,
+                                contentDescription = "返回作品详情",
+                                tint = colors.inkPrimary,
+                            )
+                        }
                         IconButton(
                             onClick = {
                                 feedback.perform(
@@ -567,32 +569,18 @@ fun ReaderScreen(
                                 viewModel.toggleCurrentPageBookmark()
                             },
                         ) {
-                            Icon(
-                                imageVector = if (uiState.isCurrentPageBookmarked) {
-                                    Icons.Filled.Bookmark
-                                } else {
-                                    Icons.Outlined.BookmarkBorder
-                                },
+                            RavenMorphToggleIcon(
+                                active = uiState.isCurrentPageBookmarked,
+                                activeGlyph = RavenMorphIcons.BookmarkFilled,
+                                inactiveGlyph = RavenMorphIcons.BookmarkOutline,
+                                activeTint = colors.crimson,
+                                inactiveTint = colors.inkPrimary,
+                                size = 24.dp,
+                                springPreset = MorphSpringPreset.SNAPPY,
                                 contentDescription = if (uiState.isCurrentPageBookmarked) "取消书签" else "添加书签",
-                                tint = bookmarkTint,
-                                modifier = Modifier.graphicsLayer {
-                                    val s = bookmarkScaleState.value
-                                    scaleX = s
-                                    scaleY = s
-                                },
                             )
                         }
 
-                        val favScaleState = animateFloatAsState(
-                            targetValue = if (uiState.isCurrentPageImageFavorited) 1.15f else 1.0f,
-                            animationSpec = if (motionReduced) snap() else RavenMotion.interactiveSpringSpec(),
-                            label = "readerImageFavScale",
-                        )
-                        val favTint by animateColorAsState(
-                            targetValue = if (uiState.isCurrentPageImageFavorited) colors.crimson else colors.inkPrimary,
-                            animationSpec = if (motionReduced) snap() else tween(durationMillis = 150),
-                            label = "readerImageFavTint",
-                        )
                         IconButton(
                             onClick = {
                                 feedback.perform(
@@ -600,20 +588,17 @@ fun ReaderScreen(
                                 )
                                 viewModel.toggleCurrentPageImageFavorite()
                             },
+                            modifier = Modifier.ravenBurstFeedback(trigger = uiState.isCurrentPageImageFavorited),
                         ) {
-                            Icon(
-                                imageVector = if (uiState.isCurrentPageImageFavorited) {
-                                    Icons.Filled.Favorite
-                                } else {
-                                    Icons.Outlined.FavoriteBorder
-                                },
+                            RavenMorphToggleIcon(
+                                active = uiState.isCurrentPageImageFavorited,
+                                activeGlyph = RavenMorphIcons.HeartFilled,
+                                inactiveGlyph = RavenMorphIcons.HeartOutline,
+                                activeTint = colors.crimson,
+                                inactiveTint = colors.inkPrimary,
+                                size = 24.dp,
+                                springPreset = MorphSpringPreset.BOUNCY,
                                 contentDescription = if (uiState.isCurrentPageImageFavorited) "取消收藏单图" else "收藏单图",
-                                tint = favTint,
-                                modifier = Modifier.graphicsLayer {
-                                    val s = favScaleState.value
-                                    scaleX = s
-                                    scaleY = s
-                                },
                             )
                         }
                     }
@@ -743,6 +728,7 @@ fun ReaderScreen(
                     onOpenSettings = { viewModel.openSheet(ReaderSheet.SETTINGS) },
                     onPreviousChapter = viewModel::openPreviousChapter,
                     onNextChapter = viewModel::openNextChapter,
+                    onOpenChapters = { viewModel.openSheet(ReaderSheet.CHAPTERS) },
                 )
             }
         }
@@ -814,6 +800,15 @@ fun ReaderScreen(
                     )
                 },
                 onDeleteBookmark = viewModel::deletePageBookmark,
+                onDismiss = viewModel::dismissSheet,
+            )
+        }
+        ReaderSheet.CHAPTERS -> {
+            ReaderChaptersSheet(
+                uiState = uiState,
+                onSelectChapter = viewModel::openChapter,
+                onRefresh = viewModel::refreshChapters,
+                onOpenDetail = navigator::navigateBack,
                 onDismiss = viewModel::dismissSheet,
             )
         }
@@ -1262,6 +1257,7 @@ private fun ReaderBottomControlBar(
     onOpenSettings: () -> Unit,
     onPreviousChapter: () -> Unit,
     onNextChapter: () -> Unit,
+    onOpenChapters: () -> Unit,
 ) {
     val colors = LocalRavenColors.current
     val reduceTransparency = LocalReduceTransparency.current
@@ -1346,6 +1342,20 @@ private fun ReaderBottomControlBar(
                                 .testTag("reader_previous_chapter"),
                         )
                         ReaderChapterButton(
+                            icon = Icons.Outlined.List,
+                            label = "选话",
+                            subtitle = if (uiState.chapters.isNotEmpty()) {
+                                "共 ${uiState.chapters.size} 话"
+                            } else {
+                                "查看全部章节"
+                            },
+                            enabled = !uiState.isChapterTransitionLoading,
+                            onClick = onOpenChapters,
+                            modifier = Modifier
+                                .weight(1f)
+                                .testTag(ReaderTestTags.READER_CHAPTER_PICKER),
+                        )
+                        ReaderChapterButton(
                             icon = Icons.Outlined.SkipNext,
                             label = "下一话",
                             subtitle = uiState.nextChapter?.title
@@ -1417,13 +1427,25 @@ private fun ReaderBottomControlBar(
                         onClick = onOpenThumbnails,
                         modifier = Modifier.weight(1f),
                     )
+                    val bookmarkLabel = if (uiState.pageBookmarks.isNotEmpty()) "书签(${uiState.pageBookmarks.size})" else "书签"
                     ReaderQuickBarButton(
-                        icon = if (uiState.pageBookmarks.isNotEmpty()) Icons.Filled.Bookmark else Icons.Outlined.BookmarkBorder,
-                        label = if (uiState.pageBookmarks.isNotEmpty()) "书签(${uiState.pageBookmarks.size})" else "书签",
+                        label = bookmarkLabel,
                         active = uiState.activeSheet == ReaderSheet.BOOKMARKS || uiState.isCurrentPageBookmarked,
                         onClick = onOpenBookmarks,
                         modifier = Modifier.weight(1f),
-                    )
+                    ) { tint ->
+                        RavenMorphIcon(
+                            glyph = if (uiState.pageBookmarks.isNotEmpty()) {
+                                RavenMorphIcons.BookmarkFilled
+                            } else {
+                                RavenMorphIcons.BookmarkOutline
+                            },
+                            contentDescription = bookmarkLabel,
+                            tint = tint,
+                            size = 20.dp,
+                            springPreset = MorphSpringPreset.SNAPPY,
+                        )
+                    }
                     ReaderQuickBarButton(
                         icon = Icons.Outlined.AutoStories,
                         label = readerModeLabel(uiState.preferences.mode),
@@ -1503,6 +1525,29 @@ private fun ReaderQuickBarButton(
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    ReaderQuickBarButton(
+        label = label,
+        active = active,
+        onClick = onClick,
+        modifier = modifier,
+    ) { tint ->
+        Icon(
+            imageVector = icon,
+            contentDescription = label,
+            tint = tint,
+            modifier = Modifier.size(20.dp),
+        )
+    }
+}
+
+@Composable
+private fun ReaderQuickBarButton(
+    label: String,
+    active: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    iconContent: @Composable (tint: Color) -> Unit,
+) {
     val colors = LocalRavenColors.current
     val motionReduced = LocalMotionReduced.current
     val feedback = LocalRavenFeedback.current
@@ -1536,12 +1581,7 @@ private fun ReaderQuickBarButton(
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(3.dp),
     ) {
-        Icon(
-            imageVector = icon,
-            contentDescription = label,
-            tint = tint,
-            modifier = Modifier.size(20.dp),
-        )
+        iconContent(tint)
         Text(
             text = label,
             style = MaterialTheme.typography.labelSmall.tabular(),

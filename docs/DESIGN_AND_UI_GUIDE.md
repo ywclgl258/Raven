@@ -18,13 +18,13 @@
 
 ### 1.2 自适应启动图标矢量规范
 
-Raven 的启动图标采用 **02 绯红疾翼** 设计体系（源稿与 Play 商店图标位于 `docs/icon-concepts/02-crimson-wing-android/`），由 `adaptive-background.svg`、`adaptive-foreground.svg`、`adaptive-monochrome.svg` 转换为 Android VectorDrawable，配置在 `app/src/main/res/mipmap-anydpi-v26/ic_launcher.xml`（及 `ic_launcher_round.xml`），同时附带 `mdpi`–`xxxhdpi`（48–192px）传统圆角方形及圆形 PNG 兼容 API 24–25：
+Raven 的启动图标采用 **01 高马尾头像** 设计体系（源稿与 Play 商店图标位于 `docs/icon-concepts/01-raven-portrait-android/`），自适应图标入口配置在 `app/src/main/res/mipmap-anydpi-v26/ic_launcher.xml`（及 `ic_launcher_round.xml`），同时附带 `mdpi`–`xxxhdpi`（48×48px–192×192px）传统圆角方形（`ic_launcher.png`）及圆形（`ic_launcher_round.png`）PNG 兼容 API 24–25：
 
 | 图层 | 文件路径 | 画布与安全区参数 | 视觉定义 |
 |---|---|---|---|
-| **背景层** | `app/src/main/res/drawable/ic_launcher_background.xml` | `108dp × 108dp`（`viewport 1254×1254`） | 纯黑曜石 `#09090B` 背景铺满画布 |
-| **前景层** | `app/src/main/res/drawable/ic_launcher_foreground.xml` | `108dp × 108dp`（`viewport 1254×1254`） | 绯红疾翼渡鸦剪影（**Raven Crimson `#FF4D58`**），居中对齐 Android 自适应图标安全区，保证圆形/圆角矩形/水滴等系统遮罩完整展示 |
-| **单色层** | `app/src/main/res/drawable/ic_launcher_monochrome.xml` | `108dp × 108dp`（`viewport 1254×1254`） | 纯白 `#FFFFFF` 同轮廓剪影，适配 Android 13+ 系统主题图标着色 |
+| **背景层** | `app/src/main/res/drawable/ic_launcher_background.xml` | `108dp × 108dp`（`viewport 108×108`） | 纯黑曜石 `#09090B` 背景铺满画布 |
+| **前景层** | `app/src/main/res/drawable/ic_launcher_foreground.xml`（包裹 `app/src/main/res/drawable-xxxhdpi/raven_portrait_foreground.png`） | `108dp × 108dp` 位图包装（源图 `432×432px` 透明 PNG，主体占 `66dp × 66dp` 安全区） | 保留原画黑发、豆豆眼与 **Raven Crimson `#FF4D58`** 绯红羽饰的高马尾头像，通过 `<bitmap android:gravity="fill" android:filter="true" />` 居中对齐安全区 |
+| **单色层** | `app/src/main/res/drawable/ic_launcher_monochrome.xml` | `108dp × 108dp`（`viewport 108×108`） | 纯白 `#FFFFFF` `evenOdd` 镂空轮廓剪影（保留羽饰、豆豆眼与笑脸），适配 Android 13+ 系统主题图标着色 |
 
 ### 1.3 三大视觉原则：**Dark Obsidian × Apple HIG Precision × Netflix Cinema**
 
@@ -39,7 +39,8 @@ Raven 的启动图标采用 **02 绯红疾翼** 设计体系（源稿与 Play �
    - 交互元素附带物理弹簧按压微缩（默认 `scale = 0.968f`），并原生兼容系统减弱动效与降低透明度开关。
 3. **Netflix Cinema（流媒体影院氛围）**
    - **视频站点首页（`MediaKind.VIDEO`）**：全出血 Hero Banner 轮播（`430dp`）+ 顶部状态栏暗角与受限环境光（`alpha <= 0.18f`）+ 底部多段渐隐融黑 + 纯白高对比主 CTA「播放」与毛玻璃次 CTA「+ 稍后看」+「继续观看」横向货架（`2.5dp` 绯红底条）+ Top 10 超大排行货架 + 分类横向片单。
-   - **漫画 / 写真站点首页（`MediaKind.COMIC` / `MediaKind.PHOTO`）**：无边框原生宽高比瀑布流 `LazyVerticalStaggeredGrid`（按宽度自动 `2–6` 列）+ 置顶紧凑续读卡 + 随滚动自动收起的单行语言筛选栏（`RavenLanguageBar`）。
+   - **漫画 / 写真站点首页（`MediaKind.COMIC` / `MediaKind.PHOTO`）**：无边框原生宽高比瀑布流 `LazyVerticalStaggeredGrid`（按宽度自动 `2–6` 列）+ 置顶紧凑续读卡 + 多本未完成作品“继续阅读”横排 + 随滚动自动收起的单行语言筛选栏（`RavenLanguageBar`）。
+   - **资料库统一呈现**：订阅更新、下载与收藏默认瀑布流，并共用 `LibraryCollectionLayoutButton` 切换为列表；标签与作者长按打开操作 Sheet（复制、订阅、编辑译名、屏蔽、单站/跨站搜索），作品详情末尾展示相似推荐。
 
 ---
 
@@ -174,7 +175,7 @@ RavenTheme(reduceTransparency = appSettings.reduceTransparency) {
 | Composable / 符号 | 核心签名与默认参数 | 内置 `testTag` / 关键细节 |
 |---|---|---|
 | `RavenAdaptiveScaffold` | `(currentDestination: RavenTopDestination, onDestinationSelected, modifier, showNavigation = true, badges: Map<RavenTopDestination, Int> = emptyMap(), content)` | `raven_adaptive_scaffold`；`< 600dp` 渲染 `NavigationBar`，`>= 600dp` 切换 `NavigationRail`；`showNavigation = false` 设为 `NavigationSuiteType.None`；自动补 `0.5dp Hairline` 分割线；徽标超过 99 显示 `99+` |
-| `RavenTopDestination` | 枚举 5 项：`HOME` (`首页`/`nav_home`)、`EXPLORE` (`发现`/`nav_explore`)、`SEARCH` (`搜索`/`nav_search`)、`LIBRARY` (`片库`/`nav_library`)、`PROFILE` (`我的`/`nav_profile`) | 每项携带 `route`、`selectedIcon`、`unselectedIcon`、`testTag` 及 `matchesRoute(current)` |
+| `RavenTopDestination` | 枚举 5 项：`HOME` (`首页`/`nav_home`)、`EXPLORE` (`发现`/`nav_explore`)、`SEARCH` (`搜索`/`nav_search`)、`LIBRARY` (`鸦巢`/`nav_library`)、`PROFILE` (`我的`/`nav_profile`) | 每项携带 `route`、`selectedIcon`、`unselectedIcon`、`testTag` 及 `matchesRoute(current)` |
 | `RavenTopBar` | `(modifier, title = null, subtitle = null, frosted = false, showBottomHairline = true, navigationIcon = null, titleContent = null, actions = {})` | 自带 `statusBarsPadding()` 与 `heightIn(min = 56.dp)`；`frosted = true` 自动包 `RavenFrostedBox`；标题带 `semantics { heading() }` |
 | `RavenSiteSwitcherPill` | 重载 1：`(site: SiteDescriptor, onClick, modifier, frosted = false)`<br>重载 2：`(shortName: String, mediaKind: MediaKind, onClick, modifier, frosted = false)` | `raven_site_switcher_pill`；强制 `>= 48dp` 触控区 + `ravenSpringPress`；按 `MediaKind` 区分指示点色（视频绯红/漫画柔白/写真次灰）与图标 |
 | `RavenBrandWordmark` | `(modifier, title = "RAVEN")` | 粗黑紧字距 `RAVEN.`（末尾绯红圆点） |
@@ -321,6 +322,7 @@ flowchart LR
 2. **`PlayerActivity`**（`app/src/main/kotlin/com/raven/app/PlayerActivity.kt`，`launchMode="singleTop"`、`supportsPictureInPicture="true"`、`resizeableActivity="true"`、`configChanges="screenSize|smallestScreenSize|screenLayout|orientation|keyboardHidden"`）：
    - 通过 `PlayerLaunchArgs` 传递轻量播放目标（播放队列仅传 UUID `queueToken` 指向 `PlaybackQueueStore`，避免 Android Binder Intent 超限）。
    - 点击相关视频或队列下一条时，通过 `onNewIntent` -> `playerViewModel.open(nextArgs)` 或 ViewModel 内部 **in-place** 原地切源并调用 `onActiveMediaChanged` 同步 Intent，**零 Activity 堆栈增长**。
+   - 播放队列通过统一 Sheet 展示完整条目，可原地选择/移除；自动连播默认关闭，仅在播放器前台以可取消倒计时推进，禁止后台轮询或重复切源。
    - **PiP 生命周期**：`onUserLeaveHint()` 在 `uiState.isPlaying == true` 且非主动跳出（`!suppressAutoPipOnce`）时自动调用 `enterPipMode`，宽高比由 `clampPipDimensions` 严格钳制在 **`0.42f .. 2.38f`**（避开 Android 系统 `1:2.39 ~ 2.39:1` 越界异常）。
    - 全屏切换按视频方向设置 `SCREEN_ORIENTATION_SENSOR_LANDSCAPE` / `SCREEN_ORIENTATION_SENSOR_PORTRAIT` 与 `BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE`；回跳标签/作者/图集/站点账号时置 `suppressAutoPipOnce = true` 并以 `FLAG_ACTIVITY_CLEAR_TOP or FLAG_ACTIVITY_SINGLE_TOP` 返回 `MainActivity` 后 `finish()`。
 
@@ -345,7 +347,7 @@ flowchart LR
 | | 8 | `SiteFunctions` | `siteId: String` | `SiteFunctionsScreen` (`:feature:browse`) | 否 |
 | **2 图集/阅读** | 9 | `GalleryDetail` | `siteId: String, mediaId: String, url: String` | `GalleryDetailScreen` (`:feature:reader`) | 否 |
 | | 10 | `Reader` | `siteId: String, mediaId: String, url: String, startPage: Int = 1, offlineOnly: Boolean = false, queueToken: String? = null` | `ReaderScreen` (`:feature:reader`) | 否（连读下一本时 `popUpTo<Reader>(inclusive = true)` 原地替换防栈堆积） |
-| **10 片库子页** | 11 | `Downloads` | `data class(siteId: String? = null, initialTab: String = "downloads")` | `DownloadsScreen` (`:feature:library`) | 否 |
+| **10 资料库子页** | 11 | `Downloads` | `data class(siteId: String? = null, initialTab: String = "downloads")` | `DownloadsScreen` (`:feature:library`) | 否 |
 | | 12 | `ShelfDetail` | `shelfId: String` | `ShelfDetailScreen` (`:feature:library`) | 否 |
 | | 13 | `SmartShelfDetail` | `smartShelfId: String` | `SmartShelfDetailScreen` (`:feature:library`) | 否 |
 | | 14 | `Favorites` | `data class(siteId: String? = null)` | `FavoritesScreen` (`:feature:library`) | 否 |
@@ -403,7 +405,7 @@ Raven 严禁 Feature 模块互相依赖，也严禁向 Feature Screen 传递 `Na
 - **命名风格**：全小写蛇形 `snake_case`，按 `<模块或组件前缀>_<语义角色>[_<动态id>]` 组织；复杂模块（如播放器、阅读器）集中收敛到 `object *TestTags` 常量类，避免测试与 UI 漂移。
 - **核心已锁定 `testTag` 索引**（部分已由 `app/src/androidTest/kotlin/com/raven/app/RavenSmokeAndroidTest.kt` 强断言，**修改需同步更新测试**）：
   - **导航壳与公共组件**：`raven_adaptive_scaffold`、`nav_home` / `nav_explore` / `nav_search` / `nav_library` / `nav_profile`、`raven_site_switcher_pill`、`raven_hero_banner`、`hero_play_cta`、`hero_watch_later_cta`、`raven_language_bar`、`lang_pill_<lang>`、`raven_search_field`、`raven_search_clear`、`raven_bottom_sheet`、`raven_visual_hud`、`raven_empty_state`、`raven_error_state`、`raven_error_retry`、`raven_loading_skeleton`、`raven_image_ready` / `raven_image_error`。
-  - **浏览 / 片库 / 设置核心屏幕**：`browse_home_screen`、`browse_explore_screen`、`browse_search_screen`、`site_switcher_sheet`、`site_switcher_content`、`site_tile_<siteId>`、`library_hub_screen`、`profile_screen`、`profile_settings_button`、`settings_screen`、`settings_list`、`settings_reduce_transparency`、`settings_backup_restore_row`、`settings_back_button`、`site_auth_activity_root`。
+  - **浏览 / 资料库 / 设置核心屏幕**：`browse_home_screen`、`browse_explore_screen`、`browse_search_screen`、`site_switcher_sheet`、`site_switcher_content`、`site_tile_<siteId>`、`library_hub_screen`、`profile_screen`、`profile_settings_button`、`settings_screen`、`settings_list`、`settings_reduce_transparency`、`settings_backup_restore_row`、`settings_back_button`、`site_auth_activity_root`。
   - **集中常量对象**：
     - `PlayerTestTags`（`feature/player/.../PlayerContracts.kt`）：36 个稳定常量（`player_screen`、`player_surface`、`player_gesture_layer`、`player_scrubber`、`player_*_sheet` 等）。
-    - `ReaderTestTags`（`feature/reader/.../ReaderTestTags.kt`）：20 个稳定常量（`gallery_detail_screen`、`reader_screen`、`reader_top_bar`、`reader_*_sheet` 等）。
+    - `ReaderTestTags`（`feature/reader/.../ReaderTestTags.kt`）：23 个稳定常量（`gallery_detail_screen`、`reader_screen`、`reader_top_bar`、`reader_chapter_picker`、`reader_open_detail`、`reader_*_sheet` 等）。

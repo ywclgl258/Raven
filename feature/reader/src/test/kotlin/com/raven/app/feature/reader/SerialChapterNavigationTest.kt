@@ -111,6 +111,64 @@ class SerialChapterNavigationTest {
     }
 
     @Test
+    fun `chapter picker exposes all chapters and opens the selected chapter`() = runTest(mainDispatcherRule.dispatcher) {
+        val harness = ReaderTestHarness(mainDispatcherRule.dispatcher, tempFolder.newFolder())
+        val chapters = chapters()
+        val viewModel = reader(
+            harness = harness,
+            detail = serialDetail(chapters[1], pageCount = 2),
+            persistenceScope = backgroundScope,
+            chapterLoader = SerialChapterLoader { _, _ -> chapters },
+        )
+        advanceUntilIdle()
+
+        assertEquals(chapters, viewModel.uiState.value.chapters)
+        viewModel.openSheet(ReaderSheet.CHAPTERS)
+        viewModel.openChapter(chapters[1])
+        advanceUntilIdle()
+        assertEquals(ReaderSheet.NONE, viewModel.uiState.value.activeSheet)
+
+        viewModel.events.test {
+            viewModel.openSheet(ReaderSheet.CHAPTERS)
+            viewModel.openChapter(chapters[2])
+            advanceUntilIdle()
+
+            val event = awaitItem()
+            assertTrue(event is ReaderEvent.OpenChapter)
+            assertEquals(chapters[2], (event as ReaderEvent.OpenChapter).nextItem)
+            assertEquals(ReaderSheet.NONE, viewModel.uiState.value.activeSheet)
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    @Test
+    fun `failed chapter list can be retried from the picker`() = runTest(mainDispatcherRule.dispatcher) {
+        val harness = ReaderTestHarness(mainDispatcherRule.dispatcher, tempFolder.newFolder())
+        val chapters = chapters()
+        var attempts = 0
+        val viewModel = reader(
+            harness = harness,
+            detail = serialDetail(chapters.first(), pageCount = 2),
+            persistenceScope = backgroundScope,
+            chapterLoader = SerialChapterLoader { _, _ ->
+                if (attempts++ == 0) error("网络错误") else chapters
+            },
+        )
+        advanceUntilIdle()
+
+        assertEquals("网络错误", viewModel.uiState.value.chapterListError)
+        assertFalse(viewModel.uiState.value.isChapterListLoading)
+
+        viewModel.refreshChapters()
+        advanceUntilIdle()
+
+        assertEquals(chapters, viewModel.uiState.value.chapters)
+        assertTrue(viewModel.uiState.value.isChapterListReady)
+        assertNull(viewModel.uiState.value.chapterListError)
+        assertEquals(2, attempts)
+    }
+
+    @Test
     fun `strip end advances even when previous page is still the anchor`() = runTest(mainDispatcherRule.dispatcher) {
         val harness = ReaderTestHarness(mainDispatcherRule.dispatcher, tempFolder.newFolder())
         val chapters = chapters()

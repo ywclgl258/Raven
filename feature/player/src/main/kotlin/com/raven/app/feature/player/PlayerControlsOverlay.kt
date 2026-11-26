@@ -2,7 +2,6 @@ package com.raven.app.feature.player
 
 import android.graphics.Bitmap
 import android.os.Build
-import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.EnterTransition
 import androidx.compose.animation.ExitTransition
@@ -15,7 +14,6 @@ import androidx.compose.animation.scaleIn
 import androidx.compose.animation.scaleOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
-import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -42,20 +40,12 @@ import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.Bedtime
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.FastForward
-import androidx.compose.material.icons.rounded.Fullscreen
-import androidx.compose.material.icons.rounded.FullscreenExit
-import androidx.compose.material.icons.rounded.Lock
-import androidx.compose.material.icons.rounded.LockOpen
-import androidx.compose.material.icons.rounded.Pause
 import androidx.compose.material.icons.rounded.PictureInPictureAlt
-import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.Refresh
-import androidx.compose.material.icons.rounded.Replay
 import androidx.compose.material.icons.rounded.SkipNext
 import androidx.compose.material.icons.rounded.Tune
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -85,7 +75,12 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.raven.app.core.designsystem.component.RavenBloubLoadingIndicator
 import com.raven.app.core.designsystem.component.RavenFormatters
+import com.raven.app.core.designsystem.component.RavenMorphIcon
+import com.raven.app.core.designsystem.component.ravenSquashPress
+import com.raven.app.core.designsystem.motion.MorphSpringPreset
+import com.raven.app.core.designsystem.motion.RavenMorphIcons
 import com.raven.app.core.designsystem.theme.LocalMotionReduced
 import com.raven.app.core.designsystem.theme.LocalRavenColors
 import com.raven.app.core.designsystem.theme.LocalReduceTransparency
@@ -127,6 +122,8 @@ internal fun PlayerControlsOverlay(
     onOpenExternalPlayers: () -> Unit,
     onConfirmQueueNext: () -> Unit,
     onEndQueue: () -> Unit,
+    onOpenQueue: () -> Unit,
+    onCancelAutoContinue: () -> Unit,
     onDismissNotice: () -> Unit,
     modifier: Modifier = Modifier,
     progressStateFlow: StateFlow<PlayerProgressSnapshot>? = null,
@@ -152,7 +149,7 @@ internal fun PlayerControlsOverlay(
                     reduceTransparency = reduceTransparency,
                     borderColor = colors.rimHighlight,
                     modifier = Modifier
-                        .ravenSpringPress()
+                        .ravenSquashPress()
                         .clickable(role = Role.Button, onClick = onToggleLock)
                         .testTag(PlayerTestTags.PLAYER_UNLOCK_PILL),
                 ) {
@@ -163,11 +160,12 @@ internal fun PlayerControlsOverlay(
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(6.dp),
                     ) {
-                        Icon(
-                            imageVector = Icons.Rounded.Lock,
+                        RavenMorphIcon(
+                            glyph = if (uiState.isLocked) RavenMorphIcons.LockClosed else RavenMorphIcons.LockOpen,
                             contentDescription = "解锁画面",
                             tint = colors.crimson,
-                            modifier = Modifier.size(18.dp),
+                            size = 18.dp,
+                            springPreset = MorphSpringPreset.SNAPPY,
                         )
                         Text(
                             text = "解锁画面",
@@ -235,37 +233,21 @@ internal fun PlayerControlsOverlay(
                 contentAlignment = Alignment.Center,
                 modifier = Modifier
                     .size(58.dp)
-                    .ravenSpringPress()
+                    .ravenSquashPress()
                     .clickable(role = Role.Button, onClick = onTogglePlayPause),
             ) {
-                val playStateKey = when {
-                    uiState.isEnded -> 2
-                    uiState.isPlaying -> 1
-                    else -> 0
-                }
-                AnimatedContent(
-                    targetState = playStateKey,
-                    transitionSpec = {
-                        if (motionReduced) {
-                            fadeIn(snap()) togetherWith fadeOut(snap())
-                        } else {
-                            (fadeIn(tween(130)) + scaleIn(initialScale = 0.78f))
-                                .togetherWith(fadeOut(tween(90)) + scaleOut(targetScale = 0.78f))
-                        }
+                RavenMorphIcon(
+                    glyph = when {
+                        uiState.isEnded -> RavenMorphIcons.Replay
+                        uiState.isPlaying -> RavenMorphIcons.Pause
+                        else -> RavenMorphIcons.Play
                     },
-                    label = "playerCenterPlayIcon",
-                ) { state ->
-                    Icon(
-                        imageVector = when (state) {
-                            2 -> Icons.Rounded.Replay
-                            1 -> Icons.Rounded.Pause
-                            else -> Icons.Rounded.PlayArrow
-                        },
-                        contentDescription = if (state == 1) "暂停" else "播放",
-                        tint = colors.inkPrimary,
-                        modifier = Modifier.size(30.dp),
-                    )
-                }
+                    contentDescription = if (uiState.isPlaying && !uiState.isEnded) "暂停" else "播放",
+                    tint = colors.inkPrimary,
+                    size = 30.dp,
+                    strokeWidth = 2.2.dp,
+                    springPreset = MorphSpringPreset.SNAPPY,
+                )
             }
         }
 
@@ -406,10 +388,9 @@ internal fun PlayerControlsOverlay(
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                CircularProgressIndicator(
-                    color = colors.crimson,
-                    strokeWidth = 3.dp,
-                    modifier = Modifier.size(36.dp),
+                RavenBloubLoadingIndicator(
+                    size = 36.dp,
+                    accentColor = colors.crimson,
                 )
                 val recoveryText = when {
                     uiState.isRefreshingExpiredStream -> "正在刷新播放地址…"
@@ -459,6 +440,8 @@ internal fun PlayerControlsOverlay(
                     queue = queue,
                     onConfirmNext = onConfirmQueueNext,
                     onEndQueue = onEndQueue,
+                    onOpenQueue = onOpenQueue,
+                    onCancelAutoContinue = onCancelAutoContinue,
                 )
             }
         }
@@ -496,7 +479,10 @@ private fun PlayerTopBar(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(4.dp),
     ) {
-        IconButton(onClick = onBackClick) {
+        IconButton(
+            onClick = onBackClick,
+            modifier = Modifier.ravenSquashPress(),
+        ) {
             Icon(
                 imageVector = Icons.AutoMirrored.Rounded.ArrowBack,
                 contentDescription = "返回",
@@ -538,20 +524,25 @@ private fun PlayerTopBar(
 
         IconButton(
             onClick = onToggleLock,
-            modifier = Modifier.testTag(PlayerTestTags.PLAYER_LOCK_BUTTON),
+            modifier = Modifier
+                .ravenSquashPress()
+                .testTag(PlayerTestTags.PLAYER_LOCK_BUTTON),
         ) {
-            Icon(
-                imageVector = Icons.Rounded.LockOpen,
+            RavenMorphIcon(
+                glyph = if (uiState.isLocked) RavenMorphIcons.LockClosed else RavenMorphIcons.LockOpen,
                 contentDescription = "锁屏",
                 tint = colors.inkPrimary,
-                modifier = Modifier.size(20.dp),
+                size = 20.dp,
+                springPreset = MorphSpringPreset.SNAPPY,
             )
         }
 
         if (supportsPip) {
             IconButton(
                 onClick = onRequestPip,
-                modifier = Modifier.testTag(PlayerTestTags.PLAYER_PIP_BUTTON),
+                modifier = Modifier
+                    .ravenSquashPress()
+                    .testTag(PlayerTestTags.PLAYER_PIP_BUTTON),
             ) {
                 Icon(
                     imageVector = Icons.Rounded.PictureInPictureAlt,
@@ -564,7 +555,9 @@ private fun PlayerTopBar(
 
         IconButton(
             onClick = onOpenSettingsSheet,
-            modifier = Modifier.testTag(PlayerTestTags.PLAYER_MORE_BUTTON),
+            modifier = Modifier
+                .ravenSquashPress()
+                .testTag(PlayerTestTags.PLAYER_MORE_BUTTON),
         ) {
             Icon(
                 imageVector = Icons.Rounded.Tune,
@@ -666,17 +659,20 @@ private fun PlayerBottomBar(
         ) {
             IconButton(
                 onClick = onTogglePlayPause,
-                modifier = Modifier.testTag(PlayerTestTags.PLAYER_PLAY_PAUSE),
+                modifier = Modifier
+                    .ravenSquashPress()
+                    .testTag(PlayerTestTags.PLAYER_PLAY_PAUSE),
             ) {
-                Icon(
-                    imageVector = when {
-                        uiState.isEnded -> Icons.Rounded.Replay
-                        uiState.isPlaying -> Icons.Rounded.Pause
-                        else -> Icons.Rounded.PlayArrow
+                RavenMorphIcon(
+                    glyph = when {
+                        uiState.isEnded -> RavenMorphIcons.Replay
+                        uiState.isPlaying -> RavenMorphIcons.Pause
+                        else -> RavenMorphIcons.Play
                     },
-                    contentDescription = if (uiState.isPlaying) "暂停" else "播放",
+                    contentDescription = if (uiState.isPlaying && !uiState.isEnded) "暂停" else "播放",
                     tint = colors.inkPrimary,
-                    modifier = Modifier.size(24.dp),
+                    size = 24.dp,
+                    springPreset = MorphSpringPreset.SNAPPY,
                 )
             }
 
@@ -724,17 +720,20 @@ private fun PlayerBottomBar(
 
             IconButton(
                 onClick = onToggleFullscreen,
-                modifier = Modifier.testTag(PlayerTestTags.PLAYER_FULLSCREEN_BUTTON),
+                modifier = Modifier
+                    .ravenSquashPress()
+                    .testTag(PlayerTestTags.PLAYER_FULLSCREEN_BUTTON),
             ) {
-                Icon(
-                    imageVector = if (uiState.isFullscreen) {
-                        Icons.Rounded.FullscreenExit
+                RavenMorphIcon(
+                    glyph = if (uiState.isFullscreen) {
+                        RavenMorphIcons.FullscreenExit
                     } else {
-                        Icons.Rounded.Fullscreen
+                        RavenMorphIcons.FullscreenEnter
                     },
                     contentDescription = if (uiState.isFullscreen) "退出全屏" else "全屏",
                     tint = colors.inkPrimary,
-                    modifier = Modifier.size(24.dp),
+                    size = 24.dp,
+                    springPreset = MorphSpringPreset.SNAPPY,
                 )
             }
         }
@@ -1065,6 +1064,8 @@ private fun PlayerQueueEndedOverlay(
     queue: PlayerQueueUiState,
     onConfirmNext: () -> Unit,
     onEndQueue: () -> Unit,
+    onOpenQueue: () -> Unit,
+    onCancelAutoContinue: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val colors = LocalRavenColors.current
@@ -1113,12 +1114,16 @@ private fun PlayerQueueEndedOverlay(
                     )
                     Spacer(modifier = Modifier.width(4.dp))
                     Text(
-                        text = "立即播放",
+                        text = if (queue.autoContinueCountdownActive) {
+                            "立即播放 (${queue.autoContinueRemainingSeconds}s)"
+                        } else {
+                            "立即播放"
+                        },
                         style = MaterialTheme.typography.labelLarge,
                     )
                 }
                 OutlinedButton(
-                    onClick = onEndQueue,
+                    onClick = if (queue.autoContinueCountdownActive) onCancelAutoContinue else onEndQueue,
                     shape = RavenShapes.PillShape,
                     contentPadding = PaddingValues(horizontal = 14.dp, vertical = 10.dp),
                     colors = ButtonDefaults.outlinedButtonColors(
@@ -1133,10 +1138,24 @@ private fun PlayerQueueEndedOverlay(
                     )
                     Spacer(modifier = Modifier.width(4.dp))
                     Text(
-                        text = "结束队列",
+                        text = if (queue.autoContinueCountdownActive) "取消连播" else "结束队列",
                         style = MaterialTheme.typography.labelMedium,
                     )
                 }
+            }
+            OutlinedButton(
+                onClick = onOpenQueue,
+                shape = RavenShapes.PillShape,
+                colors = ButtonDefaults.outlinedButtonColors(
+                    containerColor = colors.surface2,
+                    contentColor = colors.inkPrimary,
+                ),
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Text(
+                    text = "播放队列 · ${queue.currentIndex + 1}/${queue.totalCount} · 剩余 ${queue.remainingCount} 项",
+                    style = MaterialTheme.typography.labelMedium,
+                )
             }
         }
     }

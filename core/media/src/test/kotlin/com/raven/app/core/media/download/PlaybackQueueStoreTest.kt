@@ -142,4 +142,63 @@ class PlaybackQueueStoreTest {
         advanceUntilIdle()
         assertFalse(queueFile.exists())
     }
+
+    @Test
+    fun `queue store selects arbitrary history and upcoming indexes safely`() {
+        val store = PlaybackQueueStore(tokenGenerator = { "select-token" })
+        val items = listOf(sampleItem("1"), sampleItem("2"), sampleItem("3"))
+        val started = store.start("Queue", "shelf", items)
+
+        assertEquals(started, store.select("select-token", SiteId.R34V, "1", 0))
+        assertNull(store.select("wrong", SiteId.R34V, "1", 2))
+        assertNull(store.select("select-token", SiteId.R34V, "2", 2))
+        assertNull(store.select("select-token", SiteId.R34V, "1", -1))
+        assertNull(store.select("select-token", SiteId.R34V, "1", items.size))
+        assertEquals(0, store.snapshot()?.currentIndex)
+
+        val upcoming = store.select("select-token", SiteId.R34V, "1", 2)
+        assertEquals(2, upcoming?.currentIndex)
+        assertEquals("3", upcoming?.currentItem?.id)
+        assertEquals(0, upcoming?.remainingCount)
+
+        val history = store.select("select-token", SiteId.R34V, "3", 0)
+        assertEquals(0, history?.currentIndex)
+        assertEquals("1", history?.currentItem?.id)
+        assertEquals("2", history?.nextItem?.id)
+    }
+
+    @Test
+    fun `queue store removal preserves current item or explicitly selects a replacement`() {
+        val store = PlaybackQueueStore(tokenGenerator = { "remove-token" })
+        store.start("Queue", "shelf", listOf(sampleItem("1"), sampleItem("2"), sampleItem("3"), sampleItem("4")))
+        store.advance("remove-token", SiteId.R34V, "1")
+        store.advance("remove-token", SiteId.R34V, "2")
+
+        val beforeCurrent = store.removeAt("remove-token", 0)
+        assertEquals(listOf("2", "3", "4"), beforeCurrent?.items?.map { it.id })
+        assertEquals(1, beforeCurrent?.currentIndex)
+        assertEquals("3", beforeCurrent?.currentItem?.id)
+
+        val afterCurrent = store.removeAt("remove-token", 2)
+        assertEquals(listOf("2", "3"), afterCurrent?.items?.map { it.id })
+        assertEquals(1, afterCurrent?.currentIndex)
+        assertEquals("3", afterCurrent?.currentItem?.id)
+
+        val lastCurrent = store.removeAt("remove-token", 1)
+        assertEquals(listOf("2"), lastCurrent?.items?.map { it.id })
+        assertEquals(0, lastCurrent?.currentIndex)
+        assertEquals("2", lastCurrent?.currentItem?.id)
+
+        assertNull(store.removeAt("remove-token", 0))
+        assertNull(store.snapshot())
+
+        val nextStore = PlaybackQueueStore(tokenGenerator = { "next-token" })
+        nextStore.start("Queue", "shelf", listOf(sampleItem("1"), sampleItem("2"), sampleItem("3")))
+        val nextCurrent = nextStore.removeAt("next-token", 0)
+        assertEquals(listOf("2", "3"), nextCurrent?.items?.map { it.id })
+        assertEquals(0, nextCurrent?.currentIndex)
+        assertEquals("2", nextCurrent?.currentItem?.id)
+        assertNull(nextStore.removeAt("next-token", 99))
+        assertEquals(nextCurrent, nextStore.snapshot())
+    }
 }

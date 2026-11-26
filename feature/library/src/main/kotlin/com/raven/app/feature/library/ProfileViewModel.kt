@@ -4,11 +4,13 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.raven.app.core.common.AppDispatchers
 import com.raven.app.core.database.domain.CompletionPolicy
+import com.raven.app.core.database.repository.BookmarkRepository
 import com.raven.app.core.database.repository.FavoriteRepository
 import com.raven.app.core.database.repository.HistoryRepository
 import com.raven.app.core.database.repository.PreferencesRepository
 import com.raven.app.core.database.repository.ShelfRepository
 import com.raven.app.core.database.repository.SubscriptionRepository
+import com.raven.app.core.media.storage.LocalLibraryImporter
 import com.raven.app.core.model.DownloadStatus
 import com.raven.app.core.model.MediaItem
 import com.raven.app.core.model.MediaKind
@@ -18,7 +20,10 @@ import com.raven.app.core.model.Shelf
 import com.raven.app.core.model.ShelfItem
 import com.raven.app.core.model.SiteDescriptor
 import com.raven.app.core.model.SiteId
+import com.raven.app.core.model.SmartShelf
+import com.raven.app.core.model.SmartShelfRule
 import com.raven.app.core.model.WatchProgress
+import com.raven.app.core.sitespi.AuthMode
 import com.raven.app.core.sitespi.SiteRegistry
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -76,21 +81,47 @@ data class ProfileHeroItem(
 }
 
 data class ProfileUiState(
+    val isLoading: Boolean = false,
     val selectedFilter: LibraryMediaFilter = LibraryMediaFilter.ALL,
     val activeSite: SiteDescriptor? = null,
+    val activeSiteSupportsAccount: Boolean = false,
     val heroItem: ProfileHeroItem? = null,
     val continueItems: List<ProfileContinueItem> = emptyList(),
     val watchLaterItems: List<ShelfItem> = emptyList(),
     val savedSearches: List<SavedSearch> = emptyList(),
+    val unfinishedSmartShelfId: String? = null,
     val unreadInboxCount: Int = 0,
     val activeDownloadCount: Int = 0,
     val completedDownloadCount: Int = 0,
+    val pausedDownloadCount: Int = 0,
+    val attentionDownloadCount: Int = 0,
+    val totalDownloadCount: Int = 0,
     val totalHistoryCount: Int = 0,
     val totalFavoriteCount: Int = 0,
+    val imageFavoriteCount: Int = 0,
+    val tagSubscriptionCount: Int = 0,
+    val localContentCount: Int = 0,
     val siteLabels: Map<SiteId, String> = emptyMap(),
 ) {
     val hasAnyContent: Boolean
         get() = heroItem != null || continueItems.isNotEmpty() || watchLaterItems.isNotEmpty() || savedSearches.isNotEmpty()
+
+    /**
+     * Surfaces attention states first (failed/cancelled), then paused, active transfer, and completed
+     * so the hub never hides a failed or stalled download behind a green completion count.
+     */
+    val downloadSummary: String
+        get() {
+            val segments = buildList {
+                if (attentionDownloadCount > 0) add("$attentionDownloadCount 项需处理")
+                if (pausedDownloadCount > 0) add("$pausedDownloadCount 项已暂停")
+                if (activeDownloadCount > 0) add("$activeDownloadCount 项进行中")
+                if (completedDownloadCount > 0) add("$completedDownloadCount 项已完成")
+            }
+            return segments.joinToString(" · ").ifEmpty {
+                if (totalDownloadCount > 0) "$totalDownloadCount 项" else "暂无下载"
+            }
+        }
 }
 
 private data class ProfileActivitySnapshot(
@@ -104,7 +135,17 @@ private data class ProfileStatsSnapshot(
     val unreadInboxCount: Int,
     val activeDownloadCount: Int,
     val completedDownloadCount: Int,
+    val pausedDownloadCount: Int,
+    val attentionDownloadCount: Int,
+    val totalDownloadCount: Int,
     val favoriteCount: Int,
+)
+
+private data class ProfileContentSnapshot(
+    val tagSubscriptionCount: Int,
+    val imageFavoriteCount: Int,
+    val localContentCount: Int,
+    val unfinishedSmartShelfId: String?,
 )
 
 class ProfileViewModel(
@@ -112,6 +153,8 @@ class ProfileViewModel(
     private val shelfRepository: ShelfRepository,
     private val subscriptionRepository: SubscriptionRepository,
     private val favoriteRepository: FavoriteRepository,
+    private val bookmarkRepository: BookmarkRepository,
+    private val localLibraryImporter: LocalLibraryImporter,
     private val downloadGateway: LibraryDownloadGateway,
     private val preferencesRepository: PreferencesRepository,
     private val siteRegistry: SiteRegistry,
@@ -143,7 +186,29 @@ class ProfileViewModel(
             unreadInboxCount = unreadCount,
             activeDownloadCount = downloads.count { it.status.isActiveTransfer() },
             completedDownloadCount = downloads.count { it.status == DownloadStatus.COMPLETED },
+            pausedDownloadCount = downloads.count { it.status == DownloadStatus.PAUSED },
+            attentionDownloadCount = downloads.count { it.status.needsAttention() },
+            totalDownloadCount = downloads.size,
             favoriteCount = favorites.size,
+        )
+    }
+
+    private val contentFlow = combine(
+        subscriptionRepository.observeAllSubscriptions(),
+        bookmarkRepository.observeImageFavorites(),
+        localLibraryImporter.books,
+        shelfRepository.observeSmartShelves(),
+    ) { subscriptions, imageFavorites, localBooks, smartShelves ->
+        ProfileContentSnapshot(
+            tagSubscriptionCount = subscriptions.size,
+            imageFavoriteCount = imageFavorites.size,
+            localContentCount = localBooks.size,
+            unfinishedSmartShelfId = smartShelves
+                .asSequence()
+                .filter { it.rule == SmartShelfRule.UNFINISHED }
+                .sortedWith(compareByDescending<SmartShelf> { it.isPinned }.thenByDescending { it.createdAt })
+                .firstOrNull()
+                ?.id,
         )
     }
 
@@ -151,18 +216,20 @@ class ProfileViewModel(
         selectedFilter,
         activityFlow,
         statsFlow,
+        contentFlow,
         preferencesRepository.settings,
-    ) { filter, activity, stats, settings ->
+    ) { filter, activity, stats, content, settings ->
         buildUiState(
             filter = filter,
             activity = activity,
             stats = stats,
+            content = content,
             activeSiteId = settings.activeSiteId,
         )
     }.stateIn(
         scope = viewModelScope,
         started = SharingStarted.WhileSubscribed(5_000L),
-        initialValue = ProfileUiState(),
+        initialValue = ProfileUiState(isLoading = true),
     )
 
     fun selectFilter(filter: LibraryMediaFilter) {
@@ -185,6 +252,7 @@ class ProfileViewModel(
         filter: LibraryMediaFilter,
         activity: ProfileActivitySnapshot,
         stats: ProfileStatsSnapshot,
+        content: ProfileContentSnapshot,
         activeSiteId: SiteId,
     ): ProfileUiState {
         val kindFilter = filter.mediaKind
@@ -250,18 +318,31 @@ class ProfileViewModel(
             }
         }
 
+        val activePlugin = siteRegistry.get(activeSiteId)
+        val activeSiteSupportsAccount = activePlugin != null &&
+            (activePlugin.authProvider.mode != AuthMode.None || activePlugin.authProvider.requiresAuthGate)
+
         return ProfileUiState(
+            isLoading = false,
             selectedFilter = filter,
-            activeSite = siteRegistry.get(activeSiteId)?.descriptor,
+            activeSite = activePlugin?.descriptor,
+            activeSiteSupportsAccount = activeSiteSupportsAccount,
             heroItem = heroItem,
             continueItems = allContinue,
             watchLaterItems = filteredWatchLater,
             savedSearches = stats.savedSearches,
+            unfinishedSmartShelfId = content.unfinishedSmartShelfId,
             unreadInboxCount = stats.unreadInboxCount,
             activeDownloadCount = stats.activeDownloadCount,
             completedDownloadCount = stats.completedDownloadCount,
+            pausedDownloadCount = stats.pausedDownloadCount,
+            attentionDownloadCount = stats.attentionDownloadCount,
+            totalDownloadCount = stats.totalDownloadCount,
             totalHistoryCount = activity.watches.size + activity.readings.size,
             totalFavoriteCount = stats.favoriteCount,
+            imageFavoriteCount = content.imageFavoriteCount,
+            tagSubscriptionCount = content.tagSubscriptionCount,
+            localContentCount = content.localContentCount,
             siteLabels = siteLabels,
         )
     }

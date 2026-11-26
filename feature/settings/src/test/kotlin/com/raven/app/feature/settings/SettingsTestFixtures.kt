@@ -498,6 +498,8 @@ internal class FakeSearchHistoryDao : SearchHistoryDao {
     private val rows = MutableStateFlow<List<SearchHistoryEntity>>(emptyList())
     override fun observeBySite(siteId: String, limit: Int): Flow<List<SearchHistoryEntity>> =
         rows.map { list -> list.filter { it.siteId == siteId }.take(limit) }
+    override fun observeAll(limit: Int): Flow<List<SearchHistoryEntity>> =
+        rows.map { list -> list.take(limit) }
     override suspend fun getAll(): List<SearchHistoryEntity> = rows.value
     override suspend fun upsert(entity: SearchHistoryEntity) = upsertAll(listOf(entity))
     override suspend fun upsertAll(entities: List<SearchHistoryEntity>) {

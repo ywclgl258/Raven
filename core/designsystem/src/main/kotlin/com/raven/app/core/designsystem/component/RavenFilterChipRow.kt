@@ -6,6 +6,7 @@ import androidx.compose.animation.core.snap
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -33,6 +34,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.selected
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -43,7 +46,6 @@ import com.raven.app.core.designsystem.theme.RavenFeedbackEffect
 import com.raven.app.core.designsystem.theme.RavenMotion
 import com.raven.app.core.designsystem.theme.RavenShapes
 import com.raven.app.core.designsystem.theme.ravenInteractiveLight
-import com.raven.app.core.designsystem.theme.ravenSpringPress
 
 /**
  * Obsidian filter pill chip with HarmonyOS gravity spring response, pointer-origin interactive
@@ -57,6 +59,8 @@ fun RavenFilterChip(
     modifier: Modifier = Modifier,
     leadingIcon: ImageVector? = null,
     enabled: Boolean = true,
+    /** Optional long-press action; `null` preserves the original selectable-only behavior. */
+    onLongClick: (() -> Unit)? = null,
 ) {
     val colors = LocalRavenColors.current
     val motionReduced = LocalMotionReduced.current
@@ -109,24 +113,41 @@ fun RavenFilterChip(
         label = "ravenChipElevation",
     )
 
-    Box(
-        modifier = modifier
-            .minimumInteractiveComponentSize()
-            .defaultMinSize(minWidth = 48.dp, minHeight = 48.dp)
-            .ravenSpringPress(interactionSource = interactionSource, enabled = enabled)
-            .selectable(
-                selected = selected,
+    val longClickAction = onLongClick
+    val performClick = {
+        feedback.perform(
+            if (!selected) RavenFeedbackEffect.TAB_SWITCH else RavenFeedbackEffect.TAP,
+        )
+        onClick()
+    }
+    val clickModifier = if (longClickAction == null) {
+        Modifier.selectable(
+            selected = selected,
+            enabled = enabled,
+            interactionSource = interactionSource,
+            indication = null,
+            role = Role.Tab,
+            onClick = performClick,
+        )
+    } else {
+        Modifier
+            .combinedClickable(
                 enabled = enabled,
                 interactionSource = interactionSource,
                 indication = null,
                 role = Role.Tab,
-                onClick = {
-                    feedback.perform(
-                        if (!selected) RavenFeedbackEffect.TAB_SWITCH else RavenFeedbackEffect.TAP,
-                    )
-                    onClick()
-                },
-            ),
+                onLongClick = longClickAction,
+                onClick = performClick,
+            )
+            .semantics { this.selected = selected }
+    }
+    Box(
+        modifier = modifier
+            .minimumInteractiveComponentSize()
+            .defaultMinSize(minWidth = 48.dp, minHeight = 48.dp)
+            .ravenSquashPress(interactionSource = interactionSource, enabled = enabled)
+            .ravenBurstFeedback(trigger = selected, burstColor = colors.crimson, enabled = enabled)
+            .then(clickModifier),
         contentAlignment = Alignment.Center,
     ) {
         Row(

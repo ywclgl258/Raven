@@ -64,6 +64,7 @@ enum class ReaderSheet {
     NONE,
     THUMBNAILS,
     BOOKMARKS,
+    CHAPTERS,
     SETTINGS,
 }
 
@@ -117,7 +118,10 @@ data class ReaderUiState(
     val showQueueNextCard: Boolean = false,
     val previousChapter: MediaItem? = null,
     val nextChapter: MediaItem? = null,
+    val chapters: List<MediaItem> = emptyList(),
     val isChapterListReady: Boolean = false,
+    val isChapterListLoading: Boolean = false,
+    val chapterListError: String? = null,
     val isChapterTransitionLoading: Boolean = false,
     val isExporting: Boolean = false,
     val exportStatusText: String? = null,
@@ -453,7 +457,10 @@ class ReaderViewModel(
             it.copy(
                 previousChapter = null,
                 nextChapter = null,
+                chapters = emptyList(),
                 isChapterListReady = false,
+                isChapterListLoading = false,
+                chapterListError = null,
                 isChapterTransitionLoading = false,
             )
         }
@@ -602,12 +609,20 @@ class ReaderViewModel(
     private fun prepareSerialChapters(detail: GalleryDetail) {
         if (offlineOnly || detail.chaptersUrl.isNullOrBlank()) return
         chapterListJob = viewModelScope.launch(dispatchers.io) {
+            _uiState.update {
+                it.copy(isChapterListLoading = true, chapterListError = null)
+            }
             try {
                 cacheAdjacentChapters(serialChapterLoader.loadChapters(siteId, detail), detail)
             } catch (ce: CancellationException) {
                 throw ce
-            } catch (_: Throwable) {
-                // A manual chapter command or boundary request retries and reports the error.
+            } catch (error: Throwable) {
+                _uiState.update {
+                    it.copy(
+                        isChapterListLoading = false,
+                        chapterListError = error.message?.takeIf(String::isNotBlank) ?: "章节加载失败，请重试",
+                    )
+                }
             }
         }
     }
@@ -634,12 +649,15 @@ class ReaderViewModel(
         val next = chapters.getOrNull(currentIndex + 1)?.takeIf { currentIndex >= 0 && it.url.isNotBlank() }
         preparedPreviousChapter = previous
         preparedNextChapter = next
-        serialChaptersPrepared = chapters.isNotEmpty()
+        serialChaptersPrepared = true
         _uiState.update {
             it.copy(
                 previousChapter = previous,
                 nextChapter = next,
-                isChapterListReady = chapters.isNotEmpty(),
+                chapters = chapters,
+                isChapterListReady = true,
+                isChapterListLoading = false,
+                chapterListError = null,
             )
         }
     }
@@ -654,7 +672,36 @@ class ReaderViewModel(
         requestChapter(SerialChapterDirection.NEXT)
     }
 
-    private fun requestChapter(direction: SerialChapterDirection): Boolean {
+    fun openChapter(chapter: MediaItem) {
+        val detail = _uiState.value.detail ?: return
+        val hints = listOfNotNull(
+            detail.item.id,
+            detail.item.extra["chapterId"],
+            detail.item.extra["chapterUuid"],
+            detail.item.extra["chapterHid"],
+        )
+        val isCurrent = isMatchingSerialChapter(
+            chapter = chapter,
+            currentChapterId = mediaId,
+            currentChapterUrl = detail.item.extra["chapterUrl"].orEmpty(),
+            hints = hints,
+        )
+        dismissSheet()
+        if (!isCurrent) requestChapter(direction = null, requestedChapter = chapter)
+    }
+
+    fun refreshChapters() {
+        val detail = _uiState.value.detail ?: return
+        if (offlineOnly || detail.chaptersUrl.isNullOrBlank() || isInvalidSiteId) return
+        chapterListJob?.cancel()
+        serialChaptersPrepared = false
+        prepareSerialChapters(detail)
+    }
+
+    private fun requestChapter(
+        direction: SerialChapterDirection?,
+        requestedChapter: MediaItem? = null,
+    ): Boolean {
         val detail = _uiState.value.detail ?: return false
         if (offlineOnly || detail.chaptersUrl.isNullOrBlank() || isInvalidSiteId) return false
         if (chapterTransitionEmitted || chapterAdvanceJob?.isActive == true) return true
@@ -664,17 +711,20 @@ class ReaderViewModel(
             try {
                 chapterListJob?.join()
                 if (!serialChaptersPrepared) {
+                    _uiState.update { it.copy(isChapterListLoading = true, chapterListError = null) }
                     cacheAdjacentChapters(serialChapterLoader.loadChapters(siteId, detail), detail)
                 }
-                val target = when (direction) {
+                val target = requestedChapter ?: when (direction) {
                     SerialChapterDirection.PREVIOUS -> preparedPreviousChapter
                     SerialChapterDirection.NEXT -> preparedNextChapter
+                    null -> null
                 }
                 if (target == null) {
                     emitSnackbar(
                         when (direction) {
                             SerialChapterDirection.PREVIOUS -> "已经是第一话"
                             SerialChapterDirection.NEXT -> "已经是最后一话"
+                            null -> "所选章节不可用"
                         },
                     )
                     return@launch
@@ -686,7 +736,11 @@ class ReaderViewModel(
             } catch (ce: CancellationException) {
                 throw ce
             } catch (error: Throwable) {
-                emitSnackbar(error.message?.takeIf(String::isNotBlank) ?: "章节加载失败，请重试")
+                val message = error.message?.takeIf(String::isNotBlank) ?: "章节加载失败，请重试"
+                _uiState.update {
+                    it.copy(isChapterListLoading = false, chapterListError = message)
+                }
+                emitSnackbar(message)
             } finally {
                 _uiState.update { it.copy(isChapterTransitionLoading = false) }
             }

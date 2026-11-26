@@ -7,6 +7,7 @@ import com.raven.app.core.model.MediaItem
 import com.raven.app.core.model.RavenRoute
 import com.raven.app.core.model.ReadingProgress
 import com.raven.app.core.model.SearchScope
+import com.raven.app.core.model.SiteDescriptor
 import com.raven.app.core.model.SiteId
 import com.raven.app.core.model.WatchProgress
 import com.raven.app.core.sitespi.ResolvedLink
@@ -46,6 +47,11 @@ interface LibraryNavigator {
     fun openSiteFeed(route: RavenRoute.SiteFeed)
 
     fun openSiteFunctions(siteId: SiteId)
+
+    /**
+     * Opens the per-site account/authentication surface for the active site.
+     */
+    fun openSiteAccount(siteId: SiteId)
 
     fun openSearch(
         initialQuery: String? = null,
@@ -113,6 +119,30 @@ interface LibraryNavigator {
             )
         }
     }
+}
+
+/**
+ * Opens the "all continue" destination for [ProfileScreen]: prefers the user's existing UNFINISHED
+ * smart shelf when present, otherwise falls back to the history screen.
+ */
+fun LibraryNavigator.openProfileContinueAll(unfinishedSmartShelfId: String?) {
+    if (!unfinishedSmartShelfId.isNullOrBlank()) {
+        openSmartShelfDetail(unfinishedSmartShelfId)
+    } else {
+        openHistory()
+    }
+}
+
+/**
+ * Opens the active site's account surface only when the site exposes an auth provider.
+ */
+fun LibraryNavigator.openProfileSiteAccount(
+    activeSite: SiteDescriptor?,
+    supportsAccount: Boolean,
+) {
+    if (!supportsAccount) return
+    val siteId = activeSite?.id ?: return
+    openSiteAccount(siteId)
 }
 
 /**

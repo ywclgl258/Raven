@@ -52,6 +52,7 @@ import androidx.lifecycle.viewModelScope
 import com.raven.app.core.common.AppDispatchers
 import com.raven.app.core.common.NaturalSortComparator
 import com.raven.app.core.database.model.ShelfWithSummary
+import com.raven.app.core.database.repository.HistoryRepository
 import com.raven.app.core.database.repository.ShelfRepository
 import com.raven.app.core.designsystem.component.RavenEmptyState
 import com.raven.app.core.designsystem.component.RavenFilterChipRow
@@ -96,6 +97,7 @@ data class LocalLibraryUiState(
     val sort: LocalLibrarySort = LocalLibrarySort.RECENT,
     val totalCount: Int = 0,
     val totalBytes: Long = 0L,
+    val availableBytes: Long? = null,
     val books: List<LocalBook> = emptyList(),
     val mediaItems: Map<String, MediaItem> = emptyMap(),
     val shelves: List<ShelfWithSummary> = emptyList(),
@@ -112,16 +114,22 @@ private data class LocalLibraryControls(
     val selectionMode: Boolean = false,
     val selectedIds: Set<String> = emptySet(),
     val importState: LocalImportState = LocalImportState(),
+    val availableBytes: Long? = null,
     val message: String? = null,
 )
 
 class LocalLibraryViewModel(
     private val localLibraryImporter: LocalLibraryImporter,
     private val shelfRepository: ShelfRepository,
+    private val historyRepository: HistoryRepository,
     private val dispatchers: AppDispatchers,
 ) : ViewModel() {
 
     private val controls = MutableStateFlow(LocalLibraryControls())
+
+    init {
+        refreshStorageInfo()
+    }
 
     val uiState: StateFlow<LocalLibraryUiState> = combine(
         localLibraryImporter.books,
@@ -154,6 +162,7 @@ class LocalLibraryViewModel(
             sort = ctrl.sort,
             totalCount = allBooks.size,
             totalBytes = allBooks.sumOf { it.bytes },
+            availableBytes = ctrl.availableBytes,
             books = sorted,
             mediaItems = mediaMap,
             shelves = shelves,
@@ -230,9 +239,15 @@ class LocalLibraryViewModel(
     fun removeBook(bookId: String) {
         viewModelScope.launch(dispatchers.io) {
             runCatching {
-                localLibraryImporter.removeBook(bookId)
+                deleteLocalBookCompletely(
+                    bookId = bookId,
+                    localLibraryImporter = localLibraryImporter,
+                    shelfRepository = shelfRepository,
+                    historyRepository = historyRepository,
+                )
             }.onSuccess {
-                controls.update { it.copy(message = "已删除本地内容") }
+                controls.update { it.copy(message = "已删除本地内容，并清理关联片单与历史记录") }
+                refreshStorageInfo()
             }.onFailure { error ->
                 controls.update { it.copy(message = error.message ?: "删除失败") }
             }
@@ -244,18 +259,31 @@ class LocalLibraryViewModel(
         if (ids.isEmpty()) return
         viewModelScope.launch(dispatchers.io) {
             var removed = 0
+            var failed = 0
             for (id in ids) {
-                if (runCatching { localLibraryImporter.removeBook(id) }.isSuccess) {
-                    removed += 1
-                }
+                runCatching {
+                    deleteLocalBookCompletely(
+                        bookId = id,
+                        localLibraryImporter = localLibraryImporter,
+                        shelfRepository = shelfRepository,
+                        historyRepository = historyRepository,
+                    )
+                }.onSuccess { removed += 1 }
+                    .onFailure { failed += 1 }
+            }
+            val message = when {
+                failed == 0 -> "已删除 $removed 项本地内容，并清理关联片单与历史记录"
+                removed == 0 -> "$failed 项本地内容删除失败，请重试"
+                else -> "已删除 $removed 项本地内容，$failed 项删除失败"
             }
             controls.update {
                 it.copy(
                     selectionMode = false,
                     selectedIds = emptySet(),
-                    message = "已移除 $removed 项本地内容",
+                    message = message,
                 )
             }
+            refreshStorageInfo()
         }
     }
 
@@ -316,6 +344,13 @@ class LocalLibraryViewModel(
         controls.update { it.copy(importState = it.importState.copy(lastMessage = null, isError = false)) }
     }
 
+    private fun refreshStorageInfo() {
+        viewModelScope.launch(dispatchers.io) {
+            val usableBytes = runCatching { localLibraryImporter.libraryRoot.usableSpace }.getOrNull()
+            controls.update { it.copy(availableBytes = usableBytes) }
+        }
+    }
+
     private fun runImport(
         startMessage: String,
         action: suspend () -> MediaItem,
@@ -327,6 +362,7 @@ class LocalLibraryViewModel(
             }
             try {
                 val item = action()
+                refreshStorageInfo()
                 controls.update {
                     it.copy(
                         importState = LocalImportState(
@@ -364,6 +400,7 @@ fun LocalLibraryScreen(
 
     var removingBook by remember { mutableStateOf<LocalBook?>(null) }
     var showShelfPicker by remember { mutableStateOf(false) }
+    var showBatchDeleteConfirm by remember { mutableStateOf(false) }
 
     val archiveLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocument(),
@@ -380,6 +417,16 @@ fun LocalLibraryScreen(
     ) { uri: Uri? ->
         if (uri != null) viewModel.importVideo(uri)
     }
+    val launchArchivePicker = {
+        archiveLauncher.launch(
+            arrayOf(
+                "application/zip",
+                "application/x-cbz",
+                "application/vnd.comicbook+zip",
+                "application/octet-stream",
+            ),
+        )
+    }
 
     Column(
         modifier = modifier
@@ -389,7 +436,12 @@ fun LocalLibraryScreen(
     ) {
         RavenTopBar(
             title = "本地库管理",
-            subtitle = "${uiState.totalCount} 项 · ${RavenFormatters.formatByteSize(uiState.totalBytes)}",
+            subtitle = buildString {
+                append("${uiState.totalCount} 项 · 已用 ${RavenFormatters.formatByteSize(uiState.totalBytes)}")
+                uiState.availableBytes?.let { available ->
+                    append(" · 可用 ${RavenFormatters.formatByteSize(available)}")
+                }
+            },
             navigationIcon = {
                 IconButton(onClick = navigator::navigateBack) {
                     Icon(
@@ -483,16 +535,7 @@ fun LocalLibraryScreen(
                         icon = Icons.Outlined.FolderZip,
                         enabled = !uiState.importState.isImporting,
                         showChevron = true,
-                        onClick = {
-                            archiveLauncher.launch(
-                                arrayOf(
-                                    "application/zip",
-                                    "application/x-cbz",
-                                    "application/vnd.comicbook+zip",
-                                    "application/octet-stream",
-                                ),
-                            )
-                        },
+                        onClick = launchArchivePicker,
                         modifier = Modifier.testTag("local_import_cbz_button"),
                     )
                     RavenGroupedDivider(insetWithIcon = true)
@@ -550,8 +593,14 @@ fun LocalLibraryScreen(
                 item(key = "local_empty") {
                     RavenEmptyState(
                         title = if (uiState.totalCount == 0) "本地库为空" else "没有匹配的本地内容",
-                        message = "点击上方导入按钮，即可将 CBZ/ZIP、图片目录或视频文件安全导入本地库。",
+                        message = if (uiState.totalCount == 0) {
+                            "导入 CBZ/ZIP、图片目录或视频文件，即可离线浏览并统一管理。"
+                        } else {
+                            "尝试更换关键词或切换类型筛选。"
+                        },
                         icon = Icons.Outlined.FolderZip,
+                        actionLabel = if (uiState.totalCount == 0) "导入 CBZ / ZIP" else null,
+                        onActionClick = if (uiState.totalCount == 0) launchArchivePicker else null,
                     )
                 }
             } else {
@@ -621,7 +670,7 @@ fun LocalLibraryScreen(
                     if (uiState.selectedIds.isNotEmpty()) showShelfPicker = true
                 },
                 onDeleteSelected = {
-                    if (uiState.selectedIds.isNotEmpty()) viewModel.removeSelectedBooks()
+                    if (uiState.selectedIds.isNotEmpty()) showBatchDeleteConfirm = true
                 },
             )
         }
@@ -640,10 +689,23 @@ fun LocalLibraryScreen(
     removingBook?.let { book ->
         LibraryConfirmBottomSheet(
             title = "移除本地内容「${book.title}」？",
-            message = "将从应用本地存储中删除 ${RavenFormatters.formatByteSize(book.bytes)}，原外部文件不受影响。",
+            message = "将删除应用内副本（${RavenFormatters.formatByteSize(book.bytes)}），并同步清理关联片单条目与观看/阅读历史，原外部文件不受影响。",
             confirmLabel = "移除",
             onConfirm = { viewModel.removeBook(book.id) },
             onDismiss = { removingBook = null },
+        )
+    }
+
+    if (showBatchDeleteConfirm) {
+        val selectedBytes = uiState.books
+            .filter { it.id in uiState.selectedIds }
+            .sumOf { it.bytes }
+        LibraryConfirmBottomSheet(
+            title = "删除已选 ${uiState.selectedIds.size} 项本地内容？",
+            message = "将释放约 ${RavenFormatters.formatByteSize(selectedBytes)}，并同步清理这些内容的片单条目与观看/阅读历史，操作不可撤销。",
+            confirmLabel = "全部删除",
+            onConfirm = viewModel::removeSelectedBooks,
+            onDismiss = { showBatchDeleteConfirm = false },
         )
     }
 }

@@ -19,8 +19,6 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.CheckCircle
 import androidx.compose.material.icons.outlined.ErrorOutline
 import androidx.compose.material.icons.outlined.Info
-import androidx.compose.material.icons.outlined.Visibility
-import androidx.compose.material.icons.outlined.VisibilityOff
 import androidx.compose.material.icons.outlined.WarningAmber
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -38,11 +36,13 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import com.raven.app.core.designsystem.component.RavenDangerButton
-import com.raven.app.core.designsystem.component.RavenIconButton
+import com.raven.app.core.designsystem.component.RavenMorphIconButton
 import com.raven.app.core.designsystem.component.RavenPrimaryButton
 import com.raven.app.core.designsystem.component.RavenPrimaryButtonVariant
 import com.raven.app.core.designsystem.component.RavenSecondaryButton
 import com.raven.app.core.designsystem.component.RavenStatusTone
+import com.raven.app.core.designsystem.motion.MorphSpringPreset
+import com.raven.app.core.designsystem.motion.RavenMorphIcons
 import com.raven.app.core.designsystem.theme.LocalRavenColors
 import com.raven.app.core.designsystem.theme.RavenShapes
 import java.text.SimpleDateFormat
@@ -334,11 +334,12 @@ internal fun SettingsTextField(
         },
         trailingIcon = if (isPassword && onTogglePasswordVisibility != null) {
             {
-                RavenIconButton(
-                    icon = if (passwordVisible) Icons.Outlined.VisibilityOff else Icons.Outlined.Visibility,
+                RavenMorphIconButton(
+                    glyph = if (passwordVisible) RavenMorphIcons.VisibilityOff else RavenMorphIcons.VisibilityOn,
                     contentDescription = if (passwordVisible) "隐藏密码" else "显示密码",
                     onClick = onTogglePasswordVisibility,
                     tint = colors.inkSecondary,
+                    springPreset = MorphSpringPreset.SNAPPY,
                 )
             }
         } else {

@@ -41,6 +41,24 @@ interface ReaderNavigator {
         author: AuthorRef,
     )
 
+    /**
+     * Opens unified Search pre-filled with the tag's canonical slug (raw label fallback),
+     * either on the active site or across all searchable sites.
+     */
+    fun openTagSearch(
+        tag: TagRef,
+        crossSite: Boolean,
+    )
+
+    /**
+     * Opens unified Search pre-filled with the author's display name (id fallback).
+     * Gallery Detail author taps use this instead of the site-locked [openAuthorFeed].
+     */
+    fun openAuthorSearch(
+        author: AuthorRef,
+        crossSite: Boolean,
+    )
+
     fun openSiteAccount(siteId: SiteId)
 
     fun setSystemBarsVisible(visible: Boolean)

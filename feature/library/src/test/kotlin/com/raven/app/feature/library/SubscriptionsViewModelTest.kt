@@ -11,12 +11,16 @@ import com.raven.app.core.model.SiteDescriptor
 import com.raven.app.core.model.SiteId
 import com.raven.app.core.model.TagRef
 import com.raven.app.core.model.TagSubscription
+import com.raven.app.core.model.UpdateInboxItem
+import com.raven.app.core.sitespi.SitePlugin
 import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
@@ -140,6 +144,7 @@ class SubscriptionsViewModelTest {
             assertEquals(1, expectMostRecentItem().unreadCount)
 
             vm.selectInboxSourceFilter(InboxSourceFilter.ALL)
+            advanceUntilIdle()
             vm.markAllRead()
             advanceUntilIdle()
             val afterMarkAll = expectMostRecentItem()
@@ -151,7 +156,7 @@ class SubscriptionsViewModelTest {
     }
 
     @Test
-    fun `concurrent refresh caps parallelism at 3 and supports subscription reorder and unsubscribe`() = runTest {
+    fun `concurrent refresh caps parallelism at 3`() = runTest {
         val inFlight = AtomicInteger(0)
         val maxObserved = AtomicInteger(0)
 
@@ -214,29 +219,6 @@ class SubscriptionsViewModelTest {
             val afterRefresh = expectMostRecentItem()
             assertEquals(6, afterRefresh.aggregatedTagFeed.size)
 
-            // Reorder tag2 up ahead of tag1
-            val subsBefore = afterRefresh.visibleSubscriptions
-            assertEquals(listOf("tag1", "tag2", "tag3", "tag4", "tag5", "tag6"), subsBefore.map { it.slug })
-            vm.moveSubscriptionUp(subsBefore[1])
-            advanceUntilIdle()
-            val afterMove = expectMostRecentItem()
-            assertEquals(
-                listOf("tag2", "tag1", "tag3", "tag4", "tag5", "tag6"),
-                afterMove.visibleSubscriptions.map { it.slug },
-            )
-
-            // Unsubscribe removes subscription AND cleans its inbox entries
-            val toRemove = afterMove.visibleSubscriptions.first()
-            vm.unsubscribe(toRemove)
-            advanceUntilIdle()
-            val afterUnsub = expectMostRecentItem()
-            assertEquals(5, afterUnsub.visibleSubscriptions.size)
-            assertTrue(
-                afterUnsub.aggregatedTagFeed.none {
-                    it.sourceKind == InboxSourceKind.TAG_SUBSCRIPTION &&
-                        it.sourceId == SubscriptionsViewModel.subscriptionSourceId(toRemove)
-                },
-            )
             cancelAndIgnoreRemainingEvents()
         }
     }
@@ -306,6 +288,345 @@ class SubscriptionsViewModelTest {
     }
 
     @Test
+    fun `creates single multi and all logical subscription groups with derived coverage`() = runTest {
+        val harness = LibraryTestHarness(
+            dispatcher = mainRule.dispatcher,
+            localRootDir = tempFolder.newFolder("sub-groups-create"),
+            plugins = eligibleSubscriptionPlugins(),
+        )
+        val vm = createViewModel(harness)
+
+        vm.uiState.test {
+            awaitItem()
+            advanceUntilIdle()
+            val initial = expectMostRecentItem()
+            assertEquals(3, initial.onlineTagSearchSites.size)
+
+            vm.createSubscriptionGroup(
+                slug = "solo",
+                label = "单站标签",
+                coverage = SubscriptionCoverage.SINGLE,
+                selectedSiteIds = setOf(SiteId.R34V),
+            )
+            advanceUntilIdle()
+            val afterSingle = expectMostRecentItem().subscriptionGroups.single { it.slug == "solo" }
+            assertEquals(SubscriptionCoverage.SINGLE, afterSingle.coverage)
+            assertEquals(1, afterSingle.siteCount)
+            assertEquals(setOf(SiteId.R34V), afterSingle.siteIds)
+            assertEquals("单站标签", afterSingle.label)
+
+            vm.createSubscriptionGroup(
+                slug = "multi",
+                label = "多站标签",
+                coverage = SubscriptionCoverage.MULTI,
+                selectedSiteIds = setOf(SiteId.R34V, SiteId.NHENTAI),
+            )
+            advanceUntilIdle()
+            val afterMulti = expectMostRecentItem().subscriptionGroups.single { it.slug == "multi" }
+            assertEquals(SubscriptionCoverage.MULTI, afterMulti.coverage)
+            assertEquals(2, afterMulti.siteCount)
+            assertEquals(setOf(SiteId.R34V, SiteId.NHENTAI), afterMulti.siteIds)
+
+            harness.subscriptionRepository.upsertInboxItems(
+                listOf(tagInboxEntry(tagSourceId(SiteId.R34V, "multi"), SiteId.R34V, "multi-unread")),
+            )
+            advanceUntilIdle()
+            val multiWithUnread = expectMostRecentItem().subscriptionGroups.single { it.slug == "multi" }
+            assertEquals(1, multiWithUnread.unreadCount)
+
+            vm.createSubscriptionGroup(
+                slug = "all",
+                label = "全站标签",
+                coverage = SubscriptionCoverage.ALL,
+                selectedSiteIds = emptySet(),
+            )
+            advanceUntilIdle()
+            val afterAll = expectMostRecentItem().subscriptionGroups.single { it.slug == "all" }
+            assertEquals(SubscriptionCoverage.ALL, afterAll.coverage)
+            assertEquals(3, afterAll.siteCount)
+            assertEquals(
+                setOf(SiteId.R34V, SiteId.NHENTAI, SiteId.EVERIA),
+                afterAll.siteIds,
+            )
+            assertEquals("全站标签", afterAll.label)
+
+            val rows = harness.subscriptionRepository.observeAllSubscriptions().first()
+            assertEquals(1, rows.count { it.slug == "solo" })
+            assertEquals(2, rows.count { it.slug == "multi" })
+            assertEquals(3, rows.count { it.slug == "all" })
+
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    @Test
+    fun `updates single multi and all subscription groups by adding target sites and removing stale sites`() = runTest {
+        val harness = LibraryTestHarness(
+            dispatcher = mainRule.dispatcher,
+            localRootDir = tempFolder.newFolder("sub-groups-update"),
+            plugins = eligibleSubscriptionPlugins() + nonEligibleSubscriptionPlugin(),
+        )
+        val vm = createViewModel(harness)
+
+        vm.uiState.test {
+            awaitItem()
+            advanceUntilIdle()
+
+            // SINGLE -> SINGLE move, rename, and inbox cleanup
+            vm.createSubscriptionGroup(
+                slug = "solo",
+                label = "旧单站",
+                coverage = SubscriptionCoverage.SINGLE,
+                selectedSiteIds = setOf(SiteId.R34V),
+            )
+            advanceUntilIdle()
+            val soloGroup = expectMostRecentItem().subscriptionGroups.single { it.slug == "solo" }
+            harness.subscriptionRepository.upsertInboxItems(
+                listOf(tagInboxEntry(tagSourceId(SiteId.R34V, "solo"), SiteId.R34V, "solo-old")),
+            )
+            advanceUntilIdle()
+            vm.updateSubscriptionGroup(
+                group = soloGroup,
+                label = "新单站",
+                coverage = SubscriptionCoverage.SINGLE,
+                selectedSiteIds = setOf(SiteId.NHENTAI),
+            )
+            advanceUntilIdle()
+            val soloUpdated = expectMostRecentItem().subscriptionGroups.single { it.slug == "solo" }
+            assertEquals(SubscriptionCoverage.SINGLE, soloUpdated.coverage)
+            assertEquals(setOf(SiteId.NHENTAI), soloUpdated.siteIds)
+            assertEquals("新单站", soloUpdated.label)
+            assertTrue(
+                harness.subscriptionRepository.observeInbox().first().none {
+                    it.sourceId == tagSourceId(SiteId.R34V, "solo")
+                },
+            )
+
+            // MULTI -> MULTI swap: remove R34V, keep NHENTAI, add EVERIA, rename all
+            vm.createSubscriptionGroup(
+                slug = "multi",
+                label = "旧多站",
+                coverage = SubscriptionCoverage.MULTI,
+                selectedSiteIds = setOf(SiteId.R34V, SiteId.NHENTAI),
+            )
+            advanceUntilIdle()
+            val multiGroup = expectMostRecentItem().subscriptionGroups.single { it.slug == "multi" }
+            harness.subscriptionRepository.upsertInboxItems(
+                listOf(tagInboxEntry(tagSourceId(SiteId.R34V, "multi"), SiteId.R34V, "multi-old")),
+            )
+            advanceUntilIdle()
+            vm.updateSubscriptionGroup(
+                group = multiGroup,
+                label = "新多站",
+                coverage = SubscriptionCoverage.MULTI,
+                selectedSiteIds = setOf(SiteId.NHENTAI, SiteId.EVERIA),
+            )
+            advanceUntilIdle()
+            val multiUpdated = expectMostRecentItem().subscriptionGroups.single { it.slug == "multi" }
+            assertEquals(SubscriptionCoverage.MULTI, multiUpdated.coverage)
+            assertEquals(setOf(SiteId.NHENTAI, SiteId.EVERIA), multiUpdated.siteIds)
+            assertEquals("新多站", multiUpdated.label)
+            assertTrue(
+                harness.subscriptionRepository.observeInbox().first().none {
+                    it.sourceId == tagSourceId(SiteId.R34V, "multi")
+                },
+            )
+
+            // ALL -> adds every online TAG site and removes the non-eligible manual row
+            harness.subscriptionRepository.subscribe(
+                TagSubscription(
+                    siteId = SiteId.R34V,
+                    slug = "expand",
+                    label = "旧全站",
+                    url = "https://rule34video.com",
+                    scope = SearchScope.TAG,
+                ),
+            )
+            harness.subscriptionRepository.subscribe(
+                TagSubscription(
+                    siteId = SiteId.NHENTAI,
+                    slug = "expand",
+                    label = "旧全站",
+                    url = "https://nhentai.net",
+                    scope = SearchScope.TAG,
+                ),
+            )
+            harness.subscriptionRepository.subscribe(
+                TagSubscription(
+                    siteId = SiteId.JABLE,
+                    slug = "expand",
+                    label = "旧全站",
+                    url = "https://jable.tv",
+                    scope = SearchScope.TAG,
+                ),
+            )
+            advanceUntilIdle()
+            val expandGroup = expectMostRecentItem().subscriptionGroups.single { it.slug == "expand" }
+            harness.subscriptionRepository.upsertInboxItems(
+                listOf(tagInboxEntry(tagSourceId(SiteId.JABLE, "expand"), SiteId.JABLE, "expand-old")),
+            )
+            advanceUntilIdle()
+            vm.updateSubscriptionGroup(
+                group = expandGroup,
+                label = "新全站",
+                coverage = SubscriptionCoverage.ALL,
+                selectedSiteIds = emptySet(),
+            )
+            advanceUntilIdle()
+            val expandUpdated = expectMostRecentItem().subscriptionGroups.single { it.slug == "expand" }
+            assertEquals(SubscriptionCoverage.ALL, expandUpdated.coverage)
+            assertEquals(setOf(SiteId.R34V, SiteId.NHENTAI, SiteId.EVERIA), expandUpdated.siteIds)
+            assertEquals("新全站", expandUpdated.label)
+            val expandRows = harness.subscriptionRepository.observeAllSubscriptions().first()
+                .filter { it.slug == "expand" }
+            assertFalse(expandRows.any { it.siteId == SiteId.JABLE })
+            assertTrue(expandRows.all { it.label == "新全站" })
+            assertTrue(
+                harness.subscriptionRepository.observeInbox().first().none {
+                    it.sourceId == tagSourceId(SiteId.JABLE, "expand")
+                },
+            )
+
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    @Test
+    fun `deletes single multi and all logical subscription groups and clears their inbox rows`() = runTest {
+        val harness = LibraryTestHarness(
+            dispatcher = mainRule.dispatcher,
+            localRootDir = tempFolder.newFolder("sub-groups-delete"),
+            plugins = eligibleSubscriptionPlugins(),
+        )
+        val vm = createViewModel(harness)
+
+        vm.uiState.test {
+            awaitItem()
+            advanceUntilIdle()
+
+            vm.createSubscriptionGroup(
+                slug = "del-solo",
+                label = "删除单站",
+                coverage = SubscriptionCoverage.SINGLE,
+                selectedSiteIds = setOf(SiteId.R34V),
+            )
+            vm.createSubscriptionGroup(
+                slug = "del-multi",
+                label = "删除多站",
+                coverage = SubscriptionCoverage.MULTI,
+                selectedSiteIds = setOf(SiteId.R34V, SiteId.NHENTAI),
+            )
+            vm.createSubscriptionGroup(
+                slug = "del-all",
+                label = "删除全站",
+                coverage = SubscriptionCoverage.ALL,
+                selectedSiteIds = emptySet(),
+            )
+            advanceUntilIdle()
+            val groups = expectMostRecentItem().subscriptionGroups
+            harness.subscriptionRepository.upsertInboxItems(
+                listOf(
+                    tagInboxEntry(tagSourceId(SiteId.R34V, "del-solo"), SiteId.R34V, "del-solo-item"),
+                    tagInboxEntry(tagSourceId(SiteId.R34V, "del-multi"), SiteId.R34V, "del-multi-r34"),
+                    tagInboxEntry(tagSourceId(SiteId.NHENTAI, "del-multi"), SiteId.NHENTAI, "del-multi-nh"),
+                    tagInboxEntry(tagSourceId(SiteId.R34V, "del-all"), SiteId.R34V, "del-all-r34"),
+                    tagInboxEntry(tagSourceId(SiteId.NHENTAI, "del-all"), SiteId.NHENTAI, "del-all-nh"),
+                    tagInboxEntry(tagSourceId(SiteId.EVERIA, "del-all"), SiteId.EVERIA, "del-all-ev"),
+                ),
+            )
+            advanceUntilIdle()
+
+            val solo = groups.single { it.slug == "del-solo" }
+            val soloSource = tagSourceId(SiteId.R34V, "del-solo")
+            vm.deleteSubscriptionGroup(solo)
+            advanceUntilIdle()
+            assertTrue(
+                harness.subscriptionRepository.observeAllSubscriptions().first()
+                    .none { it.slug == "del-solo" },
+            )
+            assertTrue(
+                harness.subscriptionRepository.observeInbox().first()
+                    .none { it.sourceId == soloSource },
+            )
+
+            val multi = groups.single { it.slug == "del-multi" }
+            val multiSources = setOf(
+                tagSourceId(SiteId.R34V, "del-multi"),
+                tagSourceId(SiteId.NHENTAI, "del-multi"),
+            )
+            vm.deleteSubscriptionGroup(multi)
+            advanceUntilIdle()
+            assertTrue(
+                harness.subscriptionRepository.observeAllSubscriptions().first()
+                    .none { it.slug == "del-multi" },
+            )
+            assertTrue(
+                harness.subscriptionRepository.observeInbox().first()
+                    .none { it.sourceId in multiSources },
+            )
+
+            val all = groups.single { it.slug == "del-all" }
+            val allSources = setOf(
+                tagSourceId(SiteId.R34V, "del-all"),
+                tagSourceId(SiteId.NHENTAI, "del-all"),
+                tagSourceId(SiteId.EVERIA, "del-all"),
+            )
+            vm.deleteSubscriptionGroup(all)
+            advanceUntilIdle()
+            assertTrue(
+                harness.subscriptionRepository.observeAllSubscriptions().first()
+                    .none { it.slug == "del-all" },
+            )
+            assertTrue(
+                harness.subscriptionRepository.observeInbox().first()
+                    .none { it.sourceId in allSources },
+            )
+
+            val afterDeletes = expectMostRecentItem()
+            assertTrue(afterDeletes.subscriptionGroups.isEmpty())
+            assertTrue(afterDeletes.aggregatedTagFeed.isEmpty())
+
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    @Test
+    fun `checking a logical group refreshes every per-site source and establishes one shared baseline`() = runTest {
+        val harness = LibraryTestHarness(
+            dispatcher = mainRule.dispatcher,
+            localRootDir = tempFolder.newFolder("sub-groups-check"),
+            plugins = eligibleSubscriptionPlugins(
+                r34vItems = listOf(sampleMedia(SiteId.R34V, "group-r34")),
+                nhentaiItems = listOf(sampleMedia(SiteId.NHENTAI, "group-nh", MediaKind.COMIC)),
+            ),
+        )
+        val vm = createViewModel(harness)
+
+        vm.uiState.test {
+            awaitItem()
+            advanceUntilIdle()
+            vm.createSubscriptionGroup(
+                slug = "group-check",
+                label = "整组检查",
+                coverage = SubscriptionCoverage.MULTI,
+                selectedSiteIds = setOf(SiteId.R34V, SiteId.NHENTAI),
+            )
+            advanceUntilIdle()
+            val group = expectMostRecentItem().subscriptionGroups.single { it.slug == "group-check" }
+
+            vm.checkSubscriptionGroup(group)
+            advanceUntilIdle()
+            val afterCheck = expectMostRecentItem()
+            assertEquals(2, afterCheck.totalInboxCount)
+            assertEquals(0, afterCheck.unreadTagCount)
+            assertTrue(afterCheck.message.orEmpty().contains("建立基线"))
+            assertTrue(afterCheck.checkingSourceIds.isEmpty())
+
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    @Test
     fun `SubscriptionSyncRunner tracks empty initial baseline and shared state across refreshes`() = runTest {
         val feed = mutableListOf<MediaItem>()
         val plugin = FakeLibrarySitePlugin(
@@ -352,4 +673,198 @@ class SubscriptionsViewModelTest {
         assertEquals(0, secondPass.baselinedSourceCount)
         assertEquals(1, secondPass.newlyDiscoveredCount)
     }
+
+    @Test
+    fun `inbox search matches title site and source while mark all read only touches visible unread`() = runTest {
+        val harness = LibraryTestHarness(mainRule.dispatcher, tempFolder.newFolder("sub-inbox-filter"))
+        harness.subscriptionRepository.upsertInboxItems(
+            listOf(
+                UpdateInboxItem(
+                    id = "tag-alpha",
+                    sourceKind = InboxSourceKind.TAG_SUBSCRIPTION,
+                    sourceId = "r34v:cyberpunk",
+                    sourceLabel = "赛博朋克",
+                    item = sampleMedia(SiteId.R34V, "v-alpha", title = "Cyberpunk Alpha"),
+                    discoveredAt = 100L,
+                ),
+                UpdateInboxItem(
+                    id = "tag-beta",
+                    sourceKind = InboxSourceKind.TAG_SUBSCRIPTION,
+                    sourceId = "r34v:mecha",
+                    sourceLabel = "机甲",
+                    item = sampleMedia(SiteId.R34V, "v-beta", title = "Mecha Beta"),
+                    discoveredAt = 200L,
+                ),
+                UpdateInboxItem(
+                    id = "search-gamma",
+                    sourceKind = InboxSourceKind.SAVED_SEARCH,
+                    sourceId = "ss-artbook",
+                    sourceLabel = "画册追踪",
+                    item = sampleMedia(SiteId.NHENTAI, "c-gamma", MediaKind.COMIC, title = "Artbook Gamma"),
+                    discoveredAt = 300L,
+                ),
+            ),
+        )
+        val vm = SubscriptionsViewModel(
+            initialSiteId = null,
+            subscriptionRepository = harness.subscriptionRepository,
+            blockedTermsRepository = harness.blockedTermsRepository,
+            preferencesRepository = harness.preferencesRepository,
+            siteRegistry = harness.siteRegistry,
+            dispatchers = harness.dispatchers,
+            clockMs = harness.clock,
+        )
+
+        vm.uiState.test {
+            awaitItem()
+            advanceUntilIdle()
+            assertEquals(3, expectMostRecentItem().unreadCount)
+
+            // Search by title
+            vm.updateInboxSearchQuery("mecha")
+            advanceUntilIdle()
+            assertEquals(listOf("v-beta"), expectMostRecentItem().inboxItems.map { it.item.id })
+
+            // Search by source label
+            vm.updateInboxSearchQuery("画册")
+            advanceUntilIdle()
+            assertEquals(listOf("c-gamma"), expectMostRecentItem().inboxItems.map { it.item.id })
+
+            // Search by site display name / id
+            vm.updateInboxSearchQuery("nhentai")
+            advanceUntilIdle()
+            assertEquals(listOf("c-gamma"), expectMostRecentItem().inboxItems.map { it.item.id })
+
+            // Scoped mark-all-read only marks the filtered entry, leaving other unread items intact
+            vm.markAllRead()
+            advanceUntilIdle()
+            val afterScopedRead = expectMostRecentItem()
+            assertEquals(2, afterScopedRead.unreadCount)
+            assertTrue(afterScopedRead.inboxItems.single().isRead)
+            val persisted = harness.subscriptionRepository.observeInbox().first().associateBy { it.id }
+            assertEquals(false, persisted.getValue("tag-alpha").isRead)
+            assertEquals(false, persisted.getValue("tag-beta").isRead)
+            assertEquals(true, persisted.getValue("search-gamma").isRead)
+
+            // Source filter + unread-only share the same filtered result set
+            vm.updateInboxSearchQuery("")
+            vm.setInboxUnreadOnly(true)
+            vm.selectInboxSourceFilter(InboxSourceFilter.TAG_SUBSCRIPTION)
+            advanceUntilIdle()
+            val unreadTags = expectMostRecentItem()
+            assertEquals(setOf("v-alpha", "v-beta"), unreadTags.inboxItems.map { it.item.id }.toSet())
+
+            vm.markAllRead()
+            advanceUntilIdle()
+            val afterAllRead = expectMostRecentItem()
+            assertEquals(0, afterAllRead.unreadCount)
+            assertEquals(0, afterAllRead.inboxItems.size)
+
+            // No visible unread -> no-op without a new message
+            vm.clearMessage()
+            advanceUntilIdle()
+            vm.markAllRead()
+            advanceUntilIdle()
+            assertEquals(null, expectMostRecentItem().message)
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    private fun createViewModel(
+        harness: LibraryTestHarness,
+        initialSiteId: SiteId? = null,
+    ): SubscriptionsViewModel = SubscriptionsViewModel(
+        initialSiteId = initialSiteId,
+        subscriptionRepository = harness.subscriptionRepository,
+        blockedTermsRepository = harness.blockedTermsRepository,
+        preferencesRepository = harness.preferencesRepository,
+        siteRegistry = harness.siteRegistry,
+        dispatchers = harness.dispatchers,
+        clockMs = harness.clock,
+        mediaTagCacheRepository = harness.mediaTagCacheRepository,
+    )
 }
+
+private fun tagSourceId(
+    siteId: SiteId,
+    slug: String,
+    scope: SearchScope = SearchScope.TAG,
+): String = "${siteId.value}:${scope.name}:$slug"
+
+private fun tagInboxEntry(
+    sourceId: String,
+    siteId: SiteId,
+    itemId: String,
+): UpdateInboxItem = UpdateInboxItem(
+    id = "entry-$sourceId-$itemId",
+    sourceKind = InboxSourceKind.TAG_SUBSCRIPTION,
+    sourceId = sourceId,
+    sourceLabel = "标签",
+    item = sampleMedia(
+        siteId = siteId,
+        id = itemId,
+        kind = when (siteId) {
+            SiteId.NHENTAI -> MediaKind.COMIC
+            SiteId.EVERIA -> MediaKind.PHOTO
+            else -> MediaKind.VIDEO
+        },
+        title = "Update $itemId",
+    ),
+    discoveredAt = 1L,
+)
+
+private fun eligibleSubscriptionPlugins(
+    r34vItems: List<MediaItem> = emptyList(),
+    nhentaiItems: List<MediaItem> = emptyList(),
+    everiaItems: List<MediaItem> = emptyList(),
+): List<SitePlugin> = listOf(
+    eligibleSubscriptionPlugin(
+        siteId = SiteId.R34V,
+        displayName = "Rule34Video",
+        kind = MediaKind.VIDEO,
+        host = "rule34video.com",
+        items = r34vItems,
+    ),
+    eligibleSubscriptionPlugin(
+        siteId = SiteId.NHENTAI,
+        displayName = "nHentai",
+        kind = MediaKind.COMIC,
+        host = "nhentai.net",
+        items = nhentaiItems,
+    ),
+    eligibleSubscriptionPlugin(
+        siteId = SiteId.EVERIA,
+        displayName = "Everia",
+        kind = MediaKind.PHOTO,
+        host = "everia.club",
+        items = everiaItems,
+    ),
+)
+
+private fun eligibleSubscriptionPlugin(
+    siteId: SiteId,
+    displayName: String,
+    kind: MediaKind,
+    host: String,
+    items: List<MediaItem> = emptyList(),
+): SitePlugin = FakeLibrarySitePlugin(
+    descriptor = SiteDescriptor(
+        id = siteId,
+        displayName = displayName,
+        shortName = displayName,
+        primaryKind = kind,
+        defaultHost = host,
+        searchScopes = listOf(SearchScope.ALL, SearchScope.TAG),
+    ),
+    searchHandler = { FeedPage(items = items) },
+)
+
+private fun nonEligibleSubscriptionPlugin(): SitePlugin = FakeLibrarySitePlugin(
+    descriptor = SiteDescriptor(
+        id = SiteId.JABLE,
+        displayName = "Jable",
+        shortName = "Jable",
+        primaryKind = MediaKind.VIDEO,
+        defaultHost = "jable.tv",
+    ),
+)

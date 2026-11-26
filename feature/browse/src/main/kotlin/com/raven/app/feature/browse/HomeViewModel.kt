@@ -74,6 +74,7 @@ data class HomeUiState(
     val currentPage: Int = 1,
     val continueWatching: List<WatchProgress> = emptyList(),
     val resumeReading: ReadingProgress? = null,
+    val continueReading: List<ReadingProgress> = emptyList(),
     val watchProgressMap: Map<String, Float> = emptyMap(),
     val readingProgressMap: Map<String, Float> = emptyMap(),
     val watchLaterKeys: Set<String> = emptySet(),
@@ -264,9 +265,9 @@ class HomeViewModel(
             }
             .take(12)
 
-        val resumeReading = local.readingProgress
+        val continueReading = local.readingProgress
             .filter { !it.completed && it.currentPage > 0 }
-            .firstOrNull { rp ->
+            .filter { rp ->
                 isItemAllowed(
                     MediaItem(
                         siteId = rp.siteId,
@@ -278,6 +279,10 @@ class HomeViewModel(
                     ),
                 )
             }
+            .sortedByDescending { it.updatedAt }
+            .take(CONTINUE_READING_LIMIT)
+
+        val resumeReading = continueReading.firstOrNull()
 
         val watchProgressMap = local.watchProgress.associate { it.mediaId to it.progressFraction }
         val readingProgressMap = local.readingProgress.associate { it.mediaId to it.progressFraction }
@@ -309,6 +314,7 @@ class HomeViewModel(
             currentPage = if (isAligned) network.currentPage else 1,
             continueWatching = continueWatching,
             resumeReading = resumeReading,
+            continueReading = continueReading,
             watchProgressMap = watchProgressMap,
             readingProgressMap = readingProgressMap,
             watchLaterKeys = local.watchLaterKeys,
@@ -624,6 +630,8 @@ class HomeViewModel(
         }
 
     companion object {
+        const val CONTINUE_READING_LIMIT: Int = 12
+
         fun homePositionKey(siteId: SiteId, language: ComicLanguage): String =
             "home:${siteId.value}:${language.name}"
     }

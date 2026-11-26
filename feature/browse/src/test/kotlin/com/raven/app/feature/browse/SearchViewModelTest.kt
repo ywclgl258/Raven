@@ -1031,4 +1031,200 @@ class SearchViewModelTest {
             cancelAndIgnoreRemainingEvents()
         }
     }
+
+    @Test
+    fun `cross-site history is stored under GLOBAL and incognito never writes it`() =
+        runTest(mainDispatcherRule.dispatcher) {
+            val harness = BrowseTestHarness(mainDispatcherRule.dispatcher)
+            val plugin = FakeSitePlugin(
+                descriptor = SiteDescriptor(SiteId.R34V, "R34V", primaryKind = MediaKind.VIDEO, defaultHost = "r34.example"),
+                searchHandler = { req -> FeedPage(items = listOf(sampleMediaItem(SiteId.R34V, "r_${req.query}", MediaKind.VIDEO))) },
+            )
+            harness.preferencesRepository.setActiveSiteId(SiteId.R34V)
+            val vm = SearchViewModel(
+                siteRegistry = SiteRegistry(listOf(plugin)),
+                preferencesRepository = harness.preferencesRepository,
+                searchHistoryRepository = harness.searchHistoryRepository,
+                subscriptionRepository = harness.subscriptionRepository,
+                blockedTermsRepository = harness.blockedTermsRepository,
+                historyRepository = harness.historyRepository,
+                shelfRepository = harness.shelfRepository,
+                dispatchers = harness.dispatchers,
+            )
+            val repository = harness.searchHistoryRepository
+
+            vm.setMode(SearchMode.CROSS_SITE)
+            vm.updateQuery("cross query")
+            vm.submitSearch()
+            advanceUntilIdle()
+
+            assertEquals(
+                listOf("cross query"),
+                repository.observeBySite(SiteId.GLOBAL, limit = 20).first().map { it.query },
+            )
+            assertTrue(repository.observeBySite(SiteId.R34V, limit = 20).first().isEmpty())
+
+            harness.preferencesRepository.setIncognitoMode(true)
+            harness.nowMs += 1_000L
+            vm.updateQuery("secret cross query")
+            vm.submitSearch()
+            advanceUntilIdle()
+
+            assertEquals(
+                listOf("cross query"),
+                repository.observeBySite(SiteId.GLOBAL, limit = 20).first().map { it.query },
+            )
+            assertTrue(repository.observeBySite(SiteId.R34V, limit = 20).first().isEmpty())
+        }
+
+    @Test
+    fun `search history merges all sites and GLOBAL by recency, dedupes query-scope, and caps at 30`() =
+        runTest(mainDispatcherRule.dispatcher) {
+            val harness = BrowseTestHarness(mainDispatcherRule.dispatcher)
+            val plugin = FakeSitePlugin(
+                descriptor = SiteDescriptor(SiteId.R34V, "R34V", primaryKind = MediaKind.VIDEO, defaultHost = "r34.example"),
+                searchHandler = { FeedPage(items = listOf(sampleMediaItem(SiteId.R34V, "r_1", MediaKind.VIDEO))) },
+            )
+            harness.preferencesRepository.setActiveSiteId(SiteId.R34V)
+            val repository = harness.searchHistoryRepository
+            val base = harness.nowMs
+            repository.recordSearch(SiteId.R34V, "站内旧", SearchScope.ALL)
+            harness.nowMs = base + 10
+            repository.recordSearch(SiteId.GLOBAL, "跨站中", SearchScope.ALL)
+            harness.nowMs = base + 20
+            repository.recordSearch(SiteId.R34V, "重叠词", SearchScope.ALL)
+            harness.nowMs = base + 30
+            repository.recordSearch(SiteId.GLOBAL, "重叠词", SearchScope.ALL)
+            harness.nowMs = base + 40
+            repository.recordSearch(SiteId.GLOBAL, "跨站新", SearchScope.ALL)
+            harness.nowMs = base + 50
+            repository.recordSearch(SiteId.R34V, "重叠词", SearchScope.TAG)
+
+            val vm = SearchViewModel(
+                siteRegistry = SiteRegistry(listOf(plugin)),
+                preferencesRepository = harness.preferencesRepository,
+                searchHistoryRepository = repository,
+                subscriptionRepository = harness.subscriptionRepository,
+                blockedTermsRepository = harness.blockedTermsRepository,
+                historyRepository = harness.historyRepository,
+                shelfRepository = harness.shelfRepository,
+                dispatchers = harness.dispatchers,
+            )
+
+            vm.uiState.test {
+                advanceUntilIdle()
+                val merged = expectMostRecentItem().searchHistory
+                assertEquals(5, merged.size)
+                assertEquals(
+                    listOf("重叠词", "跨站新", "重叠词", "跨站中", "站内旧"),
+                    merged.map { it.query },
+                )
+                assertEquals(SearchScope.TAG, merged[0].scope)
+                assertEquals(SiteId.R34V, merged[0].siteId)
+                assertEquals(SiteId.GLOBAL, merged[2].siteId)
+                assertEquals(SearchScope.ALL, merged[2].scope)
+                assertEquals(SiteId.R34V, merged[4].siteId)
+
+                // Newer GLOBAL entries push older ones past the 30-item display cap.
+                repeat(30) { index ->
+                    harness.nowMs = base + 100 + index * 10L
+                    repository.recordSearch(SiteId.GLOBAL, "批量$index", SearchScope.ALL)
+                }
+                advanceUntilIdle()
+                val capped = expectMostRecentItem().searchHistory
+                assertEquals(30, capped.size)
+                assertEquals("批量29", capped.first().query)
+                assertTrue(capped.none { it.query == "站内旧" || it.query == "跨站中" })
+                cancelAndIgnoreRemainingEvents()
+            }
+        }
+
+    @Test
+    fun `selecting a history entry restores its site and search mode`() =
+        runTest(mainDispatcherRule.dispatcher) {
+            val harness = BrowseTestHarness(mainDispatcherRule.dispatcher)
+            val r34 = FakeSitePlugin(
+                descriptor = SiteDescriptor(SiteId.R34V, "R34V", primaryKind = MediaKind.VIDEO, defaultHost = "r34.example"),
+                searchHandler = { req -> FeedPage(items = listOf(sampleMediaItem(SiteId.R34V, "r_${req.query}", MediaKind.VIDEO))) },
+            )
+            val nhentai = FakeSitePlugin(
+                descriptor = SiteDescriptor(SiteId.NHENTAI, "nHentai", primaryKind = MediaKind.COMIC, defaultHost = "nh.example"),
+                searchHandler = { req -> FeedPage(items = listOf(sampleMediaItem(SiteId.NHENTAI, "nh_${req.query}", MediaKind.COMIC))) },
+            )
+            harness.preferencesRepository.setActiveSiteId(SiteId.R34V)
+            harness.searchHistoryRepository.recordSearch(SiteId.NHENTAI, "comic restore", SearchScope.ALL)
+            harness.nowMs += 10L
+            harness.searchHistoryRepository.recordSearch(SiteId.GLOBAL, "cross restore", SearchScope.ALL)
+
+            val vm = SearchViewModel(
+                siteRegistry = SiteRegistry(listOf(r34, nhentai)),
+                preferencesRepository = harness.preferencesRepository,
+                searchHistoryRepository = harness.searchHistoryRepository,
+                subscriptionRepository = harness.subscriptionRepository,
+                blockedTermsRepository = harness.blockedTermsRepository,
+                historyRepository = harness.historyRepository,
+                shelfRepository = harness.shelfRepository,
+                dispatchers = harness.dispatchers,
+            )
+
+            vm.uiState.test {
+                advanceUntilIdle()
+                val initial = expectMostRecentItem()
+                val siteEntry = initial.searchHistory.first { it.siteId == SiteId.NHENTAI }
+                vm.selectHistoryEntry(siteEntry)
+                advanceUntilIdle()
+
+                val single = expectMostRecentItem()
+                assertEquals(SearchMode.SINGLE_SITE, single.mode)
+                assertEquals(SiteId.NHENTAI, single.activeSite?.id)
+                assertEquals("comic restore", single.submittedQuery)
+                assertTrue(single.hasSearchedSingleSite)
+                assertEquals("comic restore", nhentai.searchRequests.last().query)
+
+                val globalEntry = single.searchHistory.first { it.siteId == SiteId.GLOBAL }
+                vm.selectHistoryEntry(globalEntry)
+                advanceUntilIdle()
+
+                val cross = expectMostRecentItem()
+                assertEquals(SearchMode.CROSS_SITE, cross.mode)
+                assertEquals("cross restore", cross.submittedQuery)
+                assertTrue(cross.hasSearchedCrossSite)
+                assertTrue(r34.searchRequests.any { it.query == "cross restore" })
+                assertTrue(nhentai.searchRequests.any { it.query == "cross restore" })
+                cancelAndIgnoreRemainingEvents()
+            }
+        }
+
+    @Test
+    fun `clearing history removes current site and GLOBAL but keeps other sites`() =
+        runTest(mainDispatcherRule.dispatcher) {
+            val harness = BrowseTestHarness(mainDispatcherRule.dispatcher)
+            harness.preferencesRepository.setActiveSiteId(SiteId.R34V)
+            harness.searchHistoryRepository.recordSearch(SiteId.R34V, "site a", SearchScope.ALL)
+            harness.searchHistoryRepository.recordSearch(SiteId.NHENTAI, "site b", SearchScope.ALL)
+            harness.searchHistoryRepository.recordSearch(SiteId.GLOBAL, "cross entry", SearchScope.ALL)
+
+            val vm = SearchViewModel(
+                siteRegistry = SiteRegistry(
+                    emptyList(),
+                ),
+                preferencesRepository = harness.preferencesRepository,
+                searchHistoryRepository = harness.searchHistoryRepository,
+                subscriptionRepository = harness.subscriptionRepository,
+                blockedTermsRepository = harness.blockedTermsRepository,
+                historyRepository = harness.historyRepository,
+                shelfRepository = harness.shelfRepository,
+                dispatchers = harness.dispatchers,
+            )
+
+            vm.clearSiteHistory()
+            advanceUntilIdle()
+
+            assertTrue(harness.searchHistoryRepository.observeBySite(SiteId.R34V, limit = 20).first().isEmpty())
+            assertTrue(harness.searchHistoryRepository.observeBySite(SiteId.GLOBAL, limit = 20).first().isEmpty())
+            assertEquals(
+                listOf("site b"),
+                harness.searchHistoryRepository.observeBySite(SiteId.NHENTAI, limit = 20).first().map { it.query },
+            )
+        }
 }

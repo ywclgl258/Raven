@@ -6,6 +6,7 @@ import com.raven.app.core.media.reader.GalleryPageRepository
 import com.raven.app.core.media.reader.OfflineGallerySnapshot
 import com.raven.app.core.media.storage.LocalLibraryImporter
 import com.raven.app.core.media.storage.StorageRootManager
+import com.raven.app.core.model.AuthorRef
 import com.raven.app.core.model.MediaItem
 import com.raven.app.core.model.MediaKind
 import com.raven.app.core.model.PageBookmark
@@ -134,6 +135,35 @@ class GalleryDetailViewModelTest {
         assertNotNull(actionState)
         assertTrue(actionState!!.isFavorited)
         assertTrue(actionState.isBlocked)
+
+        // Subscription remains reactive inside the same long-press sheet, including label-only tags.
+        viewModel.toggleTagSubscription(tag)
+        advanceUntilIdle()
+        assertTrue(viewModel.uiState.value.tagAction!!.isSubscribed)
+        assertTrue("solo-female" in viewModel.uiState.value.subscribedTagSlugs)
+        assertTrue(
+            harness.tagSubscriptionDao.getAll().any {
+                it.siteId == SiteId.NHENTAI.value && it.slug == "solo-female"
+            },
+        )
+        viewModel.toggleTagSubscription(tag)
+        advanceUntilIdle()
+        assertFalse(viewModel.uiState.value.tagAction!!.isSubscribed)
+
+        val labelOnlyTag = TagRef(slug = "", label = "label-only")
+        viewModel.openTagActions(labelOnlyTag)
+        viewModel.toggleTagSubscription(labelOnlyTag)
+        advanceUntilIdle()
+        assertTrue(viewModel.uiState.value.tagAction!!.isSubscribed)
+        assertTrue(harness.tagSubscriptionDao.getAll().any { it.slug == "label-only" })
+
+        // Author long-press owns a separate sheet and never stacks over the tag sheet.
+        val author = AuthorRef(id = "author-1", name = "Alice")
+        viewModel.openAuthorActions(author)
+        assertEquals(author, viewModel.uiState.value.authorAction)
+        assertNull(viewModel.uiState.value.tagAction)
+        viewModel.dismissAuthorActions()
+        assertNull(viewModel.uiState.value.authorAction)
 
         // Bookmark deletion propagates reactively
         viewModel.deleteBookmark("bm-1")

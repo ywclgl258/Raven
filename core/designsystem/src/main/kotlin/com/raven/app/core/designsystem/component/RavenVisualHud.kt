@@ -3,6 +3,7 @@ package com.raven.app.core.designsystem.component
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.snap
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -33,6 +34,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.raven.app.core.designsystem.motion.RavenMorphGlyph
 import com.raven.app.core.designsystem.theme.LocalMotionReduced
 import com.raven.app.core.designsystem.theme.LocalRavenColors
 import com.raven.app.core.designsystem.theme.LocalReduceTransparency
@@ -57,6 +59,61 @@ fun RavenVisualHud(
     accentColor: Color = LocalRavenColors.current.inkPrimary,
 ) {
     val colors = LocalRavenColors.current
+    RavenVisualHudLayout(
+        visible = visible,
+        label = label,
+        modifier = modifier,
+        progress = progress,
+        accentColor = accentColor,
+    ) {
+        Icon(
+            imageVector = icon,
+            contentDescription = null,
+            tint = colors.inkPrimary,
+            modifier = Modifier.size(20.dp),
+        )
+    }
+}
+
+/**
+ * Morphing-glyph overload of [RavenVisualHud] using [RavenMorphIcon] inside the same frosted
+ * capsule HUD layout.
+ */
+@Composable
+fun RavenVisualHud(
+    visible: Boolean,
+    glyph: RavenMorphGlyph,
+    label: String,
+    modifier: Modifier = Modifier,
+    progress: Float? = null,
+    accentColor: Color = LocalRavenColors.current.inkPrimary,
+) {
+    val colors = LocalRavenColors.current
+    RavenVisualHudLayout(
+        visible = visible,
+        label = label,
+        modifier = modifier,
+        progress = progress,
+        accentColor = accentColor,
+    ) {
+        RavenMorphIcon(
+            glyph = glyph,
+            tint = colors.inkPrimary,
+            size = 20.dp,
+        )
+    }
+}
+
+@Composable
+private fun RavenVisualHudLayout(
+    visible: Boolean,
+    label: String,
+    modifier: Modifier,
+    progress: Float?,
+    accentColor: Color,
+    iconContent: @Composable () -> Unit,
+) {
+    val colors = LocalRavenColors.current
     val reduceTransparency = LocalReduceTransparency.current
     val motionReduced = LocalMotionReduced.current
 
@@ -70,9 +127,9 @@ fun RavenVisualHud(
             ),
         ) + scaleIn(
             initialScale = 0.92f,
-            animationSpec = tween(
-                durationMillis = 150,
-                easing = RavenMotion.HarmonyDecelerationEasing,
+            animationSpec = spring(
+                dampingRatio = 0.72f,
+                stiffness = 520f,
             ),
         )
     }
@@ -110,12 +167,7 @@ fun RavenVisualHud(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(12.dp),
             ) {
-                Icon(
-                    imageVector = icon,
-                    contentDescription = null,
-                    tint = colors.inkPrimary,
-                    modifier = Modifier.size(20.dp),
-                )
+                iconContent()
 
                 if (progress != null) {
                     val target = if (progress.isFinite()) progress.coerceIn(0f, 1f) else 0f

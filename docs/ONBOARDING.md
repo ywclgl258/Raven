@@ -387,7 +387,7 @@ fun LibraryStatsScreenContent(
             .testTag("library_stats_screen"),
     ) {
         RavenTopBar(
-            title = "片库统计",
+            title = "资料库统计",
             navigationIcon = { /* IconButton(onClick = onBack) */ },
         )
         // 使用 RavenGroupedSection / RavenEmptyState / RavenLoadingSkeleton 等标准组件

@@ -623,6 +623,8 @@ internal class InMemorySearchHistoryDao : SearchHistoryDao {
     private val rows = MutableStateFlow<List<SearchHistoryEntity>>(emptyList())
     override fun observeBySite(siteId: String, limit: Int): Flow<List<SearchHistoryEntity>> =
         rows.map { it.filter { e -> e.siteId == siteId }.sortedByDescending { e -> e.searchedAt }.take(limit) }
+    override fun observeAll(limit: Int): Flow<List<SearchHistoryEntity>> =
+        rows.map { it.sortedByDescending { e -> e.searchedAt }.take(limit) }
     override suspend fun getAll(): List<SearchHistoryEntity> = rows.value
     override suspend fun upsert(entity: SearchHistoryEntity) {
         rows.update { list ->

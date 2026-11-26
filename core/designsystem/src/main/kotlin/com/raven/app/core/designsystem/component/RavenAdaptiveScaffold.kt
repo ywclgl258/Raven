@@ -1,19 +1,14 @@
 package com.raven.app.core.designsystem.component
 
-import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.core.Spring
+import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.snap
-import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
-import androidx.compose.animation.scaleIn
-import androidx.compose.animation.scaleOut
 import androidx.compose.animation.shrinkVertically
-import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -36,22 +31,16 @@ import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.outlined.MenuBook
 import androidx.compose.material.icons.filled.Explore
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.VideoLibrary
-import androidx.compose.material.icons.outlined.AutoStories
 import androidx.compose.material.icons.outlined.Explore
 import androidx.compose.material.icons.outlined.Home
-import androidx.compose.material.icons.outlined.Movie
 import androidx.compose.material.icons.outlined.Person
-import androidx.compose.material.icons.outlined.PhotoLibrary
 import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material.icons.outlined.VideoLibrary
-import androidx.compose.material.icons.rounded.KeyboardArrowDown
-import androidx.compose.material3.Badge
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -79,14 +68,13 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.text.SpanStyle
-import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.window.core.layout.WindowSizeClass
+import com.raven.app.core.designsystem.motion.MorphSpringPreset
+import com.raven.app.core.designsystem.motion.RavenMorphIcons
 import com.raven.app.core.designsystem.theme.LocalMotionReduced
 import com.raven.app.core.designsystem.theme.LocalRavenColors
 import com.raven.app.core.designsystem.theme.LocalRavenFeedback
@@ -99,7 +87,6 @@ import com.raven.app.core.designsystem.theme.RavenMotion
 import com.raven.app.core.designsystem.theme.RavenShapes
 import com.raven.app.core.designsystem.theme.RavenTabularTextStyle
 import com.raven.app.core.designsystem.theme.ravenInteractiveLight
-import com.raven.app.core.designsystem.theme.ravenSpringPress
 import com.raven.app.core.model.MediaKind
 import com.raven.app.core.model.RavenRoute
 import com.raven.app.core.model.SiteDescriptor
@@ -136,7 +123,7 @@ enum class RavenTopDestination(
         testTag = "nav_search",
     ),
     LIBRARY(
-        label = "片库",
+        label = "鸦巢",
         route = RavenRoute.Library,
         selectedIcon = Icons.Filled.VideoLibrary,
         unselectedIcon = Icons.Outlined.VideoLibrary,
@@ -288,33 +275,11 @@ fun RavenAdaptiveScaffold(
                     },
                     badge = if (badgeCount > 0) {
                         {
-                            val badgeText = if (badgeCount > 99) "99+" else badgeCount.toString()
-                            Badge(
+                            RavenPopBadge(
+                                count = badgeCount,
                                 containerColor = colors.crimson,
                                 contentColor = colors.inkPrimary,
-                            ) {
-                                AnimatedContent(
-                                    targetState = badgeText,
-                                    transitionSpec = {
-                                        if (motionReduced) {
-                                            fadeIn(snap()) togetherWith fadeOut(snap())
-                                        } else {
-                                            (fadeIn(tween(140)) + scaleIn(initialScale = 0.78f, animationSpec = RavenMotion.interactiveSpringSpec()))
-                                                .togetherWith(fadeOut(tween(100)) + scaleOut(targetScale = 0.78f))
-                                        }
-                                    },
-                                    label = "ravenNavBadgeCount",
-                                ) { countLabel ->
-                                    Text(
-                                        text = countLabel,
-                                        style = RavenTabularTextStyle.copy(
-                                            fontSize = 10.sp,
-                                            lineHeight = 12.sp,
-                                            fontWeight = FontWeight.Bold,
-                                        ),
-                                    )
-                                }
-                            }
+                            )
                         }
                     } else {
                         null
@@ -423,9 +388,10 @@ private fun RavenNavDestinationIcon(
     destination: RavenTopDestination,
     selected: Boolean,
 ) {
+    val colors = LocalRavenColors.current
     val motionReduced = LocalMotionReduced.current
     val iconScaleState = animateFloatAsState(
-        targetValue = if (selected) 1.10f else 1.0f,
+        targetValue = if (selected) 1.08f else 1.0f,
         animationSpec = if (motionReduced) {
             snap()
         } else {
@@ -433,15 +399,32 @@ private fun RavenNavDestinationIcon(
         },
         label = "ravenNavIconScale",
     )
-    Icon(
-        imageVector = if (selected) destination.selectedIcon else destination.unselectedIcon,
-        contentDescription = destination.label,
-        modifier = Modifier.graphicsLayer {
-            val s = iconScaleState.value
-            scaleX = s
-            scaleY = s
-        },
-    )
+    val glyph = when (destination) {
+        RavenTopDestination.HOME -> if (selected) RavenMorphIcons.HomeActive else RavenMorphIcons.HomeOutline
+        RavenTopDestination.EXPLORE -> if (selected) RavenMorphIcons.ExploreActive else RavenMorphIcons.ExploreOutline
+        RavenTopDestination.SEARCH -> if (selected) RavenMorphIcons.SearchActive else RavenMorphIcons.SearchOutline
+        RavenTopDestination.LIBRARY -> if (selected) RavenMorphIcons.LibraryActive else RavenMorphIcons.LibraryOutline
+        RavenTopDestination.PROFILE -> if (selected) RavenMorphIcons.ProfileActive else RavenMorphIcons.ProfileOutline
+    }
+    Box(
+        modifier = Modifier
+            .ravenBurstFeedback(trigger = selected, burstColor = colors.crimson)
+            .ravenSquashPress(),
+        contentAlignment = Alignment.Center,
+    ) {
+        RavenMorphIcon(
+            glyph = glyph,
+            size = 24.dp,
+            strokeWidth = 2.dp,
+            springPreset = MorphSpringPreset.SNAPPY,
+            contentDescription = destination.label,
+            modifier = Modifier.graphicsLayer {
+                val s = iconScaleState.value
+                scaleX = s
+                scaleY = s
+            },
+        )
+    }
 }
 
 /**
@@ -577,14 +560,30 @@ fun RavenSiteSwitcherPill(
 ) {
     val colors = LocalRavenColors.current
     val reduceTransparency = LocalReduceTransparency.current
+    val motionReduced = LocalMotionReduced.current
     val feedback = LocalRavenFeedback.current
     val interactionSource = remember { MutableInteractionSource() }
-    val kindIcon = when (mediaKind) {
-        MediaKind.VIDEO -> Icons.Outlined.Movie
-        MediaKind.COMIC -> Icons.AutoMirrored.Outlined.MenuBook
-        MediaKind.SERIAL_COMIC -> Icons.Outlined.AutoStories
-        MediaKind.PHOTO -> Icons.Outlined.PhotoLibrary
+    val kindGlyph = when (mediaKind) {
+        MediaKind.VIDEO -> RavenMorphIcons.Movie
+        MediaKind.COMIC, MediaKind.SERIAL_COMIC -> RavenMorphIcons.Book
+        MediaKind.PHOTO -> RavenMorphIcons.Photo
     }
+    val kindDotColor by animateColorAsState(
+        targetValue = when (mediaKind) {
+            MediaKind.VIDEO -> colors.crimson
+            MediaKind.COMIC, MediaKind.SERIAL_COMIC -> colors.inkPrimary
+            MediaKind.PHOTO -> colors.inkSecondary
+        },
+        animationSpec = if (motionReduced) {
+            snap()
+        } else {
+            tween(
+                durationMillis = RavenMotion.CHIP_TRANSITION_DURATION_MS,
+                easing = RavenMotion.HarmonyDecelerationEasing,
+            )
+        },
+        label = "ravenSiteSwitcherKindDotColor",
+    )
     val kindLabel = when (mediaKind) {
         MediaKind.VIDEO -> "视频站点"
         MediaKind.COMIC -> "漫画站点"
@@ -596,7 +595,7 @@ fun RavenSiteSwitcherPill(
         modifier = modifier
             .minimumInteractiveComponentSize()
             .defaultMinSize(minWidth = 48.dp, minHeight = 48.dp)
-            .ravenSpringPress(interactionSource = interactionSource)
+            .ravenSquashPress(interactionSource = interactionSource)
             .semantics { contentDescription = "切换站点：$shortName（$kindLabel）" }
             .clickable(
                 interactionSource = interactionSource,
@@ -622,20 +621,14 @@ fun RavenSiteSwitcherPill(
                     modifier = Modifier
                         .size(6.dp)
                         .clip(CircleShape)
-                        .background(
-                            when (mediaKind) {
-                                MediaKind.VIDEO -> colors.crimson
-                                MediaKind.COMIC -> colors.inkPrimary
-                                MediaKind.SERIAL_COMIC -> colors.inkPrimary
-                                MediaKind.PHOTO -> colors.inkSecondary
-                            },
-                        ),
+                        .background(kindDotColor),
                 )
-                Icon(
-                    imageVector = kindIcon,
-                    contentDescription = null,
+                RavenMorphIcon(
+                    glyph = kindGlyph,
                     tint = colors.inkSecondary,
-                    modifier = Modifier.size(15.dp),
+                    size = 15.dp,
+                    strokeWidth = 1.5.dp,
+                    springPreset = MorphSpringPreset.SNAPPY,
                 )
                 Text(
                     text = shortName,
@@ -644,11 +637,10 @@ fun RavenSiteSwitcherPill(
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
-                Icon(
-                    imageVector = Icons.Rounded.KeyboardArrowDown,
-                    contentDescription = null,
+                RavenMorphIcon(
+                    glyph = RavenMorphIcons.ChevronDown,
                     tint = colors.inkSecondary,
-                    modifier = Modifier.size(18.dp),
+                    size = 18.dp,
                 )
             }
         }
@@ -697,19 +689,24 @@ fun RavenBrandWordmark(
     title: String = "RAVEN",
 ) {
     val colors = LocalRavenColors.current
-    Text(
-        text = buildAnnotatedString {
-            append(title)
-            withStyle(SpanStyle(color = colors.crimson)) {
-                append(".")
-            }
-        },
-        style = MaterialTheme.typography.titleLarge.copy(
-            fontWeight = FontWeight.Black,
-            letterSpacing = (-0.5).sp,
-        ),
-        color = colors.inkPrimary,
-        maxLines = 1,
+    Row(
         modifier = modifier,
-    )
+        verticalAlignment = Alignment.Bottom,
+        horizontalArrangement = Arrangement.spacedBy(2.dp),
+    ) {
+        Text(
+            text = title,
+            style = MaterialTheme.typography.titleLarge.copy(
+                fontWeight = FontWeight.Black,
+                letterSpacing = (-0.5).sp,
+            ),
+            color = colors.inkPrimary,
+            maxLines = 1,
+        )
+        RavenLivingBrandDot(
+            size = 5.dp,
+            color = colors.crimson,
+            modifier = Modifier.padding(bottom = 5.dp),
+        )
+    }
 }

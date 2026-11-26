@@ -24,6 +24,7 @@ import com.raven.app.core.media.reader.GalleryExporter
 import com.raven.app.core.media.reader.GalleryPageRepository
 import com.raven.app.core.media.reader.PreparedExport
 import com.raven.app.core.media.storage.LocalLibraryImporter
+import com.raven.app.core.model.AuthorRef
 import com.raven.app.core.model.DownloadItem
 import com.raven.app.core.model.DownloadStatus
 import com.raven.app.core.model.FavoriteItem
@@ -102,6 +103,8 @@ data class GalleryDetailUiState(
     val sourceRoot: String = "",
     val localSizeLabel: String? = null,
     val readingProgress: ReadingProgress? = null,
+    /** Reactive site-wide reading history keyed by media/chapter id (one row per work). */
+    val readingProgressByMediaId: Map<String, ReadingProgress> = emptyMap(),
     val isFavorite: Boolean = false,
     val isInWatchLater: Boolean = false,
     val shelves: List<ShelfWithSummary> = emptyList(),
@@ -121,6 +124,8 @@ data class GalleryDetailUiState(
     val blockedTerms: Set<String> = emptySet(),
     val downloadSheet: DownloadSheetState = DownloadSheetState(),
     val tagAction: TagActionState? = null,
+    /** Author inspected via long-press; shown in the author action sheet. */
+    val authorAction: AuthorRef? = null,
     val isExporting: Boolean = false,
     val exportStatusText: String? = null,
     val authRequired: Boolean = false,
@@ -157,6 +162,37 @@ data class GalleryDetailUiState(
     val canOpenOffline: Boolean
         get() = isLocal || isOfflineComplete || downloadedPages.isNotEmpty() ||
             activeDownload?.status == DownloadStatus.COMPLETED
+
+    /** First unread/unfinished chapter after the current one, or null at the list boundary. */
+    val nextUnreadChapter: MediaItem?
+        get() {
+            val current = detail ?: return null
+            return findNextUnreadChapter(
+                chapters = chapters,
+                currentChapter = current.item,
+                progressByMediaId = readingProgressByMediaId,
+            )
+        }
+
+    val allChaptersCompleted: Boolean
+        get() = chapters.isNotEmpty() && chapters.all { chapter ->
+            readingProgressByMediaId[chapter.id]?.completed == true
+        }
+
+    /** Boundary copy shown when "下一未读" is disabled. */
+    val nextUnreadBoundaryLabel: String?
+        get() = when {
+            chapters.isEmpty() || nextUnreadChapter != null -> null
+            allChaptersCompleted -> "全部章节已读完"
+            else -> "后续章节已读完"
+        }
+
+    val chapterPickerReadState: ChapterPickerReadState
+        get() = ChapterPickerReadState(
+            progressByMediaId = readingProgressByMediaId,
+            nextUnreadChapter = nextUnreadChapter,
+            nextUnreadBoundaryLabel = nextUnreadBoundaryLabel,
+        )
 }
 
 /**
@@ -277,6 +313,19 @@ class GalleryDetailViewModel(
     @OptIn(ExperimentalCoroutinesApi::class)
     private fun observeLocalPersonalState() {
         if (isInvalidSiteId) return
+        // Site-wide history powers per-chapter read markers and "下一未读" without per-chapter queries.
+        viewModelScope.launch(dispatchers.main) {
+            historyRepository.observeReadingProgressBySite(siteId).collectLatest { history ->
+                val byMediaId = history.associateBy { it.mediaId }
+                _uiState.update { state ->
+                    if (state.readingProgressByMediaId == byMediaId) {
+                        state
+                    } else {
+                        state.copy(readingProgressByMediaId = byMediaId)
+                    }
+                }
+            }
+        }
         // Combine reading progress, bookmarks, watch-later / shelf membership, and downloads
         // keyed by the active work/chapter id so serial auto-resume stays synchronized.
         viewModelScope.launch(dispatchers.main) {
@@ -358,7 +407,7 @@ class GalleryDetailViewModel(
                         .filter { it.kind == FavoriteKind.TAG }
                         .mapTo(linkedSetOf()) { it.targetId.lowercase() }
                     val updatedTagAction = state.tagAction?.let { action ->
-                        val normSlug = action.tag.slug.lowercase()
+                        val normSlug = subscriptionSlug(action.tag).lowercase()
                         action.copy(
                             translatedLabel = formatTagLabelInternal(action.tag, state.translateTags),
                             isFavorited = normSlug in favTagSlugs,
@@ -469,6 +518,20 @@ class GalleryDetailViewModel(
                         errorMessage = null,
                     )
                 }
+                if (!offlineOnly && snapshot.detail.related.isEmpty()) {
+                    val fallback = fetchSimilarFromMetadata(snapshot.detail)
+                    if (fallback.isNotEmpty() && _uiState.value.detail?.item?.id == resolvedId) {
+                        _uiState.update {
+                            it.copy(
+                                filteredRelated = filterRelatedItems(
+                                    raw = fallback,
+                                    blockedTerms = it.blockedTerms,
+                                    cachedTagsByKey = latestCachedTagsByKey,
+                                ),
+                            )
+                        }
+                    }
+                }
                 if (!resumeApplied && !offlineOnly) {
                     resumeApplied = true
                     loadChaptersAndMaybeResume(snapshot.detail)
@@ -538,6 +601,53 @@ class GalleryDetailViewModel(
     }
 
     /**
+     * Plugin-provided `related` is optional. When absent, derive a same-site recommendation set
+     * from the first tag (preferred) or author so every detail page can expose 相似推荐.
+     */
+    private suspend fun fetchSimilarFromMetadata(detail: GalleryDetail): List<MediaItem> {
+        val feed = plugin?.feedSource ?: return emptyList()
+        val tag = detail.tags.firstOrNull() ?: detail.categories.firstOrNull()
+        val tagSlug = tag?.slug?.trim().orEmpty()
+        val authorName = (detail.authors.firstOrNull() ?: detail.item.author)
+            ?.name
+            ?.trim()
+            .orEmpty()
+        val supportedScopes = descriptor?.searchScopes.orEmpty()
+        val requests = buildList {
+            if (tagSlug.isNotEmpty()) {
+                add(
+                    FeedRequest(
+                        siteId = siteId,
+                        query = tagSlug,
+                        scope = if (SearchScope.TAG in supportedScopes) SearchScope.TAG else SearchScope.ALL,
+                        page = 1,
+                    ),
+                )
+            }
+            if (authorName.isNotEmpty()) {
+                add(
+                    FeedRequest(
+                        siteId = siteId,
+                        query = authorName,
+                        scope = if (SearchScope.AUTHOR in supportedScopes) SearchScope.AUTHOR else SearchScope.ALL,
+                        page = 1,
+                    ),
+                )
+            }
+        }
+        for (request in requests) {
+            val items = runCatching { feed.loadFeed(request).items }
+                .getOrDefault(emptyList())
+                .filterNot { it.compositeKey == detail.item.compositeKey || it.id == mediaId }
+                .distinctBy { it.compositeKey }
+                .take(12)
+            if (items.isNotEmpty()) return items
+        }
+        return emptyList()
+    }
+
+
+    /**
      * 连载漫画：自动载入章节列表，并在存在历史记录时切换到最近阅读的章节；
      * 没有历史则停留在插件默认的第一章。
      */
@@ -600,9 +710,7 @@ class GalleryDetailViewModel(
                     isOfflineComplete = snapshot.isComplete,
                     sourceRoot = snapshot.sourceRoot,
                     isFavorite = resumedFav,
-                    readingProgress = runCatching {
-                        historyRepository.getReadingProgress(siteId, chapter.id)
-                    }.getOrNull(),
+                    readingProgress = it.readingProgressByMediaId[chapter.id],
                     localSizeLabel = snapshot.detail.fileSizeLabel,
                     filteredRelated = filterRelatedItems(
                         raw = snapshot.detail.related,
@@ -887,11 +995,15 @@ class GalleryDetailViewModel(
         }
     }
 
+    /** Canonical subscription key; some plugins expose only a readable label without a slug. */
+    private fun subscriptionSlug(tag: TagRef): String =
+        tag.slug.trim().ifBlank { tag.label.trim() }
+
     // ---- Tag Long-Press Action Sheet ----
 
     fun openTagActions(tag: TagRef) {
         val state = _uiState.value
-        val normSlug = tag.slug.lowercase()
+        val normSlug = subscriptionSlug(tag).lowercase()
         _uiState.update {
             it.copy(
                 tagAction = TagActionState(
@@ -901,12 +1013,23 @@ class GalleryDetailViewModel(
                     isSubscribed = normSlug in state.subscribedTagSlugs,
                     isBlocked = matchesBlockedTerms(tag, state.blockedTerms),
                 ),
+                authorAction = null,
             )
         }
     }
 
     fun dismissTagActions() {
         _uiState.update { it.copy(tagAction = null) }
+    }
+
+    // ---- Author Long-Press Action Sheet ----
+
+    fun openAuthorActions(author: AuthorRef) {
+        _uiState.update { it.copy(authorAction = author, tagAction = null) }
+    }
+
+    fun dismissAuthorActions() {
+        _uiState.update { it.copy(authorAction = null) }
     }
 
     fun toggleTagFavorite(tag: TagRef) {
@@ -932,10 +1055,15 @@ class GalleryDetailViewModel(
     fun toggleTagSubscription(tag: TagRef) {
         viewModelScope.launch(dispatchers.io) {
             val label = formatTagLabel(tag)
+            val slug = subscriptionSlug(tag)
+            if (slug.isEmpty()) {
+                emitSnackbar("无法订阅标签「$label」：缺少标签标识")
+                return@launch
+            }
             val subscribed = subscriptionRepository.toggleSubscription(
                 TagSubscription(
                     siteId = siteId,
-                    slug = tag.slug,
+                    slug = slug,
                     label = label,
                     url = tag.url,
                     scope = SearchScope.TAG,
