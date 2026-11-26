@@ -8,6 +8,7 @@ import android.content.res.Configuration
 import android.graphics.Color as AndroidColor
 import android.os.Build
 import android.os.Bundle
+import android.os.SystemClock
 import android.util.Rational
 import android.view.WindowManager
 import android.widget.Toast
@@ -16,31 +17,52 @@ import androidx.activity.SystemBarStyle
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.annotation.RequiresApi
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.EnterTransition
+import androidx.compose.animation.ExitTransition
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Modifier
 import androidx.core.net.toUri
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.raven.app.core.common.UrlSanitizer
 import com.raven.app.core.database.model.AppSettings
 import com.raven.app.core.database.repository.PreferencesRepository
 import com.raven.app.core.designsystem.component.LocalRavenImageRequestDecorator
+import com.raven.app.core.designsystem.component.RavenAppLockOverlay
+import com.raven.app.core.designsystem.theme.LocalMotionReduced
+import com.raven.app.core.designsystem.theme.LocalRavenColors
+import com.raven.app.core.designsystem.theme.RavenMotion
 import com.raven.app.core.designsystem.theme.RavenTheme
 import com.raven.app.core.model.AuthorRef
 import com.raven.app.core.model.RavenRoute
 import com.raven.app.core.model.SiteId
 import com.raven.app.core.model.TagRef
 import com.raven.app.core.network.ravenImageRequestDecorator
+import com.raven.app.core.security.PrivacyLockStore
 import com.raven.app.core.sitespi.SiteRegistry
 import com.raven.app.feature.player.PlayerLaunchArgs
 import com.raven.app.feature.player.PlayerNavigator
 import com.raven.app.feature.player.PlayerViewModel
 import com.raven.app.feature.player.VideoPlayerScreen
 import kotlin.math.roundToInt
+import kotlinx.coroutines.delay
 import org.koin.android.ext.android.inject
 import org.koin.androidx.viewmodel.ext.android.viewModel
 import org.koin.core.parameter.parametersOf
@@ -58,6 +80,8 @@ class PlayerActivity : ComponentActivity() {
 
     private val siteRegistry: SiteRegistry by inject()
     private val preferencesRepository: PreferencesRepository by inject()
+    private val privacyLockStore: PrivacyLockStore by inject()
+    private val appLockCoordinator: AppLockSessionCoordinator by inject()
 
     private var initialLaunchArgs: PlayerLaunchArgs? = null
     private val playerViewModel: PlayerViewModel by viewModel {
@@ -72,7 +96,7 @@ class PlayerActivity : ComponentActivity() {
 
     private val playerNavigator: PlayerNavigator = object : PlayerNavigator {
         override fun openTagFeed(siteId: SiteId, tag: TagRef) {
-            navigateBackToMain(MainActivityIntentContract.resolveTagFeedRoute(siteRegistry, siteId, tag))
+            navigateBackToMain(MainActivityIntentContract.resolveTagRoute(siteRegistry, siteId, tag))
         }
 
         override fun openAuthorFeed(siteId: SiteId, author: AuthorRef) {
@@ -80,7 +104,10 @@ class PlayerActivity : ComponentActivity() {
         }
 
         override fun openExternalUrl(url: String) {
-            if (url.isBlank()) return
+            if (!UrlSanitizer.isSafeHttpUrl(url, allowHttp = true)) {
+                Toast.makeText(this@PlayerActivity, "已拦截不安全的外部链接协议", Toast.LENGTH_SHORT).show()
+                return
+            }
             suppressAutoPipOnce = true
             runCatching {
                 startActivity(Intent(Intent.ACTION_VIEW, url.toUri()))
@@ -168,12 +195,17 @@ class PlayerActivity : ComponentActivity() {
             navigationBarStyle = SystemBarStyle.dark(AndroidColor.TRANSPARENT),
         )
         super.onCreate(savedInstanceState)
+        DisplayRefreshRateController.applyHighRefreshRate(this, allowVideoFrameRateMatching = false)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-            overrideActivityTransition(
-                OVERRIDE_TRANSITION_CLOSE,
-                R.anim.raven_host_resume,
-                R.anim.raven_player_exit,
-            )
+            if (DisplayRefreshRateController.isSystemMotionReduced(this)) {
+                overrideActivityTransition(OVERRIDE_TRANSITION_CLOSE, 0, 0)
+            } else {
+                overrideActivityTransition(
+                    OVERRIDE_TRANSITION_CLOSE,
+                    R.anim.raven_host_resume,
+                    R.anim.raven_player_exit,
+                )
+            }
         }
 
         val launchArgs = PlayerLaunchArgs.fromIntent(intent)
@@ -188,11 +220,45 @@ class PlayerActivity : ComponentActivity() {
         }
 
         setContent {
-            val appSettings by preferencesRepository.settings.collectAsStateWithLifecycle(
-                initialValue = AppSettings(),
+            val loadedSettings by preferencesRepository.settings.collectAsStateWithLifecycle(
+                initialValue = null,
             )
-            val uiState by playerViewModel.uiState.collectAsStateWithLifecycle()
+            val appSettings = loadedSettings ?: AppSettings()
+            val uiState by playerViewModel.structuralUiState.collectAsStateWithLifecycle()
+            val lockState by appLockCoordinator.state.collectAsStateWithLifecycle()
+            var hasInteractiveOverlay by remember { mutableStateOf(true) }
+            val hasStoredPin = remember { privacyLockStore.hasPin() }
+            val awaitingInitialLockDecision = loadedSettings == null && hasStoredPin && !lockState.lockInitialized
             latestAppSettings = appSettings
+
+            LaunchedEffect(loadedSettings) {
+                val realSettings = loadedSettings ?: return@LaunchedEffect
+                appLockCoordinator.onSettingsLoaded(realSettings)
+            }
+
+            val showLockOverlay = lockState.isLocked && appSettings.appLockEnabled && privacyLockStore.hasPin()
+
+            LaunchedEffect(showLockOverlay, uiState.isPlaying) {
+                if (showLockOverlay && uiState.isPlaying) {
+                    playerViewModel.onBackgrounded(isInPipMode = false)
+                }
+            }
+
+            var lockoutSecondsRemaining by remember { mutableIntStateOf(0) }
+            LaunchedEffect(lockState.isLocked, lockState.lockoutUntilElapsedMs) {
+                while (lockState.isLocked && lockState.lockoutUntilElapsedMs > 0L) {
+                    val remainingMs = (lockState.lockoutUntilElapsedMs - SystemClock.elapsedRealtime()).coerceAtLeast(0L)
+                    lockoutSecondsRemaining = ((remainingMs + 999L) / 1_000L).toInt()
+                    if (remainingMs <= 0L) {
+                        appLockCoordinator.onLockoutExpired()
+                        break
+                    }
+                    delay(1_000L)
+                }
+                if (lockState.lockoutUntilElapsedMs <= 0L) {
+                    lockoutSecondsRemaining = 0
+                }
+            }
 
             LaunchedEffect(appSettings.privacyScreenSecure) {
                 if (appSettings.privacyScreenSecure) {
@@ -219,6 +285,17 @@ class PlayerActivity : ComponentActivity() {
                 updatePipParams()
             }
 
+            LaunchedEffect(uiState.isPlaying, showLockOverlay, isInPipMode, hasInteractiveOverlay) {
+                val allowVideoRateMatch = uiState.isPlaying &&
+                    !showLockOverlay &&
+                    !isInPipMode &&
+                    !hasInteractiveOverlay
+                DisplayRefreshRateController.applyHighRefreshRate(
+                    activity = this@PlayerActivity,
+                    allowVideoFrameRateMatching = allowVideoRateMatch,
+                )
+            }
+
             RavenTheme(
                 reduceTransparency = appSettings.reduceTransparency,
                 uiSoundEffectsEnabled = appSettings.uiSoundEffectsEnabled,
@@ -226,16 +303,71 @@ class PlayerActivity : ComponentActivity() {
                 CompositionLocalProvider(
                     LocalRavenImageRequestDecorator provides ::ravenImageRequestDecorator,
                 ) {
-                    VideoPlayerScreen(
-                        viewModel = playerViewModel,
-                        navigator = playerNavigator,
-                        isInPipMode = isInPipMode,
-                        isFullscreen = isFullscreen,
-                        onVideoBoundsChanged = { bounds ->
-                            latestVideoBounds = bounds
-                            updatePipParams(bounds)
-                        },
-                    )
+                    val colors = LocalRavenColors.current
+                    val motionReduced = LocalMotionReduced.current
+                    Box(modifier = Modifier.fillMaxSize()) {
+                        if (!awaitingInitialLockDecision) {
+                            VideoPlayerScreen(
+                                viewModel = playerViewModel,
+                                navigator = playerNavigator,
+                                isInPipMode = isInPipMode,
+                                isFullscreen = isFullscreen,
+                                onVideoBoundsChanged = { bounds ->
+                                    latestVideoBounds = bounds
+                                    updatePipParams(bounds)
+                                },
+                                onInteractiveOverlayChanged = { active ->
+                                    hasInteractiveOverlay = active
+                                },
+                            )
+                        } else {
+                            Box(modifier = Modifier.fillMaxSize().background(colors.canvas))
+                        }
+
+                        AnimatedVisibility(
+                            visible = showLockOverlay,
+                            enter = if (motionReduced) {
+                                EnterTransition.None
+                            } else {
+                                fadeIn(
+                                    animationSpec = tween(
+                                        durationMillis = 180,
+                                        easing = RavenMotion.HarmonyDecelerationEasing,
+                                    ),
+                                ) + scaleIn(
+                                    initialScale = 1.03f,
+                                    animationSpec = tween(
+                                        durationMillis = 220,
+                                        easing = RavenMotion.HarmonyDecelerationEasing,
+                                    ),
+                                )
+                            },
+                            exit = if (motionReduced) {
+                                ExitTransition.None
+                            } else {
+                                fadeOut(
+                                    animationSpec = tween(
+                                        durationMillis = 180,
+                                        easing = RavenMotion.HarmonyDecelerationEasing,
+                                    ),
+                                ) + scaleOut(
+                                    targetScale = 0.97f,
+                                    animationSpec = tween(
+                                        durationMillis = 200,
+                                        easing = RavenMotion.HarmonyDecelerationEasing,
+                                    ),
+                                )
+                            },
+                        ) {
+                            RavenAppLockOverlay(
+                                onSubmitPinAsync = { candidate ->
+                                    appLockCoordinator.verifyPin(candidate)
+                                },
+                                errorMessage = lockState.errorMessage,
+                                lockoutSecondsRemaining = lockoutSecondsRemaining,
+                            )
+                        }
+                    }
                 }
             }
         }
@@ -251,14 +383,25 @@ class PlayerActivity : ComponentActivity() {
     override fun finish() {
         super.finish()
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-            @Suppress("DEPRECATION")
-            overridePendingTransition(R.anim.raven_host_resume, R.anim.raven_player_exit)
+            if (DisplayRefreshRateController.isSystemMotionReduced(this)) {
+                @Suppress("DEPRECATION")
+                overridePendingTransition(0, 0)
+            } else {
+                @Suppress("DEPRECATION")
+                overridePendingTransition(R.anim.raven_host_resume, R.anim.raven_player_exit)
+            }
         }
     }
 
     override fun onResume() {
         super.onResume()
         suppressAutoPipOnce = false
+        val state = playerViewModel.structuralUiState.value
+        val allowVideoRateMatch = state.isPlaying && !isInPipMode
+        DisplayRefreshRateController.applyHighRefreshRate(
+            activity = this,
+            allowVideoFrameRateMatching = allowVideoRateMatch,
+        )
     }
 
     override fun onUserLeaveHint() {

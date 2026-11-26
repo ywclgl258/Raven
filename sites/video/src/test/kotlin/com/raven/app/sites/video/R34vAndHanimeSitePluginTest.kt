@@ -614,27 +614,99 @@ class R34vAndHanimeSitePluginTest {
 
         val fakeHttp = FakeHttpClientAdapter()
         val store = InMemorySiteSessionStore()
-        fakeHttp.onGet(
-            "https://hanime1.me/login",
-            body = """<form><input name="_token" value="csrf_token_1" /></form>""",
-        )
+        var loginGetCalls = 0
+        fakeHttp.onGetDynamic("https://hanime1.me/login") { req ->
+            loginGetCalls += 1
+            if (loginGetCalls == 1) {
+                SiteHttpResponse(
+                    code = 200,
+                    finalUrl = req.url,
+                    body = """<form><input name="_token" value="csrf_token_1" /></form>""".toByteArray(),
+                )
+            } else {
+                SiteHttpResponse(
+                    code = 429,
+                    finalUrl = req.url,
+                    headers = mapOf("Retry-After" to listOf("10")),
+                    body = ByteArray(0),
+                )
+            }
+        }
         fakeHttp.onPost("https://hanime1.me/login") { req ->
             SiteHttpResponse(code = 200, finalUrl = req.url, body = ByteArray(0))
-        }
-        fakeHttp.onGetDynamic("https://hanime1.me/login") { req ->
-            if (req.headers.containsKey("Cookie") || req.allowCache.not()) {
-                SiteHttpResponse(code = 429, finalUrl = req.url, headers = mapOf("Retry-After" to listOf("10")), body = ByteArray(0))
-            } else {
-                SiteHttpResponse(code = 200, finalUrl = req.url, body = """<form><input name="_token" value="csrf_token_1" /></form>""".toByteArray())
-            }
         }
         val plugin = HanimeSitePlugin(fakeHttp, store, rateLimitBackoffMs = 0L)
         try {
             plugin.authProvider.loginWithCredentials("user@example.com", "pw")
             fail("Expected SiteException.RateLimited")
         } catch (_: SiteException.RateLimited) {
-            // expected
+            assertEquals(2, loginGetCalls)
         }
+    }
+
+    @Test
+    fun `r34v preserves cookie-jar 302 PHPSESSID and parses absolute top-characters works directory`() = runTest {
+        val fakeHttp = FakeHttpClientAdapter()
+        val store = InMemorySiteSessionStore()
+
+        fakeHttp.onGet(
+            "https://rule34video.com/login/",
+            body = """<form><input name="remember_me_csrf_token" value="csrf_302" /></form>""",
+            headers = mapOf("Set-Cookie" to listOf("PHPSESSID=guest_before_login; Path=/")),
+        )
+        fakeHttp.onPost("https://rule34video.com/login/") {
+            // Simulate SiteCookieJar storing the authenticated session cookie on intermediate 302 hop
+            // before final 200 destination response arrives without Set-Cookie headers.
+            store.saveCookies(SiteId.R34V, mapOf("PHPSESSID" to "authed_302_session"))
+            SiteHttpResponse(
+                code = 200,
+                finalUrl = "https://rule34video.com/",
+                body = """<html><body><a href="/logout/">Logout</a></body></html>""".toByteArray(),
+            )
+        }
+        fakeHttp.onGet(
+            "https://rule34video.com/top-characters/",
+            body = """
+                <html><body>
+                <a href="https://rule34video.com/top-characters/overwatch/">Overwatch</a>
+                <a href="/top-characters/genshin-impact/">All 123</a>
+                <a href="/top-characters/nier-automata/">NieR:Automata</a>
+                </body></html>
+            """.trimIndent(),
+        )
+
+        val plugin = R34vSitePlugin(fakeHttp, store, rateLimitBackoffMs = 0L)
+        val auth = plugin.authProvider.loginWithCredentials("alice", "pw")
+        assertTrue(auth.isAuthenticated)
+        assertEquals("authed_302_session", store.getCookies(SiteId.R34V)["PHPSESSID"])
+
+        val works = plugin.directorySource.loadDirectory("works")
+        assertEquals(listOf("overwatch", "nier-automata"), works.map { it.id })
+    }
+
+    @Test
+    fun `hanime1 ignores anonymous cookies for auth state and parses js source stream fallback`() = runTest {
+        val fakeHttp = FakeHttpClientAdapter()
+        val store = InMemorySiteSessionStore()
+        store.saveCookies(SiteId.HANIME1, mapOf("hanime1_session" to "anonymous_visitor"))
+
+        val plugin = HanimeSitePlugin(fakeHttp, store, rateLimitBackoffMs = 0L)
+        assertFalse(plugin.authProvider.currentAuthState().isAuthenticated)
+
+        fakeHttp.onGet(
+            "https://hanime1.me/watch?v=9090",
+            body = """
+                <html>
+                <head><meta property="og:title" content="JS Source Demo" /></head>
+                <body>
+                <h1>JS Source Demo</h1>
+                <script>const source = 'https://cdn.hanime.test/fallback/720.mp4';</script>
+                </body></html>
+            """.trimIndent(),
+        )
+        val detail = plugin.videoSource.loadVideoDetail("https://hanime1.me/watch?v=9090")
+        assertEquals("https://cdn.hanime.test/fallback/720.mp4", detail.streams.single().url)
+        assertFalse(detail.streams.single().isHls)
     }
 
     private fun feedHtml(section: String): String = """

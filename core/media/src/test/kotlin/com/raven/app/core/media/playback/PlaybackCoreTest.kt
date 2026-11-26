@@ -6,11 +6,14 @@ import androidx.media3.common.MimeTypes
 import com.raven.app.core.model.MediaKind
 import com.raven.app.core.model.SiteDescriptor
 import com.raven.app.core.model.SiteId
+import com.raven.app.core.model.VideoDetail
 import com.raven.app.core.model.VideoStream
 import com.raven.app.core.sitespi.MediaTransportHook
 import com.raven.app.core.sitespi.RouPngProtocol
 import com.raven.app.core.sitespi.SitePlugin
 import com.raven.app.core.sitespi.SiteRegistry
+import com.raven.app.core.sitespi.VideoSource
+import kotlinx.coroutines.test.runTest
 import okhttp3.OkHttpClient
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -309,5 +312,26 @@ class PlaybackCoreTest {
         assertEquals(32 * 1024 * 1024, lowMemBytes)
         assertEquals(64 * 1024 * 1024, highMemBytes)
         assertTrue(lowMemBytes <= midMemBytes && midMemBytes <= highMemBytes)
+    }
+
+    @Test
+    fun `video source refreshDownloadStreams prioritizes downloadStreams over streams`() = runTest {
+        val dl = VideoStream(quality = "1080p", label = "1080p", url = "https://cdn.example/dl.mp4", isHls = false)
+        val view = VideoStream(quality = "1080p", label = "1080p", url = "https://cdn.example/view.m3u8", isHls = true)
+        val source = object : VideoSource {
+            override suspend fun loadVideoDetail(url: String): VideoDetail = VideoDetail(
+                item = com.raven.app.core.model.MediaItem(
+                    siteId = SiteId.R34V,
+                    id = "1",
+                    url = url,
+                    kind = MediaKind.VIDEO,
+                    title = "Test",
+                ),
+                streams = listOf(view),
+                downloadStreams = listOf(dl),
+            )
+        }
+        val refreshed = source.refreshDownloadStreams("https://rule34video.com/video/1/")
+        assertEquals(listOf("https://cdn.example/dl.mp4", "https://cdn.example/view.m3u8"), refreshed.map { it.url })
     }
 }

@@ -70,7 +70,7 @@ class Mh160SitePlugin(
             val path = SECTION_PATHS[section] ?: "zaixian_recent.html"
             val url = "${MOBILE_BASE}/kanmanhua/$path"
             val doc = Jsoup.parse(fetchHtml(url), url)
-            val items = parseMobileList(doc)
+            val items = parseMobileList(doc).ifEmpty { parseSearchList(doc) }
             if (items.isEmpty()) {
                 throw SiteException.ParseError("漫画160 列表结构不可识别", siteId = SiteId.MH160)
             }
@@ -113,6 +113,7 @@ class Mh160SitePlugin(
             val chapters = parseChapters(doc)
             // parseChapters 已按阅读顺序（最早 → 最新）返回。
             val first = chapters.firstOrNull()
+            val firstChapterId = first?.let { parseChapterRef(it.url)?.chapterId }
             val pages = if (first != null) loadChapterPages(first.url) else emptyList()
             return GalleryDetail(
                 item = MediaItem(
@@ -125,6 +126,7 @@ class Mh160SitePlugin(
                     pageCount = pages.size,
                     extra = buildMap {
                         put("chapterUrl", first?.url.orEmpty())
+                        if (!firstChapterId.isNullOrBlank()) put("chapterId", firstChapterId)
                     },
                 ),
                 description = description,
@@ -228,7 +230,7 @@ class Mh160SitePlugin(
         val html = fetchHtml(ref.url)
         val doc = Jsoup.parse(html, ref.url)
         val title = parseTitle(doc).ifBlank { "章节 ${ref.chapterId}" }
-        val pages = loadChapterPages(ref.url)
+        val pages = loadChapterPages(ref.url, preloadedHtml = html)
         return GalleryDetail(
             item = MediaItem(
                 siteId = SiteId.MH160,
@@ -289,6 +291,11 @@ class Mh160SitePlugin(
             val href = link.absUrl("href").ifBlank { link.attr("href") }
             val id = extractComicId(href) ?: return@forEach
             val title = HtmlUrlCleaner.cleanText(li.selectFirst("a.txtA")?.text().orEmpty())
+                .ifBlank {
+                    HtmlUrlCleaner.cleanText(
+                        li.select("a").firstOrNull { it.text().isNotBlank() }?.text().orEmpty(),
+                    )
+                }
                 .ifBlank { href.trim('/').substringAfterLast('/') }
             if (title.isBlank()) return@forEach
             seen.putIfAbsent(
@@ -328,8 +335,11 @@ class Mh160SitePlugin(
         return seen.values.toList().reversed()
     }
 
-    private suspend fun loadChapterPages(chapterUrl: String): List<GalleryPage> {
-        val html = fetchHtml(chapterUrl)
+    private suspend fun loadChapterPages(
+        chapterUrl: String,
+        preloadedHtml: String? = null,
+    ): List<GalleryPage> {
+        val html = preloadedHtml ?: fetchHtml(chapterUrl)
         val encoded = MURL_REGEX.find(html)?.groupValues?.get(1)
             ?: throw SiteException.ParseError("漫画160 找不到图片列表，页面结构可能已更改", siteId = SiteId.MH160)
         val decoded = runCatching {
@@ -366,7 +376,7 @@ class Mh160SitePlugin(
         val parsed = ComicUrl.parse(url) ?: return null
         val idx = parsed.pathSegments.indexOf("kanmanhua")
         if (idx < 0 || idx + 1 > parsed.pathSegments.lastIndex) return null
-        return parsed.pathSegments[idx + 1].takeIf { it.isNotBlank() }
+        return parsed.pathSegments[idx + 1].takeIf { it.isNotEmpty() && it.all(Char::isDigit) }
     }
 
     private fun sectionTitle(section: String): String =

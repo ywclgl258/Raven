@@ -507,4 +507,173 @@ class JavAndStreamVideoPluginsTest {
         assertEquals("Star Clip Two", fallbackPage.items.single().title)
         assertEquals("https://di.phncdn.com/s2.jpg", fallbackPage.items.single().coverUrl)
     }
+
+    @Test
+    fun `video plugin regex literals escape braces and brackets for Android ART ICU`() {
+        val targetClasses = listOf(
+            R34vSitePlugin::class.java,
+            HanimeSitePlugin::class.java,
+            IwaraSitePlugin::class.java,
+            MissavSitePlugin::class.java,
+            JableSitePlugin::class.java,
+            RouvideoSitePlugin::class.java,
+            PornhubSitePlugin::class.java,
+            Class.forName("com.raven.app.sites.video.VideoSiteSupport"),
+        )
+        val violations = mutableListOf<String>()
+        var checkedCount = 0
+        targetClasses.forEach { targetClass ->
+            val holders = listOf(targetClass) + targetClass.declaredClasses.toList()
+            holders.forEach { holder ->
+                holder.declaredFields
+                    .filter { java.lang.reflect.Modifier.isStatic(it.modifiers) && Regex::class.java.isAssignableFrom(it.type) }
+                    .forEach { field ->
+                        field.isAccessible = true
+                        val pattern = (field.get(null) as? Regex)?.pattern ?: return@forEach
+                        checkedCount++
+                        val err = findIcuRegexViolation(pattern)
+                        if (err != null) {
+                            violations += "${targetClass.simpleName}.${field.name} [$err]: $pattern"
+                        }
+                    }
+            }
+        }
+        assertTrue("Expected >0 static Regex fields scanned across video plugins, got $checkedCount", checkedCount > 0)
+        assertTrue("Unescaped {/}/] will crash Android ART ICU: $violations", violations.isEmpty())
+    }
+
+    @Test
+    fun `missav handles leak, subtitle, underscore, and mirror-lang slugs and parses directory with query params`() = runTest {
+        assertEquals(
+            "https://missav.ws/ssis-123-uncensored-leak",
+            MissavSitePlugin.canonicalVideoUrl("https://missav.ws/cn/ssis-123-uncensored-leak"),
+        )
+        assertEquals(
+            "https://missav.ws/abp-123-chinese-subtitle",
+            MissavSitePlugin.canonicalVideoUrl("https://missav.ws/abp-123-chinese-subtitle"),
+        )
+        assertEquals(
+            "https://missav.ws/1pondo-010123_001",
+            MissavSitePlugin.canonicalVideoUrl("https://missav.ws/1pondo-010123_001"),
+        )
+        assertEquals(
+            "https://missav.ws/dldss-584",
+            MissavSitePlugin.canonicalVideoUrl("https://missav.ws/dm18/cn/dldss-584"),
+        )
+
+        val fakeHttp = FakeHttpClientAdapter()
+        fakeHttp.onGet(
+            "https://missav.ws/genres",
+            body = """
+                <html><body>
+                <a href="/genres/cosplay/?page=1">Cosplay</a>
+                <a href="/genres/hd#top">HD</a>
+                </body></html>
+            """.trimIndent(),
+        )
+        val missav = MissavSitePlugin(fakeHttp, rateLimitBackoffMs = 0L)
+        assertTrue(missav.descriptor.matchesMediaHost("edge.surrit.com"))
+        val dir = missav.directorySource.loadDirectory("genres")
+        assertEquals(listOf("cosplay", "hd"), dir.map { it.id })
+        assertNotNull(missav.linkResolver.resolve("https://missav.ws/dm18/new?page=2"))
+    }
+
+    @Test
+    fun `jable preserves unencoded TagRef slug, pornhub separates mp4 quality, and rouvideo loads directory`() = runTest {
+        val fakeHttp = FakeHttpClientAdapter()
+        fakeHttp.onGet(
+            "https://jable.vip/vodplay/9999-1-1/",
+            body = """
+                <html><body>
+                <meta property="og:title" content="《MIDV-999》中文字幕" />
+                <a href="/vodsearch/%E5%B7%A8%E4%B9%B3-time----------/">巨乳</a>
+                <script>var player_aaaa = {"url":"https://cdn.jable.test/midv999/index.m3u8"};</script>
+                </body></html>
+            """.trimIndent(),
+        )
+        val jable = JableSitePlugin(fakeHttp, rateLimitBackoffMs = 0L)
+        val jableDetail = jable.videoSource.loadVideoDetail("https://jable.vip/vodplay/9999-1-1/")
+        assertEquals("巨乳", jableDetail.tags.single().slug)
+        assertEquals(
+            "https://jable.vip/vodsearch/%E5%B7%A8%E4%B9%B3-time----------/",
+            JableSitePlugin.resolveFeedUrl(FeedRequest(SiteId.JABLE, query = jableDetail.tags.single().slug, scope = SearchScope.TAG)),
+        )
+
+        fakeHttp.onGet(
+            "https://www.pornhub.com/view_video.php?viewkey=PHmixed1234",
+            body = """
+                <html><body>
+                <h1 class="title"><span>Mixed Streams</span></h1>
+                <script>
+                    var flashvars_88 = {
+                        "mediaDefinitions": [
+                            {"format": "hls", "height": 720, "videoUrl": "https:\/\/ev.phncdn.com\/720.m3u8"},
+                            {"format": "mp4", "height": 720, "videoUrl": "https:\/\/ev.phncdn.com\/720.mp4"}
+                        ]
+                    };
+                </script>
+                </body></html>
+            """.trimIndent(),
+        )
+        fakeHttp.onGet(
+            "https://www.pornhub.com/categories",
+            body = """<a href="/categories/animation?page=1">Animation</a>""",
+        )
+        val ph = PornhubSitePlugin(fakeHttp, rateLimitBackoffMs = 0L)
+        val phDetail = ph.videoSource.loadVideoDetail("https://www.pornhub.com/view_video.php?viewkey=PHmixed1234")
+        assertEquals(setOf("720p", "720p-mp4"), phDetail.streams.map { it.quality }.toSet())
+        assertEquals(listOf("animation"), ph.directorySource.loadDirectory("categories").map { it.id })
+
+        fakeHttp.onGet(
+            "https://rou.video/cat",
+            body = """<a href="/v?tag=%E5%9B%BD%E4%BA%A7">国产</a>""",
+        )
+        val rou = RouvideoSitePlugin(fakeHttp, rateLimitBackoffMs = 0L)
+        assertEquals(listOf("国产"), rou.directorySource.loadDirectory("category").map { it.id })
+    }
+
+    private fun findIcuRegexViolation(pattern: String): String? {
+        var i = 0
+        val n = pattern.length
+        var inCharClass = false
+        var ccStart = -1
+        while (i < n) {
+            val ch = pattern[i]
+            if (ch == '\\') {
+                if (i + 1 < n && (pattern[i + 1] == 'p' || pattern[i + 1] == 'P') && i + 2 < n && pattern[i + 2] == '{') {
+                    val closeProp = pattern.indexOf('}', i + 3)
+                    if (closeProp != -1) {
+                        i = closeProp + 1
+                        continue
+                    }
+                }
+                i += 2
+                continue
+            }
+            if (inCharClass) {
+                if (ch == '{' || ch == '}') return "unescaped '$ch' inside character class"
+                if (ch == ']' && i > ccStart + 1) inCharClass = false
+                i++
+                continue
+            }
+            when (ch) {
+                '[' -> {
+                    inCharClass = true
+                    ccStart = if (i + 1 < n && pattern[i + 1] == '^') i + 1 else i
+                }
+                ']' -> return "unescaped ']'"
+                '{' -> {
+                    val qMatch = Regex("^\\{\\d+(?:,\\d*)?\\}").find(pattern.substring(i))
+                    if (qMatch != null) {
+                        i += qMatch.value.length
+                        continue
+                    }
+                    return "unescaped '{'"
+                }
+                '}' -> return "unescaped '}'"
+            }
+            i++
+        }
+        return null
+    }
 }

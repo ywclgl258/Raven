@@ -6,6 +6,9 @@ import androidx.compose.animation.core.snap
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
+import com.raven.app.core.designsystem.theme.ravenSpringPress
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Box
@@ -224,26 +227,38 @@ fun RavenSearchField(
 
         AnimatedVisibility(
             visible = currentText.isNotEmpty() && enabled && !readOnly,
-            enter = fadeIn(
-                animationSpec = if (motionReduced) {
-                    snap()
-                } else {
-                    tween(
+            enter = if (motionReduced) {
+                fadeIn(snap())
+            } else {
+                fadeIn(
+                    animationSpec = tween(
                         durationMillis = RavenMotion.CHIP_TRANSITION_DURATION_MS,
                         easing = RavenMotion.HarmonyDecelerationEasing,
-                    )
-                },
-            ),
-            exit = fadeOut(
-                animationSpec = if (motionReduced) {
-                    snap()
-                } else {
-                    tween(
+                    ),
+                ) + scaleIn(
+                    initialScale = 0.8f,
+                    animationSpec = tween(
+                        durationMillis = RavenMotion.CHIP_TRANSITION_DURATION_MS,
+                        easing = RavenMotion.HarmonyDecelerationEasing,
+                    ),
+                )
+            },
+            exit = if (motionReduced) {
+                fadeOut(snap())
+            } else {
+                fadeOut(
+                    animationSpec = tween(
                         durationMillis = 120,
                         easing = RavenMotion.HarmonyDecelerationEasing,
-                    )
-                },
-            ),
+                    ),
+                ) + scaleOut(
+                    targetScale = 0.8f,
+                    animationSpec = tween(
+                        durationMillis = 120,
+                        easing = RavenMotion.HarmonyDecelerationEasing,
+                    ),
+                )
+            },
         ) {
             IconButton(
                 onClick = {
@@ -261,6 +276,7 @@ fun RavenSearchField(
                 },
                 modifier = Modifier
                     .defaultMinSize(minWidth = 48.dp, minHeight = 48.dp)
+                    .ravenSpringPress()
                     .testTag("raven_search_clear"),
             ) {
                 Icon(

@@ -821,4 +821,39 @@ class PlayerViewModelTest {
             cancelAndIgnoreRemainingEvents()
         }
     }
+
+    @Test
+    fun `canonical resolvedMediaId synchronizes activeTarget so watch progress persists cleanly`() = runTest {
+        val harness = PlayerTestHarness(mainDispatcherRule.dispatcher)
+        val (registry, _) = buildRegistry(
+            r34vDetailHandler = {
+                VideoDetail(
+                    item = sampleVideoItem(SiteId.R34V, "canonical-900", title = "Canonical Video"),
+                    streams = sampleStreams("canonical-900"),
+                )
+            },
+        )
+        val vm = harness.createViewModel(
+            registry,
+            initialArgs = PlayerLaunchArgs(
+                siteId = SiteId.R34V,
+                mediaId = "slug-alias-900",
+                url = "https://r34v.example/video/slug-alias-900",
+            ),
+        )
+
+        vm.uiState.test {
+            advanceUntilIdle()
+            val state = expectMostRecentItem()
+            assertEquals("canonical-900", state.mediaId)
+
+            harness.playbackPort.seekTo(45_000L)
+            vm.flushWatchProgress()
+            advanceUntilIdle()
+            val saved = harness.historyRepository.getWatchProgress(SiteId.R34V, "canonical-900")
+            assertNotNull(saved)
+            assertEquals(45_000L, saved!!.positionMs)
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
 }

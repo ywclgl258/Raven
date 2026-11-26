@@ -1,6 +1,9 @@
 package com.raven.app.feature.settings
 
 import android.content.Intent
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.snap
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
@@ -43,7 +46,9 @@ import com.raven.app.core.designsystem.component.RavenGroupedSection
 import com.raven.app.core.designsystem.component.RavenStatusPill
 import com.raven.app.core.designsystem.component.RavenStatusTone
 import com.raven.app.core.designsystem.component.RavenTopBar
+import com.raven.app.core.designsystem.theme.LocalMotionReduced
 import com.raven.app.core.designsystem.theme.LocalRavenColors
+import com.raven.app.core.designsystem.theme.RavenMotion
 import com.raven.app.core.designsystem.theme.RavenShapes
 import com.raven.app.core.designsystem.theme.tabular
 import com.raven.app.core.model.StorageLocation
@@ -330,8 +335,18 @@ fun StorageMigrationScreenContent(
                         }
 
                         if (progress.totalBytes > 0L) {
+                            val motionReduced = LocalMotionReduced.current
+                            val animatedFraction by animateFloatAsState(
+                                targetValue = progress.fraction.coerceIn(0f, 1f),
+                                animationSpec = if (motionReduced) {
+                                    snap()
+                                } else {
+                                    tween(durationMillis = 180, easing = RavenMotion.HarmonyDecelerationEasing)
+                                },
+                                label = "storageMigrationProgress",
+                            )
                             LinearProgressIndicator(
-                                progress = { progress.fraction },
+                                progress = { animatedFraction },
                                 color = colors.crimson,
                                 trackColor = colors.surface3,
                                 modifier = Modifier.fillMaxWidth(),

@@ -87,7 +87,7 @@ Raven（**渡鸦**）是一款采用 **17 模块 Clean Architecture** 构建的�
 
 ```powershell
 # 运行全部 17 模块 JVM 单元测试
-# 截至当前源码静态计数 380 处 @Test；静态计数不代表测试已执行或通过
+# 截至当前源码静态计数 384 处 @Test；静态计数不代表测试已执行或通过
 .\gradlew.bat :core:model:test :core:common:test :core:site-spi:test :sites:video:test :sites:comic:test :sites:gallery:test testDebugUnitTest --no-daemon
 
 # 仅运行单模块单测（推荐日常开发，适配 Windows kotlin.incremental=false 环境）

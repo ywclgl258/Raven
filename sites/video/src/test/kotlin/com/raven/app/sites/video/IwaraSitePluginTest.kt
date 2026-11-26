@@ -365,4 +365,45 @@ class IwaraSitePluginTest {
             // expected
         }
     }
+
+    @Test
+    fun `iwara sets HLS mime hint, parses uppercase height, and maps embedUrl and private videos`() = runTest {
+        val fakeHttp = FakeHttpClientAdapter()
+        val store = InMemorySiteSessionStore()
+        fakeHttp.onGet(
+            "https://apiq.iwara.tv/video/vidhls",
+            body = """{"id":"vidhls","title":"HLS Upper","fileUrl":"https://filesq.iwara.tv/file/f2?expires=9999999999"}""",
+        )
+        fakeHttp.onGet("https://apiq.iwara.tv/video/vidhls/related", body = """{"results":[]}""")
+        fakeHttp.onGet("https://apiq.iwara.tv/video/vidhls/comments?limit=12&page=0", body = """{"results":[]}""")
+        fakeHttp.onGetDynamic("https://filesq.iwara.tv/file/f2?expires=9999999999") { req ->
+            SiteHttpResponse(
+                code = 200,
+                finalUrl = req.url,
+                body = """[{"name":"720P","src":{"view":"https://cdn.iwara.tv/hls/720.m3u8?token=abc","download":"https://cdn.iwara.tv/dl/720.mp4"}}]""".toByteArray(),
+            )
+        }
+        val plugin = IwaraSitePlugin(fakeHttp, store, rateLimitBackoffMs = 0L)
+        val detail = plugin.videoSource.loadVideoDetail("https://www.iwara.tv/video/vidhls")
+        assertTrue(detail.streams.single().isHls)
+        assertEquals("application/vnd.apple.mpegurl", detail.streams.single().mimeTypeHint)
+        assertEquals("720p", detail.streams.single().label)
+        assertEquals("https://cdn.iwara.tv/dl/720.mp4", detail.downloadStreams.single().url)
+
+        fakeHttp.onGet("https://apiq.iwara.tv/video/ext1", body = """{"id":"ext1","embedUrl":"https://youtu.be/xyz"}""")
+        try {
+            plugin.videoSource.loadVideoDetail("https://www.iwara.tv/video/ext1")
+            fail("Expected SiteException.Unsupported")
+        } catch (_: SiteException.Unsupported) {
+            // expected
+        }
+
+        fakeHttp.onGet("https://apiq.iwara.tv/video/priv1", body = """{"id":"priv1","private":true}""")
+        try {
+            plugin.videoSource.loadVideoDetail("https://www.iwara.tv/video/priv1")
+            fail("Expected SiteException.AuthRequired")
+        } catch (_: SiteException.AuthRequired) {
+            // expected
+        }
+    }
 }

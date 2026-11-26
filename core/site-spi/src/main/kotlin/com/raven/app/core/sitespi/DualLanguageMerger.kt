@@ -53,6 +53,8 @@ data class MergedPage<T>(
  */
 object DualLanguageMerger {
 
+    private const val MAX_CONSECUTIVE_EMPTY_PAGES = 5
+
     suspend fun <T> merge(
         cursorRaw: String?,
         pageSize: Int,
@@ -65,6 +67,7 @@ object DualLanguageMerger {
         val initial = DualCursor.parse(cursorRaw)
         val pages = intArrayOf(initial.pageA, initial.pageB)
         val indices = intArrayOf(initial.indexA, initial.indexB)
+        val emptyRuns = intArrayOf(0, 0)
         val cache = arrayOf(mutableMapOf<Int, StreamSlice<T>>(), mutableMapOf<Int, StreamSlice<T>>())
 
         suspend fun peek(stream: Int): T? {
@@ -74,11 +77,24 @@ object DualLanguageMerger {
                     if (stream == 0) fetchStreamA(p) else fetchStreamB(p)
                 }
                 val item = slice.items.getOrNull(indices[stream])
-                if (item != null) return item
-                if (!slice.hasNext || slice.items.isEmpty()) {
+                if (item != null) {
+                    emptyRuns[stream] = 0
+                    return item
+                }
+                if (!slice.hasNext) {
                     pages[stream] = 0
                     indices[stream] = 0
                     break
+                }
+                if (slice.items.isEmpty()) {
+                    emptyRuns[stream] += 1
+                    if (emptyRuns[stream] >= MAX_CONSECUTIVE_EMPTY_PAGES) {
+                        pages[stream] = 0
+                        indices[stream] = 0
+                        break
+                    }
+                } else {
+                    emptyRuns[stream] = 0
                 }
                 pages[stream] = p + 1
                 indices[stream] = 0

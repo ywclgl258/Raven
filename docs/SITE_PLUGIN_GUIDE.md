@@ -169,7 +169,7 @@ flowchart LR
 
 | `SiteId` | 实现类（`sites/comic/src/main/kotlin/com/raven/app/sites/comic/`） | 主域名 / 镜像 & 媒体域 | 认证方式 | 暴露能力接口 | 核心解析与特殊协议要点 |
 |---|---|---|---|---|---|
-| `mangacopy` | `MangacopySitePlugin.kt` | `www.mangacopy.com`；镜像 `copymanga.com` / `www.copy4000.com`；API：`api.mangacopy.com`；封面：`*.mangafunb.fun` | `None` | `Feed`, `Search`, `Mirrors` | 列表走 `/api/v3/update/newest`、搜索走 `/api/v3/search/comic`；详情/章节图页接口对第三方客户端返回 210 反盗版限制，插件以 `SiteException.Unsupported` 明示 |
+| `mangacopy` | `MangacopySitePlugin.kt` | `www.mangacopy.com`；镜像 `copymanga.com` / `www.copy4000.com`；API：`api.mangacopy.com`；封面：`*.mangafunb.fun` | `None` | `Feed`, `Search`, `Mirrors` | 列表走 `/api/v3/update/newest`、搜索走 `/api/v3/search/comic`；详情/章节图页接口可能对第三方客户端返回业务码 210 限制，当前由 `api()` 统一抛为 `SiteException.ParseError`；真机现象见第 5 节已记录问题 |
 | `mh160` | `Mh160SitePlugin.kt` | `mh160mh.com` | `None` | `Feed`, `Search` | 标准目录式漫画站解析；站点当前对默认网络返回 404，`accessNote` 标注可能换域 |
 | `guazimanhua` | `GuazimanhuaSitePlugin.kt` | `www.guazimanhua.com`；图源 `img.guazicdn.com` | `None` | `Feed`, `Search` | 列表 `/update.php`、`/category.php`、搜索 `/search.php`；详情 `/comic.php?id=` 用 `application/ld+json` 递归抽取章节目录；阅读页 `/chapter.php?id=` 图页 URL 内嵌 HTML，直接正则收集并按序分页 |
 | `mycomic` | `MycomicSitePlugin.kt` | `mycomic.com` | `None` | `Feed`, `Search` | Cloudflare 托管质询站点：检测 403 / `Just a moment` 时抛 `SiteException.Forbidden(isChallenge = true)`，提示切换网络或代理 |
@@ -246,6 +246,14 @@ https://www.4khd.com/content/2026/sample.html/2#15-2-4
 ---
 
 ## 5. 上游站点改版排障手册
+
+### 已处理问题：拷贝漫画第三方客户端业务码 210（2026-11-26）
+
+- **实测环境**：Android 17 平板，正式包 `0.6.0` / `versionCode 10`。
+- **触发路径**：拷贝漫画主页「继续阅读」进入第 02 话，阅读后返回作品详情；详情已显示第 02 话和 31 页，但选集区域显示「暂无章节」，下方展示上游错误与「重试」。
+- **上游原意**：接口返回业务码 `210`，提示第三方/破解客户端受到限制，要求安装官方最新版并等待 1 小时；提示中包含 `copy4000.com/download`。这不是 HTTP 429，当前证据也不能证明是 Raven 请求频率导致。
+- **已落地修复**：`MangacopySitePlugin.kt` 的 `api()` 已将业务码 `210` 独立建模为 `SiteException.Forbidden(isChallenge = true)`（与 JSON 解析错误分离）；`loadChapters()` 已透传 `CancellationException` 与全部章节组失败错误，且已补齐 `210` 响应、章节报错透传、`loadGalleryPage` 规范 URL 与异常 hex 回归测试。
+- **后续实网排查点**：仍需在真机/实网核对触发 210 的具体 API 路径、请求头、镜像与账号/网络条件，并在 UI 评估章节失败状态下的重试频控提示。
 
 当某个在线站点突然加载失败、空列表或无法播放时，按“**异常类型 -> 根因定位 -> 最小修复 -> 契约测试回归**”四步处理：
 

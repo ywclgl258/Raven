@@ -1,12 +1,19 @@
 package com.raven.app.core.designsystem.component
 
+import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.Spring
-import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.snap
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -53,6 +60,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
@@ -80,8 +90,8 @@ import com.raven.app.core.designsystem.theme.RavenTabularTextStyle
 import com.raven.app.core.designsystem.theme.ambientHeroGlow
 import com.raven.app.core.designsystem.theme.ravenSpringPress
 import com.raven.app.core.model.MediaItem
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlin.math.abs
 
 /**
  * Edge-to-edge Netflix-style Hero carousel with bottom obsidian vignette into [RavenColors.Canvas],
@@ -122,11 +132,21 @@ fun RavenHeroBanner(
     var paused by rememberSaveable { mutableStateOf(false) }
 
     val canAutoAdvance = items.size > 1 && !paused && !motionReduced && autoAdvanceMillis > 0L
+    val autoAdvanceProgress = remember { Animatable(0f) }
     LaunchedEffect(canAutoAdvance, pagerState.currentPage, pagerState.isScrollInProgress, items.size) {
         if (canAutoAdvance && !pagerState.isScrollInProgress) {
-            delay(autoAdvanceMillis)
+            autoAdvanceProgress.snapTo(0f)
+            autoAdvanceProgress.animateTo(
+                targetValue = 1f,
+                animationSpec = tween(
+                    durationMillis = autoAdvanceMillis.toInt(),
+                    easing = LinearEasing,
+                ),
+            )
             val nextPage = (pagerState.currentPage + 1) % items.size
             pagerState.animateScrollToPage(nextPage)
+        } else {
+            autoAdvanceProgress.snapTo(0f)
         }
     }
 
@@ -162,7 +182,7 @@ fun RavenHeroBanner(
                 },
                 label = "heroWatchLaterIconTint",
             )
-            val watchLaterIconScale by animateFloatAsState(
+            val watchLaterIconScaleState = animateFloatAsState(
                 targetValue = if (saved) 1.12f else 1.0f,
                 animationSpec = if (motionReduced) {
                     snap()
@@ -342,25 +362,52 @@ fun RavenHeroBanner(
                                 horizontalArrangement = Arrangement.Center,
                                 verticalAlignment = Alignment.CenterVertically,
                             ) {
-                                Icon(
-                                    imageVector = if (saved) Icons.Rounded.Check else Icons.Rounded.Add,
-                                    contentDescription = null,
-                                    tint = watchLaterIconTint,
-                                    modifier = Modifier
-                                        .size(18.dp)
-                                        .graphicsLayer {
-                                            scaleX = watchLaterIconScale
-                                            scaleY = watchLaterIconScale
-                                        },
-                                )
+                                AnimatedContent(
+                                    targetState = saved,
+                                    transitionSpec = {
+                                        if (motionReduced) {
+                                            fadeIn(snap()) togetherWith fadeOut(snap())
+                                        } else {
+                                            (fadeIn(tween(140)) + scaleIn(initialScale = 0.8f, animationSpec = RavenMotion.interactiveSpringSpec()))
+                                                .togetherWith(fadeOut(tween(100)) + scaleOut(targetScale = 0.8f))
+                                        }
+                                    },
+                                    label = "heroWatchLaterIcon",
+                                ) { isSaved ->
+                                    Icon(
+                                        imageVector = if (isSaved) Icons.Rounded.Check else Icons.Rounded.Add,
+                                        contentDescription = null,
+                                        tint = watchLaterIconTint,
+                                        modifier = Modifier
+                                            .size(18.dp)
+                                            .graphicsLayer {
+                                                val s = watchLaterIconScaleState.value
+                                                scaleX = s
+                                                scaleY = s
+                                            },
+                                    )
+                                }
                                 Spacer(modifier = Modifier.width(6.dp))
-                                Text(
-                                    text = if (saved) inWatchLaterLabel else watchLaterLabel,
-                                    style = MaterialTheme.typography.labelLarge,
-                                    color = colors.secondaryCtaInk,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis,
-                                )
+                                AnimatedContent(
+                                    targetState = saved,
+                                    transitionSpec = {
+                                        if (motionReduced) {
+                                            fadeIn(snap()) togetherWith fadeOut(snap())
+                                        } else {
+                                            fadeIn(tween(160, easing = RavenMotion.HarmonyDecelerationEasing))
+                                                .togetherWith(fadeOut(tween(100)))
+                                        }
+                                    },
+                                    label = "heroWatchLaterLabel",
+                                ) { isSaved ->
+                                    Text(
+                                        text = if (isSaved) inWatchLaterLabel else watchLaterLabel,
+                                        style = MaterialTheme.typography.labelLarge,
+                                        color = colors.secondaryCtaInk,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                    )
+                                }
                             }
                         }
                     }
@@ -385,34 +432,8 @@ fun RavenHeroBanner(
                 ) {
                     repeat(items.size) { index ->
                         val active = pagerState.currentPage == index
-                        val dotWidth by animateDpAsState(
-                            targetValue = if (active) 22.dp else 6.dp,
-                            animationSpec = if (motionReduced) {
-                                snap()
-                            } else {
-                                spring(
-                                    dampingRatio = Spring.DampingRatioNoBouncy,
-                                    stiffness = Spring.StiffnessMedium,
-                                )
-                            },
-                            label = "heroDotWidth",
-                        )
-                        val dotColor by animateColorAsState(
-                            targetValue = if (active) {
-                                colors.crimson
-                            } else {
-                                colors.inkPrimary.copy(alpha = 0.36f)
-                            },
-                            animationSpec = if (motionReduced) {
-                                snap()
-                            } else {
-                                tween(
-                                    durationMillis = RavenMotion.CHIP_TRANSITION_DURATION_MS,
-                                    easing = RavenMotion.HarmonyDecelerationEasing,
-                                )
-                            },
-                            label = "heroDotColor",
-                        )
+                        val dotTrackColor = colors.inkPrimary.copy(alpha = 0.28f)
+                        val dotActiveColor = colors.crimson
                         Box(
                             modifier = Modifier
                                 .defaultMinSize(minWidth = 28.dp, minHeight = 48.dp)
@@ -430,25 +451,52 @@ fun RavenHeroBanner(
                                 },
                             contentAlignment = Alignment.Center,
                         ) {
+                            // Continuous offset-linked pill width driven in draw phase (zero 120Hz recomposition)
+                            val indicatorFraction = if (motionReduced) {
+                                if (active) 1f else 0f
+                            } else {
+                                val dist = abs(pagerState.getOffsetDistanceInPages(index)).coerceIn(0f, 1f)
+                                1f - dist
+                            }
+                            val widthDp = 6.dp + (20.dp * indicatorFraction)
                             Box(
                                 modifier = Modifier
                                     .height(6.dp)
-                                    .width(dotWidth)
+                                    .width(widthDp)
                                     .clip(CircleShape)
-                                    .background(dotColor),
+                                    .drawBehind {
+                                        drawRoundRect(
+                                            color = dotTrackColor,
+                                            cornerRadius = CornerRadius(size.height / 2f, size.height / 2f),
+                                        )
+                                        if (indicatorFraction > 0.02f) {
+                                            val fillFraction = if (canAutoAdvance && active && !pagerState.isScrollInProgress) {
+                                                autoAdvanceProgress.value.coerceIn(0.08f, 1f)
+                                            } else {
+                                                indicatorFraction
+                                            }
+                                            drawRoundRect(
+                                                color = dotActiveColor.copy(alpha = (0.35f + 0.65f * indicatorFraction).coerceIn(0f, 1f)),
+                                                size = Size(size.width * fillFraction, size.height),
+                                                cornerRadius = CornerRadius(size.height / 2f, size.height / 2f),
+                                            )
+                                        }
+                                    },
                             )
                         }
                     }
                 }
 
+                val pauseInteraction = remember { MutableInteractionSource() }
                 IconButton(
                     onClick = {
                         feedback.perform(RavenFeedbackEffect.TAP)
                         paused = !paused
                     },
+                    interactionSource = pauseInteraction,
                     modifier = Modifier
                         .defaultMinSize(minWidth = 48.dp, minHeight = 48.dp)
-                        .ravenSpringPress()
+                        .ravenSpringPress(interactionSource = pauseInteraction)
                         .semantics {
                             contentDescription = if (paused) "恢复轮播" else "暂停轮播"
                         }
@@ -462,12 +510,25 @@ fun RavenHeroBanner(
                             .border(0.5.dp, colors.rimHighlight, CircleShape),
                         contentAlignment = Alignment.Center,
                     ) {
-                        Icon(
-                            imageVector = if (paused) Icons.Rounded.PlayArrow else Icons.Rounded.Pause,
-                            contentDescription = null,
-                            tint = colors.inkPrimary,
-                            modifier = Modifier.size(16.dp),
-                        )
+                        AnimatedContent(
+                            targetState = paused,
+                            transitionSpec = {
+                                if (motionReduced) {
+                                    fadeIn(snap()) togetherWith fadeOut(snap())
+                                } else {
+                                    (fadeIn(tween(140)) + scaleIn(initialScale = 0.78f))
+                                        .togetherWith(fadeOut(tween(100)) + scaleOut(targetScale = 0.78f))
+                                }
+                            },
+                            label = "heroPauseIcon",
+                        ) { isPaused ->
+                            Icon(
+                                imageVector = if (isPaused) Icons.Rounded.PlayArrow else Icons.Rounded.Pause,
+                                contentDescription = null,
+                                tint = colors.inkPrimary,
+                                modifier = Modifier.size(16.dp),
+                            )
+                        }
                     }
                 }
             }

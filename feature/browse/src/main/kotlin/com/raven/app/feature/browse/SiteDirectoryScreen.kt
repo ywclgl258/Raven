@@ -47,6 +47,7 @@ import androidx.lifecycle.viewModelScope
 import com.raven.app.core.common.AppDispatchers
 import com.raven.app.core.common.TagDictionary
 import com.raven.app.core.database.repository.PreferencesRepository
+import com.raven.app.core.designsystem.component.RavenContentCrossfade
 import com.raven.app.core.designsystem.component.RavenEmptyState
 import com.raven.app.core.designsystem.component.RavenErrorState
 import com.raven.app.core.designsystem.component.RavenFilterChipRow
@@ -484,73 +485,85 @@ fun SiteDirectoryScreenContent(
                 .fillMaxWidth(),
         ) {
             val site = uiState.site
-            when {
-                site == null -> {
-                    RavenEmptyState(
-                        title = "站点不可用",
-                        message = "未找到对应站点插件。",
-                    )
-                }
-                uiState.authGateRequired -> {
-                    BrowseAuthGateCard(
-                        site = site,
-                        detailMessage = uiState.errorMessage,
-                        onOpenAccount = { navigator.openSiteAccount(site.id) },
-                        onRefreshStatus = onRefresh,
-                    )
-                }
-                uiState.isLoading && uiState.entries.isEmpty() -> {
-                    RavenLoadingSkeleton(rowCount = 6)
-                }
-                uiState.errorMessage != null && uiState.entries.isEmpty() -> {
-                    RavenErrorState(
-                        message = uiState.errorMessage,
-                        onRetry = onRefresh,
-                    )
-                }
-                uiState.entries.isEmpty() -> {
-                    RavenEmptyState(
-                        title = if (uiState.filterQuery.isNotBlank()) "未筛选到匹配项" else "目录为空",
-                        message = if (uiState.filterQuery.isNotBlank()) {
-                            "可清除筛选关键词或点击键盘搜索尝试远程查询。"
-                        } else {
-                            "该分类目录下暂无条目。"
-                        },
-                        icon = Icons.Outlined.FolderOpen,
-                        actionLabel = if (uiState.filterQuery.isNotBlank()) "清除筛选" else "重新加载",
-                        onActionClick = if (uiState.filterQuery.isNotBlank()) {
-                            { onFilterQueryChange("") }
-                        } else {
-                            onRefresh
-                        },
-                    )
-                }
-                else -> {
-                    LazyColumn(
-                        state = listState,
-                        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
-                        verticalArrangement = Arrangement.spacedBy(8.dp),
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .testTag("site_directory_list"),
-                    ) {
-                        items(
-                            items = uiState.entries,
-                            key = { "${it.entry.id}_${it.entry.url}" },
-                        ) { item ->
-                            DirectoryEntryCard(
-                                item = item,
-                                onClick = { navigator.openDirectoryEntry(plugin, item.entry) },
-                            )
-                        }
+            val directoryStage = when {
+                site == null -> "no_site"
+                uiState.authGateRequired -> "auth"
+                uiState.isLoading && uiState.entries.isEmpty() -> "loading"
+                uiState.errorMessage != null && uiState.entries.isEmpty() -> "error"
+                uiState.entries.isEmpty() -> "empty"
+                else -> "content"
+            }
+            RavenContentCrossfade(targetState = directoryStage) { stage ->
+                when (stage) {
+                    "no_site" -> {
+                        RavenEmptyState(
+                            title = "站点不可用",
+                            message = "未找到对应站点插件。",
+                        )
+                    }
+                    "auth" -> {
+                        val activeSite = site ?: return@RavenContentCrossfade
+                        BrowseAuthGateCard(
+                            site = activeSite,
+                            detailMessage = uiState.errorMessage,
+                            onOpenAccount = { navigator.openSiteAccount(activeSite.id) },
+                            onRefreshStatus = onRefresh,
+                        )
+                    }
+                    "loading" -> {
+                        RavenLoadingSkeleton(rowCount = 6)
+                    }
+                    "error" -> {
+                        RavenErrorState(
+                            message = uiState.errorMessage ?: "目录加载失败",
+                            onRetry = onRefresh,
+                        )
+                    }
+                    "empty" -> {
+                        RavenEmptyState(
+                            title = if (uiState.filterQuery.isNotBlank()) "未筛选到匹配项" else "目录为空",
+                            message = if (uiState.filterQuery.isNotBlank()) {
+                                "可清除筛选关键词或点击键盘搜索尝试远程查询。"
+                            } else {
+                                "该分类目录下暂无条目。"
+                            },
+                            icon = Icons.Outlined.FolderOpen,
+                            actionLabel = if (uiState.filterQuery.isNotBlank()) "清除筛选" else "重新加载",
+                            onActionClick = if (uiState.filterQuery.isNotBlank()) {
+                                { onFilterQueryChange("") }
+                            } else {
+                                onRefresh
+                            },
+                        )
+                    }
+                    else -> {
+                        LazyColumn(
+                            state = listState,
+                            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp),
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .testTag("site_directory_list"),
+                        ) {
+                            items(
+                                items = uiState.entries,
+                                key = { "${it.entry.id}_${it.entry.url}" },
+                            ) { item ->
+                                DirectoryEntryCard(
+                                    item = item,
+                                    onClick = { navigator.openDirectoryEntry(plugin, item.entry) },
+                                    modifier = Modifier.animateItem(),
+                                )
+                            }
 
-                        item(key = "directory_pagination_footer") {
-                            BrowsePaginationFooter(
-                                isLoadingMore = uiState.isLoadingMore,
-                                errorMessage = uiState.paginationErrorMessage,
-                                hasMore = uiState.hasMore,
-                                onRetry = onLoadNextPage,
-                            )
+                            item(key = "directory_pagination_footer") {
+                                BrowsePaginationFooter(
+                                    isLoadingMore = uiState.isLoadingMore,
+                                    errorMessage = uiState.paginationErrorMessage,
+                                    hasMore = uiState.hasMore,
+                                    onRetry = onLoadNextPage,
+                                )
+                            }
                         }
                     }
                 }
@@ -563,13 +576,14 @@ fun SiteDirectoryScreenContent(
 private fun DirectoryEntryCard(
     item: DirectoryDisplayEntry,
     onClick: () -> Unit,
+    modifier: Modifier = Modifier,
 ) {
     val colors = LocalRavenColors.current
     val entry = item.entry
     val countLabel = entry.itemCount?.let { RavenFormatters.formatCount(it.toLong()) }?.takeIf { it.isNotEmpty() }
 
     Row(
-        modifier = Modifier
+        modifier = modifier
             .fillMaxWidth()
             .heightIn(min = 58.dp)
             .clip(RavenShapes.CardShape)

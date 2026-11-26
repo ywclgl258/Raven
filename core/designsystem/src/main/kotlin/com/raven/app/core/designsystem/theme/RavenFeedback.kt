@@ -4,6 +4,7 @@ import android.content.Context
 import android.media.AudioAttributes
 import android.media.AudioManager
 import android.media.SoundPool
+import android.os.SystemClock
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.hapticfeedback.HapticFeedback
@@ -243,6 +244,12 @@ class AndroidRavenFeedbackController(
     private val soundIds = ConcurrentHashMap<RavenFeedbackEffect, Int>()
     private val loadedIds = ConcurrentHashMap.newKeySet<Int>()
 
+    @Volatile
+    private var cachedCanPlaySound: Boolean = false
+
+    @Volatile
+    private var lastAudioCheckElapsedMs: Long = Long.MIN_VALUE
+
     private val executor = Executors.newSingleThreadExecutor { runnable ->
         Thread(runnable, "raven-ui-sfx").apply { isDaemon = true }
     }
@@ -315,7 +322,13 @@ class AndroidRavenFeedbackController(
 
     private fun canPlaySound(): Boolean {
         val manager = audioManager ?: return false
-        return runCatching {
+        val nowMs = runCatching { SystemClock.elapsedRealtime() }.getOrDefault(0L)
+        if (lastAudioCheckElapsedMs != Long.MIN_VALUE &&
+            nowMs - lastAudioCheckElapsedMs in 0L until AUDIO_CHECK_TTL_MS
+        ) {
+            return cachedCanPlaySound
+        }
+        val allowed = runCatching {
             if (manager.ringerMode != AudioManager.RINGER_MODE_NORMAL) {
                 false
             } else {
@@ -323,6 +336,9 @@ class AndroidRavenFeedbackController(
                     manager.getStreamVolume(AudioManager.STREAM_MUSIC) > 0
             }
         }.getOrDefault(false)
+        cachedCanPlaySound = allowed
+        lastAudioCheckElapsedMs = nowMs
+        return allowed
     }
 
     fun release() {
@@ -335,6 +351,7 @@ class AndroidRavenFeedbackController(
 
     private companion object {
         const val SFX_CACHE_DIR: String = "raven_sfx_v1"
+        const val AUDIO_CHECK_TTL_MS: Long = 1_500L
     }
 }
 

@@ -70,7 +70,7 @@ class CosplayteleSitePlugin(
             val rawUri = GalleryUrlUtils.parseUri(url) ?: return null
             val fragment = rawUri.rawFragment?.trim().orEmpty()
             if (VIDEO_FRAGMENT_REGEX.matches(fragment)) {
-                val canonicalArticle = engine.canonicalize(url)?.substringBefore('#') ?: return null
+                val canonicalArticle = engine.canonicalizePostUrl(url) ?: return null
                 return "$canonicalArticle#${fragment.lowercase()}"
             }
             return engine.canonicalize(url)
@@ -354,7 +354,8 @@ class CosplayteleSitePlugin(
                     frame.attr("data-lazy-src"),
                 )
                 for (raw in candidateUrls) {
-                    val embed = parseDirectCossoraEmbed(raw) ?: continue
+                    val normalized = GalleryUrlUtils.resolveAbsoluteUrl(raw, DESCRIPTOR.baseUrl) ?: raw
+                    val embed = parseDirectCossoraEmbed(normalized) ?: continue
                     embeds.putIfAbsent(embed.id, embed)
                 }
             }

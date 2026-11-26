@@ -1,5 +1,7 @@
 package com.raven.app.core.designsystem.component
 
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
@@ -37,6 +39,7 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
@@ -52,11 +55,13 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import com.raven.app.core.designsystem.theme.LocalMotionReduced
 import com.raven.app.core.designsystem.theme.LocalRavenColors
 import com.raven.app.core.designsystem.theme.LocalRavenFeedback
 import com.raven.app.core.designsystem.theme.LocalReduceTransparency
 import com.raven.app.core.designsystem.theme.RavenFeedbackEffect
 import com.raven.app.core.designsystem.theme.RavenLayout
+import com.raven.app.core.designsystem.theme.RavenMotion
 import com.raven.app.core.designsystem.theme.RavenShapes
 
 /**
@@ -77,13 +82,28 @@ fun RavenDialog(
     val colors = LocalRavenColors.current
     val feedback = LocalRavenFeedback.current
     val reduceTransparency = LocalReduceTransparency.current
+    val motionReduced = LocalMotionReduced.current
     val configuration = LocalConfiguration.current
     val dialogWidth = RavenLayout.computeDialogWidth(configuration.screenWidthDp)
     val maxHeight = (configuration.screenHeightDp * RavenLayout.DIALOG_MAX_HEIGHT_FRACTION).dp
     val borderColor = if (reduceTransparency) colors.outlineSubtle else colors.hairline
+    val enterProgress = remember(motionReduced) { Animatable(if (motionReduced) 1f else 0f) }
 
     LaunchedEffect(Unit) {
         feedback.perform(RavenFeedbackEffect.SHEET_OPEN)
+    }
+    LaunchedEffect(motionReduced) {
+        if (motionReduced) {
+            enterProgress.snapTo(1f)
+        } else {
+            enterProgress.animateTo(
+                targetValue = 1f,
+                animationSpec = tween(
+                    durationMillis = 200,
+                    easing = RavenMotion.HarmonyDecelerationEasing,
+                ),
+            )
+        }
     }
 
     Dialog(
@@ -99,6 +119,14 @@ fun RavenDialog(
                 .width(dialogWidth)
                 .heightIn(max = maxHeight)
                 .imePadding()
+                .graphicsLayer {
+                    val p = enterProgress.value
+                    alpha = p
+                    val scale = 0.95f + 0.05f * p
+                    scaleX = scale
+                    scaleY = scale
+                    translationY = (1f - p) * 12.dp.toPx()
+                }
                 .border(0.75.dp, borderColor, RavenShapes.DialogShape)
                 .onPreviewKeyEvent { keyEvent ->
                     if (dismissOnBackPress &&

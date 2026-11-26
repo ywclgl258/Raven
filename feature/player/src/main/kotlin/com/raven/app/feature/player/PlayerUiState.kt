@@ -122,6 +122,17 @@ sealed interface PlayerSideEffect {
 }
 
 /**
+ * High-frequency playback progress snapshot separated from structural UI state so 200ms position
+ * ticks never recompose the detail pane, sheets, or player surface.
+ */
+@Immutable
+data class PlayerProgressSnapshot(
+    val positionMs: Long = 0L,
+    val bufferedPositionMs: Long = 0L,
+    val durationMs: Long = 0L,
+)
+
+/**
  * Complete reactive UI state for [VideoPlayerScreen].
  */
 @Immutable

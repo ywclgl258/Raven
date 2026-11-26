@@ -1,5 +1,8 @@
 package com.raven.app.feature.library
 
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.snap
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -42,8 +45,11 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.raven.app.core.designsystem.component.RavenContentCrossfade
 import com.raven.app.core.designsystem.component.RavenTopBar
+import com.raven.app.core.designsystem.theme.LocalMotionReduced
 import com.raven.app.core.designsystem.theme.LocalRavenColors
+import com.raven.app.core.designsystem.theme.RavenMotion
 import com.raven.app.core.designsystem.theme.RavenShapes
 import com.raven.app.core.designsystem.theme.ravenSpringPress
 import com.raven.app.core.designsystem.theme.tabular
@@ -174,19 +180,21 @@ fun DownloadsFavoritesScreen(
         )
 
         Box(modifier = Modifier.weight(1f)) {
-            when (selectedTab) {
-                CollectionTab.DOWNLOADS -> DownloadsScreen(
-                    navigator = navigator,
-                    siteId = siteId,
-                    embedded = true,
-                    viewModel = downloadsViewModel,
-                )
-                CollectionTab.FAVORITES -> FavoritesScreen(
-                    navigator = navigator,
-                    siteId = siteId,
-                    embedded = true,
-                    viewModel = favoritesViewModel,
-                )
+            RavenContentCrossfade(targetState = selectedTab) { tab ->
+                when (tab) {
+                    CollectionTab.DOWNLOADS -> DownloadsScreen(
+                        navigator = navigator,
+                        siteId = siteId,
+                        embedded = true,
+                        viewModel = downloadsViewModel,
+                    )
+                    CollectionTab.FAVORITES -> FavoritesScreen(
+                        navigator = navigator,
+                        siteId = siteId,
+                        embedded = true,
+                        viewModel = favoritesViewModel,
+                    )
+                }
             }
         }
     }
@@ -254,8 +262,22 @@ private fun CollectionTabButton(
     modifier: Modifier = Modifier,
 ) {
     val colors = LocalRavenColors.current
-    val container = if (selected) colors.crimson.copy(alpha = 0.16f) else colors.surface1
-    val borderColor = if (selected) colors.crimson else colors.hairline
+    val motionReduced = LocalMotionReduced.current
+    val colorSpec = if (motionReduced) {
+        snap<androidx.compose.ui.graphics.Color>()
+    } else {
+        tween(durationMillis = RavenMotion.CHIP_TRANSITION_DURATION_MS, easing = RavenMotion.HarmonyDecelerationEasing)
+    }
+    val container by animateColorAsState(
+        targetValue = if (selected) colors.crimson.copy(alpha = 0.16f) else colors.surface1,
+        animationSpec = colorSpec,
+        label = "collectionTabContainer",
+    )
+    val borderColor by animateColorAsState(
+        targetValue = if (selected) colors.crimson else colors.hairline,
+        animationSpec = colorSpec,
+        label = "collectionTabBorder",
+    )
     Row(
         modifier = modifier
             .heightIn(min = 64.dp)

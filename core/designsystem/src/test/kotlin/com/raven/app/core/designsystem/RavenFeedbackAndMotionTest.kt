@@ -143,4 +143,12 @@ class RavenFeedbackAndMotionTest {
         assertTrue(RavenLayout.supportsCenteredSheet(600))
         assertTrue(RavenLayout.supportsCenteredSheet(1200))
     }
+
+    @Test
+    fun `motion spring specs maintain responsive faster-than-interactive stiffness`() {
+        val responsive = RavenMotion.responsiveSpringSpec<Float>()
+        val interactive = RavenMotion.interactiveSpringSpec<Float>()
+        assertTrue(responsive.stiffness > interactive.stiffness)
+        assertTrue(interactive.dampingRatio in 0.7f..1.0f)
+    }
 }

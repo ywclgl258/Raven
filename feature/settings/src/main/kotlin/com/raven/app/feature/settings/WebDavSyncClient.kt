@@ -80,10 +80,8 @@ class WebDavSyncClient(
                 .build()
 
             executeCancellable(apiClient.newCall(request)).use { response ->
-                val targetHost = UrlSanitizer.extractHost(config.endpointUrl).orEmpty()
-                val actualHost = response.request.url.host
-                if (targetHost.isNotEmpty() && !actualHost.equals(targetHost, ignoreCase = true)) {
-                    return@withContext WebDavSyncOutcome.Error("WebDAV 响应跳转到非目标域名，已拒绝连接")
+                if (!isAllowedFinalResponseUrl(response, config.endpointUrl)) {
+                    return@withContext WebDavSyncOutcome.Error("WebDAV 响应跳转到非目标域名或降级为非 HTTPS，已拒绝连接")
                 }
                 when {
                     response.code in 200..299 ->
@@ -129,10 +127,8 @@ class WebDavSyncClient(
                 .build()
 
             executeCancellable(apiClient.newCall(request)).use { response ->
-                val targetHost = UrlSanitizer.extractHost(config.endpointUrl).orEmpty()
-                val actualHost = response.request.url.host
-                if (targetHost.isNotEmpty() && !actualHost.equals(targetHost, ignoreCase = true)) {
-                    return@withContext WebDavSyncOutcome.Error("WebDAV 上传跳转到了非目标域名，已中止操作")
+                if (!isAllowedFinalResponseUrl(response, config.endpointUrl)) {
+                    return@withContext WebDavSyncOutcome.Error("WebDAV 上传跳转到了非目标域名或降级为非 HTTPS，已中止操作")
                 }
                 if (response.code == 401 || response.code == 403) {
                     return@withContext WebDavSyncOutcome.Error("WebDAV 认证失败或无写入权限 (HTTP ${response.code})")
@@ -179,10 +175,8 @@ class WebDavSyncClient(
                 .build()
 
             val downloaded = executeCancellable(apiClient.newCall(request)).use { response ->
-                val targetHost = UrlSanitizer.extractHost(config.endpointUrl).orEmpty()
-                val actualHost = response.request.url.host
-                if (targetHost.isNotEmpty() && !actualHost.equals(targetHost, ignoreCase = true)) {
-                    return@withContext WebDavSyncOutcome.Error("WebDAV 下载跳转到了非目标域名，已中止恢复")
+                if (!isAllowedFinalResponseUrl(response, config.endpointUrl)) {
+                    return@withContext WebDavSyncOutcome.Error("WebDAV 下载跳转到了非目标域名或降级为非 HTTPS，已中止恢复")
                 }
                 if (response.code == 404) {
                     return@withContext WebDavSyncOutcome.Error("远端尚无备份文件 (${config.remoteFileName})")
@@ -230,6 +224,9 @@ class WebDavSyncClient(
             .header("User-Agent", userAgent())
             .build()
         return executeCancellable(apiClient.newCall(request)).use { headResp ->
+            if (!isAllowedFinalResponseUrl(headResp, config.endpointUrl)) {
+                return@use WebDavSyncOutcome.Error("WebDAV 探测响应跳转到非目标域名或降级为非 HTTPS，已拒绝连接")
+            }
             when (headResp.code) {
                 in 200..299 -> WebDavSyncOutcome.Connected("WebDAV 服务连接正常，远端已有备份")
                 404 -> WebDavSyncOutcome.Connected("WebDAV 服务认证正常（远端尚未创建备份）")
@@ -237,6 +234,15 @@ class WebDavSyncClient(
                 else -> WebDavSyncOutcome.Error("WebDAV 服务返回 HTTP ${headResp.code}")
             }
         }
+    }
+
+    private fun isAllowedFinalResponseUrl(response: Response, configuredEndpointUrl: String): Boolean {
+        val targetHost = UrlSanitizer.extractHost(configuredEndpointUrl).orEmpty()
+        val actualHost = response.request.url.host
+        val expectHttps = configuredEndpointUrl.startsWith("https://", ignoreCase = true)
+        if (expectHttps && !response.request.url.isHttps) return false
+        if (targetHost.isNotEmpty() && !actualHost.equals(targetHost, ignoreCase = true)) return false
+        return true
     }
 
     private fun userAgent(): String = "Raven/${appInfo.versionName} (Android)"

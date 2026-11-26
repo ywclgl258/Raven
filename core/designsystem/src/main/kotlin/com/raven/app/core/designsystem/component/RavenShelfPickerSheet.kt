@@ -1,8 +1,12 @@
 package com.raven.app.core.designsystem.component
 
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.snap
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -34,6 +38,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -45,8 +50,13 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.raven.app.core.designsystem.theme.LocalMotionReduced
 import com.raven.app.core.designsystem.theme.LocalRavenColors
+import com.raven.app.core.designsystem.theme.LocalRavenFeedback
+import com.raven.app.core.designsystem.theme.RavenFeedbackEffect
+import com.raven.app.core.designsystem.theme.RavenMotion
 import com.raven.app.core.designsystem.theme.RavenShapes
+import com.raven.app.core.designsystem.theme.ravenSpringPress
 import com.raven.app.core.designsystem.theme.tabular
 
 /**
@@ -75,6 +85,8 @@ fun RavenShelfPickerSheet(
     modifier: Modifier = Modifier,
 ) {
     val colors = LocalRavenColors.current
+    val motionReduced = LocalMotionReduced.current
+    val feedback = LocalRavenFeedback.current
     var newShelfName by rememberSaveable { mutableStateOf("") }
 
     fun submitCreate() {
@@ -125,9 +137,14 @@ fun RavenShelfPickerSheet(
                     keyboardActions = KeyboardActions(onDone = { submitCreate() }),
                     modifier = Modifier.weight(1f),
                 )
+                val createInteraction = remember { MutableInteractionSource() }
                 Button(
-                    onClick = ::submitCreate,
+                    onClick = {
+                        feedback.perform(RavenFeedbackEffect.TAP)
+                        submitCreate()
+                    },
                     enabled = newShelfName.trim().isNotEmpty(),
+                    interactionSource = createInteraction,
                     shape = RavenShapes.PillShape,
                     colors = ButtonDefaults.buttonColors(
                         containerColor = colors.primaryCtaContainer,
@@ -135,7 +152,12 @@ fun RavenShelfPickerSheet(
                         disabledContainerColor = colors.surface3,
                         disabledContentColor = colors.inkTertiary,
                     ),
-                    modifier = Modifier.heightIn(min = 48.dp),
+                    modifier = Modifier
+                        .heightIn(min = 48.dp)
+                        .ravenSpringPress(
+                            interactionSource = createInteraction,
+                            enabled = newShelfName.trim().isNotEmpty(),
+                        ),
                 ) {
                     Icon(
                         imageVector = Icons.Rounded.Add,
@@ -168,20 +190,46 @@ fun RavenShelfPickerSheet(
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
                     items(items = shelves, key = { it.id }) { shelf ->
+                        val rowBg by animateColorAsState(
+                            targetValue = if (shelf.selected) colors.crimson.copy(alpha = 0.12f) else colors.surface1,
+                            animationSpec = if (motionReduced) {
+                                snap()
+                            } else {
+                                tween(
+                                    durationMillis = RavenMotion.CHIP_TRANSITION_DURATION_MS,
+                                    easing = RavenMotion.HarmonyDecelerationEasing,
+                                )
+                            },
+                            label = "shelfRowBg",
+                        )
+                        val rowBorder by animateColorAsState(
+                            targetValue = if (shelf.selected) colors.crimson.copy(alpha = 0.45f) else colors.hairline,
+                            animationSpec = if (motionReduced) {
+                                snap()
+                            } else {
+                                tween(
+                                    durationMillis = RavenMotion.CHIP_TRANSITION_DURATION_MS,
+                                    easing = RavenMotion.HarmonyDecelerationEasing,
+                                )
+                            },
+                            label = "shelfRowBorder",
+                        )
                         Row(
                             modifier = Modifier
+                                .animateItem()
                                 .fillMaxWidth()
                                 .heightIn(min = 52.dp)
                                 .clip(RavenShapes.ControlShape)
-                                .background(
-                                    if (shelf.selected) colors.crimson.copy(alpha = 0.12f) else colors.surface1,
-                                )
+                                .background(rowBg)
                                 .border(
                                     width = 0.5.dp,
-                                    color = if (shelf.selected) colors.crimson.copy(alpha = 0.45f) else colors.hairline,
+                                    color = rowBorder,
                                     shape = RavenShapes.ControlShape,
                                 )
                                 .clickable(role = Role.Checkbox) {
+                                    feedback.perform(
+                                        if (shelf.selected) RavenFeedbackEffect.TOGGLE_OFF else RavenFeedbackEffect.TOGGLE_ON,
+                                    )
                                     onToggleShelf(shelf.id, !shelf.selected)
                                 }
                                 .padding(horizontal = 14.dp, vertical = 10.dp),

@@ -558,7 +558,6 @@ class IwaraSitePlugin(
             if (currentSalt != usedSalt) return@withLock currentSalt
             val now = clockMs()
             if (now - lastSaltCheckMs < SALT_REFRESH_COOLDOWN_MS) return@withLock null
-            lastSaltCheckMs = now
             try {
                 withTimeoutOrNull(5_000L) {
                     val (_, homeHtml) = VideoSiteSupport.fetchHtml(
@@ -578,6 +577,7 @@ class IwaraSitePlugin(
                         allowCache = false,
                         rateLimitBackoffMs = rateLimitBackoffMs,
                     )
+                    lastSaltCheckMs = clockMs()
                     extractSaltFromScript(scriptText)?.takeIf { it != usedSalt }
                 }
             } catch (ce: CancellationException) {
@@ -948,7 +948,7 @@ class IwaraSitePlugin(
                 val name = srcObj.str("name")
                 if (name.equals("preview", ignoreCase = true)) return@mapNotNull null
                 val isSource = name.equals("Source", ignoreCase = true)
-                val height = if (isSource) originalHeight else name.removeSuffix("p").toIntOrNull() ?: return@mapNotNull null
+                val height = if (isSource) originalHeight else name.removeSuffix("p").removeSuffix("P").toIntOrNull() ?: return@mapNotNull null
                 val urls = srcObj.obj("src") ?: return@mapNotNull null
                 val raw = (if (download) urls.str("download") else urls.str("view")).ifBlank { urls.str("view") }
                 val normalized = if (raw.startsWith("//")) "https:$raw" else raw
@@ -958,12 +958,13 @@ class IwaraSitePlugin(
                 } else {
                     "${height}p"
                 }
+                val isHls = normalized.substringBefore('?').endsWith(".m3u8", ignoreCase = true)
                 VideoStream(
                     quality = if (isSource) "Source" else "${height}p",
                     label = label,
                     url = normalized,
-                    isHls = normalized.substringBefore('?').endsWith(".m3u8", ignoreCase = true),
-                    mimeTypeHint = "video/mp4",
+                    isHls = isHls,
+                    mimeTypeHint = if (isHls) "application/vnd.apple.mpegurl" else "video/mp4",
                 )
             }.distinctBy { it.label }.sortedByDescending { stream ->
                 val h = VideoSiteSupport.parseStreamHeight(stream.label)

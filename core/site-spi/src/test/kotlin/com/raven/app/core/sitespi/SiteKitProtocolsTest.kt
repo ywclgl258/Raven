@@ -56,6 +56,24 @@ class SiteKitProtocolsTest {
     }
 
     @Test
+    fun `rou png protocol decodeEv handles byte wrap-around and UTF-8 text and detects BOM m3u8 and 188-byte TS`() {
+        val utf8Payload = """{"title":"测试\u0000\u0001","url":"/api/hls/demo"}"""
+        val keyOffset = 200
+        val rawUtf8 = utf8Payload.toByteArray(Charsets.UTF_8)
+        val shifted = ByteArray(rawUtf8.size) { i -> (((rawUtf8[i].toInt() and 0xFF) + keyOffset) and 0xFF).toByteByteMask() }
+        assertEquals(utf8Payload, RouPngProtocol.decodeEv(Base64.encode(shifted), keyOffset))
+
+        val bomM3u8 = byteArrayOf(0xEF.toByte(), 0xBB.toByte(), 0xBF.toByte()) +
+            "#EXTM3U\n#EXT-X-ENDLIST\n".toByteArray(Charsets.UTF_8)
+        assertEquals("application/vnd.apple.mpegurl", RouPngProtocol.detectContentType(bomM3u8))
+
+        val singleTsPacket = ByteArray(188) { idx -> if (idx == 0) 0x47 else 0x11 }
+        assertEquals("video/mp2t", RouPngProtocol.detectContentType(singleTsPacket))
+    }
+
+    private fun Int.toByteByteMask(): Byte = (this and 0xFF).toByte()
+
+    @Test
     fun `cossora aes protocol decrypts embed html and enforces trusted host`() {
         val key = "0123456789abcdef0123456789abcdef" // 32 ASCII chars -> 32-byte AES-256 key
         val iv = ByteArray(16) { (it + 1).toByte() }
@@ -129,5 +147,13 @@ class SiteKitProtocolsTest {
         // Dimension validation
         assertTrue(JmcomicStripMath.validateDimensions(1200, 1800, 10))
         assertFalse(JmcomicStripMath.validateDimensions(4000, 4000, 10)) // 16M > 12M limit
+        assertEquals(
+            listOf(StripSlice(sourceTop = 0, destinationTop = 0, height = 100)),
+            JmcomicStripMath.computeSlicePlan(imageHeight = 100, stripCount = 0),
+        )
+        assertEquals(
+            IllegalArgumentException::class.java,
+            runCatching { JmcomicStripMath.computeSlicePlan(imageHeight = 0, stripCount = 4) }.exceptionOrNull()?.javaClass,
+        )
     }
 }

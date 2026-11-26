@@ -1,6 +1,15 @@
 package com.raven.app.feature.settings
 
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.EnterTransition
+import androidx.compose.animation.ExitTransition
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.snap
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
@@ -77,6 +86,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
@@ -95,7 +105,9 @@ import com.raven.app.core.designsystem.component.RavenGroupedSwitchRow
 import com.raven.app.core.designsystem.component.RavenStatusPill
 import com.raven.app.core.designsystem.component.RavenStatusTone
 import com.raven.app.core.designsystem.component.RavenTopBar
+import com.raven.app.core.designsystem.theme.LocalMotionReduced
 import com.raven.app.core.designsystem.theme.LocalRavenColors
+import com.raven.app.core.designsystem.theme.RavenMotion
 import com.raven.app.core.designsystem.theme.RavenShapes
 import com.raven.app.core.designsystem.theme.tabular
 import com.raven.app.core.model.SiteDescriptor
@@ -688,6 +700,16 @@ fun SettingsScreenContent(
                         RavenGroupedDivider(insetWithIcon = true)
                     }
 
+                    val motionReduced = LocalMotionReduced.current
+                    val accountsChevronAngle = animateFloatAsState(
+                        targetValue = if (accountsExpanded) 180f else 0f,
+                        animationSpec = if (motionReduced) {
+                            snap()
+                        } else {
+                            tween(durationMillis = 180, easing = RavenMotion.HarmonyDecelerationEasing)
+                        },
+                        label = "settingsAccountsChevron",
+                    )
                     RavenGroupedRow(
                         title = "管理站点账号",
                         subtitle = "支持 ${uiState.authSites.size} 个认证站点的独立登录与注销",
@@ -696,15 +718,30 @@ fun SettingsScreenContent(
                         onClick = { accountsExpanded = !accountsExpanded },
                         trailingContent = {
                             Icon(
-                                imageVector = if (accountsExpanded) Icons.Rounded.ExpandLess else Icons.Rounded.ExpandMore,
+                                imageVector = Icons.Rounded.ExpandMore,
                                 contentDescription = if (accountsExpanded) "收起站点账号列表" else "展开站点账号列表",
                                 tint = colors.inkSecondary,
+                                modifier = Modifier.graphicsLayer { rotationZ = accountsChevronAngle.value },
                             )
                         },
                         modifier = Modifier.testTag("settings_manage_accounts_toggle"),
                     )
 
-                    AnimatedVisibility(visible = accountsExpanded) {
+                    AnimatedVisibility(
+                        visible = accountsExpanded,
+                        enter = if (motionReduced) {
+                            EnterTransition.None
+                        } else {
+                            expandVertically(tween(200, easing = RavenMotion.HarmonyDecelerationEasing)) +
+                                fadeIn(tween(160, easing = RavenMotion.HarmonyDecelerationEasing))
+                        },
+                        exit = if (motionReduced) {
+                            ExitTransition.None
+                        } else {
+                            shrinkVertically(tween(170, easing = RavenMotion.HarmonyDecelerationEasing)) +
+                                fadeOut(tween(120, easing = RavenMotion.HarmonyDecelerationEasing))
+                        },
+                    ) {
                         Column(modifier = Modifier.fillMaxWidth()) {
                             uiState.authSites.forEach { entry ->
                                 RavenGroupedDivider(insetWithIcon = true)
@@ -811,30 +848,47 @@ fun SettingsScreenContent(
                         onClick = { activeSheet = SettingsSheetKind.PIN_SETUP },
                         modifier = Modifier.testTag("settings_pin_setup_row"),
                     )
-                    if (uiState.hasAppPin) {
-                        RavenGroupedDivider(insetWithIcon = true)
-                        Column(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(horizontal = 16.dp, vertical = 12.dp),
-                            verticalArrangement = Arrangement.spacedBy(8.dp),
-                        ) {
-                            Text(
-                                text = "后台自动锁定超时",
-                                style = MaterialTheme.typography.titleSmall,
-                                color = colors.inkPrimary,
-                            )
-                            val timeoutChoices = listOf(0 to "立即", 30 to "30 秒", 60 to "1 分钟", 300 to "5 分钟")
-                            FlowRow(
-                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    val pinTimeoutMotionReduced = LocalMotionReduced.current
+                    AnimatedVisibility(
+                        visible = uiState.hasAppPin,
+                        enter = if (pinTimeoutMotionReduced) {
+                            EnterTransition.None
+                        } else {
+                            expandVertically(tween(200, easing = RavenMotion.HarmonyDecelerationEasing)) +
+                                fadeIn(tween(160, easing = RavenMotion.HarmonyDecelerationEasing))
+                        },
+                        exit = if (pinTimeoutMotionReduced) {
+                            ExitTransition.None
+                        } else {
+                            shrinkVertically(tween(170, easing = RavenMotion.HarmonyDecelerationEasing)) +
+                                fadeOut(tween(120, easing = RavenMotion.HarmonyDecelerationEasing))
+                        },
+                    ) {
+                        Column(modifier = Modifier.fillMaxWidth()) {
+                            RavenGroupedDivider(insetWithIcon = true)
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 16.dp, vertical = 12.dp),
                                 verticalArrangement = Arrangement.spacedBy(8.dp),
                             ) {
-                                timeoutChoices.forEach { (sec, label) ->
-                                    RavenFilterChip(
-                                        label = label,
-                                        selected = uiState.settings.appLockTimeoutSeconds == sec,
-                                        onClick = { onSelectAppLockTimeout(sec) },
-                                    )
+                                Text(
+                                    text = "后台自动锁定超时",
+                                    style = MaterialTheme.typography.titleSmall,
+                                    color = colors.inkPrimary,
+                                )
+                                val timeoutChoices = listOf(0 to "立即", 30 to "30 秒", 60 to "1 分钟", 300 to "5 分钟")
+                                FlowRow(
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                                ) {
+                                    timeoutChoices.forEach { (sec, label) ->
+                                        RavenFilterChip(
+                                            label = label,
+                                            selected = uiState.settings.appLockTimeoutSeconds == sec,
+                                            onClick = { onSelectAppLockTimeout(sec) },
+                                        )
+                                    }
                                 }
                             }
                         }

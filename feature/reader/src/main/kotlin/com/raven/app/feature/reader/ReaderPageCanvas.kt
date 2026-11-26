@@ -5,6 +5,8 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.os.BatteryManager
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -44,11 +46,13 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -73,7 +77,9 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.repeatOnLifecycle
 import com.raven.app.core.designsystem.component.RavenFormatters
+import com.raven.app.core.designsystem.theme.LocalMotionReduced
 import com.raven.app.core.designsystem.theme.LocalRavenColors
+import com.raven.app.core.designsystem.theme.RavenMotion
 import com.raven.app.core.designsystem.theme.RavenShapes
 import com.raven.app.core.designsystem.theme.RavenTabularTextStyle
 import com.raven.app.core.designsystem.theme.ravenSpringPress
@@ -84,7 +90,9 @@ import com.raven.app.core.model.ReaderFit
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlin.math.abs
 
 private const val STRIP_MIN_ASPECT_RATIO = 0.20f
@@ -119,8 +127,11 @@ internal fun PagedReaderCanvas(
     onNextPage: () -> Unit = {},
 ) {
     val colors = LocalRavenColors.current
+    val motionReduced = LocalMotionReduced.current
+    val scope = rememberCoroutineScope()
     var zoom by remember(pageKey) { mutableFloatStateOf(ReaderGeometry.MIN_ZOOM) }
     var pan by remember(pageKey) { mutableStateOf(PanOffset.ZERO) }
+    var doubleTapAnimJob by remember(pageKey) { mutableStateOf<Job?>(null) }
     var viewportSize by remember { mutableStateOf(IntSize.Zero) }
     var wideHalfIndex by remember(pageKey) { mutableIntStateOf(0) }
 
@@ -138,17 +149,19 @@ internal fun PagedReaderCanvas(
     val isWideSplit = autoSplitWidePages &&
         loadedPage != null &&
         loadedPage.pixelWidth > loadedPage.pixelHeight * 1.25f
+    val isZoomed by remember(pageKey) { derivedStateOf { zoom > ReaderGeometry.MIN_ZOOM + 0.01f } }
 
     // Always notify parent when leaving a page or resetting zoom.
     LaunchedEffect(pageKey) {
+        doubleTapAnimJob?.cancel()
         zoom = ReaderGeometry.MIN_ZOOM
         pan = PanOffset.ZERO
         wideHalfIndex = 0
         currentOnZoomedChanged(false)
     }
 
-    LaunchedEffect(zoom) {
-        currentOnZoomedChanged(zoom > ReaderGeometry.MIN_ZOOM + 0.01f)
+    LaunchedEffect(isZoomed) {
+        currentOnZoomedChanged(isZoomed)
     }
 
     // Re-clamp pan if fit, crop, or viewport dimensions change while zoomed.
@@ -209,10 +222,12 @@ internal fun PagedReaderCanvas(
                         }
                     },
                     onDoubleTap = { tapOffset ->
-                        val nextZoom = ReaderGeometry.toggleDoubleTapZoom(zoom)
-                        if (nextZoom <= ReaderGeometry.MIN_ZOOM) {
-                            zoom = ReaderGeometry.MIN_ZOOM
-                            pan = PanOffset.ZERO
+                        doubleTapAnimJob?.cancel()
+                        val startZoom = zoom
+                        val startPan = pan
+                        val nextZoom = ReaderGeometry.toggleDoubleTapZoom(startZoom)
+                        val targetPan = if (nextZoom <= ReaderGeometry.MIN_ZOOM) {
+                            PanOffset.ZERO
                         } else {
                             val loaded = currentLoaded
                             val vw = viewportSize.width.toFloat()
@@ -225,9 +240,9 @@ internal fun PagedReaderCanvas(
                                 } else {
                                     loaded.pixelWidth
                                 }
-                                val scaleRatio = nextZoom / zoom.coerceAtLeast(ReaderGeometry.MIN_ZOOM)
-                                val anchorPanX = pan.x * scaleRatio + (vw / 2f - tapOffset.x) * (scaleRatio - 1f)
-                                val anchorPanY = pan.y * scaleRatio + (vh / 2f - tapOffset.y) * (scaleRatio - 1f)
+                                val scaleRatio = nextZoom / startZoom.coerceAtLeast(ReaderGeometry.MIN_ZOOM)
+                                val anchorPanX = startPan.x * scaleRatio + (vw / 2f - tapOffset.x) * (scaleRatio - 1f)
+                                val anchorPanY = startPan.y * scaleRatio + (vh / 2f - tapOffset.y) * (scaleRatio - 1f)
                                 val limit = ReaderGeometry.computePanLimit(
                                     bitmapWidth = effectiveWidth,
                                     bitmapHeight = loaded.pixelHeight,
@@ -237,9 +252,29 @@ internal fun PagedReaderCanvas(
                                     cropPercent = currentCrop,
                                     zoom = nextZoom,
                                 )
-                                pan = ReaderGeometry.clampPan(PanOffset(anchorPanX, anchorPanY), limit)
+                                ReaderGeometry.clampPan(PanOffset(anchorPanX, anchorPanY), limit)
+                            } else {
+                                startPan
                             }
+                        }
+                        if (motionReduced) {
                             zoom = nextZoom
+                            pan = targetPan
+                        } else {
+                            doubleTapAnimJob = scope.launch {
+                                val anim = Animatable(0f)
+                                anim.animateTo(
+                                    targetValue = 1f,
+                                    animationSpec = RavenMotion.interactiveSpringSpec(),
+                                ) {
+                                    val t = value
+                                    zoom = startZoom + (nextZoom - startZoom) * t
+                                    pan = PanOffset(
+                                        x = startPan.x + (targetPan.x - startPan.x) * t,
+                                        y = startPan.y + (targetPan.y - startPan.y) * t,
+                                    )
+                                }
+                            }
                         }
                     },
                 )
@@ -247,6 +282,7 @@ internal fun PagedReaderCanvas(
             .pointerInput(pageKey) {
                 awaitEachGesture {
                     awaitFirstDown(requireUnconsumed = false)
+                    doubleTapAnimJob?.cancel()
                     var gestureZooming = false
                     val touchSlop = viewConfiguration.touchSlop
                     var accumZoom = 1f
@@ -457,8 +493,11 @@ internal fun SpreadSheetCanvas(
     }
 
     val colors = LocalRavenColors.current
+    val motionReduced = LocalMotionReduced.current
+    val scope = rememberCoroutineScope()
     var zoom by remember(sheetKey) { mutableFloatStateOf(ReaderGeometry.MIN_ZOOM) }
     var pan by remember(sheetKey) { mutableStateOf(PanOffset.ZERO) }
+    var doubleTapAnimJob by remember(sheetKey) { mutableStateOf<Job?>(null) }
     var viewportSize by remember { mutableStateOf(IntSize.Zero) }
 
     val currentCrop by rememberUpdatedState(cropPercent)
@@ -467,15 +506,17 @@ internal fun SpreadSheetCanvas(
     val currentTapZonesEnabled by rememberUpdatedState(tapZonesEnabled)
     val currentOnPreviousPage by rememberUpdatedState(onPreviousPage)
     val currentOnNextPage by rememberUpdatedState(onNextPage)
+    val isZoomed by remember(sheetKey) { derivedStateOf { zoom > ReaderGeometry.MIN_ZOOM + 0.01f } }
 
     LaunchedEffect(sheetKey) {
+        doubleTapAnimJob?.cancel()
         zoom = ReaderGeometry.MIN_ZOOM
         pan = PanOffset.ZERO
         currentOnZoomedChanged(false)
     }
 
-    LaunchedEffect(zoom) {
-        currentOnZoomedChanged(zoom > ReaderGeometry.MIN_ZOOM + 0.01f)
+    LaunchedEffect(isZoomed) {
+        currentOnZoomedChanged(isZoomed)
     }
 
     Box(
@@ -500,17 +541,19 @@ internal fun SpreadSheetCanvas(
                         }
                     },
                     onDoubleTap = { tapOffset ->
-                        val nextZoom = ReaderGeometry.toggleDoubleTapZoom(zoom)
-                        if (nextZoom <= ReaderGeometry.MIN_ZOOM) {
-                            zoom = ReaderGeometry.MIN_ZOOM
-                            pan = PanOffset.ZERO
+                        doubleTapAnimJob?.cancel()
+                        val startZoom = zoom
+                        val startPan = pan
+                        val nextZoom = ReaderGeometry.toggleDoubleTapZoom(startZoom)
+                        val targetPan = if (nextZoom <= ReaderGeometry.MIN_ZOOM) {
+                            PanOffset.ZERO
                         } else {
                             val vw = viewportSize.width.toFloat()
                             val vh = viewportSize.height.toFloat()
                             if (vw > 0f && vh > 0f) {
-                                val scaleRatio = nextZoom / zoom.coerceAtLeast(ReaderGeometry.MIN_ZOOM)
-                                val anchorX = pan.x * scaleRatio + (vw / 2f - tapOffset.x) * (scaleRatio - 1f)
-                                val anchorY = pan.y * scaleRatio + (vh / 2f - tapOffset.y) * (scaleRatio - 1f)
+                                val scaleRatio = nextZoom / startZoom.coerceAtLeast(ReaderGeometry.MIN_ZOOM)
+                                val anchorX = startPan.x * scaleRatio + (vw / 2f - tapOffset.x) * (scaleRatio - 1f)
+                                val anchorY = startPan.y * scaleRatio + (vh / 2f - tapOffset.y) * (scaleRatio - 1f)
                                 val limit = ReaderGeometry.computePanLimit(
                                     bitmapWidth = viewportSize.width,
                                     bitmapHeight = viewportSize.height,
@@ -520,9 +563,29 @@ internal fun SpreadSheetCanvas(
                                     cropPercent = currentCrop,
                                     zoom = nextZoom,
                                 )
-                                pan = ReaderGeometry.clampPan(PanOffset(anchorX, anchorY), limit)
+                                ReaderGeometry.clampPan(PanOffset(anchorX, anchorY), limit)
+                            } else {
+                                startPan
                             }
+                        }
+                        if (motionReduced) {
                             zoom = nextZoom
+                            pan = targetPan
+                        } else {
+                            doubleTapAnimJob = scope.launch {
+                                val anim = Animatable(0f)
+                                anim.animateTo(
+                                    targetValue = 1f,
+                                    animationSpec = RavenMotion.interactiveSpringSpec(),
+                                ) {
+                                    val t = value
+                                    zoom = startZoom + (nextZoom - startZoom) * t
+                                    pan = PanOffset(
+                                        x = startPan.x + (targetPan.x - startPan.x) * t,
+                                        y = startPan.y + (targetPan.y - startPan.y) * t,
+                                    )
+                                }
+                            }
                         }
                     },
                 )
@@ -530,6 +593,7 @@ internal fun SpreadSheetCanvas(
             .pointerInput(sheetKey) {
                 awaitEachGesture {
                     awaitFirstDown(requireUnconsumed = false)
+                    doubleTapAnimJob?.cancel()
                     var gestureActive = false
                     val touchSlop = viewConfiguration.touchSlop
                     var accumZoom = 1f

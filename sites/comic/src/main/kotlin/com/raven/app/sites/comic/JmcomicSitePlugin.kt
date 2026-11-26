@@ -119,6 +119,10 @@ class JmcomicSitePlugin(
             }
             val pageUrl = detail.pages.firstOrNull { it.index == pageIndex }?.pageUrl
                 ?: detail.pages.firstOrNull()?.pageUrl?.substringBefore('#')?.let { "$it#$pageIndex" }
+                ?: detail.item.extra["chapterId"]?.takeIf { it.isNotBlank() }?.let { cid ->
+                    val host = mirrorRouter.activeHost(httpClient.currentRouteKey(mirrorProbeUrls))
+                    "https://$host/photo/$cid#$pageIndex"
+                }
                 ?: throw SiteException.ParseError("无法定位禁漫天堂章节页地址", siteId = SiteId.JMCOMIC)
             return resolvePageImage(pageUrl = pageUrl, preferOriginal = false, forceReload = forceReload)
         }
@@ -199,16 +203,15 @@ class JmcomicSitePlugin(
         }
         val attempted = LinkedHashSet<String>()
         var lastError: Throwable? = null
+        val orderedCandidates = ArrayDeque<String>(ALL_HOSTS.size)
+        orderedCandidates += mirrorRouter.activeHost(routeKey)
+        mirrorRouter.candidateHosts().forEach { candidate ->
+            if (candidate !in orderedCandidates) orderedCandidates += candidate
+        }
 
-        repeat(ALL_HOSTS.size) {
-            val preferred = mirrorRouter.activeHost(routeKey)
-            val host = if (preferred !in attempted) {
-                preferred
-            } else {
-                mirrorRouter.candidateHosts().firstOrNull { it !in attempted }
-                    ?: return@repeat
-            }
-            attempted.add(host)
+        while (orderedCandidates.isNotEmpty()) {
+            val host = orderedCandidates.removeFirst()
+            if (!attempted.add(host)) continue
             try {
                 val result = block(host)
                 mirrorRouter.reportHostSuccess(host, routeKey)
@@ -903,7 +906,7 @@ class JmcomicSitePlugin(
                 userAgent = SiteNetworkProfile.DEFAULT_MOBILE_UA,
                 referer = "https://${ALL_HOSTS.first()}/",
                 mediaReferer = "https://${ALL_HOSTS.first()}/",
-                mediaDomains = CDN_HOSTS,
+                mediaDomains = CDN_HOSTS + setOf("jmcomic-zzz.org", "18comic.vip"),
             ),
         )
     }

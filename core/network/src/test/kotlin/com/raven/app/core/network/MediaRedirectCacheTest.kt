@@ -165,4 +165,43 @@ class MediaRedirectCacheTest {
             origin.shutdown()
         }
     }
+
+    @Test
+    fun `strips Authorization and Cookie headers when cache hit rewrites cross-host to CDN`() {
+        val origin = MockWebServer()
+        val cdn = MockWebServer()
+        origin.start()
+        cdn.start()
+        try {
+            val cdnUrl = "http://cdn.example:${cdn.port}/video.mp4"
+            origin.enqueue(MockResponse().setResponseCode(302).setHeader("Location", cdnUrl))
+            cdn.enqueue(MockResponse().setResponseCode(200).setBody("first"))
+            cdn.enqueue(MockResponse().setResponseCode(200).setBody("hit"))
+
+            val cache = MediaRedirectCache(eligible = { true })
+            val client = clientOf(cache)
+            val originUrl = origin.url("/get-file/secret").toString()
+
+            val req1 = Request.Builder()
+                .url(originUrl)
+                .header("Cookie", "session=topsecret")
+                .build()
+            client.newCall(req1).execute().use { assertEquals("first", it.body!!.string()) }
+
+            val req2 = Request.Builder()
+                .url(originUrl)
+                .header("Authorization", "Bearer topsecret")
+                .header("Cookie", "session=topsecret")
+                .build()
+            client.newCall(req2).execute().use { assertEquals("hit", it.body!!.string()) }
+
+            cdn.takeRequest()
+            val hitReq = cdn.takeRequest()
+            assertNull("Authorization must be stripped on cross-host cache hit", hitReq.getHeader("Authorization"))
+            assertNull("Cookie must be stripped on cross-host cache hit", hitReq.getHeader("Cookie"))
+        } finally {
+            origin.shutdown()
+            cdn.shutdown()
+        }
+    }
 }

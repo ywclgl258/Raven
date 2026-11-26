@@ -27,6 +27,10 @@ interface FeedSource {
 interface VideoSource {
     suspend fun loadVideoDetail(url: String): VideoDetail
     suspend fun refreshStreams(url: String): List<VideoStream> = loadVideoDetail(url).streams
+    suspend fun refreshDownloadStreams(url: String): List<VideoStream> {
+        val detail = loadVideoDetail(url)
+        return (detail.downloadStreams + detail.streams).distinctBy { it.url }
+    }
 }
 
 interface GallerySource {

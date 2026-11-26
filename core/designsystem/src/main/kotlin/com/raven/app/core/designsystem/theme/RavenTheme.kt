@@ -1,7 +1,11 @@
 package com.raven.app.core.designsystem.theme
 
 import android.content.Context
+import android.database.ContentObserver
+import android.os.Handler
+import android.os.Looper
 import android.provider.Settings
+import android.view.ViewTreeObserver
 import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
@@ -9,10 +13,13 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.ReadOnlyComposable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.platform.LocalView
 
 /**
  * Root theme for Raven (`渡鸦`) implementing **Dark Obsidian × Apple HIG Precision × Netflix Cinema**.
@@ -27,17 +34,49 @@ fun RavenTheme(
     content: @Composable () -> Unit,
 ) {
     val context = LocalContext.current
+    val view = LocalView.current
     val haptic = LocalHapticFeedback.current
     val currentHaptic by rememberUpdatedState(haptic)
     val currentSoundEnabled by rememberUpdatedState(uiSoundEffectsEnabled)
     val extendedColors = remember { RavenExtendedColors() }
-    val motionReduced = remember(context) { isSystemMotionReduced(context) }
+    var motionReduced by remember(context) { mutableStateOf(isSystemMotionReduced(context)) }
     val feedbackController = remember(context.applicationContext) {
         AndroidRavenFeedbackController(
             context = context.applicationContext,
             hapticProvider = { currentHaptic },
             soundEnabledProvider = { currentSoundEnabled },
         )
+    }
+
+    DisposableEffect(context, view) {
+        val resolver = context.contentResolver
+        val observer = object : ContentObserver(Handler(Looper.getMainLooper())) {
+            override fun onChange(selfChange: Boolean) {
+                motionReduced = isSystemMotionReduced(context)
+            }
+        }
+        val focusListener = ViewTreeObserver.OnWindowFocusChangeListener { hasFocus ->
+            if (hasFocus) {
+                motionReduced = isSystemMotionReduced(context)
+            }
+        }
+        runCatching {
+            val scaleUri = Settings.Global.getUriFor(Settings.Global.ANIMATOR_DURATION_SCALE)
+            if (scaleUri != null) {
+                resolver.registerContentObserver(scaleUri, false, observer)
+            }
+        }
+        runCatching {
+            view.viewTreeObserver.addOnWindowFocusChangeListener(focusListener)
+        }
+        onDispose {
+            runCatching { resolver.unregisterContentObserver(observer) }
+            runCatching {
+                if (view.viewTreeObserver.isAlive) {
+                    view.viewTreeObserver.removeOnWindowFocusChangeListener(focusListener)
+                }
+            }
+        }
     }
 
     DisposableEffect(feedbackController) {

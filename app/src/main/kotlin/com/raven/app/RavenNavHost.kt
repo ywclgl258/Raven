@@ -30,11 +30,8 @@ import androidx.compose.material.icons.outlined.Explore
 import androidx.compose.material.icons.outlined.FolderOpen
 import androidx.compose.material.icons.outlined.Link
 import androidx.compose.material.icons.outlined.Movie
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -61,6 +58,9 @@ import com.raven.app.core.designsystem.component.RavenAdaptiveScaffold
 import com.raven.app.core.designsystem.component.RavenBottomSheet
 import com.raven.app.core.designsystem.component.RavenGroupedRow
 import com.raven.app.core.designsystem.component.RavenGroupedSection
+import com.raven.app.core.designsystem.component.RavenPrimaryButton
+import com.raven.app.core.designsystem.component.RavenPrimaryButtonVariant
+import com.raven.app.core.designsystem.component.RavenSecondaryButton
 import com.raven.app.core.designsystem.component.RavenStatusPill
 import com.raven.app.core.designsystem.component.RavenStatusTone
 import com.raven.app.core.designsystem.component.RavenTopDestination
@@ -114,6 +114,75 @@ import org.koin.androidx.compose.koinViewModel
 import org.koin.core.parameter.parametersOf
 
 /**
+ * Supplies the missing detail parent for readers opened from resume cards, history or deep links.
+ * A matching detail already on top is reused so normal detail -> reader navigation stays unchanged.
+ */
+internal fun readerParentDetail(
+    currentDetail: RavenRoute.GalleryDetail?,
+    reader: RavenRoute.Reader,
+): RavenRoute.GalleryDetail? {
+    if (currentDetail != null &&
+        currentDetail.siteId == reader.siteId &&
+        currentDetail.mediaId == reader.mediaId &&
+        currentDetail.offlineOnly == reader.offlineOnly
+    ) {
+        return null
+    }
+    return RavenRoute.GalleryDetail(
+        siteId = reader.siteId,
+        mediaId = reader.mediaId,
+        url = reader.url,
+        offlineOnly = reader.offlineOnly,
+    )
+}
+
+internal data class ReaderNavigationPlan(
+    val popCurrentReader: Boolean,
+    val popStaleParentDetail: Boolean,
+    val insertParentDetail: RavenRoute.GalleryDetail?,
+)
+
+/**
+ * Plans backstack adjustment when entering or advancing inside [RavenRoute.Reader] so pressing Back
+ * always returns to the active work's [RavenRoute.GalleryDetail] (never a previous queue item's detail).
+ */
+internal fun planReaderNavigation(
+    currentReader: RavenRoute.Reader?,
+    currentDetail: RavenRoute.GalleryDetail?,
+    previousDetail: RavenRoute.GalleryDetail?,
+    targetReader: RavenRoute.Reader,
+): ReaderNavigationPlan {
+    if (currentReader == null) {
+        return ReaderNavigationPlan(
+            popCurrentReader = false,
+            popStaleParentDetail = false,
+            insertParentDetail = readerParentDetail(currentDetail, targetReader),
+        )
+    }
+    val matchesPrevious = previousDetail != null &&
+        previousDetail.siteId == targetReader.siteId &&
+        previousDetail.mediaId == targetReader.mediaId &&
+        previousDetail.offlineOnly == targetReader.offlineOnly
+    if (matchesPrevious) {
+        return ReaderNavigationPlan(
+            popCurrentReader = true,
+            popStaleParentDetail = false,
+            insertParentDetail = null,
+        )
+    }
+    return ReaderNavigationPlan(
+        popCurrentReader = true,
+        popStaleParentDetail = previousDetail != null,
+        insertParentDetail = RavenRoute.GalleryDetail(
+            siteId = targetReader.siteId,
+            mediaId = targetReader.mediaId,
+            url = targetReader.url,
+            offlineOnly = targetReader.offlineOnly,
+        ),
+    )
+}
+
+/**
  * Host platform callbacks supplied by [MainActivity] for features that interact with Android
  * Activities, SAF document pickers, FileProvider sharing, window chrome, and hardware keys.
  */
@@ -156,6 +225,7 @@ fun RavenAppShell(
     onDismissSharedLink: () -> Unit,
     modifier: Modifier = Modifier,
     isIncognito: Boolean = false,
+    isAppLocked: Boolean = false,
     navController: NavHostController = rememberNavController(),
 ) {
     val navBackStackEntry by navController.currentBackStackEntryAsState()
@@ -176,15 +246,6 @@ fun RavenAppShell(
         if (activeTopDestination != null) {
             lastTopDestination = activeTopDestination
         }
-    }
-
-    // Consume incoming return-from-PlayerActivity or deep route intents cleanly.
-    LaunchedEffect(pendingNavigationRoute) {
-        val target = pendingNavigationRoute ?: return@LaunchedEffect
-        navController.navigate(target) {
-            launchSingleTop = true
-        }
-        onConsumeNavigationRoute()
     }
 
     val selectTopDestination: (RavenTopDestination) -> Unit = remember(navController) {
@@ -215,15 +276,52 @@ fun RavenAppShell(
 
     val navigateReaderRoute: (RavenRoute.Reader) -> Unit = remember(navController) {
         { readerRoute ->
-            val onReaderAlready = navController.currentBackStackEntry?.destination
-                ?.hasRoute<RavenRoute.Reader>() == true
-            navController.navigate(readerRoute) {
-                if (onReaderAlready) {
-                    popUpTo<RavenRoute.Reader> { inclusive = true }
+            val currentEntry = navController.currentBackStackEntry
+            val previousEntry = navController.previousBackStackEntry
+            val currentReader = currentEntry
+                ?.takeIf { it.destination.hasRoute<RavenRoute.Reader>() }
+                ?.let { entry -> runCatching { entry.toRoute<RavenRoute.Reader>() }.getOrNull() }
+            val currentDetail = currentEntry
+                ?.takeIf { it.destination.hasRoute<RavenRoute.GalleryDetail>() }
+                ?.let { entry -> runCatching { entry.toRoute<RavenRoute.GalleryDetail>() }.getOrNull() }
+            val previousDetail = previousEntry
+                ?.takeIf { it.destination.hasRoute<RavenRoute.GalleryDetail>() }
+                ?.let { entry -> runCatching { entry.toRoute<RavenRoute.GalleryDetail>() }.getOrNull() }
+            val plan = planReaderNavigation(
+                currentReader = currentReader,
+                currentDetail = currentDetail,
+                previousDetail = previousDetail,
+                targetReader = readerRoute,
+            )
+            if (plan.popCurrentReader) {
+                navController.popBackStack<RavenRoute.Reader>(inclusive = true)
+            }
+            if (plan.popStaleParentDetail) {
+                navController.popBackStack<RavenRoute.GalleryDetail>(inclusive = true)
+            }
+            plan.insertParentDetail?.let { parent ->
+                navController.navigate(parent) {
+                    launchSingleTop = true
                 }
+            }
+            navController.navigate(readerRoute) {
                 launchSingleTop = true
             }
         }
+    }
+
+    // Consume incoming return-from-PlayerActivity or deep route intents cleanly after unlock.
+    LaunchedEffect(pendingNavigationRoute, isAppLocked) {
+        if (isAppLocked) return@LaunchedEffect
+        val target = pendingNavigationRoute ?: return@LaunchedEffect
+        if (target is RavenRoute.Reader) {
+            navigateReaderRoute(target)
+        } else {
+            navController.navigate(target) {
+                launchSingleTop = true
+            }
+        }
+        onConsumeNavigationRoute()
     }
 
     val browseNavigator = remember(navController, hostActions, openSearchRoute, navigateReaderRoute) {
@@ -526,7 +624,7 @@ fun RavenAppShell(
 
             override fun openTagFeed(siteId: SiteId, tag: TagRef) {
                 navController.navigate(
-                    MainActivityIntentContract.resolveTagFeedRoute(siteRegistry, siteId, tag),
+                    MainActivityIntentContract.resolveTagRoute(siteRegistry, siteId, tag),
                 )
             }
 
@@ -666,6 +764,8 @@ fun RavenAppShell(
                         ravenTabEnterTransition(RavenMotion.computeTabSlideDirection(fromIdx, toIdx))
                     }
                     targetState.destination.isTopLevelTabDestination() -> ravenTabEnterTransition(direction = 0)
+                    initialState.destination.hasRoute<RavenRoute.GalleryDetail>() &&
+                        targetState.destination.hasRoute<RavenRoute.Reader>() -> ravenGalleryToReaderEnterTransition()
                     targetState.destination.isImmersiveModalDestination() -> ravenModalEnterTransition()
                     else -> ravenPushEnterTransition()
                 }
@@ -679,6 +779,8 @@ fun RavenAppShell(
                         ravenTabExitTransition(RavenMotion.computeTabSlideDirection(fromIdx, toIdx))
                     }
                     targetState.destination.isTopLevelTabDestination() -> ravenTabExitTransition(direction = 0)
+                    initialState.destination.hasRoute<RavenRoute.GalleryDetail>() &&
+                        targetState.destination.hasRoute<RavenRoute.Reader>() -> ravenModalParentExitTransition()
                     targetState.destination.isImmersiveModalDestination() -> ravenModalParentExitTransition()
                     else -> ravenPushParentExitTransition()
                 }
@@ -691,6 +793,8 @@ fun RavenAppShell(
                     fromIdx != null && toIdx != null -> {
                         ravenTabEnterTransition(RavenMotion.computeTabSlideDirection(fromIdx, toIdx))
                     }
+                    initialState.destination.hasRoute<RavenRoute.Reader>() &&
+                        targetState.destination.hasRoute<RavenRoute.GalleryDetail>() -> ravenModalParentEnterTransition()
                     initialState.destination.isImmersiveModalDestination() -> ravenModalParentEnterTransition()
                     else -> ravenPopParentEnterTransition()
                 }
@@ -703,6 +807,8 @@ fun RavenAppShell(
                     fromIdx != null && toIdx != null -> {
                         ravenTabExitTransition(RavenMotion.computeTabSlideDirection(fromIdx, toIdx))
                     }
+                    initialState.destination.hasRoute<RavenRoute.Reader>() &&
+                        targetState.destination.hasRoute<RavenRoute.GalleryDetail>() -> ravenReaderToGalleryExitTransition()
                     initialState.destination.isImmersiveModalDestination() -> ravenModalExitTransition()
                     else -> ravenPopExitTransition()
                 }
@@ -986,35 +1092,23 @@ private fun SharedLinkConfirmationSheet(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(10.dp),
             ) {
-                OutlinedButton(
+                RavenSecondaryButton(
+                    text = if (resolved != null) "取消" else "知道了",
                     onClick = onDismissRequest,
-                    shape = RavenShapes.PillShape,
                     modifier = Modifier
                         .weight(1f)
-                        .heightIn(min = 48.dp)
                         .testTag("shared_link_cancel_button"),
-                ) {
-                    Text(
-                        text = if (resolved != null) "取消" else "知道了",
-                        color = colors.inkPrimary,
-                    )
-                }
+                )
 
                 if (resolved != null) {
-                    Button(
+                    RavenPrimaryButton(
+                        text = "立即打开",
                         onClick = { onConfirmOpen(resolved) },
-                        shape = RavenShapes.PillShape,
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = colors.primaryCtaContainer,
-                            contentColor = colors.primaryCtaInk,
-                        ),
+                        variant = RavenPrimaryButtonVariant.Cta,
                         modifier = Modifier
                             .weight(1f)
-                            .heightIn(min = 48.dp)
                             .testTag("shared_link_confirm_button"),
-                    ) {
-                        Text(text = "立即打开")
-                    }
+                    )
                 }
             }
         }
@@ -1151,6 +1245,34 @@ private fun ravenPopExitTransition(): ExitTransition =
             easing = RavenMotion.HarmonyDecelerationEasing,
         ),
         targetAlpha = 0.85f,
+    )
+
+private fun ravenGalleryToReaderEnterTransition(): EnterTransition =
+    scaleIn(
+        initialScale = 0.96f,
+        animationSpec = tween(
+            durationMillis = RavenMotion.MODAL_ENTER_DURATION_MS,
+            easing = RavenMotion.HarmonyDecelerationEasing,
+        ),
+    ) + fadeIn(
+        animationSpec = tween(
+            durationMillis = RavenMotion.MODAL_ENTER_DURATION_MS - 40,
+            easing = RavenMotion.HarmonyDecelerationEasing,
+        ),
+    )
+
+private fun ravenReaderToGalleryExitTransition(): ExitTransition =
+    scaleOut(
+        targetScale = 0.96f,
+        animationSpec = tween(
+            durationMillis = RavenMotion.MODAL_EXIT_DURATION_MS,
+            easing = RavenMotion.HarmonyDecelerationEasing,
+        ),
+    ) + fadeOut(
+        animationSpec = tween(
+            durationMillis = RavenMotion.MODAL_EXIT_DURATION_MS - 30,
+            easing = RavenMotion.HarmonyDecelerationEasing,
+        ),
     )
 
 private fun ravenModalEnterTransition(): EnterTransition =

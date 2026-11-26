@@ -6,6 +6,7 @@ import android.net.Uri
 import android.os.Build
 import com.raven.app.core.common.AppDispatchers
 import com.raven.app.core.common.DefaultAppDispatchers
+import java.io.ByteArrayOutputStream
 import java.io.IOException
 import java.net.DatagramPacket
 import java.net.DatagramSocket
@@ -13,14 +14,20 @@ import java.net.InetAddress
 import java.net.SocketTimeoutException
 import java.net.URI
 import java.util.Locale
+import kotlin.coroutines.resume
+import kotlin.coroutines.resumeWithException
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
+import okhttp3.Call
+import okhttp3.Callback
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
+import okhttp3.Response
 
 /**
  * Discovered DLNA/UPnP MediaRenderer on the user's private LAN.
@@ -45,6 +52,7 @@ class LanCastManager(
     private val context: Context?,
     private val okHttpClient: OkHttpClient,
     private val dispatchers: AppDispatchers = DefaultAppDispatchers(),
+    private val lanUrlValidator: (String) -> Boolean = Companion::isAllowedLanUrl,
 ) {
     constructor(
         context: Context,
@@ -138,34 +146,77 @@ class LanCastManager(
         }.getOrDefault(false)
     }
 
-    private fun fetchXml(locationUrl: String): String? = runCatching {
-        if (!isAllowedLanUrl(locationUrl)) return null
+    internal suspend fun fetchXml(locationUrl: String): String? {
+        if (!lanUrlValidator(locationUrl)) return null
         val request = Request.Builder().url(locationUrl).get().build()
-        okHttpClient.newCall(request).execute().use { res ->
-            if (!res.isSuccessful) return null
-            val body = res.body?.string() ?: return null
-            if (body.length > MAX_DESCRIPTION_XML_CHARS) null else body
+        return try {
+            executeCancellable(okHttpClient.newCall(request)).use { res ->
+                if (!res.isSuccessful || res.isRedirect) return@use null
+                val body = res.body ?: return@use null
+                val contentLength = body.contentLength()
+                if (contentLength > MAX_DESCRIPTION_XML_BYTES) return@use null
+                val out = ByteArrayOutputStream()
+                val buf = ByteArray(8 * 1024)
+                val ctx = currentCoroutineContext()
+                body.byteStream().use { stream ->
+                    while (true) {
+                        ctx.ensureActive()
+                        val read = stream.read(buf)
+                        if (read < 0) break
+                        if (out.size() + read > MAX_DESCRIPTION_XML_BYTES) {
+                            return@use null
+                        }
+                        out.write(buf, 0, read)
+                    }
+                }
+                String(out.toByteArray(), Charsets.UTF_8)
+            }
+        } catch (ce: CancellationException) {
+            throw ce
+        } catch (_: Throwable) {
+            null
         }
-    }.getOrNull()
+    }
 
-    private fun postSoapAction(controlUrl: String, action: String, body: String) {
+    internal suspend fun postSoapAction(controlUrl: String, action: String, body: String) {
+        if (!lanUrlValidator(controlUrl)) {
+            throw IOException("拒绝向非局域网地址发送投屏指令")
+        }
         val request = Request.Builder()
             .url(controlUrl)
             .header("SOAPACTION", "\"$AV_TRANSPORT_SERVICE#$action\"")
             .post(body.toRequestBody("text/xml; charset=\"utf-8\"".toMediaType()))
             .build()
-        okHttpClient.newCall(request).execute().use { res ->
+        executeCancellable(okHttpClient.newCall(request)).use { res ->
             if (!res.isSuccessful) {
                 throw IOException("DLNA $action 失败 (HTTP ${res.code})")
             }
         }
     }
 
+    private suspend fun executeCancellable(call: Call): Response =
+        suspendCancellableCoroutine { cont ->
+            cont.invokeOnCancellation { call.cancel() }
+            call.enqueue(object : Callback {
+                override fun onFailure(call: Call, e: IOException) {
+                    if (!cont.isCancelled) cont.resumeWithException(e)
+                }
+
+                override fun onResponse(call: Call, response: Response) {
+                    if (cont.isCancelled) {
+                        response.close()
+                    } else {
+                        cont.resume(response)
+                    }
+                }
+            })
+        }
+
     companion object {
         const val SSDP_MULTICAST_ADDR: String = "239.255.255.250"
         const val SSDP_PORT: Int = 1900
         const val AV_TRANSPORT_SERVICE: String = "urn:schemas-upnp-org:service:AVTransport:1"
-        private const val MAX_DESCRIPTION_XML_CHARS: Int = 512 * 1024
+        internal const val MAX_DESCRIPTION_XML_BYTES: Int = 512 * 1024
 
         private val LOCATION_HEADER_REGEX = Regex("(?im)^LOCATION:\\s*(https?://\\S+)\\s*$")
         private val FRIENDLY_NAME_REGEX = Regex("(?is)<friendlyName>\\s*([^<]+?)\\s*</friendlyName>")

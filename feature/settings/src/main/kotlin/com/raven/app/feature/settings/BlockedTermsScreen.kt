@@ -1,5 +1,8 @@
 package com.raven.app.feature.settings
 
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.snap
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -53,8 +56,13 @@ import com.raven.app.core.designsystem.component.RavenGroupedSwitchRow
 import com.raven.app.core.designsystem.component.RavenSearchField
 import com.raven.app.core.designsystem.component.RavenStatusTone
 import com.raven.app.core.designsystem.component.RavenTopBar
+import com.raven.app.core.designsystem.theme.LocalMotionReduced
 import com.raven.app.core.designsystem.theme.LocalRavenColors
+import com.raven.app.core.designsystem.theme.LocalRavenFeedback
+import com.raven.app.core.designsystem.theme.RavenFeedbackEffect
+import com.raven.app.core.designsystem.theme.RavenMotion
 import com.raven.app.core.designsystem.theme.RavenShapes
+import com.raven.app.core.designsystem.theme.ravenSpringPress
 import com.raven.app.core.model.RavenRoute
 import org.koin.androidx.compose.koinViewModel
 import org.koin.core.parameter.parametersOf
@@ -376,9 +384,28 @@ private fun ScopeSegmentButton(
     modifier: Modifier = Modifier,
 ) {
     val colors = LocalRavenColors.current
-    val bg = if (selected) colors.surface3 else colors.surface1
-    val borderColor = if (selected) colors.outlineSubtle else colors.surface1
-    val textColor = if (selected) colors.inkPrimary else colors.inkSecondary
+    val motionReduced = LocalMotionReduced.current
+    val feedback = LocalRavenFeedback.current
+    val colorSpec = if (motionReduced) {
+        snap<androidx.compose.ui.graphics.Color>()
+    } else {
+        tween(durationMillis = RavenMotion.CHIP_TRANSITION_DURATION_MS, easing = RavenMotion.HarmonyDecelerationEasing)
+    }
+    val bg by animateColorAsState(
+        targetValue = if (selected) colors.surface3 else colors.surface1,
+        animationSpec = colorSpec,
+        label = "blockedScopeBg",
+    )
+    val borderColor by animateColorAsState(
+        targetValue = if (selected) colors.outlineSubtle else colors.surface1,
+        animationSpec = colorSpec,
+        label = "blockedScopeBorder",
+    )
+    val textColor by animateColorAsState(
+        targetValue = if (selected) colors.inkPrimary else colors.inkSecondary,
+        animationSpec = colorSpec,
+        label = "blockedScopeText",
+    )
 
     Box(
         modifier = modifier
@@ -386,7 +413,13 @@ private fun ScopeSegmentButton(
             .clip(RavenShapes.ControlShape)
             .background(bg)
             .border(0.5.dp, borderColor, RavenShapes.ControlShape)
-            .clickable(role = Role.Tab, onClick = onClick)
+            .ravenSpringPress()
+            .clickable(role = Role.Tab) {
+                if (!selected) {
+                    feedback.perform(RavenFeedbackEffect.TAB_SWITCH)
+                }
+                onClick()
+            }
             .padding(horizontal = 10.dp, vertical = 8.dp),
         contentAlignment = Alignment.Center,
     ) {

@@ -142,7 +142,15 @@ class SiteImageHeadersInterceptor(
         val partitionedKey = "$partitionId|$urlString"
 
         val existingHeaders = request.httpHeaders
-        val headersBuilder = existingHeaders.newBuilder()
+        val headersBuilder = NetworkHeaders.Builder()
+        for ((name, values) in existingHeaders.asMap()) {
+            if (name.equals("Authorization", ignoreCase = true) || name.equals("Cookie", ignoreCase = true)) {
+                continue
+            }
+            for (value in values) {
+                headersBuilder.add(name, value)
+            }
+        }
 
         fun setIfMissing(name: String, value: String) {
             if (value.isNotBlank() && existingHeaders.get(name) == null) {

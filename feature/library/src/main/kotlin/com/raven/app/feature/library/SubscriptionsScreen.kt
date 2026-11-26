@@ -141,6 +141,10 @@ fun SubscriptionsScreen(
             },
         )
 
+        val subscriptionsBySite = remember(uiState.visibleSubscriptions) {
+            uiState.visibleSubscriptions.groupBy { it.siteId }
+        }
+
         LazyColumn(
             modifier = Modifier.fillMaxSize(),
             contentPadding = PaddingValues(top = 10.dp, bottom = 28.dp),
@@ -232,7 +236,7 @@ fun SubscriptionsScreen(
                             key = { _, sub -> SubscriptionsViewModel.subscriptionSourceId(sub) },
                         ) { index, sub ->
                             val sourceId = SubscriptionsViewModel.subscriptionSourceId(sub)
-                            val siteGroup = sameSiteList.filter { it.siteId == sub.siteId }
+                            val siteGroup = subscriptionsBySite[sub.siteId].orEmpty()
                             val posInSite = siteGroup.indexOfFirst {
                                 it.slug == sub.slug && it.scope == sub.scope
                             }
@@ -243,6 +247,7 @@ fun SubscriptionsScreen(
 
                             Row(
                                 modifier = Modifier
+                                    .animateItem()
                                     .fillMaxWidth()
                                     .padding(horizontal = 16.dp)
                                     .clip(RavenShapes.CardShape)
@@ -406,7 +411,9 @@ fun SubscriptionsScreen(
                                         RavenStatusPill(text = entry.sourceLabel)
                                     }
                                 },
-                                modifier = Modifier.padding(horizontal = 16.dp),
+                                modifier = Modifier
+                                    .animateItem()
+                                    .padding(horizontal = 16.dp),
                             )
                         }
                     }

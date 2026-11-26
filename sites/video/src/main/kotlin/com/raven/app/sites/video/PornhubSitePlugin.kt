@@ -216,7 +216,7 @@ class PornhubSitePlugin(
             val doc = Jsoup.parse(html, url)
             val entries = doc.select("a[href*=$segment]").mapNotNull { a ->
                 val rawHref = a.attr("href")
-                val slug = rawHref.substringAfter(segment).trimEnd('/').substringBefore('?').substringBefore('#')
+                val slug = rawHref.substringAfter(segment).substringBefore('?').substringBefore('#').trimEnd('/')
                 if (slug.isBlank() || slug.contains('/')) return@mapNotNull null
                 val title = HtmlUrlCleaner.cleanText(a.text()).ifBlank { slug }
                 DirectoryEntry(
@@ -325,9 +325,9 @@ class PornhubSitePlugin(
         const val BASE_URL: String = "https://www.pornhub.com"
         private val searchPathRegex = Regex("^/video/search/?$", RegexOption.IGNORE_CASE)
         private val viewKeyRegex = Regex("^[0-9a-z]{8,24}$", RegexOption.IGNORE_CASE)
-        private val hrefViewKeyRegex = Regex("viewkey=([0-9a-z]+)")
+        private val hrefViewKeyRegex = Regex("viewkey=([0-9a-z]+)", RegexOption.IGNORE_CASE)
         private val mediaDefRegex = Regex(
-            """"height"\s*:\s*(\d+)[^{}]*?"format"\s*:\s*"(hls|mp4)"[^{}]*?"videoUrl"\s*:\s*"(https?:[^"]+)"""",
+            """"height"\s*:\s*(\d+)[^\{\}]*?"format"\s*:\s*"(hls|mp4)"[^\{\}]*?"videoUrl"\s*:\s*"(https?:[^"]+)"""",
         )
         private val fallbackM3u8Regex = Regex(""""videoUrl"\s*:\s*"(https?:[^"]+\.m3u8[^"]*)"""")
         private val pageParamRegex = Regex("[?&]page=(\\d+)")
@@ -677,7 +677,7 @@ class PornhubSitePlugin(
                 else -> "自动"
             }
             val quality = when {
-                isMp4 && height > 0 -> "${height}p"
+                isMp4 && height > 0 -> "${height}p-mp4"
                 isMp4 -> "mp4"
                 height > 0 -> "${height}p"
                 else -> "auto"
@@ -751,7 +751,7 @@ class PornhubSitePlugin(
 
             val tags = doc.select("a[href*=tags/]").mapNotNull { a ->
                 val href = a.attr("href")
-                val slug = href.substringAfter("tags/").trimEnd('/').substringBefore('?')
+                val slug = href.substringAfter("tags/").substringBefore('?').substringBefore('#').trimEnd('/')
                 val label = HtmlUrlCleaner.cleanText(a.text())
                 if (slug.isBlank() || label.isBlank()) return@mapNotNull null
                 TagRef(

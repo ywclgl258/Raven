@@ -1,6 +1,10 @@
 package com.raven.app.core.designsystem.component
 
-import androidx.compose.foundation.background
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.snap
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.size
@@ -17,6 +21,7 @@ import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.draw.drawWithCache
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
@@ -80,11 +85,14 @@ fun RavenImage(
     Box(
         modifier = modifier
             .clipToBounds()
-            .background(
-                brush = Brush.verticalGradient(
+            .drawWithCache {
+                val placeholderBrush = Brush.verticalGradient(
                     colors = listOf(placeholderTopColor, placeholderBottomColor),
-                ),
-            ),
+                )
+                onDrawBehind {
+                    drawRect(brush = placeholderBrush)
+                }
+            },
     ) {
         if (url.isNotBlank()) {
             AsyncImage(
@@ -112,13 +120,17 @@ fun RavenImage(
             )
         }
 
-        if (showErrorIcon && (url.isBlank() || loadState is AsyncImagePainter.State.Error)) {
+        AnimatedVisibility(
+            visible = showErrorIcon && (url.isBlank() || loadState is AsyncImagePainter.State.Error),
+            enter = fadeIn(if (motionReduced) snap() else tween(durationMillis = 160)),
+            exit = fadeOut(if (motionReduced) snap() else tween(durationMillis = 100)),
+            modifier = Modifier.align(Alignment.Center),
+        ) {
             Icon(
                 imageVector = Icons.Outlined.BrokenImage,
                 contentDescription = null,
                 tint = colors.inkTertiary,
                 modifier = Modifier
-                    .align(Alignment.Center)
                     .size(22.dp)
                     .testTag("raven_image_error"),
             )

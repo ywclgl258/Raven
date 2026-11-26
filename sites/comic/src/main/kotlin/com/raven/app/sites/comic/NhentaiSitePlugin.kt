@@ -370,17 +370,22 @@ class NhentaiSitePlugin(
         val raw = request.query?.trim().orEmpty()
         if (raw.isEmpty()) return ""
         return when (request.scope) {
-            SearchScope.AUTHOR -> {
-                if (raw.contains(':')) raw else "artist:\"${raw.replace("\"", "")}\""
-            }
-            SearchScope.CHARACTER -> {
-                if (raw.contains(':')) raw else "character:\"${raw.replace("\"", "")}\""
-            }
-            SearchScope.TAG -> {
-                if (raw.contains(':') || raw.contains('"')) raw else "tag:\"${raw.replace("\"", "")}\""
-            }
+            SearchScope.AUTHOR -> formatScopedQuery(defaultPrefix = "artist", raw = raw)
+            SearchScope.CHARACTER -> formatScopedQuery(defaultPrefix = "character", raw = raw)
+            SearchScope.TAG -> formatScopedQuery(defaultPrefix = "tag", raw = raw)
             SearchScope.ALL -> raw
         }
+    }
+
+    private fun formatScopedQuery(defaultPrefix: String, raw: String): String {
+        val cleaned = raw.replace("\"", "").trim()
+        val colonIdx = cleaned.indexOf(':')
+        if (colonIdx > 0) {
+            val ns = cleaned.substring(0, colonIdx).trim()
+            val value = cleaned.substring(colonIdx + 1).trim()
+            return if (value.any(Char::isWhitespace)) "$ns:\"$value\"" else "$ns:$value"
+        }
+        return "$defaultPrefix:\"$cleaned\""
     }
 
     private suspend fun fetchCdn(forceRefresh: Boolean): NhentaiCdn = cdnMutex.withLock {
@@ -430,11 +435,23 @@ class NhentaiSitePlugin(
                 message = "nhentai 请求频率已达限制，请稍后重试",
                 siteId = SiteId.NHENTAI,
             )
-            401, 403 -> throw SiteException.Forbidden(
-                isChallenge = response.header("cf-mitigated").equals("challenge", ignoreCase = true),
-                message = "nhentai 暂时拒绝访问，请稍后重试",
+            401 -> throw SiteException.AuthRequired(
+                message = "nhentai 需要登录验证",
                 siteId = SiteId.NHENTAI,
             )
+            403 -> {
+                val body = response.bodyText()
+                val isChallenge = response.header("cf-mitigated").equals("challenge", ignoreCase = true) ||
+                    body.contains("cf-challenge", ignoreCase = true) ||
+                    body.contains("Just a moment", ignoreCase = true) ||
+                    body.contains("Checking your browser", ignoreCase = true) ||
+                    body.contains("DDoS-Guard", ignoreCase = true)
+                throw SiteException.Forbidden(
+                    isChallenge = isChallenge,
+                    message = if (isChallenge) "nhentai 触发浏览器验证挑战" else "nhentai 暂时拒绝访问，请稍后重试",
+                    siteId = SiteId.NHENTAI,
+                )
+            }
             404 -> throw SiteException.NotFound(
                 message = "该画廊已被原站移除或不存在",
                 siteId = SiteId.NHENTAI,

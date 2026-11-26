@@ -91,6 +91,12 @@ class GalleryDetailSerialResumeTest {
 
         assertEquals(resumeDetail.item.id, viewModel.uiState.value.detail?.item?.id)
         assertEquals(7, viewModel.uiState.value.readingProgress?.currentPage)
+
+        // Favorite toggle after serial auto-resume must sync UI isFavorite state with the resumed chapter id
+        assertFalse(viewModel.uiState.value.isFavorite)
+        viewModel.toggleFavorite()
+        advanceUntilIdle()
+        assertTrue(viewModel.uiState.value.isFavorite)
     }
 
     @Test

@@ -621,10 +621,14 @@ class ReaderViewModel(
             detail.item.extra["chapterUuid"],
             detail.item.extra["chapterHid"],
         )
+        val chapterUrlHint = detail.item.extra["chapterUrl"]?.trim().orEmpty()
         val currentIndex = chapters.indexOfFirst { chapter ->
             chapter.id == mediaId ||
                 chapter.id == detail.item.id ||
-                hints.any { hint -> hint.isNotBlank() && chapter.id.endsWith(hint) }
+                (chapterUrlHint.isNotEmpty() && chapter.url == chapterUrlHint) ||
+                hints.any { hint ->
+                    hint.isNotBlank() && (chapter.id == hint || chapter.id.endsWith(":$hint"))
+                }
         }
         val previous = chapters.getOrNull(currentIndex - 1)?.takeIf { currentIndex > 0 && it.url.isNotBlank() }
         val next = chapters.getOrNull(currentIndex + 1)?.takeIf { currentIndex >= 0 && it.url.isNotBlank() }
@@ -694,6 +698,12 @@ class ReaderViewModel(
         chapterTransitionEmitted = false
         _uiState.update { it.copy(isChapterTransitionLoading = false) }
         emitSnackbar("无法打开所选章节，请重试")
+    }
+
+    fun onScreenStarted() {
+        if (chapterAdvanceJob?.isActive != true) {
+            chapterTransitionEmitted = false
+        }
     }
 
     private fun resolveInitialPage(

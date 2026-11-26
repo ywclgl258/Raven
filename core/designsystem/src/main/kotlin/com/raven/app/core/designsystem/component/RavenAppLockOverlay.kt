@@ -1,8 +1,20 @@
 package com.raven.app.core.designsystem.component
 
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.snap
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -31,15 +43,18 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.hapticfeedback.HapticFeedbackType
-import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
@@ -49,10 +64,16 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.raven.app.core.designsystem.theme.LocalMotionReduced
 import com.raven.app.core.designsystem.theme.LocalRavenColors
+import com.raven.app.core.designsystem.theme.LocalRavenFeedback
+import com.raven.app.core.designsystem.theme.RavenFeedbackEffect
+import com.raven.app.core.designsystem.theme.RavenMotion
 import com.raven.app.core.designsystem.theme.RavenShapes
 import com.raven.app.core.designsystem.theme.RavenTabularTextStyle
+import com.raven.app.core.designsystem.theme.ravenInteractiveLight
 import com.raven.app.core.designsystem.theme.ravenSpringPress
+import kotlinx.coroutines.launch
 
 /**
  * Full-screen Dark Obsidian PIN lock overlay preventing underlying app content from appearing
@@ -60,18 +81,25 @@ import com.raven.app.core.designsystem.theme.ravenSpringPress
  */
 @Composable
 fun RavenAppLockOverlay(
-    onSubmitPin: (String) -> Boolean,
+    onSubmitPin: (String) -> Boolean = { false },
     modifier: Modifier = Modifier,
     errorMessage: String? = null,
     lockoutSecondsRemaining: Int = 0,
     onBiometricClick: (() -> Unit)? = null,
     maxPinLength: Int = 8,
     minPinLength: Int = 4,
+    onSubmitPinAsync: (suspend (String) -> Boolean)? = null,
 ) {
     val colors = LocalRavenColors.current
-    val haptic = LocalHapticFeedback.current
-    var pin by rememberSaveable { mutableStateOf("") }
-    var localError by rememberSaveable { mutableStateOf<String?>(null) }
+    val feedback = LocalRavenFeedback.current
+    val motionReduced = LocalMotionReduced.current
+    val density = LocalDensity.current
+    val scope = rememberCoroutineScope()
+    var pin by remember { mutableStateOf("") }
+    var localError by remember { mutableStateOf<String?>(null) }
+    var isSubmitting by remember { mutableStateOf(false) }
+    var errorShakeTrigger by remember { mutableIntStateOf(0) }
+    val shakeOffsetPx = remember { Animatable(0f) }
     val lockedOut = lockoutSecondsRemaining > 0
     val displayError = when {
         lockedOut -> "尝试次数过多，请 ${lockoutSecondsRemaining} 秒后再试"
@@ -79,15 +107,59 @@ fun RavenAppLockOverlay(
         else -> localError
     }
 
+    LaunchedEffect(errorMessage) {
+        if (!errorMessage.isNullOrBlank()) {
+            errorShakeTrigger++
+        }
+    }
+
+    LaunchedEffect(errorShakeTrigger) {
+        if (errorShakeTrigger <= 0) return@LaunchedEffect
+        if (motionReduced) {
+            shakeOffsetPx.snapTo(0f)
+            return@LaunchedEffect
+        }
+        val amp = with(density) { 12.dp.toPx() }
+        val steps = listOf(amp, -amp, amp * 0.72f, -amp * 0.56f, amp * 0.28f, 0f)
+        for (target in steps) {
+            shakeOffsetPx.animateTo(
+                targetValue = target,
+                animationSpec = tween(durationMillis = 42),
+            )
+        }
+    }
+
     fun attemptUnlock(candidate: String) {
-        if (lockedOut || candidate.length < minPinLength) return
-        val ok = onSubmitPin(candidate)
-        if (!ok) {
-            haptic.performHapticFeedback(HapticFeedbackType.Reject)
-            localError = "PIN 密码不正确"
-            pin = ""
+        if (lockedOut || isSubmitting || candidate.length < minPinLength) return
+        if (onSubmitPinAsync != null) {
+            isSubmitting = true
+            scope.launch {
+                val ok = try {
+                    onSubmitPinAsync(candidate)
+                } finally {
+                    isSubmitting = false
+                }
+                if (!ok) {
+                    feedback.perform(RavenFeedbackEffect.ERROR)
+                    errorShakeTrigger++
+                    localError = "PIN 密码不正确"
+                    pin = ""
+                } else {
+                    localError = null
+                    pin = ""
+                }
+            }
         } else {
-            localError = null
+            val ok = onSubmitPin(candidate)
+            if (!ok) {
+                feedback.perform(RavenFeedbackEffect.ERROR)
+                errorShakeTrigger++
+                localError = "PIN 密码不正确"
+                pin = ""
+            } else {
+                localError = null
+                pin = ""
+            }
         }
     }
 
@@ -95,6 +167,11 @@ fun RavenAppLockOverlay(
         modifier = modifier
             .fillMaxSize()
             .background(colors.canvas)
+            .clickable(
+                interactionSource = remember { MutableInteractionSource() },
+                indication = null,
+                onClick = {},
+            )
             .statusBarsPadding()
             .navigationBarsPadding()
             .padding(horizontal = 24.dp, vertical = 20.dp)
@@ -111,15 +188,20 @@ fun RavenAppLockOverlay(
             Box(
                 modifier = Modifier
                     .size(56.dp)
+                    .graphicsLayer { translationX = shakeOffsetPx.value }
                     .clip(CircleShape)
                     .background(colors.surface2)
-                    .border(0.5.dp, colors.rimHighlight, CircleShape),
+                    .border(
+                        width = 0.5.dp,
+                        color = if (displayError != null) colors.error.copy(alpha = 0.65f) else colors.rimHighlight,
+                        shape = CircleShape,
+                    ),
                 contentAlignment = Alignment.Center,
             ) {
                 Icon(
                     imageVector = Icons.Rounded.Lock,
                     contentDescription = null,
-                    tint = colors.crimson,
+                    tint = if (displayError != null) colors.error else colors.crimson,
                     modifier = Modifier.size(26.dp),
                 )
             }
@@ -141,17 +223,50 @@ fun RavenAppLockOverlay(
             Row(
                 horizontalArrangement = Arrangement.spacedBy(10.dp),
                 verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier.padding(vertical = 8.dp),
+                modifier = Modifier
+                    .padding(vertical = 8.dp)
+                    .graphicsLayer { translationX = shakeOffsetPx.value }
+                    .animateContentSize(
+                        animationSpec = if (motionReduced) snap() else RavenMotion.interactiveSpringSpec(),
+                    ),
             ) {
                 val dotSlots = maxOf(minPinLength, pin.length).coerceAtMost(maxPinLength)
                 repeat(dotSlots) { idx ->
                     val filled = idx < pin.length
+                    val dotScaleState = animateFloatAsState(
+                        targetValue = if (filled) 1.15f else 0.92f,
+                        animationSpec = if (motionReduced) snap() else RavenMotion.interactiveSpringSpec(),
+                        label = "lockPinDotScale",
+                    )
+                    val dotFill by animateColorAsState(
+                        targetValue = when {
+                            displayError != null && pin.isEmpty() -> colors.error.copy(alpha = 0.35f)
+                            filled -> colors.crimson
+                            else -> colors.surface2
+                        },
+                        animationSpec = if (motionReduced) snap() else tween(durationMillis = 120),
+                        label = "lockPinDotFill",
+                    )
+                    val dotBorder by animateColorAsState(
+                        targetValue = when {
+                            displayError != null && pin.isEmpty() -> colors.error.copy(alpha = 0.75f)
+                            filled -> colors.crimson
+                            else -> colors.hairline
+                        },
+                        animationSpec = if (motionReduced) snap() else tween(durationMillis = 120),
+                        label = "lockPinDotBorder",
+                    )
                     Box(
                         modifier = Modifier
                             .size(12.dp)
+                            .graphicsLayer {
+                                val s = dotScaleState.value
+                                scaleX = s
+                                scaleY = s
+                            }
                             .clip(CircleShape)
-                            .background(if (filled) colors.crimson else colors.surface2)
-                            .border(0.5.dp, if (filled) colors.crimson else colors.hairline, CircleShape),
+                            .background(dotFill)
+                            .border(0.5.dp, dotBorder, CircleShape),
                     )
                 }
             }
@@ -169,7 +284,7 @@ fun RavenAppLockOverlay(
                 rows.forEach { row ->
                     Row(horizontalArrangement = Arrangement.spacedBy(18.dp)) {
                         row.forEach { key ->
-                            val enabledKey = !lockedOut && when (key) {
+                            val enabledKey = !lockedOut && !isSubmitting && when (key) {
                                 "DEL" -> pin.isNotEmpty()
                                 "OK" -> pin.length >= minPinLength
                                 else -> pin.length < maxPinLength
@@ -179,7 +294,7 @@ fun RavenAppLockOverlay(
                                 enabled = enabledKey,
                                 accent = key == "OK",
                                 onClick = {
-                                    haptic.performHapticFeedback(HapticFeedbackType.KeyboardTap)
+                                    feedback.perform(RavenFeedbackEffect.TAP)
                                     localError = null
                                     when (key) {
                                         "DEL" -> if (pin.isNotEmpty()) pin = pin.dropLast(1)
@@ -187,10 +302,8 @@ fun RavenAppLockOverlay(
                                         else -> {
                                             if (pin.length < maxPinLength) {
                                                 pin += key
-                                                if (pin.length == minPinLength) {
-                                                    if (onSubmitPin(pin)) {
-                                                        localError = null
-                                                    }
+                                                if (minPinLength == maxPinLength && pin.length == maxPinLength) {
+                                                    attemptUnlock(pin)
                                                 }
                                             }
                                         }
@@ -202,10 +315,32 @@ fun RavenAppLockOverlay(
                 }
             }
 
-            if (pin.length >= minPinLength) {
+            AnimatedVisibility(
+                visible = pin.length >= minPinLength,
+                enter = if (motionReduced) {
+                    fadeIn(snap())
+                } else {
+                    fadeIn(
+                        tween(
+                            durationMillis = 160,
+                            easing = RavenMotion.HarmonyDecelerationEasing,
+                        ),
+                    ) + expandVertically(
+                        animationSpec = tween(
+                            durationMillis = 180,
+                            easing = RavenMotion.HarmonyDecelerationEasing,
+                        ),
+                    )
+                },
+                exit = if (motionReduced) {
+                    fadeOut(snap())
+                } else {
+                    fadeOut(tween(durationMillis = 120)) + shrinkVertically(tween(durationMillis = 140))
+                },
+            ) {
                 Button(
                     onClick = { attemptUnlock(pin) },
-                    enabled = !lockedOut,
+                    enabled = !lockedOut && !isSubmitting,
                     shape = RavenShapes.PillShape,
                     colors = ButtonDefaults.buttonColors(
                         containerColor = colors.primaryCtaContainer,
@@ -249,25 +384,43 @@ private fun PinPadButton(
     onClick: () -> Unit,
 ) {
     val colors = LocalRavenColors.current
-    val bg = when {
-        !enabled -> colors.surface1
-        accent -> colors.crimson.copy(alpha = 0.16f)
-        else -> colors.surface2
-    }
-    val fg = when {
-        !enabled -> colors.inkTertiary
-        accent -> colors.crimson
-        else -> colors.inkPrimary
-    }
+    val motionReduced = LocalMotionReduced.current
+    val interactionSource = remember { MutableInteractionSource() }
+    val bg by animateColorAsState(
+        targetValue = when {
+            !enabled -> colors.surface1
+            accent -> colors.crimson.copy(alpha = 0.16f)
+            else -> colors.surface2
+        },
+        animationSpec = if (motionReduced) snap() else tween(durationMillis = 120),
+        label = "pinPadBg",
+    )
+    val fg by animateColorAsState(
+        targetValue = when {
+            !enabled -> colors.inkTertiary
+            accent -> colors.crimson
+            else -> colors.inkPrimary
+        },
+        animationSpec = if (motionReduced) snap() else tween(durationMillis = 120),
+        label = "pinPadFg",
+    )
     Box(
         modifier = Modifier
             .defaultMinSize(minWidth = 64.dp, minHeight = 64.dp)
             .size(68.dp)
-            .ravenSpringPress(enabled = enabled)
+            .ravenSpringPress(interactionSource = interactionSource, enabled = enabled)
             .clip(CircleShape)
             .background(bg)
+            .ravenInteractiveLight(
+                interactionSource = interactionSource,
+                shape = CircleShape,
+                enabled = enabled,
+                glowColor = colors.interactiveGlow,
+            )
             .border(0.5.dp, colors.hairline, CircleShape)
             .clickable(
+                interactionSource = interactionSource,
+                indication = null,
                 enabled = enabled,
                 role = Role.Button,
                 onClick = onClick,

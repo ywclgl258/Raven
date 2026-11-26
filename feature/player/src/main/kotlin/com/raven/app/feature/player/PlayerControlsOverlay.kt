@@ -2,9 +2,20 @@ package com.raven.app.feature.player
 
 import android.graphics.Bitmap
 import android.os.Build
+import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.EnterTransition
+import androidx.compose.animation.ExitTransition
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.snap
+import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -75,14 +86,18 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.raven.app.core.designsystem.component.RavenFormatters
+import com.raven.app.core.designsystem.theme.LocalMotionReduced
 import com.raven.app.core.designsystem.theme.LocalRavenColors
 import com.raven.app.core.designsystem.theme.LocalReduceTransparency
 import com.raven.app.core.designsystem.theme.RavenFrostedBox
+import com.raven.app.core.designsystem.theme.RavenMotion
 import com.raven.app.core.designsystem.theme.RavenShapes
 import com.raven.app.core.designsystem.theme.RavenTabularTextStyle
 import com.raven.app.core.designsystem.theme.ravenSpringPress
 import com.raven.app.core.media.playback.VideoLoopRange
 import com.raven.app.core.model.TimeBookmark
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import kotlinx.coroutines.flow.StateFlow
 
 /**
  * Full player overlay stack: frosted top/bottom control chrome, A-B marked scrubber, lock mode
@@ -114,9 +129,11 @@ internal fun PlayerControlsOverlay(
     onEndQueue: () -> Unit,
     onDismissNotice: () -> Unit,
     modifier: Modifier = Modifier,
+    progressStateFlow: StateFlow<PlayerProgressSnapshot>? = null,
 ) {
     val colors = LocalRavenColors.current
     val reduceTransparency = LocalReduceTransparency.current
+    val motionReduced = LocalMotionReduced.current
     val supportsPip = Build.VERSION.SDK_INT >= Build.VERSION_CODES.O
 
     Box(modifier = modifier.fillMaxSize()) {
@@ -124,8 +141,8 @@ internal fun PlayerControlsOverlay(
         if (uiState.isLocked) {
             AnimatedVisibility(
                 visible = unlockPillVisible,
-                enter = fadeIn(),
-                exit = fadeOut(),
+                enter = if (motionReduced) EnterTransition.None else fadeIn(tween(160, easing = RavenMotion.HarmonyDecelerationEasing)),
+                exit = if (motionReduced) ExitTransition.None else fadeOut(tween(150, easing = RavenMotion.HarmonyDecelerationEasing)),
                 modifier = Modifier
                     .align(Alignment.CenterStart)
                     .padding(start = 16.dp),
@@ -163,74 +180,153 @@ internal fun PlayerControlsOverlay(
             return@Box
         }
 
-        // 2. Main Frosted Top & Bottom Control Chrome
+        val showChrome = controlsVisible && !uiState.showQueueNextOverlay
+
+        // 2a. Top frosted header bar (slides cleanly from top edge)
         AnimatedVisibility(
-            visible = controlsVisible && !uiState.showQueueNextOverlay,
-            enter = fadeIn(),
-            exit = fadeOut(),
-            modifier = Modifier.fillMaxSize(),
+            visible = showChrome,
+            enter = if (motionReduced) {
+                EnterTransition.None
+            } else {
+                fadeIn(tween(160, easing = RavenMotion.HarmonyDecelerationEasing)) +
+                    slideInVertically(tween(200, easing = RavenMotion.HarmonyDecelerationEasing)) { -it }
+            },
+            exit = if (motionReduced) {
+                ExitTransition.None
+            } else {
+                fadeOut(tween(140, easing = RavenMotion.HarmonyDecelerationEasing)) +
+                    slideOutVertically(tween(170, easing = RavenMotion.HarmonyDecelerationEasing)) { -it }
+            },
+            modifier = Modifier.align(Alignment.TopCenter),
         ) {
-            Box(modifier = Modifier.fillMaxSize()) {
-                // Top scrim + frosted header bar
-                PlayerTopBar(
-                    uiState = uiState,
-                    supportsPip = supportsPip,
-                    onBackClick = onBackClick,
-                    onOpenQualitySheet = onOpenQualitySheet,
-                    onOpenSleepTimerSheet = onOpenSleepTimerSheet,
-                    onToggleLock = onToggleLock,
-                    onRequestPip = onRequestPip,
-                    onOpenSettingsSheet = onOpenSettingsSheet,
-                    modifier = Modifier.align(Alignment.TopCenter),
-                )
+            PlayerTopBar(
+                uiState = uiState,
+                supportsPip = supportsPip,
+                onBackClick = onBackClick,
+                onOpenQualitySheet = onOpenQualitySheet,
+                onOpenSleepTimerSheet = onOpenSleepTimerSheet,
+                onToggleLock = onToggleLock,
+                onRequestPip = onRequestPip,
+                onOpenSettingsSheet = onOpenSettingsSheet,
+            )
+        }
 
-                // Center Play / Pause / Replay medallion when ready and not errored
-                if (!uiState.isBuffering && uiState.loadError == null && uiState.playbackError == null) {
-                    RavenFrostedBox(
-                        shape = CircleShape,
-                        reduceTransparency = reduceTransparency,
-                        borderColor = colors.rimHighlight,
-                        contentAlignment = Alignment.Center,
-                        modifier = Modifier
-                            .align(Alignment.Center)
-                            .size(58.dp)
-                            .ravenSpringPress()
-                            .clickable(role = Role.Button, onClick = onTogglePlayPause),
-                    ) {
-                        Icon(
-                            imageVector = when {
-                                uiState.isEnded -> Icons.Rounded.Replay
-                                uiState.isPlaying -> Icons.Rounded.Pause
-                                else -> Icons.Rounded.PlayArrow
-                            },
-                            contentDescription = if (uiState.isPlaying) "暂停" else "播放",
-                            tint = colors.inkPrimary,
-                            modifier = Modifier.size(30.dp),
-                        )
-                    }
+        // 2b. Center Play / Pause / Replay medallion
+        AnimatedVisibility(
+            visible = showChrome && !uiState.isBuffering && uiState.loadError == null && uiState.playbackError == null,
+            enter = if (motionReduced) {
+                EnterTransition.None
+            } else {
+                fadeIn(tween(150, easing = RavenMotion.HarmonyDecelerationEasing)) +
+                    scaleIn(initialScale = 0.88f, animationSpec = tween(180, easing = RavenMotion.HarmonyDecelerationEasing))
+            },
+            exit = if (motionReduced) {
+                ExitTransition.None
+            } else {
+                fadeOut(tween(130, easing = RavenMotion.HarmonyDecelerationEasing)) +
+                    scaleOut(targetScale = 0.88f, animationSpec = tween(150, easing = RavenMotion.HarmonyDecelerationEasing))
+            },
+            modifier = Modifier.align(Alignment.Center),
+        ) {
+            RavenFrostedBox(
+                shape = CircleShape,
+                reduceTransparency = reduceTransparency,
+                borderColor = colors.rimHighlight,
+                contentAlignment = Alignment.Center,
+                modifier = Modifier
+                    .size(58.dp)
+                    .ravenSpringPress()
+                    .clickable(role = Role.Button, onClick = onTogglePlayPause),
+            ) {
+                val playStateKey = when {
+                    uiState.isEnded -> 2
+                    uiState.isPlaying -> 1
+                    else -> 0
                 }
-
-                // Bottom scrim + scrubber with A-B markers + controls row
-                PlayerBottomBar(
-                    uiState = uiState,
-                    previewFrame = scrubbingPreviewFrame,
-                    onTogglePlayPause = onTogglePlayPause,
-                    onScrubStart = onScrubStart,
-                    onScrubPositionChange = onScrubPositionChange,
-                    onScrubCommit = onScrubCommit,
-                    onOpenSpeedSheet = onOpenSpeedSheet,
-                    onOpenQualitySheet = onOpenQualitySheet,
-                    onToggleFullscreen = onToggleFullscreen,
-                    modifier = Modifier.align(Alignment.BottomCenter),
-                )
+                AnimatedContent(
+                    targetState = playStateKey,
+                    transitionSpec = {
+                        if (motionReduced) {
+                            fadeIn(snap()) togetherWith fadeOut(snap())
+                        } else {
+                            (fadeIn(tween(130)) + scaleIn(initialScale = 0.78f))
+                                .togetherWith(fadeOut(tween(90)) + scaleOut(targetScale = 0.78f))
+                        }
+                    },
+                    label = "playerCenterPlayIcon",
+                ) { state ->
+                    Icon(
+                        imageVector = when (state) {
+                            2 -> Icons.Rounded.Replay
+                            1 -> Icons.Rounded.Pause
+                            else -> Icons.Rounded.PlayArrow
+                        },
+                        contentDescription = if (state == 1) "暂停" else "播放",
+                        tint = colors.inkPrimary,
+                        modifier = Modifier.size(30.dp),
+                    )
+                }
             }
+        }
+
+        // 2c. Bottom scrim + scrubber (slides cleanly from bottom edge; collects high-freq progress ONLY when visible!)
+        AnimatedVisibility(
+            visible = showChrome,
+            enter = if (motionReduced) {
+                EnterTransition.None
+            } else {
+                fadeIn(tween(160, easing = RavenMotion.HarmonyDecelerationEasing)) +
+                    slideInVertically(tween(200, easing = RavenMotion.HarmonyDecelerationEasing)) { it }
+            },
+            exit = if (motionReduced) {
+                ExitTransition.None
+            } else {
+                fadeOut(tween(140, easing = RavenMotion.HarmonyDecelerationEasing)) +
+                    slideOutVertically(tween(170, easing = RavenMotion.HarmonyDecelerationEasing)) { it }
+            },
+            modifier = Modifier.align(Alignment.BottomCenter),
+        ) {
+            val liveProgress = if (progressStateFlow != null) {
+                progressStateFlow.collectAsStateWithLifecycle().value
+            } else {
+                null
+            }
+            val barState = if (liveProgress != null) {
+                uiState.copy(
+                    positionMs = liveProgress.positionMs,
+                    bufferedPositionMs = liveProgress.bufferedPositionMs,
+                    durationMs = maxOf(uiState.durationMs, liveProgress.durationMs),
+                )
+            } else {
+                uiState
+            }
+            PlayerBottomBar(
+                uiState = barState,
+                previewFrame = scrubbingPreviewFrame,
+                onTogglePlayPause = onTogglePlayPause,
+                onScrubStart = onScrubStart,
+                onScrubPositionChange = onScrubPositionChange,
+                onScrubCommit = onScrubCommit,
+                onOpenSpeedSheet = onOpenSpeedSheet,
+                onOpenQualitySheet = onOpenQualitySheet,
+                onToggleFullscreen = onToggleFullscreen,
+            )
         }
 
         // 3. Long-press temporary playback speed pill (always visible above controls while held)
         AnimatedVisibility(
             visible = uiState.isTemporarySpeedActive,
-            enter = fadeIn(),
-            exit = fadeOut(),
+            enter = if (motionReduced) {
+                EnterTransition.None
+            } else {
+                fadeIn(tween(120, easing = RavenMotion.HarmonyDecelerationEasing)) +
+                    scaleIn(initialScale = 0.92f, animationSpec = tween(150))
+            },
+            exit = if (motionReduced) {
+                EnterTransition.None.let { ExitTransition.None }
+            } else {
+                fadeOut(tween(120, easing = RavenMotion.HarmonyDecelerationEasing))
+            },
             modifier = Modifier
                 .align(Alignment.TopCenter)
                 .padding(top = if (uiState.isFullscreen) 24.dp else 14.dp),
@@ -264,8 +360,8 @@ internal fun PlayerControlsOverlay(
         // 4. Transient notice banner (stream refresh, resume, loop)
         AnimatedVisibility(
             visible = !uiState.noticeMessage.isNullOrBlank() && !uiState.isTemporarySpeedActive,
-            enter = fadeIn(),
-            exit = fadeOut(),
+            enter = if (motionReduced) EnterTransition.None else fadeIn(tween(150, easing = RavenMotion.HarmonyDecelerationEasing)),
+            exit = if (motionReduced) ExitTransition.None else fadeOut(tween(140, easing = RavenMotion.HarmonyDecelerationEasing)),
             modifier = Modifier
                 .align(Alignment.TopCenter)
                 .padding(top = if (controlsVisible) 58.dp else 14.dp, start = 20.dp, end = 20.dp),
@@ -296,13 +392,17 @@ internal fun PlayerControlsOverlay(
         }
 
         // 5. Buffering or loading spinner
-        if ((uiState.isBuffering || uiState.isLoadingDetail || uiState.isRefreshingExpiredStream ||
-                (uiState.isInitialized && !uiState.isVideoFrameReady)) &&
+        val showBuffering = (uiState.isBuffering || uiState.isLoadingDetail || uiState.isRefreshingExpiredStream ||
+            (uiState.isInitialized && !uiState.isVideoFrameReady)) &&
             uiState.loadError == null &&
             uiState.playbackError == null
+        AnimatedVisibility(
+            visible = showBuffering,
+            enter = if (motionReduced) EnterTransition.None else fadeIn(tween(150, easing = RavenMotion.HarmonyDecelerationEasing)),
+            exit = if (motionReduced) ExitTransition.None else fadeOut(tween(120, easing = RavenMotion.HarmonyDecelerationEasing)),
+            modifier = Modifier.align(Alignment.Center),
         ) {
             Column(
-                modifier = Modifier.align(Alignment.Center),
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
@@ -328,27 +428,39 @@ internal fun PlayerControlsOverlay(
 
         // 6. Error overlay inside video viewport
         val activeError = uiState.loadError ?: uiState.playbackError
-        if (activeError != null && !uiState.isRefreshingExpiredStream) {
-            PlayerSurfaceErrorOverlay(
-                message = activeError,
-                requiresAuth = uiState.requiresAuth,
-                hasExternalPlayers = uiState.externalPlayers.isNotEmpty() || uiState.url.startsWith("http"),
-                onRetry = onRetry,
-                onOpenSiteAccount = onOpenSiteAccount,
-                onOpenExternalPlayers = onOpenExternalPlayers,
-                modifier = Modifier.align(Alignment.Center),
-            )
+        AnimatedVisibility(
+            visible = activeError != null && !uiState.isRefreshingExpiredStream,
+            enter = if (motionReduced) EnterTransition.None else fadeIn(tween(180, easing = RavenMotion.HarmonyDecelerationEasing)),
+            exit = if (motionReduced) ExitTransition.None else fadeOut(tween(140, easing = RavenMotion.HarmonyDecelerationEasing)),
+            modifier = Modifier.align(Alignment.Center),
+        ) {
+            if (activeError != null) {
+                PlayerSurfaceErrorOverlay(
+                    message = activeError,
+                    requiresAuth = uiState.requiresAuth,
+                    hasExternalPlayers = uiState.externalPlayers.isNotEmpty() || uiState.url.startsWith("http"),
+                    onRetry = onRetry,
+                    onOpenSiteAccount = onOpenSiteAccount,
+                    onOpenExternalPlayers = onOpenExternalPlayers,
+                )
+            }
         }
 
         // 7. End-of-video Sequential Queue Next confirmation overlay
         val queue = uiState.queue
-        if (uiState.showQueueNextOverlay && queue?.nextItem != null) {
-            PlayerQueueEndedOverlay(
-                queue = queue,
-                onConfirmNext = onConfirmQueueNext,
-                onEndQueue = onEndQueue,
-                modifier = Modifier.align(Alignment.Center),
-            )
+        AnimatedVisibility(
+            visible = uiState.showQueueNextOverlay && queue?.nextItem != null,
+            enter = if (motionReduced) EnterTransition.None else fadeIn(tween(180, easing = RavenMotion.HarmonyDecelerationEasing)) + scaleIn(initialScale = 0.95f),
+            exit = if (motionReduced) ExitTransition.None else fadeOut(tween(140, easing = RavenMotion.HarmonyDecelerationEasing)),
+            modifier = Modifier.align(Alignment.Center),
+        ) {
+            if (queue?.nextItem != null) {
+                PlayerQueueEndedOverlay(
+                    queue = queue,
+                    onConfirmNext = onConfirmQueueNext,
+                    onEndQueue = onEndQueue,
+                )
+            }
         }
     }
 }
@@ -478,6 +590,7 @@ private fun PlayerBottomBar(
     modifier: Modifier = Modifier,
 ) {
     val colors = LocalRavenColors.current
+    val motionReduced = LocalMotionReduced.current
     val durationMs = uiState.effectiveDurationMs
     var isScrubbing by remember { mutableStateOf(false) }
     var scrubPositionMs by remember { mutableLongStateOf(0L) }
@@ -499,17 +612,24 @@ private fun PlayerBottomBar(
             .padding(horizontal = 10.dp, vertical = 6.dp),
         verticalArrangement = Arrangement.spacedBy(2.dp),
     ) {
-        if (isScrubbing && previewFrame != null) {
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(bottom = 6.dp),
-                contentAlignment = Alignment.Center,
-            ) {
-                SeekPreviewThumbnailCard(
-                    bitmap = previewFrame,
-                    timestampLabel = RavenFormatters.formatDurationMs(scrubPositionMs),
-                )
+        AnimatedVisibility(
+            visible = isScrubbing && previewFrame != null,
+            enter = if (motionReduced) EnterTransition.None else fadeIn(tween(120, easing = RavenMotion.HarmonyDecelerationEasing)),
+            exit = if (motionReduced) ExitTransition.None else fadeOut(tween(120, easing = RavenMotion.HarmonyDecelerationEasing)),
+        ) {
+            val frame = previewFrame
+            if (frame != null) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(bottom = 6.dp),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    SeekPreviewThumbnailCard(
+                        bitmap = frame,
+                        timestampLabel = RavenFormatters.formatDurationMs(scrubPositionMs),
+                    )
+                }
             }
         }
 
@@ -518,7 +638,7 @@ private fun PlayerBottomBar(
             bufferedPositionMs = uiState.bufferedPositionMs,
             durationMs = durationMs,
             loopRange = uiState.loopRange,
-            timeBookmarks = uiState.timeBookmarks,
+            isScrubbing = isScrubbing,
             onScrubStart = { targetMs ->
                 isScrubbing = true
                 scrubPositionMs = targetMs
@@ -536,6 +656,7 @@ private fun PlayerBottomBar(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(horizontal = 6.dp),
+            timeBookmarks = uiState.timeBookmarks,
         )
 
         Row(
@@ -635,12 +756,19 @@ internal fun PlayerAbScrubber(
     onScrubEnd: (Long) -> Unit,
     modifier: Modifier = Modifier,
     timeBookmarks: List<TimeBookmark> = emptyList(),
+    isScrubbing: Boolean = false,
 ) {
     val colors = LocalRavenColors.current
+    val motionReduced = LocalMotionReduced.current
     val durationState by rememberUpdatedState(durationMs)
     val startCb by rememberUpdatedState(onScrubStart)
     val moveCb by rememberUpdatedState(onScrubMove)
     val endCb by rememberUpdatedState(onScrubEnd)
+    val scrubScaleState = animateFloatAsState(
+        targetValue = if (isScrubbing) 1f else 0f,
+        animationSpec = if (motionReduced) snap() else RavenMotion.interactiveSpringSpec(),
+        label = "playerScrubberExpand",
+    )
 
     var trackWidthPx by remember { mutableFloatStateOf(1f) }
     var dragFraction by remember { mutableFloatStateOf(0f) }
@@ -703,7 +831,9 @@ internal fun PlayerAbScrubber(
                 .fillMaxWidth()
                 .height(20.dp),
         ) {
-            val trackHeight = 3.5.dp.toPx()
+            val expandT = scrubScaleState.value.coerceIn(0f, 1.3f)
+            val trackHeight = (3.5.dp + 2.dp * expandT).toPx()
+            val thumbRadius = (6.dp + 2.5.dp * expandT).toPx()
             val centerY = size.height / 2f
             val topY = centerY - trackHeight / 2f
             val corner = CornerRadius(trackHeight / 2f, trackHeight / 2f)
@@ -784,15 +914,15 @@ internal fun PlayerAbScrubber(
             }
 
             // Scrubber thumb
-            val thumbX = (size.width * playedFraction).coerceIn(6.dp.toPx(), (size.width - 6.dp.toPx()).coerceAtLeast(6.dp.toPx()))
+            val thumbX = (size.width * playedFraction).coerceIn(thumbRadius, (size.width - thumbRadius).coerceAtLeast(thumbRadius))
             drawCircle(
                 color = colors.inkPrimary,
-                radius = 6.dp.toPx(),
+                radius = thumbRadius,
                 center = Offset(thumbX, centerY),
             )
             drawCircle(
                 color = colors.crimson,
-                radius = 2.5.dp.toPx(),
+                radius = (thumbRadius * 0.42f).coerceAtLeast(2.5.dp.toPx()),
                 center = Offset(thumbX, centerY),
             )
         }

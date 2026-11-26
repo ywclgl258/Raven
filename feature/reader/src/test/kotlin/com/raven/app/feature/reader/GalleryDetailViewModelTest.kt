@@ -319,6 +319,36 @@ class GalleryDetailViewModelTest {
         assertEquals(1, loaded.embeddedVideos.size)
         assertEquals("cossora-vid-1", loaded.embeddedVideos.single().id)
         assertEquals(MediaKind.VIDEO, loaded.embeddedVideos.single().kind)
+
+        // Pure-video Cosplaytele post (0 image pages) must block opening the page download sheet cleanly.
+        val zeroPageDetail = detail.copy(
+            item = detail.item.copy(id = "ct-video-only", pageCount = 0),
+            pageCount = 0,
+            pages = emptyList(),
+        )
+        val zeroLoader = FakeReaderPageLoader(
+            detailLoader = { _, _, _, _ -> OfflineGallerySnapshot(zeroPageDetail, emptyList(), emptyList(), "", false) },
+        )
+        val zeroVm = GalleryDetailViewModel(
+            route = RavenRoute.GalleryDetail(SiteId.COSPLAYTELE.value, "ct-video-only", zeroPageDetail.item.url),
+            siteRegistry = registry,
+            pageLoader = zeroLoader,
+            localLibraryImporter = harness.localLibraryImporter,
+            downloadGateway = FakeGalleryDownloadGateway(),
+            exportGateway = harness.exportGateway,
+            historyRepository = harness.historyRepository,
+            favoriteRepository = harness.favoriteRepository,
+            shelfRepository = harness.shelfRepository,
+            bookmarkRepository = harness.bookmarkRepository,
+            blockedTermsRepository = harness.blockedTermsRepository,
+            subscriptionRepository = harness.subscriptionRepository,
+            preferencesRepository = harness.preferencesRepository,
+            dispatchers = harness.dispatchers,
+            clock = harness.clock,
+        )
+        advanceUntilIdle()
+        zeroVm.openDownloadSheet()
+        assertFalse(zeroVm.uiState.value.downloadSheet.visible)
     }
 
     @Test

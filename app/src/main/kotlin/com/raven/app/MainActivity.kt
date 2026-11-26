@@ -23,13 +23,21 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.annotation.RequiresApi
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.EnterTransition
+import androidx.compose.animation.ExitTransition
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
-import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -44,6 +52,9 @@ import com.raven.app.core.database.repository.PreferencesRepository
 import com.raven.app.core.database.repository.SubscriptionRepository
 import com.raven.app.core.designsystem.component.LocalRavenImageRequestDecorator
 import com.raven.app.core.designsystem.component.RavenAppLockOverlay
+import com.raven.app.core.designsystem.theme.LocalMotionReduced
+import com.raven.app.core.designsystem.theme.LocalRavenColors
+import com.raven.app.core.designsystem.theme.RavenMotion
 import com.raven.app.core.designsystem.theme.RavenTheme
 import com.raven.app.core.model.RavenRoute
 import com.raven.app.core.model.SiteId
@@ -68,17 +79,10 @@ class MainActivity : ComponentActivity(), MainActivityHostActions {
     private val preferencesRepository: PreferencesRepository by inject()
     private val subscriptionRepository: SubscriptionRepository by inject()
     private val privacyLockStore: PrivacyLockStore by inject()
+    private val appLockCoordinator: AppLockSessionCoordinator by inject()
 
     private var pendingNavigationRoute by mutableStateOf<RavenRoute?>(null)
     private var pendingSharedLink by mutableStateOf<SharedLinkPrompt?>(null)
-
-    private var isAppLocked by mutableStateOf(false)
-    private var lastBackgroundElapsedMs by mutableLongStateOf(0L)
-    private var lockErrorMessage by mutableStateOf<String?>(null)
-    private var failedPinAttempts by mutableIntStateOf(0)
-    private var lockoutUntilElapsedMs by mutableLongStateOf(0L)
-    private var lockInitialized by mutableStateOf(false)
-    private var latestAppSettings: AppSettings = AppSettings()
 
     private var pendingCreateDocumentCallback: ((Uri?) -> Unit)? = null
     private var pendingOpenDocumentCallback: ((Uri?) -> Unit)? = null
@@ -137,6 +141,7 @@ class MainActivity : ComponentActivity(), MainActivityHostActions {
             navigationBarStyle = SystemBarStyle.dark(AndroidColor.TRANSPARENT),
         )
         super.onCreate(savedInstanceState)
+        DisplayRefreshRateController.applyHighRefreshRate(this, allowVideoFrameRateMatching = false)
 
         if (savedInstanceState == null) {
             handleIncomingIntent(intent)
@@ -144,19 +149,26 @@ class MainActivity : ComponentActivity(), MainActivityHostActions {
         }
 
         setContent {
-            val appSettings by preferencesRepository.settings.collectAsStateWithLifecycle(
-                initialValue = AppSettings(),
+            val loadedSettings by preferencesRepository.settings.collectAsStateWithLifecycle(
+                initialValue = null,
             )
+            val appSettings = loadedSettings ?: AppSettings()
             val unreadCount by subscriptionRepository.observeUnreadCount().collectAsStateWithLifecycle(
                 initialValue = 0,
             )
             val startupUpdate by StartupUpdateNotifier.latestUpdate.collectAsStateWithLifecycle()
+            val lockState by appLockCoordinator.state.collectAsStateWithLifecycle()
+            val hasStoredPin = remember { privacyLockStore.hasPin() }
+            val awaitingInitialLockDecision = loadedSettings == null && hasStoredPin && !lockState.lockInitialized
 
-            latestAppSettings = appSettings
+            LaunchedEffect(loadedSettings) {
+                val realSettings = loadedSettings ?: return@LaunchedEffect
+                appLockCoordinator.onSettingsLoaded(realSettings)
+            }
 
-            LaunchedEffect(startupUpdate?.release?.tagName, isAppLocked) {
+            LaunchedEffect(startupUpdate?.release?.tagName, lockState.isLocked, awaitingInitialLockDecision) {
                 val available = startupUpdate ?: return@LaunchedEffect
-                if (isAppLocked) return@LaunchedEffect
+                if (lockState.isLocked || awaitingInitialLockDecision) return@LaunchedEffect
                 Toast.makeText(
                     this@MainActivity,
                     "发现新版本 ${available.release.tagName}，可在设置中查看",
@@ -172,32 +184,18 @@ class MainActivity : ComponentActivity(), MainActivityHostActions {
                 }
             }
 
-            LaunchedEffect(appSettings.appLockEnabled) {
-                val hasPin = privacyLockStore.hasPin()
-                if (!lockInitialized) {
-                    lockInitialized = true
-                    if (appSettings.appLockEnabled && hasPin) {
-                        isAppLocked = true
-                    }
-                } else if (!appSettings.appLockEnabled || !hasPin) {
-                    isAppLocked = false
-                    lockErrorMessage = null
-                }
-            }
-
             var lockoutSecondsRemaining by remember { mutableIntStateOf(0) }
-            LaunchedEffect(isAppLocked, lockoutUntilElapsedMs) {
-                while (isAppLocked && lockoutUntilElapsedMs > 0L) {
-                    val remainingMs = (lockoutUntilElapsedMs - SystemClock.elapsedRealtime()).coerceAtLeast(0L)
+            LaunchedEffect(lockState.isLocked, lockState.lockoutUntilElapsedMs) {
+                while (lockState.isLocked && lockState.lockoutUntilElapsedMs > 0L) {
+                    val remainingMs = (lockState.lockoutUntilElapsedMs - SystemClock.elapsedRealtime()).coerceAtLeast(0L)
                     lockoutSecondsRemaining = ((remainingMs + 999L) / 1_000L).toInt()
                     if (remainingMs <= 0L) {
-                        lockoutUntilElapsedMs = 0L
-                        failedPinAttempts = 0
+                        appLockCoordinator.onLockoutExpired()
                         break
                     }
                     delay(1_000L)
                 }
-                if (lockoutUntilElapsedMs <= 0L) {
+                if (lockState.lockoutUntilElapsedMs <= 0L) {
                     lockoutSecondsRemaining = 0
                 }
             }
@@ -209,36 +207,66 @@ class MainActivity : ComponentActivity(), MainActivityHostActions {
                 CompositionLocalProvider(
                     LocalRavenImageRequestDecorator provides ::ravenImageRequestDecorator,
                 ) {
+                    val colors = LocalRavenColors.current
+                    val motionReduced = LocalMotionReduced.current
+                    val showLockOverlay = lockState.isLocked && appSettings.appLockEnabled && privacyLockStore.hasPin()
                     Box(modifier = Modifier.fillMaxSize()) {
-                        RavenAppShell(
-                            siteRegistry = siteRegistry,
-                            hostActions = this@MainActivity,
-                            unreadInboxCount = unreadCount,
-                            isIncognito = appSettings.incognitoMode,
-                            pendingNavigationRoute = pendingNavigationRoute,
-                            onConsumeNavigationRoute = { pendingNavigationRoute = null },
-                            pendingSharedLink = pendingSharedLink,
-                            onDismissSharedLink = { pendingSharedLink = null },
-                        )
+                        if (!awaitingInitialLockDecision) {
+                            RavenAppShell(
+                                siteRegistry = siteRegistry,
+                                hostActions = this@MainActivity,
+                                unreadInboxCount = unreadCount,
+                                isIncognito = appSettings.incognitoMode,
+                                isAppLocked = showLockOverlay,
+                                pendingNavigationRoute = pendingNavigationRoute,
+                                onConsumeNavigationRoute = { pendingNavigationRoute = null },
+                                pendingSharedLink = pendingSharedLink,
+                                onDismissSharedLink = { pendingSharedLink = null },
+                            )
+                        } else {
+                            Box(modifier = Modifier.fillMaxSize().background(colors.canvas))
+                        }
 
-                        if (isAppLocked && appSettings.appLockEnabled && privacyLockStore.hasPin()) {
+                        AnimatedVisibility(
+                            visible = showLockOverlay,
+                            enter = if (motionReduced) {
+                                EnterTransition.None
+                            } else {
+                                fadeIn(
+                                    animationSpec = tween(
+                                        durationMillis = 180,
+                                        easing = RavenMotion.HarmonyDecelerationEasing,
+                                    ),
+                                ) + scaleIn(
+                                    initialScale = 1.03f,
+                                    animationSpec = tween(
+                                        durationMillis = 220,
+                                        easing = RavenMotion.HarmonyDecelerationEasing,
+                                    ),
+                                )
+                            },
+                            exit = if (motionReduced) {
+                                ExitTransition.None
+                            } else {
+                                fadeOut(
+                                    animationSpec = tween(
+                                        durationMillis = 180,
+                                        easing = RavenMotion.HarmonyDecelerationEasing,
+                                    ),
+                                ) + scaleOut(
+                                    targetScale = 0.97f,
+                                    animationSpec = tween(
+                                        durationMillis = 200,
+                                        easing = RavenMotion.HarmonyDecelerationEasing,
+                                    ),
+                                )
+                            },
+                        ) {
                             RavenAppLockOverlay(
-                                onSubmitPin = { candidate ->
-                                    val ok = privacyLockStore.verifyPin(candidate)
-                                    if (ok) {
-                                        isAppLocked = false
-                                        lockErrorMessage = null
-                                        failedPinAttempts = 0
-                                        lockoutUntilElapsedMs = 0L
-                                    } else {
-                                        failedPinAttempts += 1
-                                        if (failedPinAttempts >= MAX_PIN_ATTEMPTS) {
-                                            lockoutUntilElapsedMs = SystemClock.elapsedRealtime() + LOCKOUT_DURATION_MS
-                                        }
-                                    }
-                                    ok
+                                onSubmitPinAsync = { candidate ->
+                                    appLockCoordinator.verifyPin(candidate)
                                 },
-                                errorMessage = lockErrorMessage,
+                                errorMessage = lockState.errorMessage,
                                 lockoutSecondsRemaining = lockoutSecondsRemaining,
                                 onBiometricClick = if (
                                     Build.VERSION.SDK_INT >= Build.VERSION_CODES.P &&
@@ -256,30 +284,14 @@ class MainActivity : ComponentActivity(), MainActivityHostActions {
         }
     }
 
-    override fun onStart() {
-        super.onStart()
-        val settings = latestAppSettings
-        if (settings.appLockEnabled && privacyLockStore.hasPin() && lastBackgroundElapsedMs > 0L) {
-            val elapsedMs = SystemClock.elapsedRealtime() - lastBackgroundElapsedMs
-            if (elapsedMs >= settings.appLockTimeoutSeconds.coerceAtLeast(0) * 1_000L) {
-                isAppLocked = true
-            }
-        }
-        lastBackgroundElapsedMs = 0L
-    }
-
     override fun onResume() {
         super.onResume()
+        DisplayRefreshRateController.applyHighRefreshRate(this, allowVideoFrameRateMatching = false)
         val apk = pendingInstallApk
         if (apk != null && apk.isFile && RavenUpdateInstaller.canRequestPackageInstalls(this)) {
             pendingInstallApk = null
             startApkInstaller(apk)
         }
-    }
-
-    override fun onStop() {
-        super.onStop()
-        lastBackgroundElapsedMs = SystemClock.elapsedRealtime()
     }
 
     private fun canOfferBiometricUnlock(): Boolean {
@@ -305,18 +317,18 @@ class MainActivity : ComponentActivity(), MainActivityHostActions {
             mainExecutor,
             object : BiometricPrompt.AuthenticationCallback() {
                 override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult?) {
-                    isAppLocked = false
-                    lockErrorMessage = null
-                    failedPinAttempts = 0
-                    lockoutUntilElapsedMs = 0L
+                    appLockCoordinator.onBiometricUnlocked()
+                }
+
+                override fun onAuthenticationError(errorCode: Int, errString: CharSequence?) {
+                    if (errorCode != BiometricPrompt.BIOMETRIC_ERROR_USER_CANCELED &&
+                        errorCode != BiometricPrompt.BIOMETRIC_ERROR_CANCELED
+                    ) {
+                        appLockCoordinator.onBiometricError(errString?.toString())
+                    }
                 }
             },
         )
-    }
-
-    companion object {
-        private const val MAX_PIN_ATTEMPTS: Int = 5
-        private const val LOCKOUT_DURATION_MS: Long = 30_000L
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -354,16 +366,30 @@ class MainActivity : ComponentActivity(), MainActivityHostActions {
         val playerIntent = args.toIntent(this, PlayerActivity::class.java).apply {
             addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP)
         }
-        val options = ActivityOptions.makeCustomAnimation(
-            this,
-            R.anim.raven_player_enter,
-            R.anim.raven_host_hold,
-        )
-        startActivity(playerIntent, options.toBundle())
+        if (DisplayRefreshRateController.isSystemMotionReduced(this)) {
+            startActivity(playerIntent)
+        } else {
+            val options = ActivityOptions.makeCustomAnimation(
+                this,
+                R.anim.raven_player_enter,
+                R.anim.raven_host_hold,
+            )
+            startActivity(playerIntent, options.toBundle())
+        }
     }
 
     override fun launchWebViewAuth(siteId: SiteId) {
-        startActivity(SiteAuthActivity.createIntent(this, siteId))
+        val authIntent = SiteAuthActivity.createIntent(this, siteId)
+        if (DisplayRefreshRateController.isSystemMotionReduced(this)) {
+            startActivity(authIntent)
+        } else {
+            val options = ActivityOptions.makeCustomAnimation(
+                this,
+                R.anim.raven_player_enter,
+                R.anim.raven_host_hold,
+            )
+            startActivity(authIntent, options.toBundle())
+        }
     }
 
     override fun setSystemBarsVisible(visible: Boolean) {
@@ -481,7 +507,9 @@ class MainActivity : ComponentActivity(), MainActivityHostActions {
             Toast.makeText(this, "未找到已校验的安装包文件", Toast.LENGTH_SHORT).show()
             return
         }
-        if (!RavenUpdateInstaller.canRequestPackageInstalls(this)) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O &&
+            !RavenUpdateInstaller.canRequestPackageInstalls(this)
+        ) {
             pendingInstallApk = apkFile
             runCatching {
                 unknownSourcesLauncher.launch(

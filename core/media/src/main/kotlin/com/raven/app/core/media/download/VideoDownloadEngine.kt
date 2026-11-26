@@ -420,25 +420,40 @@ class VideoDownloadEngine(
             DownloadService.sendResumeDownloads(appContext, VideoDownloadService::class.java, false)
             DownloadService.sendAddDownload(appContext, VideoDownloadService::class.java, request, false)
             applicationScope.launch(dispatchers.io) {
-                downloadStateRepository.upsert(
-                    DownloadItem(
-                        id = id,
-                        siteId = meta.siteId,
-                        mediaId = meta.mediaId,
-                        url = meta.url,
-                        title = meta.title,
-                        coverUrl = meta.coverUrl,
-                        kind = DownloadKind.VIDEO,
-                        status = DownloadStatus.QUEUED,
-                        quality = meta.quality,
-                        groupName = meta.groupName,
-                        priority = meta.priority,
-                        storageLocation = storageRootManager.activeLocation(),
-                        localPath = storageRootManager.layout().root.absolutePath,
-                        createdAt = meta.createdAt.takeIf { it > 0L } ?: clockMs(),
-                        updatedAt = clockMs(),
-                    ),
-                )
+                projectionMutex.withLock {
+                    if (generationGuard.isRemoving(id) || generationGuard.isStale(id, expectedGeneration)) {
+                        return@withLock
+                    }
+                    val existing = downloadStateRepository.getById(id)
+                    if (existing != null &&
+                        existing.status in setOf(
+                            DownloadStatus.DOWNLOADING,
+                            DownloadStatus.COMPLETED,
+                            DownloadStatus.PAUSED,
+                        )
+                    ) {
+                        return@withLock
+                    }
+                    downloadStateRepository.upsert(
+                        DownloadItem(
+                            id = id,
+                            siteId = meta.siteId,
+                            mediaId = meta.mediaId,
+                            url = meta.url,
+                            title = meta.title,
+                            coverUrl = meta.coverUrl,
+                            kind = DownloadKind.VIDEO,
+                            status = DownloadStatus.QUEUED,
+                            quality = meta.quality,
+                            groupName = meta.groupName,
+                            priority = meta.priority,
+                            storageLocation = storageRootManager.activeLocation(),
+                            localPath = storageRootManager.layout().root.absolutePath,
+                            createdAt = meta.createdAt.takeIf { it > 0L } ?: clockMs(),
+                            updatedAt = clockMs(),
+                        ),
+                    )
+                }
             }
         } catch (error: Exception) {
             submittedIds.remove(id)
@@ -526,18 +541,19 @@ class VideoDownloadEngine(
         projectionMutex.withLock {
             val id = download.request.id
             if (generationGuard.isRemoving(id)) return
-            val meta = decodeMeta(download) ?: return
+            val authoritative = runCatching { manager.downloadIndex.getDownload(id) }.getOrNull() ?: download
+            val meta = decodeMeta(authoritative) ?: return
             val existing = downloadStateRepository.getById(id)
-            val status = mapMedia3State(download)
+            val status = mapMedia3State(authoritative)
             val classified = if (status == DownloadStatus.FAILED && finalException != null) {
                 DownloadErrorClassifier.classify(finalException, DownloadStage.DOWNLOADING_PAGE, clockMs())
             } else {
                 null
             }
             val fraction = DownloadNotifications.computeVideoProgressFraction(
-                percentDownloaded = download.percentDownloaded,
-                bytesDownloaded = download.bytesDownloaded,
-                contentLength = download.contentLength,
+                percentDownloaded = authoritative.percentDownloaded,
+                bytesDownloaded = authoritative.bytesDownloaded,
+                contentLength = authoritative.contentLength,
                 isCompleted = status == DownloadStatus.COMPLETED,
                 fallback = if (status == DownloadStatus.DOWNLOADING || status == DownloadStatus.PAUSED) {
                     existing?.progressFraction ?: 0f
@@ -545,7 +561,7 @@ class VideoDownloadEngine(
                     0f
                 },
             )
-            val totalBytes = download.contentLength.takeIf { it > 0L } ?: existing?.totalBytes
+            val totalBytes = authoritative.contentLength.takeIf { it > 0L } ?: existing?.totalBytes
             downloadStateRepository.upsert(
                 DownloadItem(
                     id = id,
@@ -561,7 +577,7 @@ class VideoDownloadEngine(
                     progressFraction = fraction,
                     completedUnits = if (status == DownloadStatus.COMPLETED) 1 else 0,
                     totalUnits = 1,
-                    downloadedBytes = download.bytesDownloaded.coerceAtLeast(0L),
+                    downloadedBytes = authoritative.bytesDownloaded.coerceAtLeast(0L),
                     totalBytes = totalBytes,
                     errorCategory = classified?.category
                         ?: if (status == DownloadStatus.FAILED) DownloadErrorCategory.NETWORK else null,
@@ -569,7 +585,7 @@ class VideoDownloadEngine(
                     priority = existing?.priority ?: meta.priority,
                     storageLocation = existing?.storageLocation ?: storageRootManager.activeLocation(),
                     localPath = existing?.localPath ?: storageRootManager.layout().root.absolutePath,
-                    createdAt = existing?.createdAt ?: meta.createdAt.takeIf { it > 0L } ?: download.startTimeMs,
+                    createdAt = existing?.createdAt ?: meta.createdAt.takeIf { it > 0L } ?: authoritative.startTimeMs,
                     updatedAt = clockMs(),
                 ),
             )
@@ -621,7 +637,7 @@ class VideoDownloadEngine(
     private suspend fun refreshStream(meta: VideoDownloadMeta): VideoStream? {
         val plugin = siteRegistryProvider().get(meta.siteId) ?: return null
         val source = plugin.videoSource ?: return null
-        val refreshed = source.refreshStreams(meta.url)
+        val refreshed = source.refreshDownloadStreams(meta.url)
         return refreshed.firstOrNull {
             it.quality.equals(meta.quality, ignoreCase = true) ||
                 it.label.equals(meta.quality, ignoreCase = true)

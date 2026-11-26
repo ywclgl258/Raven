@@ -3,6 +3,8 @@ package com.raven.app.feature.browse
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.EnterTransition
 import androidx.compose.animation.ExitTransition
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.snap
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
@@ -35,6 +37,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.staggeredgrid.LazyVerticalStaggeredGrid
 import androidx.compose.foundation.lazy.staggeredgrid.StaggeredGridCells
 import androidx.compose.foundation.lazy.staggeredgrid.StaggeredGridItemSpan
@@ -94,6 +97,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.raven.app.core.common.TagSuggestion
 import com.raven.app.core.database.model.ShelfWithSummary
 import com.raven.app.core.designsystem.component.RavenBottomSheet
+import com.raven.app.core.designsystem.component.RavenContentCrossfade
 import com.raven.app.core.designsystem.component.RavenEmptyState
 import com.raven.app.core.designsystem.component.RavenErrorState
 import com.raven.app.core.designsystem.component.RavenFilterChip
@@ -607,9 +611,13 @@ fun SearchScreenContent(
                 .fillMaxWidth()
                 .nestedScroll(autoHideScrollConnection),
         ) {
-            when (uiState.mode) {
-                SearchMode.SINGLE_SITE -> {
-                    if (!uiState.hasSearchedSingleSite) {
+            val searchStage = when (uiState.mode) {
+                SearchMode.SINGLE_SITE -> if (uiState.hasSearchedSingleSite) "single_results" else "single_discovery"
+                SearchMode.CROSS_SITE -> if (uiState.hasSearchedCrossSite) "cross_results" else "cross_discovery"
+            }
+            RavenContentCrossfade(targetState = searchStage) { stage ->
+                when (stage) {
+                    "single_discovery", "cross_discovery" -> {
                         SearchDiscoveryPanel(
                             activeSite = activeSite,
                             searchHistory = uiState.searchHistory,
@@ -631,7 +639,8 @@ fun SearchScreenContent(
                             onOpenMedia = { navigator.openSearchResultItem(pluginResolver(it.siteId), it) },
                             onLongClickMedia = { actionTargetItem = it },
                         )
-                    } else {
+                    }
+                    "single_results" -> {
                         SingleSiteResultsBody(
                             uiState = uiState,
                             activePlugin = activeSite?.id?.let(pluginResolver),
@@ -641,31 +650,7 @@ fun SearchScreenContent(
                             onItemLongClick = { actionTargetItem = it },
                         )
                     }
-                }
-                SearchMode.CROSS_SITE -> {
-                    if (!uiState.hasSearchedCrossSite) {
-                        SearchDiscoveryPanel(
-                            activeSite = activeSite,
-                            searchHistory = uiState.searchHistory,
-                            savedSearches = uiState.savedSearches,
-                            trendingTags = uiState.trendingTags,
-                            hotTagRanking = uiState.hotTagRanking,
-                            hotWorksRanking = uiState.hotWorksRanking,
-                            watchProgressMap = uiState.watchProgressMap,
-                            readingProgressMap = uiState.readingProgressMap,
-                            onSelectHistory = onSelectHistory,
-                            onRemoveHistory = onRemoveHistory,
-                            onClearHistory = onClearHistory,
-                            onApplySavedSearch = onApplySavedSearch,
-                            onDeleteSavedSearch = onDeleteSavedSearch,
-                            onSelectTagSlug = { slug ->
-                                onQueryChange(slug)
-                                onSubmitSearch()
-                            },
-                            onOpenMedia = { navigator.openSearchResultItem(pluginResolver(it.siteId), it) },
-                            onLongClickMedia = { actionTargetItem = it },
-                        )
-                    } else {
+                    else -> {
                         CrossSiteResultsBody(
                             uiState = uiState,
                             pluginResolver = pluginResolver,
@@ -913,12 +898,35 @@ private fun ModeSegment(
     modifier: Modifier = Modifier,
 ) {
     val colors = LocalRavenColors.current
+    val motionReduced = LocalMotionReduced.current
+    val feedback = LocalRavenFeedback.current
+    val colorSpec = if (motionReduced) {
+        snap<androidx.compose.ui.graphics.Color>()
+    } else {
+        tween(durationMillis = RavenMotion.CHIP_TRANSITION_DURATION_MS, easing = RavenMotion.HarmonyDecelerationEasing)
+    }
+    val container by animateColorAsState(
+        targetValue = if (selected) colors.primaryCtaContainer else colors.surface1,
+        animationSpec = colorSpec,
+        label = "searchModeSegmentContainer",
+    )
+    val ink by animateColorAsState(
+        targetValue = if (selected) colors.primaryCtaInk else colors.inkSecondary,
+        animationSpec = colorSpec,
+        label = "searchModeSegmentInk",
+    )
     Box(
         modifier = modifier
             .heightIn(min = 38.dp)
             .clip(RavenShapes.PillShape)
-            .background(if (selected) colors.primaryCtaContainer else colors.surface1)
-            .clickable(role = Role.Tab, onClick = onClick)
+            .background(container)
+            .ravenSpringPress()
+            .clickable(role = Role.Tab) {
+                if (!selected) {
+                    feedback.perform(RavenFeedbackEffect.TAB_SWITCH)
+                }
+                onClick()
+            }
             .padding(horizontal = 12.dp, vertical = 7.dp),
         contentAlignment = Alignment.Center,
     ) {
@@ -927,7 +935,7 @@ private fun ModeSegment(
             style = MaterialTheme.typography.labelLarge.copy(
                 fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
             ),
-            color = if (selected) colors.primaryCtaInk else colors.inkSecondary,
+            color = ink,
             maxLines = 1,
         )
     }
@@ -1429,10 +1437,11 @@ private fun SearchDiscoveryPanel(
                         contentPadding = PaddingValues(horizontal = 16.dp),
                         horizontalArrangement = Arrangement.spacedBy(12.dp),
                     ) {
-                        items(
-                            items = hotWorksRanking.mapIndexed { idx, media -> idx + 1 to media },
-                            key = { (rank, media) -> "hot_work_${rank}_${media.compositeKey}" },
-                        ) { (rank, media) ->
+                        itemsIndexed(
+                            items = hotWorksRanking,
+                            key = { idx, media -> "hot_work_${idx + 1}_${media.compositeKey}" },
+                        ) { idx, media ->
+                            val rank = idx + 1
                             if (media.kind.isVideo) {
                                 RavenRankedVideoCard(
                                     rank = rank,
@@ -1501,94 +1510,105 @@ private fun SingleSiteResultsBody(
 ) {
     val activeSite = uiState.activeSite ?: return
 
-    when {
-        uiState.singleSiteAuthRequired -> {
-            BrowseAuthGateCard(
-                site = activeSite,
-                detailMessage = uiState.singleSiteError,
-                onOpenAccount = { navigator.openSiteAccount(activeSite.id) },
-                onRefreshStatus = onRetry,
-            )
-        }
-        uiState.singleSiteLoading && uiState.singleSiteItems.isEmpty() -> {
-            ExploreLoadingGrid(isVideo = activeSite.primaryKind == MediaKind.VIDEO)
-        }
-        uiState.singleSiteError != null && uiState.singleSiteItems.isEmpty() -> {
-            RavenErrorState(
-                message = uiState.singleSiteError,
-                onRetry = onRetry,
-            )
-        }
-        uiState.singleSiteItems.isEmpty() -> {
-            RavenEmptyState(
-                title = "没有找到匹配结果",
-                message = "可尝试更换关键词、放宽高级筛选或切换到跨站搜索。",
-                icon = Icons.Outlined.Search,
-            )
-        }
-        uiState.singleSiteIsDirectory -> {
-            LazyColumn(
-                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
-                modifier = Modifier
-                    .fillMaxSize()
-                    .testTag("single_site_directory_results"),
-            ) {
-                items(uiState.singleSiteItems, key = { it.compositeKey }) { item ->
-                    DirectoryJumpCard(
-                        title = item.title,
-                        subtitle = "${activeSite.displayName} · 目录入口",
-                        onClick = { navigator.openSearchResultItem(activePlugin, item) },
-                    )
+    val singleStage = when {
+        uiState.singleSiteAuthRequired -> "auth"
+        uiState.singleSiteLoading && uiState.singleSiteItems.isEmpty() -> "loading"
+        uiState.singleSiteError != null && uiState.singleSiteItems.isEmpty() -> "error"
+        uiState.singleSiteItems.isEmpty() -> "empty"
+        uiState.singleSiteIsDirectory -> "directory"
+        activeSite.primaryKind == MediaKind.VIDEO -> "video"
+        else -> "gallery"
+    }
+    RavenContentCrossfade(targetState = singleStage) { stage ->
+        when (stage) {
+            "auth" -> {
+                BrowseAuthGateCard(
+                    site = activeSite,
+                    detailMessage = uiState.singleSiteError,
+                    onOpenAccount = { navigator.openSiteAccount(activeSite.id) },
+                    onRefreshStatus = onRetry,
+                )
+            }
+            "loading" -> {
+                ExploreLoadingGrid(isVideo = activeSite.primaryKind == MediaKind.VIDEO)
+            }
+            "error" -> {
+                RavenErrorState(
+                    message = uiState.singleSiteError ?: "搜索失败",
+                    onRetry = onRetry,
+                )
+            }
+            "empty" -> {
+                RavenEmptyState(
+                    title = "没有找到匹配结果",
+                    message = "可尝试更换关键词、放宽高级筛选或切换到跨站搜索。",
+                    icon = Icons.Outlined.Search,
+                )
+            }
+            "directory" -> {
+                LazyColumn(
+                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .testTag("single_site_directory_results"),
+                ) {
+                    items(uiState.singleSiteItems, key = { it.compositeKey }) { item ->
+                        DirectoryJumpCard(
+                            title = item.title,
+                            subtitle = "${activeSite.displayName} · 目录入口",
+                            onClick = { navigator.openSearchResultItem(activePlugin, item) },
+                        )
+                    }
+                    item(key = "single_dir_footer") {
+                        BrowsePaginationFooter(
+                            isLoadingMore = uiState.singleSiteLoadingMore,
+                            errorMessage = uiState.singleSitePaginationError,
+                            hasMore = uiState.singleSiteHasMore,
+                            onRetry = onLoadMore,
+                        )
+                    }
                 }
-                item(key = "single_dir_footer") {
-                    BrowsePaginationFooter(
-                        isLoadingMore = uiState.singleSiteLoadingMore,
-                        errorMessage = uiState.singleSitePaginationError,
-                        hasMore = uiState.singleSiteHasMore,
-                        onRetry = onLoadMore,
-                    )
+            }
+            "video" -> {
+                val siteWatchMap = remember(uiState.watchProgressMap, activeSite.id) {
+                    val prefix = "${activeSite.id.value}:"
+                    uiState.watchProgressMap
+                        .filterKeys { it.startsWith(prefix) }
+                        .mapKeys { it.key.removePrefix(prefix) }
                 }
+                ExploreVideoGrid(
+                    items = uiState.singleSiteItems,
+                    watchProgressMap = siteWatchMap,
+                    isLoadingMore = uiState.singleSiteLoadingMore,
+                    paginationError = uiState.singleSitePaginationError,
+                    hasMore = uiState.singleSiteHasMore,
+                    currentPage = 1,
+                    onItemClick = { navigator.openSearchResultItem(activePlugin, it) },
+                    onItemLongClick = onItemLongClick,
+                    onLoadNextPage = onLoadMore,
+                )
             }
-        }
-        activeSite.primaryKind == MediaKind.VIDEO -> {
-            val siteWatchMap = remember(uiState.watchProgressMap, activeSite.id) {
-                val prefix = "${activeSite.id.value}:"
-                uiState.watchProgressMap
-                    .filterKeys { it.startsWith(prefix) }
-                    .mapKeys { it.key.removePrefix(prefix) }
+            else -> {
+                val siteReadMap = remember(uiState.readingProgressMap, activeSite.id) {
+                    val prefix = "${activeSite.id.value}:"
+                    uiState.readingProgressMap
+                        .filterKeys { it.startsWith(prefix) }
+                        .mapKeys { it.key.removePrefix(prefix) }
+                }
+                ExploreGalleryGrid(
+                    siteId = activeSite.id,
+                    items = uiState.singleSiteItems,
+                    readingProgressMap = siteReadMap,
+                    isLoadingMore = uiState.singleSiteLoadingMore,
+                    paginationError = uiState.singleSitePaginationError,
+                    hasMore = uiState.singleSiteHasMore,
+                    currentPage = 1,
+                    onItemClick = { navigator.openSearchResultItem(activePlugin, it) },
+                    onItemLongClick = onItemLongClick,
+                    onLoadNextPage = onLoadMore,
+                )
             }
-            ExploreVideoGrid(
-                items = uiState.singleSiteItems,
-                watchProgressMap = siteWatchMap,
-                isLoadingMore = uiState.singleSiteLoadingMore,
-                paginationError = uiState.singleSitePaginationError,
-                hasMore = uiState.singleSiteHasMore,
-                currentPage = 1,
-                onItemClick = { navigator.openSearchResultItem(activePlugin, it) },
-                onItemLongClick = onItemLongClick,
-                onLoadNextPage = onLoadMore,
-            )
-        }
-        else -> {
-            val siteReadMap = remember(uiState.readingProgressMap, activeSite.id) {
-                val prefix = "${activeSite.id.value}:"
-                uiState.readingProgressMap
-                    .filterKeys { it.startsWith(prefix) }
-                    .mapKeys { it.key.removePrefix(prefix) }
-            }
-            ExploreGalleryGrid(
-                siteId = activeSite.id,
-                items = uiState.singleSiteItems,
-                readingProgressMap = siteReadMap,
-                isLoadingMore = uiState.singleSiteLoadingMore,
-                paginationError = uiState.singleSitePaginationError,
-                hasMore = uiState.singleSiteHasMore,
-                currentPage = 1,
-                onItemClick = { navigator.openSearchResultItem(activePlugin, it) },
-                onItemLongClick = onItemLongClick,
-                onLoadNextPage = onLoadMore,
-            )
         }
     }
 }

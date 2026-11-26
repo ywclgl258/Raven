@@ -1,9 +1,12 @@
 package com.raven.app.feature.player
 
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.snap
 import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -96,6 +99,7 @@ import com.raven.app.core.designsystem.theme.LocalRavenColors
 import com.raven.app.core.designsystem.theme.LocalRavenFeedback
 import com.raven.app.core.designsystem.theme.RAVEN_TABULAR_FONT_FEATURE
 import com.raven.app.core.designsystem.theme.RavenFeedbackEffect
+import com.raven.app.core.designsystem.theme.RavenMotion
 import com.raven.app.core.designsystem.theme.RavenShapes
 import com.raven.app.core.designsystem.theme.RavenTabularTextStyle
 import com.raven.app.core.designsystem.theme.ravenSpringPress
@@ -195,6 +199,7 @@ internal fun PlayerDetailPane(
     onOpenCast: () -> Unit = {},
 ) {
     val colors = LocalRavenColors.current
+    val motionReduced = LocalMotionReduced.current
     var descriptionExpanded by remember(uiState.mediaId) { mutableStateOf(false) }
     var commentsExpanded by remember(uiState.mediaId) { mutableStateOf(false) }
     val maxDurationForLinks = uiState.effectiveDurationMs.takeIf { it > 0L }
@@ -311,6 +316,15 @@ internal fun PlayerDetailPane(
         val description = uiState.detail?.description?.trim().orEmpty()
         if (description.isNotEmpty()) {
             item(key = "description_card") {
+                val descChevronAngle = animateFloatAsState(
+                    targetValue = if (descriptionExpanded) 180f else 0f,
+                    animationSpec = if (motionReduced) {
+                        snap()
+                    } else {
+                        tween(durationMillis = 180, easing = RavenMotion.HarmonyDecelerationEasing)
+                    },
+                    label = "playerDescChevronRotation",
+                )
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -318,6 +332,9 @@ internal fun PlayerDetailPane(
                         .clip(RavenShapes.CardShape)
                         .background(colors.surface1)
                         .border(0.5.dp, colors.hairline, RavenShapes.CardShape)
+                        .animateContentSize(
+                            animationSpec = if (motionReduced) snap() else RavenMotion.interactiveSpringSpec(),
+                        )
                         .clickable { descriptionExpanded = !descriptionExpanded }
                         .padding(14.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp),
@@ -333,14 +350,12 @@ internal fun PlayerDetailPane(
                             color = colors.inkPrimary,
                         )
                         Icon(
-                            imageVector = if (descriptionExpanded) {
-                                Icons.Rounded.ExpandLess
-                            } else {
-                                Icons.Rounded.ExpandMore
-                            },
+                            imageVector = Icons.Rounded.ExpandMore,
                             contentDescription = if (descriptionExpanded) "收起简介" else "展开简介",
                             tint = colors.inkSecondary,
-                            modifier = Modifier.size(18.dp),
+                            modifier = Modifier
+                                .size(18.dp)
+                                .graphicsLayer { rotationZ = descChevronAngle.value },
                         )
                     }
                     TimestampText(
@@ -458,6 +473,15 @@ internal fun PlayerDetailPane(
         // 7. Expandable Comments Section with clickable TimestampText
         if (uiState.comments.isNotEmpty()) {
             item(key = "comments_section") {
+                val commentsChevronAngle = animateFloatAsState(
+                    targetValue = if (commentsExpanded) 180f else 0f,
+                    animationSpec = if (motionReduced) {
+                        snap()
+                    } else {
+                        tween(durationMillis = 180, easing = RavenMotion.HarmonyDecelerationEasing)
+                    },
+                    label = "playerCommentsChevronRotation",
+                )
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -465,6 +489,9 @@ internal fun PlayerDetailPane(
                         .clip(RavenShapes.CardShape)
                         .background(colors.surface1)
                         .border(0.5.dp, colors.hairline, RavenShapes.CardShape)
+                        .animateContentSize(
+                            animationSpec = if (motionReduced) snap() else RavenMotion.interactiveSpringSpec(),
+                        )
                         .padding(14.dp),
                     verticalArrangement = Arrangement.spacedBy(10.dp),
                 ) {
@@ -490,14 +517,12 @@ internal fun PlayerDetailPane(
                                 color = colors.inkSecondary,
                             )
                             Icon(
-                                imageVector = if (commentsExpanded) {
-                                    Icons.Rounded.ExpandLess
-                                } else {
-                                    Icons.Rounded.ExpandMore
-                                },
+                                imageVector = Icons.Rounded.ExpandMore,
                                 contentDescription = null,
                                 tint = colors.inkSecondary,
-                                modifier = Modifier.size(18.dp),
+                                modifier = Modifier
+                                    .size(18.dp)
+                                    .graphicsLayer { rotationZ = commentsChevronAngle.value },
                             )
                         }
                     }
@@ -538,7 +563,9 @@ internal fun PlayerDetailPane(
                     RavenCompactMediaRow(
                         item = item,
                         onClick = { onRelatedClick(item) },
-                        modifier = Modifier.padding(horizontal = 16.dp),
+                        modifier = Modifier
+                            .animateItem()
+                            .padding(horizontal = 16.dp),
                     )
                 }
             } else {
@@ -554,7 +581,9 @@ internal fun PlayerDetailPane(
                             RavenVideoCard(
                                 item = item,
                                 onClick = { onRelatedClick(item) },
-                                modifier = Modifier.width(204.dp),
+                                modifier = Modifier
+                                    .animateItem()
+                                    .width(204.dp),
                             )
                         }
                     }
@@ -843,7 +872,7 @@ private fun DetailActionButton(
     val colors = LocalRavenColors.current
     val motionReduced = LocalMotionReduced.current
     val feedback = LocalRavenFeedback.current
-    val iconScale by animateFloatAsState(
+    val iconScaleState = animateFloatAsState(
         targetValue = if (active) 1.12f else 1.0f,
         animationSpec = if (motionReduced) {
             snap()
@@ -855,11 +884,15 @@ private fun DetailActionButton(
         },
         label = "playerActionIconScale",
     )
-    val tint = when {
-        !enabled -> colors.inkTertiary
-        active -> colors.crimson
-        else -> colors.inkPrimary
-    }
+    val tint by animateColorAsState(
+        targetValue = when {
+            !enabled -> colors.inkTertiary
+            active -> colors.crimson
+            else -> colors.inkPrimary
+        },
+        animationSpec = if (motionReduced) snap() else tween(durationMillis = 160),
+        label = "playerActionIconTint",
+    )
 
     Column(
         modifier = modifier
@@ -888,8 +921,9 @@ private fun DetailActionButton(
             modifier = Modifier
                 .size(20.dp)
                 .graphicsLayer {
-                    scaleX = iconScale
-                    scaleY = iconScale
+                    val s = iconScaleState.value
+                    scaleX = s
+                    scaleY = s
                 },
         )
         Text(
@@ -910,21 +944,39 @@ private fun PlayerTagChip(
     onLongClick: () -> Unit,
 ) {
     val colors = LocalRavenColors.current
-    val container = when {
-        tagDisplay.isBlocked -> colors.error.copy(alpha = 0.14f)
-        tagDisplay.isFavorited -> colors.crimson.copy(alpha = 0.15f)
-        else -> colors.surface1
+    val motionReduced = LocalMotionReduced.current
+    val colorSpec = if (motionReduced) {
+        snap<androidx.compose.ui.graphics.Color>()
+    } else {
+        tween(durationMillis = RavenMotion.CHIP_TRANSITION_DURATION_MS, easing = RavenMotion.HarmonyDecelerationEasing)
     }
-    val border = when {
-        tagDisplay.isBlocked -> colors.error.copy(alpha = 0.40f)
-        tagDisplay.isFavorited -> colors.crimson.copy(alpha = 0.40f)
-        else -> colors.hairline
-    }
-    val textColor = when {
-        tagDisplay.isBlocked -> colors.error
-        tagDisplay.isFavorited -> colors.crimson
-        else -> colors.inkPrimary
-    }
+    val container by animateColorAsState(
+        targetValue = when {
+            tagDisplay.isBlocked -> colors.error.copy(alpha = 0.14f)
+            tagDisplay.isFavorited -> colors.crimson.copy(alpha = 0.15f)
+            else -> colors.surface1
+        },
+        animationSpec = colorSpec,
+        label = "playerTagContainer",
+    )
+    val border by animateColorAsState(
+        targetValue = when {
+            tagDisplay.isBlocked -> colors.error.copy(alpha = 0.40f)
+            tagDisplay.isFavorited -> colors.crimson.copy(alpha = 0.40f)
+            else -> colors.hairline
+        },
+        animationSpec = colorSpec,
+        label = "playerTagBorder",
+    )
+    val textColor by animateColorAsState(
+        targetValue = when {
+            tagDisplay.isBlocked -> colors.error
+            tagDisplay.isFavorited -> colors.crimson
+            else -> colors.inkPrimary
+        },
+        animationSpec = colorSpec,
+        label = "playerTagText",
+    )
 
     Row(
         modifier = Modifier

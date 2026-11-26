@@ -1,5 +1,13 @@
 package com.raven.app.feature.browse
 
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.EnterTransition
+import androidx.compose.animation.ExitTransition
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
@@ -52,6 +60,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
@@ -61,6 +70,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.raven.app.core.designsystem.component.RavenBottomSheet
+import com.raven.app.core.designsystem.component.RavenContentCrossfade
 import com.raven.app.core.designsystem.component.RavenEmptyState
 import com.raven.app.core.designsystem.component.RavenErrorState
 import com.raven.app.core.designsystem.component.RavenFilterChip
@@ -76,9 +86,11 @@ import com.raven.app.core.designsystem.component.RavenTopBar
 import com.raven.app.core.designsystem.component.RavenVideoCard
 import com.raven.app.core.designsystem.component.RavenVideoCardSkeleton
 import com.raven.app.core.designsystem.component.displayLabel
-import com.raven.app.core.designsystem.component.rememberRavenShimmerBrush
+import com.raven.app.core.designsystem.component.rememberRavenShimmerProgress
 import com.raven.app.core.database.model.ShelfWithSummary
+import com.raven.app.core.designsystem.theme.LocalMotionReduced
 import com.raven.app.core.designsystem.theme.LocalRavenColors
+import com.raven.app.core.designsystem.theme.RavenMotion
 import com.raven.app.core.model.ComicLanguage
 import com.raven.app.core.model.FeedSort
 import com.raven.app.core.model.MediaItem
@@ -284,7 +296,22 @@ fun ExploreScreenContent(
                 }
             }
 
-            if (uiState.activeFilterSummary.isNotEmpty()) {
+            val motionReduced = LocalMotionReduced.current
+            AnimatedVisibility(
+                visible = uiState.activeFilterSummary.isNotEmpty(),
+                enter = if (motionReduced) {
+                    EnterTransition.None
+                } else {
+                    expandVertically(tween(180, easing = RavenMotion.HarmonyDecelerationEasing)) +
+                        fadeIn(tween(140, easing = RavenMotion.HarmonyDecelerationEasing))
+                },
+                exit = if (motionReduced) {
+                    ExitTransition.None
+                } else {
+                    shrinkVertically(tween(150, easing = RavenMotion.HarmonyDecelerationEasing)) +
+                        fadeOut(tween(110, easing = RavenMotion.HarmonyDecelerationEasing))
+                },
+            ) {
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -297,7 +324,10 @@ fun ExploreScreenContent(
                         modifier = Modifier.weight(1f),
                         horizontalArrangement = Arrangement.spacedBy(6.dp),
                     ) {
-                        items(uiState.activeFilterSummary) { summary ->
+                        items(
+                            items = uiState.activeFilterSummary,
+                            key = { it },
+                        ) { summary ->
                             RavenStatusPill(
                                 text = summary,
                                 tone = RavenStatusTone.ACCENT,
@@ -347,70 +377,84 @@ fun ExploreScreenContent(
                 .weight(1f)
                 .fillMaxWidth(),
         ) {
-            when {
-                activeSite == null -> {
-                    RavenEmptyState(
-                        title = "暂无可用站点",
-                        message = "未检测到已注册站点。",
-                    )
-                }
-                uiState.authGateRequired -> {
-                    BrowseAuthGateCard(
-                        site = activeSite,
-                        detailMessage = uiState.errorMessage,
-                        onOpenAccount = { navigator.openSiteAccount(activeSite.id) },
-                        onRefreshStatus = onRefresh,
-                    )
-                }
-                uiState.isLoading && uiState.items.isEmpty() -> {
-                    ExploreLoadingGrid(isVideo = uiState.effectiveMediaKind == MediaKind.VIDEO)
-                }
-                uiState.errorMessage != null && uiState.items.isEmpty() -> {
-                    RavenErrorState(
-                        message = uiState.errorMessage,
-                        onRetry = onRefresh,
-                        secondaryActionLabel = if (uiState.hasActiveFilter) "重置筛选" else null,
-                        onSecondaryActionClick = if (uiState.hasActiveFilter) onClearFilters else null,
-                    )
-                }
-                uiState.items.isEmpty() -> {
-                    RavenEmptyState(
-                        title = "暂无匹配内容",
-                        message = "可尝试切换分类、排序或清除当前筛选条件。",
-                        actionLabel = if (uiState.hasActiveFilter) "重置筛选" else "重新加载",
-                        onActionClick = if (uiState.hasActiveFilter) onClearFilters else onRefresh,
-                    )
-                }
-                uiState.effectiveMediaKind == MediaKind.VIDEO -> {
-                    ExploreVideoGrid(
-                        items = uiState.items,
-                        watchProgressMap = uiState.watchProgressMap,
-                        isLoadingMore = uiState.isLoadingMore,
-                        paginationError = uiState.paginationErrorMessage,
-                        hasMore = uiState.hasMore,
-                        currentPage = uiState.currentPage,
-                        onItemClick = navigator::openMedia,
-                        onItemLongClick = { actionTargetItem = it },
-                        onLoadNextPage = onLoadNextPage,
-                        onSaveBrowsePosition = onSaveBrowsePosition,
-                        scrollResetKey = activeSite.id to uiState.filter,
-                    )
-                }
-                else -> {
-                    ExploreGalleryGrid(
-                        siteId = activeSite.id,
-                        items = uiState.items,
-                        readingProgressMap = uiState.readingProgressMap,
-                        isLoadingMore = uiState.isLoadingMore,
-                        paginationError = uiState.paginationErrorMessage,
-                        hasMore = uiState.hasMore,
-                        currentPage = uiState.currentPage,
-                        onItemClick = navigator::openMedia,
-                        onItemLongClick = { actionTargetItem = it },
-                        onLoadNextPage = onLoadNextPage,
-                        onSaveBrowsePosition = onSaveBrowsePosition,
-                        scrollResetKey = activeSite.id to uiState.filter,
-                    )
+            val exploreStage = when {
+                activeSite == null -> "no_site"
+                uiState.authGateRequired -> "auth"
+                uiState.isLoading && uiState.items.isEmpty() -> "loading"
+                uiState.errorMessage != null && uiState.items.isEmpty() -> "error"
+                uiState.items.isEmpty() -> "empty"
+                uiState.effectiveMediaKind == MediaKind.VIDEO -> "video"
+                else -> "gallery"
+            }
+            RavenContentCrossfade(targetState = exploreStage) { stage ->
+                when (stage) {
+                    "no_site" -> {
+                        RavenEmptyState(
+                            title = "暂无可用站点",
+                            message = "未检测到已注册站点。",
+                        )
+                    }
+                    "auth" -> {
+                        val site = activeSite ?: return@RavenContentCrossfade
+                        BrowseAuthGateCard(
+                            site = site,
+                            detailMessage = uiState.errorMessage,
+                            onOpenAccount = { navigator.openSiteAccount(site.id) },
+                            onRefreshStatus = onRefresh,
+                        )
+                    }
+                    "loading" -> {
+                        ExploreLoadingGrid(isVideo = uiState.effectiveMediaKind == MediaKind.VIDEO)
+                    }
+                    "error" -> {
+                        RavenErrorState(
+                            message = uiState.errorMessage ?: "加载失败",
+                            onRetry = onRefresh,
+                            secondaryActionLabel = if (uiState.hasActiveFilter) "重置筛选" else null,
+                            onSecondaryActionClick = if (uiState.hasActiveFilter) onClearFilters else null,
+                        )
+                    }
+                    "empty" -> {
+                        RavenEmptyState(
+                            title = "暂无匹配内容",
+                            message = "可尝试切换分类、排序或清除当前筛选条件。",
+                            actionLabel = if (uiState.hasActiveFilter) "重置筛选" else "重新加载",
+                            onActionClick = if (uiState.hasActiveFilter) onClearFilters else onRefresh,
+                        )
+                    }
+                    "video" -> {
+                        val site = activeSite ?: return@RavenContentCrossfade
+                        ExploreVideoGrid(
+                            items = uiState.items,
+                            watchProgressMap = uiState.watchProgressMap,
+                            isLoadingMore = uiState.isLoadingMore,
+                            paginationError = uiState.paginationErrorMessage,
+                            hasMore = uiState.hasMore,
+                            currentPage = uiState.currentPage,
+                            onItemClick = navigator::openMedia,
+                            onItemLongClick = { actionTargetItem = it },
+                            onLoadNextPage = onLoadNextPage,
+                            onSaveBrowsePosition = onSaveBrowsePosition,
+                            scrollResetKey = site.id to uiState.filter,
+                        )
+                    }
+                    else -> {
+                        val site = activeSite ?: return@RavenContentCrossfade
+                        ExploreGalleryGrid(
+                            siteId = site.id,
+                            items = uiState.items,
+                            readingProgressMap = uiState.readingProgressMap,
+                            isLoadingMore = uiState.isLoadingMore,
+                            paginationError = uiState.paginationErrorMessage,
+                            hasMore = uiState.hasMore,
+                            currentPage = uiState.currentPage,
+                            onItemClick = navigator::openMedia,
+                            onItemLongClick = { actionTargetItem = it },
+                            onLoadNextPage = onLoadNextPage,
+                            onSaveBrowsePosition = onSaveBrowsePosition,
+                            scrollResetKey = site.id to uiState.filter,
+                        )
+                    }
                 }
             }
         }
@@ -631,13 +675,15 @@ internal fun ExploreVideoGrid(
     }
 
     if (onSaveBrowsePosition != null) {
-        LaunchedEffect(gridState, items, currentPage) {
+        val currentItems by rememberUpdatedState(items)
+        val currentPageNum by rememberUpdatedState(currentPage)
+        LaunchedEffect(gridState) {
             snapshotFlow { gridState.firstVisibleItemIndex }
                 .distinctUntilChanged()
                 .collect { index ->
-                    val anchor = items.getOrNull(index)
+                    val anchor = currentItems.getOrNull(index)
                     if (anchor != null && index > 0) {
-                        onSaveBrowsePosition(anchor.id, currentPage)
+                        onSaveBrowsePosition(anchor.id, currentPageNum)
                     }
                 }
         }
@@ -665,6 +711,7 @@ internal fun ExploreVideoGrid(
                     onLongClick = { onItemLongClick(item) },
                     progressFraction = watchProgressMap[item.id],
                     badgeText = badgeProvider?.invoke(item) ?: item.extra["badge"],
+                    modifier = Modifier.animateItem(),
                 )
             }
 
@@ -723,13 +770,15 @@ internal fun ExploreGalleryGrid(
     }
 
     if (onSaveBrowsePosition != null) {
-        LaunchedEffect(gridState, items, currentPage) {
+        val currentItems by rememberUpdatedState(items)
+        val currentPageNum by rememberUpdatedState(currentPage)
+        LaunchedEffect(gridState) {
             snapshotFlow { gridState.firstVisibleItemIndex }
                 .distinctUntilChanged()
                 .collect { index ->
-                    val anchor = items.getOrNull(index)
+                    val anchor = currentItems.getOrNull(index)
                     if (anchor != null && index > 0) {
-                        onSaveBrowsePosition(anchor.id, currentPage)
+                        onSaveBrowsePosition(anchor.id, currentPageNum)
                     }
                 }
         }
@@ -761,6 +810,7 @@ internal fun ExploreGalleryGrid(
                     },
                     progressFraction = readingProgressMap[item.id],
                     badgeText = badgeProvider?.invoke(item) ?: item.language?.takeIf { it.isNotBlank() },
+                    modifier = Modifier.animateItem(),
                 )
             }
 
@@ -781,7 +831,7 @@ internal fun ExploreGalleryGrid(
 
 @Composable
 internal fun ExploreLoadingGrid(isVideo: Boolean) {
-    val brush = rememberRavenShimmerBrush()
+    val shimmerProgress = rememberRavenShimmerProgress()
     BoxWithConstraints(
         modifier = Modifier
             .fillMaxSize()
@@ -800,9 +850,9 @@ internal fun ExploreLoadingGrid(isVideo: Boolean) {
                 ) {
                     repeat(columns) {
                         if (isVideo) {
-                            RavenVideoCardSkeleton(brush = brush, modifier = Modifier.weight(1f))
+                            RavenVideoCardSkeleton(progress = shimmerProgress, modifier = Modifier.weight(1f))
                         } else {
-                            RavenGalleryCardSkeleton(brush = brush, modifier = Modifier.weight(1f))
+                            RavenGalleryCardSkeleton(progress = shimmerProgress, modifier = Modifier.weight(1f))
                         }
                     }
                 }

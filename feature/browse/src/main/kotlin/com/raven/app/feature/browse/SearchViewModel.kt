@@ -305,7 +305,9 @@ class SearchViewModel(
                 isLoading = false,
                 fetchedAtMs = System.currentTimeMillis(),
             )
-            discoveryCache[siteId] = snapshot
+            if (fetched.isNotEmpty()) {
+                discoveryCache[siteId] = snapshot
+            }
             emit(snapshot)
         }
     }
@@ -1439,7 +1441,7 @@ class SearchViewModel(
 
     private suspend fun fetchDiscoveryWorks(plugin: SitePlugin): List<MediaItem> {
         val siteId = plugin.id
-        runCatching {
+        try {
             val home = plugin.feedSource?.loadHome()
             if (home != null) {
                 val combined = buildList {
@@ -1452,8 +1454,12 @@ class SearchViewModel(
                     return combined.distinctBy { it.compositeKey }.take(20)
                 }
             }
+        } catch (ce: CancellationException) {
+            throw ce
+        } catch (_: Throwable) {
+            // Fall through to popular feed lookup
         }
-        return runCatching {
+        return try {
             val page = plugin.feedSource?.loadFeed(
                 FeedRequest(
                     siteId = siteId,
@@ -1462,7 +1468,11 @@ class SearchViewModel(
                 ),
             )
             page?.items.orEmpty().distinctBy { it.compositeKey }.take(20)
-        }.getOrDefault(emptyList())
+        } catch (ce: CancellationException) {
+            throw ce
+        } catch (_: Throwable) {
+            emptyList()
+        }
     }
 
     private fun buildDiscoveryTagRankings(

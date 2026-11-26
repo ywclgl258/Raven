@@ -89,6 +89,7 @@ val coreNetworkModule: Module = module {
     single<OkHttpClient>(NetworkQualifiers.IMAGE) { get<RavenOkHttpPool>().imageClient }
     single<OkHttpClient>(NetworkQualifiers.MEDIA) { get<RavenOkHttpPool>().mediaClient }
     single<OkHttpClient>(NetworkQualifiers.PROBE) { get<RavenOkHttpPool>().probeClient }
+    single<OkHttpClient>(NetworkQualifiers.LAN) { get<RavenOkHttpPool>().lanClient }
 
     single {
         SiteHttpClient(

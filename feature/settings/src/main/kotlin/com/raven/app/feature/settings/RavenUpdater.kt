@@ -256,16 +256,54 @@ class AndroidApkSignatureVerifier(
             val installedSigners = installed.signingInfo
                 ?.apkContentsSigners
                 ?.map { sha256Hex(it.toByteArray()) }
+                ?.toSet()
                 .orEmpty()
-            installedSigners.isNotEmpty() && installedSigners.all { it in validCandidateCerts }
+            isCandidateSignatureAccepted(
+                isDebug = appInfo.isDebug,
+                expectedReleaseCertSha256 = appInfo.releaseCertSha256,
+                candidateCerts = validCandidateCerts,
+                installedCerts = installedSigners,
+                exactMatchLegacy = false,
+            )
         } else {
-            val candidateSigs = candidate.signatures?.map { sha256Hex(it.toByteArray()) }
-            val installedSigs = installed.signatures?.map { sha256Hex(it.toByteArray()) }
-            !candidateSigs.isNullOrEmpty() && candidateSigs == installedSigs
+            val candidateSigs = candidate.signatures?.map { sha256Hex(it.toByteArray()) }?.toSet().orEmpty()
+            val installedSigs = installed.signatures?.map { sha256Hex(it.toByteArray()) }?.toSet().orEmpty()
+            isCandidateSignatureAccepted(
+                isDebug = appInfo.isDebug,
+                expectedReleaseCertSha256 = appInfo.releaseCertSha256,
+                candidateCerts = candidateSigs,
+                installedCerts = installedSigs,
+                exactMatchLegacy = true,
+            )
         }
 
         if (!signatureAccepted) {
             throw UpdateVerificationException("安装包签名校验未通过，无法覆盖当前版本，已停止安装")
+        }
+    }
+
+    internal companion object {
+        internal fun isCandidateSignatureAccepted(
+            isDebug: Boolean,
+            expectedReleaseCertSha256: String?,
+            candidateCerts: Set<String>,
+            installedCerts: Set<String>,
+            exactMatchLegacy: Boolean,
+        ): Boolean {
+            if (candidateCerts.isEmpty() || installedCerts.isEmpty()) return false
+            val matchesInstalled = if (exactMatchLegacy) {
+                candidateCerts.map { it.lowercase(Locale.ROOT) }.toSet() ==
+                    installedCerts.map { it.lowercase(Locale.ROOT) }.toSet()
+            } else {
+                installedCerts.all { inst -> candidateCerts.any { it.equals(inst, ignoreCase = true) } }
+            }
+            if (!matchesInstalled) return false
+
+            val pinned = expectedReleaseCertSha256?.trim()?.takeIf { it.isNotEmpty() }
+            if (!isDebug && pinned != null) {
+                return candidateCerts.any { it.equals(pinned, ignoreCase = true) }
+            }
+            return true
         }
     }
 }
@@ -745,6 +783,7 @@ object RavenUpdateInstaller {
         Build.VERSION.SDK_INT < Build.VERSION_CODES.O ||
             context.packageManager.canRequestPackageInstalls()
 
+    @androidx.annotation.RequiresApi(Build.VERSION_CODES.O)
     fun unknownSourcesPermissionIntent(context: Context): Intent =
         Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, "package:${context.packageName}".toUri())
 

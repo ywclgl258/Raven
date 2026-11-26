@@ -1,5 +1,14 @@
 package com.raven.app.core.designsystem.component
 
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.snap
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -48,13 +57,14 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import com.raven.app.core.designsystem.theme.LocalMotionReduced
 import com.raven.app.core.designsystem.theme.LocalRavenColors
 import com.raven.app.core.designsystem.theme.LocalRavenFeedback
 import com.raven.app.core.designsystem.theme.RavenFeedbackEffect
 import com.raven.app.core.designsystem.theme.RavenLayout
+import com.raven.app.core.designsystem.theme.RavenMotion
 import com.raven.app.core.designsystem.theme.RavenShapes
 import com.raven.app.core.designsystem.theme.ravenInteractiveLight
-import com.raven.app.core.designsystem.theme.ravenPressHaptic
 import com.raven.app.core.designsystem.theme.ravenSpringPress
 
 /**
@@ -101,26 +111,44 @@ fun RavenPrimaryButton(
 ) {
     val colors = LocalRavenColors.current
     val feedback = LocalRavenFeedback.current
+    val motionReduced = LocalMotionReduced.current
     val interactionSource = remember { MutableInteractionSource() }
     val isHovered by interactionSource.collectIsHoveredAsState()
     val isFocused by interactionSource.collectIsFocusedAsState()
     val interactive = enabled && !loading
+    val colorSpec = if (motionReduced) {
+        snap<Color>()
+    } else {
+        tween(
+            durationMillis = RavenMotion.CHIP_TRANSITION_DURATION_MS,
+            easing = RavenMotion.HarmonyDecelerationEasing,
+        )
+    }
 
     val baseContainer = when {
         success -> colors.success
         variant == RavenPrimaryButtonVariant.Cta -> colors.primaryCtaContainer
         else -> colors.crimson
     }
-    val containerColor = if (interactive && (isHovered || isFocused)) {
+    val targetContainerColor = if (interactive && (isHovered || isFocused)) {
         baseContainer.copy(alpha = 0.92f)
     } else {
         baseContainer
     }
-    val contentColor = when {
-        success -> colors.canvas
-        variant == RavenPrimaryButtonVariant.Cta -> colors.primaryCtaInk
-        else -> colors.inkPrimary
-    }
+    val containerColor by animateColorAsState(
+        targetValue = targetContainerColor,
+        animationSpec = colorSpec,
+        label = "ravenPrimaryButtonContainer",
+    )
+    val contentColor by animateColorAsState(
+        targetValue = when {
+            success -> colors.canvas
+            variant == RavenPrimaryButtonVariant.Cta -> colors.primaryCtaInk
+            else -> colors.inkPrimary
+        },
+        animationSpec = colorSpec,
+        label = "ravenPrimaryButtonContent",
+    )
     val focusBorder = if (isFocused && interactive) {
         BorderStroke(1.5.dp, colors.inkPrimary.copy(alpha = 0.85f))
     } else {
@@ -161,8 +189,7 @@ fun RavenPrimaryButton(
                 shape = RavenShapes.ButtonShape,
                 enabled = interactive,
                 glowColor = colors.interactiveGlow,
-            )
-            .ravenPressHaptic(interactionSource = interactionSource, enabled = interactive),
+            ),
     ) {
         RavenButtonContent(
             text = text,
@@ -193,18 +220,35 @@ fun RavenSecondaryButton(
 ) {
     val colors = LocalRavenColors.current
     val feedback = LocalRavenFeedback.current
+    val motionReduced = LocalMotionReduced.current
     val interactionSource = remember { MutableInteractionSource() }
     val isHovered by interactionSource.collectIsHoveredAsState()
     val isFocused by interactionSource.collectIsFocusedAsState()
     val interactive = enabled && !loading
-
-    val containerColor = if (interactive && (isHovered || isFocused)) colors.surface3 else colors.surface2
-    val borderColor = when {
-        !interactive -> colors.hairline
-        isFocused -> colors.crimson.copy(alpha = 0.85f)
-        isHovered -> colors.rimHighlight
-        else -> colors.outlineSubtle
+    val colorSpec = if (motionReduced) {
+        snap<Color>()
+    } else {
+        tween(
+            durationMillis = RavenMotion.CHIP_TRANSITION_DURATION_MS,
+            easing = RavenMotion.HarmonyDecelerationEasing,
+        )
     }
+
+    val containerColor by animateColorAsState(
+        targetValue = if (interactive && (isHovered || isFocused)) colors.surface3 else colors.surface2,
+        animationSpec = colorSpec,
+        label = "ravenSecondaryButtonContainer",
+    )
+    val borderColor by animateColorAsState(
+        targetValue = when {
+            !interactive -> colors.hairline
+            isFocused -> colors.crimson.copy(alpha = 0.85f)
+            isHovered -> colors.rimHighlight
+            else -> colors.outlineSubtle
+        },
+        animationSpec = colorSpec,
+        label = "ravenSecondaryButtonBorder",
+    )
 
     OutlinedButton(
         onClick = {
@@ -240,8 +284,7 @@ fun RavenSecondaryButton(
                 shape = RavenShapes.ButtonShape,
                 enabled = interactive,
                 glowColor = colors.interactiveGlow,
-            )
-            .ravenPressHaptic(interactionSource = interactionSource, enabled = interactive),
+            ),
     ) {
         RavenButtonContent(
             text = text,
@@ -273,16 +316,28 @@ fun RavenTextButton(
 ) {
     val colors = LocalRavenColors.current
     val feedback = LocalRavenFeedback.current
+    val motionReduced = LocalMotionReduced.current
     val interactionSource = remember { MutableInteractionSource() }
     val isHovered by interactionSource.collectIsHoveredAsState()
     val isFocused by interactionSource.collectIsFocusedAsState()
     val interactive = enabled && !loading
     val contentColor = if (accent) colors.crimson else colors.inkSecondary
-    val hoverContainer = if (interactive && (isHovered || isFocused)) {
-        colors.surface2.copy(alpha = 0.72f)
-    } else {
-        Color.Transparent
-    }
+    val hoverContainer by animateColorAsState(
+        targetValue = if (interactive && (isHovered || isFocused)) {
+            colors.surface2.copy(alpha = 0.72f)
+        } else {
+            Color.Transparent
+        },
+        animationSpec = if (motionReduced) {
+            snap()
+        } else {
+            tween(
+                durationMillis = RavenMotion.CHIP_TRANSITION_DURATION_MS,
+                easing = RavenMotion.HarmonyDecelerationEasing,
+            )
+        },
+        label = "ravenTextButtonContainer",
+    )
 
     TextButton(
         onClick = {
@@ -316,8 +371,7 @@ fun RavenTextButton(
                 shape = RavenShapes.ButtonShape,
                 enabled = interactive,
                 glowColor = colors.interactiveGlow,
-            )
-            .ravenPressHaptic(interactionSource = interactionSource, enabled = interactive),
+            ),
     ) {
         RavenButtonContent(
             text = text,
@@ -350,10 +404,19 @@ fun RavenDangerButton(
 ) {
     val colors = LocalRavenColors.current
     val feedback = LocalRavenFeedback.current
+    val motionReduced = LocalMotionReduced.current
     val interactionSource = remember { MutableInteractionSource() }
     val isHovered by interactionSource.collectIsHoveredAsState()
     val isFocused by interactionSource.collectIsFocusedAsState()
     val interactive = enabled && !loading
+    val colorSpec = if (motionReduced) {
+        snap<Color>()
+    } else {
+        tween(
+            durationMillis = RavenMotion.CHIP_TRANSITION_DURATION_MS,
+            easing = RavenMotion.HarmonyDecelerationEasing,
+        )
+    }
 
     val commonModifier = modifier
         .minimumInteractiveComponentSize()
@@ -371,15 +434,27 @@ fun RavenDangerButton(
             enabled = interactive,
             glowColor = colors.interactiveGlow,
         )
-        .ravenPressHaptic(interactionSource = interactionSource, enabled = interactive)
 
     if (outlined) {
-        val borderColor = when {
-            !interactive -> colors.hairline
-            isFocused -> colors.error
-            isHovered -> colors.error.copy(alpha = 0.72f)
-            else -> colors.error.copy(alpha = 0.45f)
-        }
+        val borderColor by animateColorAsState(
+            targetValue = when {
+                !interactive -> colors.hairline
+                isFocused -> colors.error
+                isHovered -> colors.error.copy(alpha = 0.72f)
+                else -> colors.error.copy(alpha = 0.45f)
+            },
+            animationSpec = colorSpec,
+            label = "ravenDangerOutlinedBorder",
+        )
+        val containerColor by animateColorAsState(
+            targetValue = if (interactive && (isHovered || isFocused)) {
+                colors.error.copy(alpha = 0.14f)
+            } else {
+                colors.surface2
+            },
+            animationSpec = colorSpec,
+            label = "ravenDangerOutlinedContainer",
+        )
         OutlinedButton(
             onClick = {
                 feedback.perform(RavenFeedbackEffect.TAP)
@@ -394,11 +469,7 @@ fun RavenDangerButton(
                 vertical = size.verticalPadding,
             ),
             colors = ButtonDefaults.outlinedButtonColors(
-                containerColor = if (interactive && (isHovered || isFocused)) {
-                    colors.error.copy(alpha = 0.14f)
-                } else {
-                    colors.surface2
-                },
+                containerColor = containerColor,
                 contentColor = colors.error,
                 disabledContainerColor = colors.surface1,
                 disabledContentColor = colors.inkTertiary,
@@ -477,19 +548,31 @@ fun RavenIconButton(
 ) {
     val colors = LocalRavenColors.current
     val feedback = LocalRavenFeedback.current
+    val motionReduced = LocalMotionReduced.current
     val interactionSource = remember { MutableInteractionSource() }
     val isHovered by interactionSource.collectIsHoveredAsState()
     val isFocused by interactionSource.collectIsFocusedAsState()
 
-    val resolvedContainer = when {
-        !enabled -> if (containerColor == Color.Transparent) Color.Transparent else colors.surface2.copy(alpha = 0.5f)
-        isHovered || isFocused -> if (containerColor == Color.Transparent) {
-            colors.surface2.copy(alpha = 0.85f)
+    val resolvedContainer by animateColorAsState(
+        targetValue = when {
+            !enabled -> if (containerColor == Color.Transparent) Color.Transparent else colors.surface2.copy(alpha = 0.5f)
+            isHovered || isFocused -> if (containerColor == Color.Transparent) {
+                colors.surface2.copy(alpha = 0.85f)
+            } else {
+                containerColor.copy(alpha = (containerColor.alpha + 0.12f).coerceAtMost(1f))
+            }
+            else -> containerColor
+        },
+        animationSpec = if (motionReduced) {
+            snap()
         } else {
-            containerColor.copy(alpha = (containerColor.alpha + 0.12f).coerceAtMost(1f))
-        }
-        else -> containerColor
-    }
+            tween(
+                durationMillis = RavenMotion.CHIP_TRANSITION_DURATION_MS,
+                easing = RavenMotion.HarmonyDecelerationEasing,
+            )
+        },
+        label = "ravenIconButtonContainer",
+    )
     val borderModifier = if (enabled && isFocused) {
         Modifier.border(1.25.dp, colors.crimson.copy(alpha = 0.85f), shape)
     } else if (enabled && isHovered) {
@@ -512,7 +595,6 @@ fun RavenIconButton(
                 enabled = enabled,
                 glowColor = colors.interactiveGlow,
             )
-            .ravenPressHaptic(interactionSource = interactionSource, enabled = enabled)
             .semantics {
                 if (!contentDescription.isNullOrBlank()) {
                     this.contentDescription = contentDescription
@@ -655,30 +737,56 @@ private fun RavenButtonContent(
     indicatorColor: Color,
     fontWeight: FontWeight,
 ) {
-    when {
-        loading -> {
-            CircularProgressIndicator(
-                color = indicatorColor,
-                strokeWidth = 2.dp,
-                modifier = Modifier.size(iconSize - 2.dp),
-            )
-            Spacer(modifier = Modifier.width(8.dp))
-        }
-        success -> {
-            Icon(
-                imageVector = Icons.Rounded.Check,
-                contentDescription = null,
-                modifier = Modifier.size(iconSize),
-            )
-            Spacer(modifier = Modifier.width(6.dp))
-        }
-        leadingIcon != null -> {
-            Icon(
-                imageVector = leadingIcon,
-                contentDescription = null,
-                modifier = Modifier.size(iconSize),
-            )
-            Spacer(modifier = Modifier.width(6.dp))
+    val motionReduced = LocalMotionReduced.current
+    val slotState = when {
+        loading -> 1
+        success -> 2
+        leadingIcon != null -> 3
+        else -> 0
+    }
+    AnimatedContent(
+        targetState = slotState,
+        transitionSpec = {
+            if (motionReduced) {
+                fadeIn(snap()) togetherWith fadeOut(snap())
+            } else {
+                (fadeIn(tween(140, easing = RavenMotion.HarmonyDecelerationEasing)) +
+                    scaleIn(initialScale = 0.84f, animationSpec = tween(160)))
+                    .togetherWith(
+                        fadeOut(tween(100)) + scaleOut(targetScale = 0.84f, animationSpec = tween(100)),
+                    )
+            }
+        },
+        label = "ravenButtonLeadingSlot",
+    ) { state ->
+        when (state) {
+            1 -> Row(verticalAlignment = Alignment.CenterVertically) {
+                CircularProgressIndicator(
+                    color = indicatorColor,
+                    strokeWidth = 2.dp,
+                    modifier = Modifier.size(iconSize - 2.dp),
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+            }
+            2 -> Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    imageVector = Icons.Rounded.Check,
+                    contentDescription = null,
+                    modifier = Modifier.size(iconSize),
+                )
+                Spacer(modifier = Modifier.width(6.dp))
+            }
+            3 -> if (leadingIcon != null) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        imageVector = leadingIcon,
+                        contentDescription = null,
+                        modifier = Modifier.size(iconSize),
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                }
+            }
+            else -> Unit
         }
     }
     Text(

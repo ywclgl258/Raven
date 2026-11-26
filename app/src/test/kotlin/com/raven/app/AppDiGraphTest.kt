@@ -260,6 +260,18 @@ class AppDiGraphTest {
             assertEquals("Intent contract mismatch for $original", original, contractDecoded)
         }
         assertNull(MainActivityIntentContract.decodeRoute("not-valid-json"))
+
+        val route = RavenRoute.Settings
+        val encodedRoute = MainActivityIntentContract.encodeRoute(route)
+        assertNull(MainActivityIntentContract.parseAuthorizedNavigateRoute(encodedRoute, suppliedToken = null))
+        assertNull(MainActivityIntentContract.parseAuthorizedNavigateRoute(encodedRoute, suppliedToken = "forged-token"))
+        assertEquals(
+            route,
+            MainActivityIntentContract.parseAuthorizedNavigateRoute(
+                encodedRoute,
+                suppliedToken = MainActivityIntentContract.internalTokenForTest(),
+            ),
+        )
     }
 
     @Test
@@ -275,6 +287,23 @@ class AppDiGraphTest {
         assertEquals("mecha", tagRoute.query)
         assertEquals(SearchScope.TAG.name, tagRoute.scope)
         assertEquals("机甲", tagRoute.title)
+
+        val seriesRoute = MainActivityIntentContract.resolveTagRoute(
+            siteRegistry = registry,
+            siteId = SiteId.GALLERYEPIC,
+            tag = TagRef(
+                slug = "series:108",
+                label = "Demo Series",
+                url = "https://galleryepic.com/en/parody/108",
+            ),
+        )
+        assertEquals(
+            RavenRoute.SiteDirectory(
+                siteId = SiteId.GALLERYEPIC.value,
+                section = "series:108",
+            ),
+            seriesRoute,
+        )
 
         val authorRoute = MainActivityIntentContract.resolveAuthorFeedRoute(
             siteRegistry = registry,

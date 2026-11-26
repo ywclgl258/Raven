@@ -409,4 +409,37 @@ class HitomiSitePluginTest {
         val feed = plugin.feedSource!!.loadFeed(FeedRequest(SiteId.HITOMI, sort = FeedSort.NEWEST, page = 1))
         assertEquals(listOf("701"), feed.items.map { it.id })
     }
+
+    @Test
+    fun `hitomi maps 429 retry-after, rejects out-of-range page and foreign urls`() = runTest {
+        val http = FakeHttpClientAdapter()
+        http.onUrlText(
+            "${HitomiSitePlugin.CDN_BASE}/index-all.nozomi",
+            "rate limited",
+            code = 429,
+            headers = mapOf("Retry-After" to listOf("25")),
+        )
+        val plugin = HitomiSitePlugin(http)
+        val rateErr = runCatching { plugin.feedSource!!.loadFeed(FeedRequest(SiteId.HITOMI)) }.exceptionOrNull()
+        assertTrue(rateErr is SiteException.RateLimited)
+        assertEquals(25L, (rateErr as SiteException.RateLimited).retryAfterSeconds)
+
+        val dummyDetail = com.raven.app.core.model.GalleryDetail(
+            item = com.raven.app.core.model.MediaItem(
+                siteId = SiteId.HITOMI,
+                id = "701",
+                url = "https://hitomi.la/doujinshi/x-701.html",
+                kind = com.raven.app.core.model.MediaKind.COMIC,
+                title = "Sample",
+                pageCount = 2,
+            ),
+            pageCount = 2,
+            pages = emptyList(),
+        )
+        assertTrue(
+            runCatching { plugin.gallerySource!!.loadGalleryPage(dummyDetail, pageIndex = 3) }
+                .exceptionOrNull() is SiteException.NotFound,
+        )
+        assertFalse(plugin.linkResolver!!.canHandle("https://not-hitomi.invalid/doujinshi/x-1.html"))
+    }
 }

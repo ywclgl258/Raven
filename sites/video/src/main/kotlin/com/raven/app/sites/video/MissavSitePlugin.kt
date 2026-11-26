@@ -177,7 +177,7 @@ class MissavSitePlugin(
             val kind = if (section == "genres") SearchScope.TAG else SearchScope.AUTHOR
             val entries = doc.select("a[href*=$segment]").mapNotNull { a ->
                 val rawHref = a.attr("href")
-                val slug = rawHref.substringAfter(segment).trimEnd('/').substringBefore('?').substringBefore('#')
+                val slug = rawHref.substringAfter(segment).substringBefore('?').substringBefore('#').trimEnd('/')
                 if (slug.isBlank() || slug == "ranking" || slug.contains('/')) return@mapNotNull null
                 val label = HtmlUrlCleaner.cleanText(a.text()).ifBlank { HtmlUrlCleaner.decodeUrlComponent(slug) }
                 DirectoryEntry(
@@ -220,10 +220,15 @@ class MissavSitePlugin(
             }
             val uri = UrlSanitizer.parseUriOrNull(url) ?: return null
             val rawParts = VideoSiteSupport.pathSegments(uri)
-            val parts = if (rawParts.size > 1 && rawParts.first().matches(langPrefixRegex)) {
+            val withoutMirror = if (rawParts.size > 1 && mirrorSegmentRegex.matches(rawParts.first())) {
                 rawParts.drop(1)
             } else {
                 rawParts
+            }
+            val parts = if (withoutMirror.size > 1 && withoutMirror.first().matches(langPrefixRegex)) {
+                withoutMirror.drop(1)
+            } else {
+                withoutMirror
             }
             if (parts.isEmpty()) {
                 return ResolvedLink.Feed(FeedRequest(SiteId.MISSAV, section = "new"))
@@ -303,7 +308,7 @@ class MissavSitePlugin(
 
     companion object {
         const val BASE_URL: String = "https://missav.ws"
-        private val videoPathRegex = Regex("^/([a-z0-9]+(?:-[a-z0-9]+)*-[a-z]*\\d+)/?$", RegexOption.IGNORE_CASE)
+        private val videoPathRegex = Regex("^/([a-z0-9]+(?:[-_][a-z0-9]+)+)/?$", RegexOption.IGNORE_CASE)
         private val playlistRegex = Regex("""(https?://[^'"\s]+?/[0-9a-f-]{32,36}/playlist\.m3u8)""")
         private val pageParamRegex = Regex("[?&]page=(\\d+)")
         private val langPrefixRegex = Regex("^[a-z]{2}(?:-[a-z]{2})?$", RegexOption.IGNORE_CASE)
@@ -348,7 +353,7 @@ class MissavSitePlugin(
                 userAgent = SiteNetworkProfile.DEFAULT_MOBILE_UA,
                 referer = "$BASE_URL/",
                 mediaReferer = "$BASE_URL/",
-                mediaDomains = setOf("mrstcdn.store"),
+                mediaDomains = setOf("mrstcdn.store", "surrit.com"),
             ),
         )
 
@@ -428,9 +433,13 @@ class MissavSitePlugin(
                 segments.size == 2 &&
                     (langPrefixRegex.matches(segments[0]) || mirrorSegmentRegex.matches(segments[0])) &&
                     segments[1].lowercase(Locale.ROOT) !in NON_VIDEO_ROOT_SEGMENTS -> segments[1]
+                segments.size == 3 &&
+                    mirrorSegmentRegex.matches(segments[0]) &&
+                    langPrefixRegex.matches(segments[1]) &&
+                    segments[2].lowercase(Locale.ROOT) !in NON_VIDEO_ROOT_SEGMENTS -> segments[2]
                 else -> return null
             }
-            if (!videoPathRegex.matches("/$code/")) return null
+            if (!code.any(Char::isDigit) || !videoPathRegex.matches("/$code/")) return null
             return "${baseUrl.trimEnd('/')}/$code"
         }
 
@@ -529,14 +538,14 @@ class MissavSitePlugin(
             )
 
             val authors = doc.select("a[href*=/actresses/]").mapNotNull { a ->
-                val slug = a.attr("href").substringAfter("/actresses/").trimEnd('/').substringBefore('?')
+                val slug = a.attr("href").substringAfter("/actresses/").substringBefore('?').substringBefore('#').trimEnd('/')
                 if (slug.isBlank() || slug == "ranking" || slug.contains('/')) return@mapNotNull null
                 val name = HtmlUrlCleaner.cleanText(a.text()).ifBlank { HtmlUrlCleaner.decodeUrlComponent(slug) }
                 AuthorRef(id = slug, name = name, role = "actress", url = "$BASE_URL/actresses/$slug")
             }.distinctBy { it.id }
 
             val tags = doc.select("a[href*=/genres/]").mapNotNull { a ->
-                val slug = a.attr("href").substringAfter("/genres/").trimEnd('/').substringBefore('?')
+                val slug = a.attr("href").substringAfter("/genres/").substringBefore('?').substringBefore('#').trimEnd('/')
                 if (slug.isBlank() || slug.contains('/')) return@mapNotNull null
                 val label = HtmlUrlCleaner.cleanText(a.text()).ifBlank { HtmlUrlCleaner.decodeUrlComponent(slug) }
                 TagRef(slug = slug, label = label, url = "$BASE_URL/genres/$slug")

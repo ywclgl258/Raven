@@ -199,6 +199,8 @@ class SerialComicSitesPluginTest {
         val search = plugin.searchSource.search(FeedRequest(siteId = SiteId.HDOUJIN, query = "test"))
         assertEquals("Search Hit", search.items.single().title)
         assertEquals("245982/67290554d85b", search.items.single().id)
+        assertFalse(search.hasMore)
+        assertNull(search.nextPage)
 
         val detail = plugin.gallerySource.loadGalleryDetail("https://hdoujin.org/book/245209/abcdef123456")
         assertEquals("Popular Book", detail.item.title)
@@ -709,9 +711,279 @@ class SerialComicSitesPluginTest {
             koinApp.close()
         }
     }
+
+    @Test
+    fun `mangacopy handles business code 210, chapter errors, canonical pageUrl, and malformed hex safely`() = runTest {
+        val http = FakeHttpClientAdapter()
+        val plugin = MangacopySitePlugin(http)
+
+        // 1. Business code 210 maps to Forbidden(isChallenge = true) and propagates from chapter feed
+        http.onUrlText(
+            "https://api.copy4000.com/api/v3/comic2/demo?platform=1",
+            """{"code":200,"results":{"comic":{"name":"Demo","path_word":"demo","cover":""},"groups":{"default":{"path_word":"default"}}}}""",
+        )
+        http.onUrlText(
+            "https://api.copy4000.com/api/v3/comic/demo/group/default/chapters?limit=500&offset=0",
+            """{"code":210,"message":"请下载官方最新客户端"}""",
+        )
+        val chapterErr = runCatching {
+            plugin.feedSource.loadFeed(FeedRequest(siteId = SiteId.MANGACOPY, section = "chapters", category = "demo"))
+        }.exceptionOrNull()
+        assertTrue(chapterErr is SiteException.Forbidden)
+        assertTrue((chapterErr as SiteException.Forbidden).isChallenge)
+
+        // 2. Direct chapter detail preserves chaptersUrl even when chapter API returns 210
+        val sampleAesHtml = """
+            <html><body><script>
+            var cct = '1234567890abcdef';
+            var contentKey = 'abcdef1234567890ZZZZ';
+            </script></body></html>
+        """.trimIndent()
+        http.onUrlText("https://www.mangacopy.com/comic/demo/chapter/ch-uuid-2", sampleAesHtml)
+        val badHexErr = runCatching {
+            plugin.gallerySource.loadGalleryDetail("https://www.mangacopy.com/comic/demo/chapter/ch-uuid-2")
+        }.exceptionOrNull()
+        // Malformed/short cipherText must map cleanly to SiteException.ParseError (never raw IllegalArgumentException)
+        assertTrue(badHexErr is SiteException.ParseError)
+
+        // 3. loadGalleryPage uses pure comicId (never pathWord:uuid) and returns canonical pageUrl resolvable by resolvePageImage
+        val aesKey = "1234567890abcdef"
+        val ivStr = "abcdef1234567890"
+        val cipher = javax.crypto.Cipher.getInstance("AES/CBC/PKCS5Padding")
+        cipher.init(
+            javax.crypto.Cipher.ENCRYPT_MODE,
+            javax.crypto.spec.SecretKeySpec(aesKey.toByteArray(Charsets.UTF_8), "AES"),
+            javax.crypto.spec.IvParameterSpec(ivStr.toByteArray(Charsets.UTF_8)),
+        )
+        val encryptedHex = cipher.doFinal("""[{"url":"https://img.copy.test/p1.webp"}]""".toByteArray(Charsets.UTF_8))
+            .joinToString("") { "%02x".format(it) }
+        val validChapterHtml = """
+            <html><body><script>
+            var cct = '$aesKey';
+            var contentKey = '$ivStr$encryptedHex';
+            </script></body></html>
+        """.trimIndent()
+        http.onUrlText("https://www.mangacopy.com/comic/demo/chapter/ch-uuid-2", validChapterHtml)
+
+        val detail = plugin.gallerySource.loadGalleryDetail("https://www.mangacopy.com/comic/demo/chapter/ch-uuid-2")
+        assertEquals("demo:ch-uuid-2", detail.item.id)
+        assertEquals("https://www.mangacopy.com/comic/demo#chapters", detail.chaptersUrl)
+
+        val reloaded = plugin.gallerySource.loadGalleryPage(detail, pageIndex = 1, forceReload = true)
+        assertEquals("https://www.mangacopy.com/comic/demo/chapter/ch-uuid-2#1", reloaded.pageUrl)
+        val resolved = plugin.gallerySource.resolvePageImage(reloaded.pageUrl)
+        assertEquals("https://img.copy.test/p1.webp", resolved.imageUrl)
+        assertEquals(reloaded.pageUrl, resolved.pageUrl)
+    }
+
+    @Test
+    fun `serial comic edge cases cover mh160 categories, hdoujin pagination, and empty search handling`() = runTest {
+        val http = FakeHttpClientAdapter()
+
+        // 1. MH160 category (#listbody li) fallback
+        val mh160 = Mh160SitePlugin(http)
+        http.onUrlText(
+            "https://m.mh160ba.com/kanmanhua/lianzai",
+            """
+            <html><body><ul id="listbody">
+              <li><a class="ImgA" href="/kanmanhua/1001/"><img src="https://img.mh160.test/1001.jpg" /></a>
+              <a href="/kanmanhua/1001/">Category Hit</a></li>
+            </ul></body></html>
+            """.trimIndent(),
+        )
+        val mhCat = mh160.feedSource.loadFeed(FeedRequest(siteId = SiteId.MH160, section = "cat_lianzai"))
+        assertEquals(listOf("1001"), mhCat.items.map { it.id })
+
+        // 2. HDoujin pagination & malformed JSON rejection
+        val hdoujin = HdoujinSitePlugin(http)
+        http.onUrlText(
+            "https://api.hdoujin.org/books?q=multi",
+            """{"entries":[{"id":1,"key":"k1","title":"Book 1"}],"limit":1,"page":1,"total":3}""",
+        )
+        val hdoujinPage = hdoujin.searchSource.search(FeedRequest(siteId = SiteId.HDOUJIN, query = "multi", page = 1))
+        assertTrue(hdoujinPage.hasMore)
+        assertEquals(2, hdoujinPage.nextPage)
+
+        http.onUrlText("https://api.hdoujin.org/books?q=broken", "not-json")
+        val badJsonErr = runCatching {
+            hdoujin.searchSource.search(FeedRequest(siteId = SiteId.HDOUJIN, query = "broken"))
+        }.exceptionOrNull()
+        assertTrue(badJsonErr is SiteException.ParseError)
+
+        // 3. Hipmh data:null -> ParseError, empty search -> empty FeedPage, chapter error propagated
+        val hipmh = HipmhSitePlugin(http)
+        http.onUrlText("https://hipapi1.s3file.top/v1/mangas?sort=updated&page=1&per_page=18", """{"code":500,"data":null}""")
+        assertTrue(
+            runCatching { hipmh.feedSource.loadFeed(FeedRequest(siteId = SiteId.HIPMH, section = "latest")) }
+                .exceptionOrNull() is SiteException.ParseError,
+        )
+        http.onUrlText(
+            "https://hipapi1.s3file.top/v1/mangas?keyword=none&page=1&per_page=18",
+            """{"code":200,"data":{"items":[],"total":0,"total_pages":1}}""",
+        )
+        assertTrue(hipmh.searchSource.search(FeedRequest(siteId = SiteId.HIPMH, query = "none")).items.isEmpty())
+
+        // 4. Guazimanhua empty search & non-primitive JSON-LD url object
+        val guazi = GuazimanhuaSitePlugin(http)
+        http.onUrlText("https://www.guazimanhua.com/category.php?keyword=none&sort=hits&page=1", "<html><body><div>无结果</div></body></html>")
+        assertTrue(guazi.searchSource.search(FeedRequest(siteId = SiteId.GUAZIMANHUA, query = "none")).items.isEmpty())
+        http.onUrlText(
+            "https://www.guazimanhua.com/comic.php?id=999",
+            """
+            <html><body><h1>Safe Title</h1>
+            <script type="application/ld+json">
+              {"url":{"@id":"https://www.guazimanhua.com/comic.php?id=999"},"name":null}
+            </script>
+            <a href="/chapter.php?id=101">第1话</a></body></html>
+            """.trimIndent(),
+        )
+        http.onUrlText("https://www.guazimanhua.com/chapter.php?id=101", """<html><body><img src="https://img.guazicdn.com/th/comics/chapters/1.jpg"/></body></html>""")
+        val guaziDetail = guazi.gallerySource.loadGalleryDetail("https://www.guazimanhua.com/comic.php?id=999")
+        assertEquals("Safe Title", guaziDetail.item.title)
+
+        // 5. Mycomic empty search returns empty FeedPage
+        val mycomic = MycomicSitePlugin(http)
+        http.onUrlText("https://mycomic.com/comics?q=none&page=1", "<html><body><p>No comics found</p></body></html>")
+        assertTrue(mycomic.searchSource.search(FeedRequest(siteId = SiteId.MYCOMIC, query = "none")).items.isEmpty())
+    }
+
+    @Test
+    fun `single point checks for hdoujin security, mangacopy root url, mh160 single fetch, guazi empty id, mycomic fallback, and hipmh decode`() = runTest {
+        // 1. HDoujin Origin/Referer headers, foreign/traversal guard, resolvePageImage AuthRequired
+        val hHttp = FakeHttpClientAdapter()
+        hHttp.onUrlText("https://api.hdoujin.org/books/detail/10/key1/", """{"id":10,"key":"key1","title":"OK"}""")
+        val hdoujin = HdoujinSitePlugin(hHttp)
+        hdoujin.gallerySource.loadGalleryDetail("https://hdoujin.org/book/10/key1")
+        val apiReq = hHttp.recordedRequests.last()
+        assertEquals("https://hdoujin.org", apiReq.headers["Origin"])
+        assertEquals("https://hdoujin.org/", apiReq.headers["Referer"])
+        assertTrue(runCatching { hdoujin.gallerySource.loadGalleryDetail("https://evil.example/book/10/key1") }.exceptionOrNull() is SiteException.ParseError)
+        assertTrue(runCatching { hdoujin.gallerySource.loadGalleryDetail("https://hdoujin.org/book/10/bad%2Fkey") }.exceptionOrNull() is SiteException.ParseError)
+        assertTrue(runCatching { hdoujin.gallerySource.resolvePageImage("https://hdoujin.org/book/10/key1#1") }.exceptionOrNull() is SiteException.AuthRequired)
+
+        // 2. Mangacopy preserves root comic URL & deduplicates multi-group UUIDs
+        val mcHttp = FakeHttpClientAdapter()
+        mcHttp.onMatch({ req -> req.url.contains("/comic2/demo") }) { req ->
+            FakeHttpClientAdapter.htmlResponse(
+                req.url,
+                """{"code":200,"results":{"comic":{"name":"Demo","path_word":"demo","cover":"https://img.copy.test/c.jpg"},"groups":{"g1":{"path_word":"default"},"g2":{"path_word":"tank"}}}}""",
+            )
+        }
+        mcHttp.onMatch({ req -> req.url.contains("/group/default/chapters") || req.url.contains("/group/tank/chapters") }) { req ->
+            FakeHttpClientAdapter.htmlResponse(
+                req.url,
+                """{"code":200,"results":{"list":[{"uuid":"dup-uuid-1","name":"Ch 1"}]}}""",
+            )
+        }
+        mcHttp.onUrlText("https://www.mangacopy.com/comic/demo/chapter/dup-uuid-1", mangacopyChapterHtml())
+        val mc = MangacopySitePlugin(mcHttp)
+        val mcRoot = mc.gallerySource.loadGalleryDetail("https://www.mangacopy.com/comic/demo")
+        assertEquals("https://www.mangacopy.com/comic/demo", mcRoot.item.url)
+        assertEquals("dup-uuid-1", mcRoot.item.extra["chapterUuid"])
+        val mcChapters = mc.feedSource.loadFeed(FeedRequest(siteId = SiteId.MANGACOPY, section = "chapters", category = "demo"))
+        assertEquals(1, mcChapters.items.size)
+
+        // 3. MH160 root chapterId, single chapter fetch, parseSearchList title, linkResolver non-numeric guard, legacy host & +http Unsupported
+        val mhHttp = FakeHttpClientAdapter()
+        val legacyPayload = java.util.Base64.getEncoder().encodeToString("/mh/1.jpg".toByteArray())
+        val removedPayload = java.util.Base64.getEncoder().encodeToString("+http://removed.invalid/x.jpg".toByteArray())
+        mhHttp.onUrlText("https://www.mh160ba.com/kanmanhua/26001/", mh160DetailHtml)
+        mhHttp.onUrlText(
+            "https://www.mh160ba.com/kanmanhua/26001/583501.html",
+            """<html><head><title>第1话</title></head><body><script>var qTcms_S_p_id="100";var qTcms_S_m_murl_e="$legacyPayload";</script></body></html>""",
+        )
+        mhHttp.onUrlText(
+            "https://www.mh160ba.com/kanmanhua/26001/590566.html",
+            """<html><head><title>第65话</title></head><body><script>var qTcms_S_p_id="100";var qTcms_S_m_murl_e="$removedPayload";</script></body></html>""",
+        )
+        mhHttp.onUrlText(
+            "https://m.mh160ba.com/kanmanhua/lianzai",
+            """<html><body><ul id="listbody"><li><a class="ImgA" href="/kanmanhua/1001/"><img src="https://img.mh160.test/1.jpg" /></a><a href="/kanmanhua/1001/">Category Hit</a></li></ul></body></html>""",
+        )
+        val mh = Mh160SitePlugin(mhHttp)
+        val mhRoot = mh.gallerySource.loadGalleryDetail("https://www.mh160ba.com/kanmanhua/26001/")
+        assertEquals("583501", mhRoot.item.extra["chapterId"])
+        assertEquals("https://mhpic6.kingwar.cn/mh/1.jpg", mhRoot.pages.single().imageUrl)
+        mhHttp.recordedRequests.clear()
+        mh.gallerySource.loadGalleryDetail("https://www.mh160ba.com/kanmanhua/26001/583501.html")
+        assertEquals(1, mhHttp.recordedRequests.count { it.url.endsWith("583501.html") })
+        assertEquals("Category Hit", mh.feedSource.loadFeed(FeedRequest(siteId = SiteId.MH160, section = "cat_lianzai")).items.single().title)
+        assertNull(mh.linkResolver.resolve("https://m.mh160ba.com/kanmanhua/lianzai"))
+        assertTrue(runCatching { mh.gallerySource.loadGalleryDetail("https://www.mh160ba.com/kanmanhua/26001/590566.html") }.exceptionOrNull() is SiteException.Unsupported)
+
+        // 4. Guazimanhua empty digit guard, chapter link guard, single fetch per chapter
+        val gzHttp = FakeHttpClientAdapter()
+        gzHttp.onUrlText("https://www.guazimanhua.com/category.php?sort=update&page=1", guaziUpdateHtml)
+        gzHttp.onUrlText("https://www.guazimanhua.com/chapter.php?id=77", """<html><title>Ch77漫画在线阅读</title><body><a href="/comic.php?id=28873">Back</a><img src="https://img.guazicdn.com/th/comics/chapters/77.jpg"/></body></html>""")
+        val gz = GuazimanhuaSitePlugin(gzHttp)
+        gz.feedSource.loadFeed(FeedRequest(siteId = SiteId.GUAZIMANHUA, category = ""))
+        assertFalse(gzHttp.recordedRequests.last().url.contains("cid="))
+        assertTrue(runCatching { gz.feedSource.loadFeed(FeedRequest(siteId = SiteId.GUAZIMANHUA, section = "chapters", category = "")) }.exceptionOrNull() is SiteException.ParseError)
+        assertNull(gz.linkResolver.resolve("https://www.guazimanhua.com/chapter.php?id=77"))
+        gzHttp.recordedRequests.clear()
+        gz.gallerySource.loadGalleryDetail("https://www.guazimanhua.com/chapter.php?id=77")
+        assertEquals(1, gzHttp.recordedRequests.count { it.url.endsWith("chapter.php?id=77") })
+
+        // 5. Mycomic loadGalleryPage pageUrl fallback
+        val myHttp = FakeHttpClientAdapter()
+        myHttp.onUrlText("https://mycomic.com/chapters/794527", mycomicChapterHtml)
+        val mycomic = MycomicSitePlugin(myHttp)
+        val myPage = mycomic.gallerySource.loadGalleryPage(
+            com.raven.app.core.model.GalleryDetail(
+                item = com.raven.app.core.model.MediaItem(
+                    siteId = SiteId.MYCOMIC,
+                    id = "1128",
+                    url = "https://mycomic.com/comics/1128",
+                    kind = com.raven.app.core.model.MediaKind.SERIAL_COMIC,
+                    title = "One Piece",
+                    pageCount = 2,
+                    extra = emptyMap(),
+                ),
+                pageCount = 2,
+                pages = listOf(com.raven.app.core.model.GalleryPage(1, "https://mycomic.com/chapters/794527#1", "")),
+            ),
+            pageIndex = 2,
+            forceReload = true,
+        )
+        assertEquals("https://cdn.mycomic.com/manga/1128/2.webp", myPage.imageUrl)
+
+        // 6. Hipmh obfuscated decodeImages + decoyIndex removal + comicId in chapters feed + /chapter/go?hid=
+        val encodedAlp = "_-9876543210abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
+        val decodedAlp = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
+        val plainJson = """["/p/real1.jpg","/p/decoy.jpg","/p/real2.jpg"]"""
+        val b64Url = java.util.Base64.getUrlEncoder().withoutPadding().encodeToString(plainJson.toByteArray(Charsets.UTF_8))
+        val sub = b64Url.map { ch -> encodedAlp[decodedAlp.indexOf(ch)] }.joinToString("")
+        val perm = sub.chunked(7).mapIndexed { idx, blk -> if (idx % 2 == 1) blk.reversed() else blk }.joinToString("")
+        val tailLen = perm.length / 3
+        val headLen = (perm.length - tailLen) / 2
+        val obfPayload = "qM9" + perm.substring(tailLen, tailLen + headLen) + "XX" + perm.drop(tailLen + headLen) + "YYY" + perm.take(tailLen) + "Z7"
+        val sid = 1L
+        val key = (sid.toBigInteger() * java.math.BigInteger.valueOf(0x9E3779B1L))
+            .xor(3.toBigInteger() * java.math.BigInteger.valueOf(0x85EBCA6BL))
+            .mod(3.toBigInteger())
+        val orderId = java.math.BigInteger.ONE.xor(key).toLong()
+
+        val hipHttp = FakeHttpClientAdapter()
+        hipHttp.onMatch({ req -> req.url.startsWith("https://hipapi1.s3file.top/v2/chapter") }) { req ->
+            FakeHttpClientAdapter.htmlResponse(
+                req.url,
+                """{"code":200,"data":{"manga_title":"M","chapter_title":"C1","manga_id":"7244","manga_slug":"demo","line":2,"order_id":$orderId,"sid":$sid,"images":"$obfPayload"}}""",
+            )
+        }
+        hipHttp.onMatch({ req -> req.url.startsWith("https://hipapi1.s3file.top/v1/manga/chapters") }) { req ->
+            FakeHttpClientAdapter.htmlResponse(req.url, """{"code":200,"data":{"items":[{"hid":"bTo3MjQ0LWM6MTM3MjE-NzI0NDoxLjAw","title":"第1话"}]}}""")
+        }
+        val hip = HipmhSitePlugin(hipHttp)
+        val hipChapter = hip.feedSource.loadFeed(FeedRequest(siteId = SiteId.HIPMH, section = "chapters", category = "bTo3MjQ0-demo"))
+        assertEquals("bTo3MjQ0-demo", hipChapter.items.single().extra["comicId"])
+        val hipPage2 = hip.gallerySource.resolvePageImage("https://reader.hipmh.top/chapter/go?hid=bTo3MjQ0LWM6MTM3MjE-NzI0NDoxLjAw#2")
+        assertEquals("https://hip-cf-1.s3imgs.top/p/real2.jpg", hipPage2.imageUrl)
+    }
+
     @Test
     fun `comic plugin regex literals escape closing braces and brackets for ART ICU`() {
-        val pluginClasses = listOf(
+        val targetClasses = listOf(
+            EhSharedEngine::class.java,
             EhentaiSitePlugin::class.java,
             ExhentaiSitePlugin::class.java,
             NhentaiSitePlugin::class.java,
@@ -726,41 +998,72 @@ class SerialComicSitesPluginTest {
             HipmhSitePlugin::class.java,
         )
         val violations = mutableListOf<String>()
-        pluginClasses.forEach { pluginClass ->
-            val companion = pluginClass.declaredClasses.firstOrNull { it.simpleName == "Companion" }
-                ?: return@forEach
-            companion.declaredFields
-                .filter { Regex::class.java.isAssignableFrom(it.type) }
-                .forEach { field ->
-                    field.isAccessible = true
-                    val pattern = (field.get(null) as? Regex)?.pattern ?: return@forEach
-                    val openBraces = countUnescaped(pattern, '{')
-                    val closeBraces = countUnescaped(pattern, '}')
-                    val openBrackets = countUnescaped(pattern, '[')
-                    val closeBrackets = countUnescaped(pattern, ']')
-                    if (closeBraces > openBraces || closeBrackets > openBrackets) {
-                        violations += "${pluginClass.simpleName}.${field.name}: $pattern"
+        var checkedCount = 0
+        targetClasses.forEach { targetClass ->
+            val holders = listOf(targetClass) + targetClass.declaredClasses.toList()
+            holders.forEach { holder ->
+                holder.declaredFields
+                    .filter { java.lang.reflect.Modifier.isStatic(it.modifiers) && Regex::class.java.isAssignableFrom(it.type) }
+                    .forEach { field ->
+                        field.isAccessible = true
+                        val pattern = (field.get(null) as? Regex)?.pattern ?: return@forEach
+                        checkedCount++
+                        val err = findIcuRegexViolation(pattern)
+                        if (err != null) {
+                            violations += "${targetClass.simpleName}.${field.name} [$err]: $pattern"
+                        }
                     }
-                }
+            }
         }
+        assertTrue("Expected >0 static Regex fields scanned across comic plugins, got $checkedCount", checkedCount > 0)
         assertTrue(
-            "Unescaped } or ] will crash Android ART ICU: $violations",
+            "Unescaped {/}/] will crash Android ART ICU: $violations",
             violations.isEmpty(),
         )
     }
 
-    private fun countUnescaped(pattern: String, target: Char): Int {
-        var count = 0
-        var backslashes = 0
-        pattern.forEach { ch ->
+    private fun findIcuRegexViolation(pattern: String): String? {
+        var i = 0
+        val n = pattern.length
+        var inCharClass = false
+        var ccStart = -1
+        while (i < n) {
+            val ch = pattern[i]
             if (ch == '\\') {
-                backslashes++
-                return@forEach
+                if (i + 1 < n && (pattern[i + 1] == 'p' || pattern[i + 1] == 'P') && i + 2 < n && pattern[i + 2] == '{') {
+                    val closeProp = pattern.indexOf('}', i + 3)
+                    if (closeProp != -1) {
+                        i = closeProp + 1
+                        continue
+                    }
+                }
+                i += 2
+                continue
             }
-            if (ch == target && backslashes % 2 == 0) count++
-            backslashes = 0
+            if (inCharClass) {
+                if (ch == '{' || ch == '}') return "unescaped '$ch' inside character class"
+                if (ch == ']' && i > ccStart + 1) inCharClass = false
+                i++
+                continue
+            }
+            when (ch) {
+                '[' -> {
+                    inCharClass = true
+                    ccStart = if (i + 1 < n && pattern[i + 1] == '^') i + 1 else i
+                }
+                ']' -> return "unescaped ']'"
+                '{' -> {
+                    val qMatch = Regex("^\\{\\d+(?:,\\d*)?\\}").find(pattern.substring(i))
+                    if (qMatch != null) {
+                        i += qMatch.value.length
+                        continue
+                    }
+                    return "unescaped '{'"
+                }
+                '}' -> return "unescaped '}'"
+            }
+            i++
         }
-        return count
+        return null
     }
-
 }

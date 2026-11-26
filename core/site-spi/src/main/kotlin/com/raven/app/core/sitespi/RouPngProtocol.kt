@@ -85,10 +85,24 @@ object RouPngProtocol {
      * Sniffs unwrapped media bytes to synthesize accurate HTTP Content-Type for Media3.
      */
     fun detectContentType(inner: ByteArray): String {
-        val head = String(inner, 0, minOf(16, inner.size), Charsets.US_ASCII)
+        val offset = if (inner.size >= 3 &&
+            inner[0] == 0xEF.toByte() &&
+            inner[1] == 0xBB.toByte() &&
+            inner[2] == 0xBF.toByte()
+        ) {
+            3
+        } else {
+            0
+        }
+        val head = if (inner.size > offset) {
+            String(inner, offset, minOf(16, inner.size - offset), Charsets.US_ASCII)
+        } else {
+            ""
+        }
         return when {
             head.startsWith("#EXTM3U") -> "application/vnd.apple.mpegurl"
-            inner.size >= 189 && inner[0] == 0x47.toByte() -> "video/mp2t"
+            inner.size >= 188 && inner[0] == 0x47.toByte() && (inner.size < 189 || inner[188] == 0x47.toByte()) ->
+                "video/mp2t"
             else -> "application/octet-stream"
         }
     }
@@ -108,10 +122,10 @@ object RouPngProtocol {
      */
     fun decodeEv(encodedBase64: String, keyOffset: Int): String {
         val bytes = Base64.decode(encodedBase64.trim())
-        val chars = CharArray(bytes.size) { i ->
-            ((bytes[i].toInt() and 0xFF) - keyOffset).toChar()
+        val decoded = ByteArray(bytes.size) { i ->
+            (((bytes[i].toInt() and 0xFF) - keyOffset) and 0xFF).toByte()
         }
-        return String(chars)
+        return decoded.toString(Charsets.UTF_8)
     }
 
     private fun inflateZlib(raw: ByteArray): ByteArray? {

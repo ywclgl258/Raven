@@ -6,6 +6,14 @@ import com.raven.app.core.model.SiteId
 import com.raven.app.core.sitespi.HtmlUrlCleaner
 import com.raven.app.core.sitespi.SiteHttpResponse
 import java.net.URI
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonNull
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.intOrNull
+import kotlinx.serialization.json.longOrNull
 
 /**
  * Pure-Kotlin RFC-aware URL parser and builder for `:sites:comic`.
@@ -299,3 +307,21 @@ internal fun SiteHttpResponse.throwIfNotSuccessful(siteId: SiteId, siteName: Str
         )
     }
 }
+
+internal fun JsonElement?.safePrimitiveContent(): String? =
+    (this as? JsonPrimitive)?.takeUnless { it is JsonNull }?.contentOrNull
+
+internal fun JsonObject.safeString(name: String): String =
+    this[name].safePrimitiveContent()?.trim().orEmpty()
+
+internal fun JsonObject.safeInt(name: String): Int? =
+    (this[name] as? JsonPrimitive)?.takeUnless { it is JsonNull }?.intOrNull
+
+internal fun JsonObject.safeLong(name: String): Long? =
+    (this[name] as? JsonPrimitive)?.takeUnless { it is JsonNull }?.longOrNull
+
+internal fun JsonObject.safeObject(name: String): JsonObject? =
+    this[name] as? JsonObject
+
+internal fun JsonObject.safeArray(name: String): JsonArray? =
+    this[name] as? JsonArray

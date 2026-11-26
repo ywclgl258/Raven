@@ -634,7 +634,21 @@ class WordPressPhotoEngine(
             if (spec.contentPageLinkSelector.isBlank()) {
                 1
             } else {
-                doc.select(spec.contentPageLinkSelector).size.coerceAtLeast(1)
+                val nodes = doc.select(spec.contentPageLinkSelector)
+                val maxNumeric = nodes.mapNotNull { el ->
+                    el.text().trim().replace(",", "").toIntOrNull()
+                        ?: el.selectFirst("a")?.text()?.trim()?.replace(",", "")?.toIntOrNull()
+                }.filter { it > 0 }.maxOrNull()
+                if (maxNumeric != null) {
+                    maxNumeric
+                } else {
+                    val distinctKeys = nodes.mapNotNull { el ->
+                        val href = el.selectFirst("a")?.attr("href")?.trim()?.ifBlank { null }
+                            ?: el.attr("href").trim().ifBlank { null }
+                        href ?: el.text().trim().ifBlank { null }
+                    }.toSet()
+                    distinctKeys.size.coerceAtLeast(1)
+                }
             }
         }
         is ImageExtractionSpec.NextJsRscUuidPayload -> 1

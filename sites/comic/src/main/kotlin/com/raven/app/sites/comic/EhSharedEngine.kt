@@ -177,6 +177,7 @@ class EhSharedEngine(
         }
 
         sessionStore.replaceCookies(siteId, candidate)
+        previewPageCache.clear()
         val username = "UID ${candidate["ipb_member_id"]}"
         sessionStore.saveUsername(siteId, username)
         return AuthState(
@@ -547,6 +548,21 @@ class EhSharedEngine(
         }
 
         if (requiresAuthGate && (response.code == 401 || response.code == 403)) {
+            if (response.code == 403) {
+                val body = response.bodyText()
+                val isChallenge = response.header("cf-mitigated").equals("challenge", ignoreCase = true) ||
+                    body.contains("cf-challenge", ignoreCase = true) ||
+                    body.contains("Just a moment", ignoreCase = true) ||
+                    body.contains("Checking your browser", ignoreCase = true) ||
+                    body.contains("DDoS-Guard", ignoreCase = true)
+                if (isChallenge) {
+                    throw SiteException.Forbidden(
+                        isChallenge = true,
+                        message = "${descriptor.displayName} 触发浏览器验证挑战",
+                        siteId = siteId,
+                    )
+                }
+            }
             throw SiteException.AuthRequired(
                 message = "ExHentai 会话已失效或需要官方验证，请重新登录",
                 siteId = siteId,
@@ -628,7 +644,7 @@ class EhSharedEngine(
             val categoryText = HtmlUrlCleaner.cleanText(row.selectFirst(".cn, .cs")?.text().orEmpty())
             val languageTags = row.select("[title^=language:]")
                 .map { it.attr("title").substringAfter(':').trim().lowercase() }
-                .filter { it.isNotEmpty() }
+                .filter { it.isNotEmpty() && it != "translated" }
             val extra = buildMap {
                 if (categoryText.isNotEmpty()) put("category", categoryText)
             }

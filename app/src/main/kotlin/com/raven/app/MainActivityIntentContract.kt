@@ -9,6 +9,9 @@ import com.raven.app.core.model.SiteId
 import com.raven.app.core.model.TagRef
 import com.raven.app.core.sitespi.ResolvedLink
 import com.raven.app.core.sitespi.SiteRegistry
+import java.security.MessageDigest
+import java.security.SecureRandom
+import java.util.Locale
 import kotlinx.serialization.json.Json
 
 /**
@@ -18,6 +21,14 @@ import kotlinx.serialization.json.Json
 object MainActivityIntentContract {
 
     const val EXTRA_NAVIGATE_ROUTE: String = "com.raven.app.extra.NAVIGATE_ROUTE"
+    private const val EXTRA_INTERNAL_TOKEN: String = "com.raven.app.extra.INTERNAL_TOKEN"
+
+    private val internalTokenBytes: ByteArray = ByteArray(16).apply {
+        SecureRandom().nextBytes(this)
+    }
+    private val internalToken: String = internalTokenBytes.joinToString("") { b ->
+        String.format(Locale.ROOT, "%02x", b)
+    }
 
     private val routeJson: Json = Json {
         ignoreUnknownKeys = true
@@ -38,18 +49,57 @@ object MainActivityIntentContract {
         Intent(context, MainActivity::class.java).apply {
             addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
             putExtra(EXTRA_NAVIGATE_ROUTE, encodeRoute(route))
+            putExtra(EXTRA_INTERNAL_TOKEN, internalToken)
         }
 
     fun parseNavigateRoute(intent: Intent?): RavenRoute? {
         if (intent == null) return null
-        return decodeRoute(intent.getStringExtra(EXTRA_NAVIGATE_ROUTE))
+        return parseAuthorizedNavigateRoute(
+            rawRoute = intent.getStringExtra(EXTRA_NAVIGATE_ROUTE),
+            suppliedToken = intent.getStringExtra(EXTRA_INTERNAL_TOKEN),
+        )
     }
+
+    internal fun parseAuthorizedNavigateRoute(
+        rawRoute: String?,
+        suppliedToken: String?,
+    ): RavenRoute? {
+        if (suppliedToken == null) return null
+        val matches = MessageDigest.isEqual(
+            suppliedToken.toByteArray(Charsets.UTF_8),
+            internalTokenBytesHexBytes,
+        )
+        if (!matches) return null
+        return decodeRoute(rawRoute)
+    }
+
+    internal fun internalTokenForTest(): String = internalToken
+
+    private val internalTokenBytesHexBytes: ByteArray = internalToken.toByteArray(Charsets.UTF_8)
 
     fun extractSharedText(intent: Intent?): String? {
         if (intent == null || intent.action != Intent.ACTION_SEND) return null
         val text = intent.getStringExtra(Intent.EXTRA_TEXT)?.trim().orEmpty()
         if (text.isNotEmpty()) return text
         return intent.getStringExtra(Intent.EXTRA_SUBJECT)?.trim()?.takeIf { it.isNotEmpty() }
+    }
+
+    fun resolveTagRoute(
+        siteRegistry: SiteRegistry,
+        siteId: SiteId,
+        tag: TagRef,
+    ): RavenRoute {
+        val label = tag.label.ifBlank { tag.slug }
+        val resolved = tag.url.takeIf { it.isNotBlank() }?.let { url ->
+            siteRegistry.get(siteId)?.linkResolver?.takeIf { it.canHandle(url) }?.resolve(url)
+        }
+        if (resolved is ResolvedLink.Directory) {
+            return RavenRoute.SiteDirectory(
+                siteId = resolved.siteId.value,
+                section = resolved.section,
+            )
+        }
+        return resolveTagFeedRoute(siteRegistry = siteRegistry, siteId = siteId, tag = tag)
     }
 
     fun resolveTagFeedRoute(

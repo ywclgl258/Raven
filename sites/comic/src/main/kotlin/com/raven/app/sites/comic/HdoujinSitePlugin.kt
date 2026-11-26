@@ -29,9 +29,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
-import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonObject
-import kotlinx.serialization.json.jsonPrimitive
 import org.jsoup.parser.Parser
 
 /**
@@ -114,12 +112,12 @@ class HdoujinSitePlugin(
                 ?: throw SiteException.ParseError("无法识别 HDoujin 地址：$url", siteId = SiteId.HDOUJIN)
             val detailJson = fetchBookDetail(identity)
             val title = Parser.unescapeEntities(
-                detailJson.string("title").ifBlank { detailJson.string("title_short") },
+                detailJson.safeString("title").ifBlank { detailJson.safeString("title_short") },
                 false,
             ).ifBlank { "Book ${identity.id}" }
-            val subtitle = detailJson.string("subtitle")
-            val pages = detailJson.int("pages") ?: 0
-            val cover = (detailJson["thumbnail"] as? JsonObject)?.string("path").orEmpty()
+            val subtitle = detailJson.safeString("subtitle")
+            val pages = detailJson.safeInt("pages") ?: 0
+            val cover = detailJson.safeObject("thumbnail")?.safeString("path").orEmpty()
             val item = MediaItem(
                 siteId = SiteId.HDOUJIN,
                 id = identity.raw,
@@ -197,15 +195,15 @@ class HdoujinSitePlugin(
     }
 
     private fun parseBookSummary(obj: JsonObject): MediaItem? {
-        val id = obj["id"]?.jsonPrimitive?.content?.takeIf { it.isNotBlank() } ?: return null
-        val key = obj["key"]?.jsonPrimitive?.content.orEmpty()
+        val id = obj.safeString("id").takeIf { it.isNotBlank() } ?: return null
+        val key = obj.safeString("key").takeIf { it.isNotBlank() && BOOK_KEY_REGEX.matches(it) } ?: return null
         val title = Parser.unescapeEntities(
-            obj.string("title").ifBlank { obj.string("title_short") },
+            obj.safeString("title").ifBlank { obj.safeString("title_short") },
             false,
         )
         if (title.isBlank()) return null
-        val cover = (obj["thumbnail"] as? JsonObject)?.string("path").orEmpty()
-        val pages = obj.int("pages")
+        val cover = obj.safeObject("thumbnail")?.safeString("path").orEmpty()
+        val pages = obj.safeInt("pages")
         val identity = BookIdentity(id, key)
         return MediaItem(
             siteId = SiteId.HDOUJIN,
@@ -228,25 +226,42 @@ class HdoujinSitePlugin(
     }
 
     private suspend fun searchBooks(query: String, page: Int): FeedPage {
+        val normalizedPage = page.coerceAtLeast(1)
         val url = ComicUrl.parse(descriptor.networkProfile.apiBase)
             ?.addPathSegment("books")
             ?.addQueryParameter("q", query)
-            ?.let { builder -> if (page > 1) builder.addQueryParameter("page", page.toString()) else builder }
+            ?.let { builder -> if (normalizedPage > 1) builder.addQueryParameter("page", normalizedPage.toString()) else builder }
             ?.toString()
             ?: "${descriptor.networkProfile.apiBase}/books?q=$query"
         val body = fetchApi(url)
         val root = runCatching { json.parseToJsonElement(body) }.getOrNull()
+            ?: throw SiteException.ParseError("HDoujin 搜索数据格式异常", siteId = SiteId.HDOUJIN)
+        var total: Int? = null
+        var limit: Int? = null
         val items = when (root) {
             is JsonArray -> root.mapNotNull { (it as? JsonObject)?.let(::parseBookSummary) }
             is JsonObject -> {
-                val array = (root["entries"] as? JsonArray)
-                    ?: (root["list"] as? JsonArray)
-                    ?: (root["results"] as? JsonArray)
+                total = root.safeInt("total")
+                limit = root.safeInt("limit")
+                val array = root.safeArray("entries")
+                    ?: root.safeArray("list")
+                    ?: root.safeArray("results")
                 array?.mapNotNull { (it as? JsonObject)?.let(::parseBookSummary) }.orEmpty()
             }
-            else -> emptyList()
+            else -> throw SiteException.ParseError("HDoujin 搜索数据格式异常", siteId = SiteId.HDOUJIN)
         }
-        return FeedPage(items = items, title = query, hasMore = items.isNotEmpty())
+        val effectiveLimit = (limit ?: 25).coerceAtLeast(1)
+        val hasMore = when {
+            total != null -> normalizedPage * effectiveLimit < total && items.isNotEmpty()
+            else -> items.size >= effectiveLimit
+        }
+        return FeedPage(
+            items = items,
+            nextPage = if (hasMore) normalizedPage + 1 else null,
+            hasMore = hasMore,
+            totalCount = total,
+            title = query,
+        )
     }
 
     private suspend fun fetchApi(url: String): String {
@@ -288,20 +303,14 @@ class HdoujinSitePlugin(
     // -------------------------------------------------------------------------
 
     private fun parseBookIdentity(url: String): BookIdentity? {
-        val parsed = ComicUrl.parse(url) ?: return null
+        val parsed = ComicUrl.parse(url)?.takeIf { descriptor.matchesHost(it.host) } ?: return null
         val segments = parsed.pathSegments
         val idx = segments.indexOfFirst { it == "book" || it == "books" }
         if (idx < 0 || idx + 2 > segments.lastIndex) return null
-        val id = segments[idx + 1].takeIf { it.all(Char::isDigit) } ?: return null
-        val key = segments[idx + 2].takeIf { it.isNotBlank() } ?: return null
+        val id = segments[idx + 1].takeIf { it.isNotEmpty() && it.all(Char::isDigit) } ?: return null
+        val key = segments[idx + 2].takeIf { it.isNotBlank() && BOOK_KEY_REGEX.matches(it) } ?: return null
         return BookIdentity(id, key)
     }
-
-    private fun JsonObject.string(name: String): String =
-        this[name]?.jsonPrimitive?.content?.trim().orEmpty()
-
-    private fun JsonObject.int(name: String): Int? =
-        this[name]?.jsonPrimitive?.intOrNull
 
     private data class BookIdentity(val id: String, val key: String) {
         val raw: String get() = "$id/$key"
@@ -320,6 +329,7 @@ class HdoujinSitePlugin(
         private const val POPULAR = "popular"
         private const val DOUJINSHI = "doujinshi"
         private const val MANGA = "manga"
+        private val BOOK_KEY_REGEX = Regex("^[A-Za-z0-9_-]+$")
 
         val DESCRIPTOR: SiteDescriptor = SiteDescriptor(
             id = SITE_ID,

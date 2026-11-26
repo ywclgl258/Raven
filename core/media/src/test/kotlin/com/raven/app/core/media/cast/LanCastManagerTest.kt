@@ -1,5 +1,10 @@
 package com.raven.app.core.media.cast
 
+import kotlinx.coroutines.test.runTest
+import okhttp3.CookieJar
+import okhttp3.OkHttpClient
+import okhttp3.mockwebserver.MockResponse
+import okhttp3.mockwebserver.MockWebServer
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
@@ -70,5 +75,42 @@ class LanCastManagerTest {
         )
         assertTrue(soap.contains("https://cdn.example/v.mp4?a=1&amp;b=2"))
         assertTrue(soap.contains("Test &lt;Video&gt;"))
+    }
+
+    @Test
+    fun `fetchXml ignores redirects and rejects oversized XML bodies without OOM`() = runTest {
+        val server = MockWebServer()
+        val redirectTarget = MockWebServer()
+        server.start()
+        redirectTarget.start()
+        try {
+            val lanClient = OkHttpClient.Builder()
+                .followRedirects(false)
+                .followSslRedirects(false)
+                .cookieJar(CookieJar.NO_COOKIES)
+                .build()
+            val manager = LanCastManager(
+                context = null,
+                okHttpClient = lanClient,
+                lanUrlValidator = { true },
+            )
+
+            // Redirect response must NOT be followed
+            server.enqueue(
+                MockResponse()
+                    .setResponseCode(302)
+                    .setHeader("Location", redirectTarget.url("/secret").toString()),
+            )
+            assertNull(manager.fetchXml(server.url("/desc.xml").toString()))
+            assertEquals(0, redirectTarget.requestCount)
+
+            // Oversized XML body (> 512 KiB) must be rejected cleanly
+            val oversized = "A".repeat(LanCastManager.MAX_DESCRIPTION_XML_BYTES + 128)
+            server.enqueue(MockResponse().setResponseCode(200).setBody(oversized))
+            assertNull(manager.fetchXml(server.url("/huge.xml").toString()))
+        } finally {
+            server.shutdown()
+            redirectTarget.shutdown()
+        }
     }
 }

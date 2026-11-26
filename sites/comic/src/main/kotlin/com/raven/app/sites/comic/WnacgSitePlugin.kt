@@ -720,7 +720,7 @@ class WnacgSitePlugin(
                 userAgent = SiteNetworkProfile.DESKTOP_WINDOWS_UA,
                 referer = "https://www.wnacg.com/",
                 mediaReferer = "https://www.wnacg.com/",
-                mediaDomains = COVER_HOSTS + IMAGE_HOSTS,
+                mediaDomains = COVER_HOSTS + IMAGE_HOSTS + setOf("wnimg1.ru", "qy0.ru"),
             ),
         )
     }

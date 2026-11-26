@@ -1,6 +1,15 @@
 package com.raven.app.feature.settings
 
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.EnterTransition
+import androidx.compose.animation.ExitTransition
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.snap
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -37,6 +46,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.style.TextOverflow
@@ -49,7 +59,9 @@ import com.raven.app.core.designsystem.component.RavenFormatters
 import com.raven.app.core.designsystem.component.RavenStatusPill
 import com.raven.app.core.designsystem.component.RavenStatusTone
 import com.raven.app.core.designsystem.component.RavenTopBar
+import com.raven.app.core.designsystem.theme.LocalMotionReduced
 import com.raven.app.core.designsystem.theme.LocalRavenColors
+import com.raven.app.core.designsystem.theme.RavenMotion
 import com.raven.app.core.designsystem.theme.RavenShapes
 import com.raven.app.core.designsystem.theme.tabular
 import com.raven.app.core.media.storage.DuplicateCopy
@@ -272,6 +284,7 @@ fun DuplicateScannerScreenContent(
                     siteLabelProvider = siteLabelProvider,
                     onToggleExpanded = { onToggleGroup(group.fingerprint) },
                     onDeleteCopy = { copy -> onRequestDeleteCopy(group, copy) },
+                    modifier = Modifier.animateItem(),
                 )
             }
         }
@@ -319,13 +332,24 @@ private fun DuplicateGroupCard(
     siteLabelProvider: (SiteId) -> String,
     onToggleExpanded: () -> Unit,
     onDeleteCopy: (DuplicateCopy) -> Unit,
+    modifier: Modifier = Modifier,
 ) {
     val colors = LocalRavenColors.current
+    val motionReduced = LocalMotionReduced.current
     val primaryTitle = group.copies.firstOrNull()?.title ?: "重复图集"
     val shortHash = group.fingerprint.take(12)
+    val chevronRotation = animateFloatAsState(
+        targetValue = if (expanded) 180f else 0f,
+        animationSpec = if (motionReduced) {
+            snap()
+        } else {
+            tween(durationMillis = 180, easing = RavenMotion.HarmonyDecelerationEasing)
+        },
+        label = "dupGroupChevronRotation",
+    )
 
     Column(
-        modifier = Modifier
+        modifier = modifier
             .fillMaxWidth()
             .clip(RavenShapes.CardShape)
             .background(colors.surface1)
@@ -369,13 +393,28 @@ private fun DuplicateGroupCard(
             }
 
             Icon(
-                imageVector = if (expanded) Icons.Rounded.ExpandLess else Icons.Rounded.ExpandMore,
+                imageVector = Icons.Rounded.ExpandMore,
                 contentDescription = if (expanded) "收起副本列表" else "展开副本列表",
                 tint = colors.inkSecondary,
+                modifier = Modifier.graphicsLayer { rotationZ = chevronRotation.value },
             )
         }
 
-        AnimatedVisibility(visible = expanded) {
+        AnimatedVisibility(
+            visible = expanded,
+            enter = if (motionReduced) {
+                EnterTransition.None
+            } else {
+                expandVertically(tween(200, easing = RavenMotion.HarmonyDecelerationEasing)) +
+                    fadeIn(tween(160, easing = RavenMotion.HarmonyDecelerationEasing))
+            },
+            exit = if (motionReduced) {
+                ExitTransition.None
+            } else {
+                shrinkVertically(tween(170, easing = RavenMotion.HarmonyDecelerationEasing)) +
+                    fadeOut(tween(120, easing = RavenMotion.HarmonyDecelerationEasing))
+            },
+        ) {
             Column(modifier = Modifier.fillMaxWidth()) {
                 group.copies.forEach { copy ->
                     HorizontalDivider(thickness = 0.5.dp, color = colors.hairline)

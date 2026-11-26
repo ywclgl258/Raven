@@ -54,7 +54,9 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -231,6 +233,39 @@ class PlayerViewModel(
         initialValue = PlayerUiState(),
     )
 
+    val progressState: StateFlow<PlayerProgressSnapshot> = playback.state
+        .map { engine ->
+            PlayerProgressSnapshot(
+                positionMs = engine.positionMs,
+                bufferedPositionMs = engine.bufferedPositionMs,
+                durationMs = engine.durationMs,
+            )
+        }
+        .distinctUntilChanged()
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(5_000L),
+            initialValue = PlayerProgressSnapshot(),
+        )
+
+    /**
+     * Structural player state with high-frequency `positionMs` / `bufferedPositionMs` zeroed out
+     * so playback ticks only update the active scrubber overlay and never recompose the screen.
+     */
+    val structuralUiState: StateFlow<PlayerUiState> = uiState
+        .map { state ->
+            state.copy(
+                positionMs = 0L,
+                bufferedPositionMs = 0L,
+            )
+        }
+        .distinctUntilChanged()
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(5_000L),
+            initialValue = PlayerUiState(),
+        )
+
     init {
         observeAppSettingsSync()
         observeEffectiveSpeedSync()
@@ -262,7 +297,7 @@ class PlayerViewModel(
 
         loadJob = viewModelScope.launch {
             if (previousTarget != null && previousTarget.compositeKey != args.compositeKey) {
-                runCatching { persistWatchProgressInternal(previousTarget, force = true) }
+                runCatchingCancellable { persistWatchProgressInternal(previousTarget, force = true) }
             }
             closeSeekPreview()
             lastSavedCompositeKey = null
@@ -1108,7 +1143,7 @@ class PlayerViewModel(
                     lastHandledEndedKey != target.compositeKey
                 ) {
                     lastHandledEndedKey = target.compositeKey
-                    runCatching { persistWatchProgressInternal(target, force = true) }
+                    runCatchingCancellable { persistWatchProgressInternal(target, force = true) }
                 }
 
                 // 3. One-shot auto-fullscreen matching video aspect ratio (never on autoplay)
@@ -1139,7 +1174,7 @@ class PlayerViewModel(
     }
 
     private suspend fun resolveAndLoadMedia(args: PlayerLaunchArgs) {
-        val savedProgress = runCatching {
+        val savedProgress = runCatchingCancellable {
             historyRepository.getWatchProgress(args.siteId, args.mediaId)
         }.getOrNull()
         val resumePositionMs = if (savedProgress != null && CompletionPolicy.isWatchResumable(savedProgress)) {
@@ -1148,10 +1183,10 @@ class PlayerViewModel(
             0L
         }
 
-        val appSettings = runCatching { preferencesRepository.currentSettings() }.getOrDefault(AppSettings())
+        val appSettings = runCatchingCancellable { preferencesRepository.currentSettings() }.getOrDefault(AppSettings())
         latestAppSettings.value = appSettings
         val effectiveArgs = args.copy(autoplay = args.autoplay && appSettings.autoplayVideo)
-        val effectivePrefs = runCatching {
+        val effectivePrefs = runCatchingCancellable {
             preferencesRepository.observeEffectivePlaybackPreferences(args.siteId).first()
         }.getOrDefault(
             PlaybackPreferences(
@@ -1176,7 +1211,7 @@ class PlayerViewModel(
         }
 
         // Branch 2: Check offline downloaded video handle first
-        val offlineHandle = runCatching {
+        val offlineHandle = runCatchingCancellable {
             offline.findOfflineHandle(args.siteId, args.mediaId, MediaKind.VIDEO)
         }.getOrNull()
 
@@ -1240,11 +1275,31 @@ class PlayerViewModel(
             return
         }
 
+        currentCoroutineContext().ensureActive()
         val resolvedMediaId = detail.item.id.ifBlank { args.mediaId }
         val resolvedUrl = detail.item.url.ifBlank { args.url }
+        var effectiveResumeMs = resumePositionMs
+        if (resolvedMediaId != args.mediaId && savedProgress == null) {
+            val resolvedProgress = runCatchingCancellable {
+                historyRepository.getWatchProgress(args.siteId, resolvedMediaId)
+            }.getOrNull()
+            if (resolvedProgress != null && CompletionPolicy.isWatchResumable(resolvedProgress)) {
+                effectiveResumeMs = resolvedProgress.positionMs
+            }
+        }
+        val normalizedTarget = if (resolvedMediaId != args.mediaId || resolvedUrl != args.url) {
+            effectiveArgs.copy(mediaId = resolvedMediaId, url = resolvedUrl)
+        } else {
+            effectiveArgs
+        }
+        if (normalizedTarget != activeTarget.value) {
+            activeTarget.value = normalizedTarget
+            _sideEffects.tryEmit(PlayerSideEffect.ActiveMediaChanged(normalizedTarget))
+        }
+
         cacheDetailTags(args.siteId, resolvedMediaId, detail)
-        val resumeNotice = if (resumePositionMs > 0L) {
-            "已从 ${RavenFormatters.formatDurationMs(resumePositionMs)} 续播"
+        val resumeNotice = if (effectiveResumeMs > 0L) {
+            "已从 ${RavenFormatters.formatDurationMs(effectiveResumeMs)} 续播"
         } else {
             null
         }
@@ -1255,7 +1310,7 @@ class PlayerViewModel(
                 detail = detail,
                 loadError = null,
                 requiresAuth = false,
-                resumedFromMs = resumePositionMs.takeIf { pos -> pos > 0L },
+                resumedFromMs = effectiveResumeMs.takeIf { pos -> pos > 0L },
                 localNotice = resumeNotice,
             )
         }
@@ -1271,17 +1326,20 @@ class PlayerViewModel(
 
         val preferredQuality = effectivePrefs.preferredQuality.ifBlank { appSettings.preferredQuality }
         try {
+            currentCoroutineContext().ensureActive()
             playback.loadOnline(
-                siteId = args.siteId,
+                siteId = normalizedTarget.siteId,
                 mediaId = resolvedMediaId,
                 sourceUrl = resolvedUrl,
                 streams = detail.streams,
                 preferredQuality = preferredQuality,
-                startPositionMs = resumePositionMs,
-                autoPlay = effectiveArgs.autoplay,
+                startPositionMs = effectiveResumeMs,
+                autoPlay = normalizedTarget.autoplay,
                 streamCacheEnabled = appSettings.streamCacheEnabled,
                 seekCacheEnabled = appSettings.seekCacheEnabled,
             )
+        } catch (ce: CancellationException) {
+            throw ce
         } catch (error: Throwable) {
             localState.update {
                 it.copy(loadError = error.message?.takeIf { it.isNotBlank() } ?: "视频初始化失败")
@@ -1339,6 +1397,8 @@ class PlayerViewModel(
                     },
                 )
             }
+        } catch (ce: CancellationException) {
+            throw ce
         } catch (error: Throwable) {
             localState.update {
                 it.copy(
@@ -1387,6 +1447,8 @@ class PlayerViewModel(
                     },
                 )
             }
+        } catch (ce: CancellationException) {
+            throw ce
         } catch (error: Throwable) {
             localState.update {
                 it.copy(
@@ -1401,7 +1463,7 @@ class PlayerViewModel(
         if (!args.offlineOnly) {
             val videoSource = siteRegistry.get(args.siteId)?.videoSource ?: return
             metadataEnrichJob = viewModelScope.launch {
-                val enriched = runCatching {
+                val enriched = runCatchingCancellable {
                     withContext(dispatchers.io) { videoSource.loadVideoDetail(args.url) }
                 }.getOrNull() ?: return@launch
                 if (activeTarget.value?.compositeKey == args.compositeKey) {
@@ -1437,6 +1499,15 @@ class PlayerViewModel(
             }
         }
     }
+
+    private inline fun <T> runCatchingCancellable(block: () -> T): Result<T> =
+        try {
+            Result.success(block())
+        } catch (ce: CancellationException) {
+            throw ce
+        } catch (t: Throwable) {
+            Result.failure(t)
+        }
 
     private fun buildWatchProgressSnapshot(target: PlayerLaunchArgs, force: Boolean): WatchProgress? {
         val engine = playback.state.value

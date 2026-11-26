@@ -452,5 +452,48 @@ class WnacgAndJmcomicPluginTest {
         val wnacg = WnacgSitePlugin(wnacgHttp)
         val wFeed = wnacg.feedSource!!.loadFeed(FeedRequest(SiteId.WNACG))
         assertEquals("https://t7.wnimg1.ru/data/cover/909.jpg", wFeed.items.single().coverUrl)
+        assertTrue(wnacg.descriptor.matchesMediaHost("t7.wnimg1.ru"))
+        assertTrue(jmWithDynamicCdn.descriptor.matchesMediaHost("cdn-msp9.jmcomic-zzz.org"))
+    }
+
+    @Test
+    fun `jmcomic does not trigger probe storm when all mirrors fail and loadGalleryPage uses chapterId fallback`() = runTest {
+        val http = FakeHttpClientAdapter()
+        http.onMatch({ true }) { req ->
+            FakeHttpClientAdapter.htmlResponse(req.url, "bad gateway", code = 502)
+        }
+        val jm = JmcomicSitePlugin(http)
+        val err = runCatching { jm.feedSource!!.loadFeed(FeedRequest(SiteId.JMCOMIC)) }.exceptionOrNull()
+        assertTrue(err is SiteException.Network)
+        // Before fix, 4 candidates each re-probed all 4 candidates (up to 16 probes + 4 calls = 20 requests).
+        // With bounded single initial probe + candidate loop, total requests stay <= 8.
+        assertTrue(
+            "Expected bounded requests <= 8 when all mirrors fail, got ${http.recordedRequests.size}",
+            http.recordedRequests.size <= 8,
+        )
+
+        val chapterHttp = FakeHttpClientAdapter()
+        chapterHttp.onMatch({ req -> req.url.contains("/photo/888001") }) { req ->
+            FakeHttpClientAdapter.htmlResponse(
+                req.url,
+                jmChapterHtml(chapterId = 888001L, scrambleId = 999999L),
+            )
+        }
+        val jmFallback = JmcomicSitePlugin(chapterHttp)
+        val detailWithoutPages = com.raven.app.core.model.GalleryDetail(
+            item = com.raven.app.core.model.MediaItem(
+                siteId = SiteId.JMCOMIC,
+                id = "888000",
+                url = "https://jmcomic-zzz.one/album/888000",
+                kind = com.raven.app.core.model.MediaKind.COMIC,
+                title = "Sample",
+                pageCount = 2,
+                extra = mapOf("chapterId" to "888001"),
+            ),
+            pageCount = 2,
+            pages = emptyList(),
+        )
+        val resolved = jmFallback.gallerySource!!.loadGalleryPage(detailWithoutPages, pageIndex = 1, forceReload = true)
+        assertEquals("https://cdn-msp.18comic.ink/media/photos/888001/00001.webp", resolved.imageUrl)
     }
 }

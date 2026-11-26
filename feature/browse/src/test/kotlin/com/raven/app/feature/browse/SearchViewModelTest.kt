@@ -6,6 +6,7 @@ import com.raven.app.core.model.AdvancedSearchFilters
 import com.raven.app.core.model.ComicLanguage
 import com.raven.app.core.model.FeedPage
 import com.raven.app.core.model.FeedSort
+import com.raven.app.core.model.HomeFeed
 import com.raven.app.core.model.MediaKind
 import com.raven.app.core.model.RavenRoute
 import com.raven.app.core.model.SearchScope
@@ -969,4 +970,65 @@ class SearchViewModelTest {
             assertEquals(emptyList<SiteId>(), persisted())
         }
 
+    @Test
+    fun `cancelled discovery load does not poison discovery cache with empty results`() = runTest {
+        val harness = BrowseTestHarness(mainDispatcherRule.dispatcher)
+        var homeCalls = 0
+        val siteA = FakeSitePlugin(
+            descriptor = SiteDescriptor(
+                id = SiteId.R34V,
+                displayName = "Rule34Video",
+                shortName = "R34V",
+                primaryKind = MediaKind.VIDEO,
+                defaultHost = "rule34video.com",
+            ),
+            homeHandler = {
+                homeCalls += 1
+                if (homeCalls == 1) {
+                    throw kotlinx.coroutines.CancellationException("cancelled on switch")
+                }
+                HomeFeed(
+                    siteId = SiteId.R34V,
+                    primaryFeedPage = FeedPage(items = listOf(sampleMediaItem(SiteId.R34V, "hot-1", MediaKind.VIDEO))),
+                )
+            },
+        )
+        val siteB = FakeSitePlugin(
+            descriptor = SiteDescriptor(
+                id = SiteId.IWARA,
+                displayName = "Iwara",
+                shortName = "Iwara",
+                primaryKind = MediaKind.VIDEO,
+                defaultHost = "www.iwara.tv",
+            ),
+        )
+        harness.preferencesRepository.setActiveSiteId(SiteId.R34V)
+
+        val vm = SearchViewModel(
+            initialRoute = RavenRoute.Search(),
+            siteRegistry = SiteRegistry(listOf(siteA, siteB)),
+            preferencesRepository = harness.preferencesRepository,
+            searchHistoryRepository = harness.searchHistoryRepository,
+            subscriptionRepository = harness.subscriptionRepository,
+            blockedTermsRepository = harness.blockedTermsRepository,
+            historyRepository = harness.historyRepository,
+            shelfRepository = harness.shelfRepository,
+            dispatchers = harness.dispatchers,
+        )
+
+        vm.uiState.test {
+            advanceUntilIdle()
+            assertTrue(expectMostRecentItem().hotWorksRanking.isEmpty())
+
+            // Switch away and back; since empty/cancelled result was NOT cached, R34V fetches again
+            harness.preferencesRepository.setActiveSiteId(SiteId.IWARA)
+            advanceUntilIdle()
+            harness.preferencesRepository.setActiveSiteId(SiteId.R34V)
+            advanceUntilIdle()
+
+            assertEquals(listOf("hot-1"), expectMostRecentItem().hotWorksRanking.map { it.id })
+            assertEquals(2, homeCalls)
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
 }

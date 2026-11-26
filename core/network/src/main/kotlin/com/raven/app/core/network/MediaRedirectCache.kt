@@ -28,7 +28,7 @@ class MediaRedirectCache(
         val expiresAtMs: Long,
     )
 
-    private data class RedirectOriginTag(val originUrl: String)
+    internal data class RedirectOriginTag(val originUrl: String)
 
     init {
         require(ttlMs > 0L) { "ttlMs must be positive" }
@@ -72,10 +72,15 @@ class MediaRedirectCache(
         val tag = RedirectOriginTag(key)
         val hit = getActive(key)
         if (hit != null) {
-            val directRequest = original.newBuilder()
+            val crossHost = !hit.targetUrl.host.equals(original.url.host, ignoreCase = true)
+            val directBuilder = original.newBuilder()
                 .tag(RedirectOriginTag::class.java, tag)
                 .url(hit.targetUrl)
-                .build()
+            if (crossHost) {
+                directBuilder.removeHeader("Authorization")
+                    .removeHeader("Cookie")
+            }
+            val directRequest = directBuilder.build()
             val directResponse = chain.proceed(directRequest)
             if (directResponse.code !in INVALIDATION_CODES) {
                 return directResponse

@@ -73,6 +73,13 @@ class SerialChapterNavigationTest {
             assertTrue(viewModel.navigateAdjacentPage(forward = true))
             advanceUntilIdle()
             expectNoEvents()
+
+            // Returning to the screen (ON_START) unlocks subsequent chapter transitions
+            viewModel.onScreenStarted()
+            viewModel.openNextChapter()
+            advanceUntilIdle()
+            val secondEvent = awaitItem()
+            assertTrue(secondEvent is ReaderEvent.OpenChapter)
             cancelAndIgnoreRemainingEvents()
         }
     }
@@ -266,5 +273,93 @@ class SerialChapterNavigationTest {
             item = chapter.copy(pageCount = pageCount),
             chaptersUrl = "${chapter.url}/chapters",
         )
+    }
+
+    @Test
+    fun `serial chapter matcher requires colon boundary and supports chapterUrl hint`() = runTest(mainDispatcherRule.dispatcher) {
+        val harness = ReaderTestHarness(mainDispatcherRule.dispatcher, tempFolder.newFolder())
+        // Numeric suffix collision guard: chapter hint "10" must NOT match "comic:110".
+        val shortAndLongChapters = listOf(
+            MediaItem(
+                siteId = SiteId.GUAZIMANHUA,
+                id = "18741:110",
+                url = "https://www.guazimanhua.com/chapter.php?id=110",
+                kind = MediaKind.SERIAL_COMIC,
+                title = "第110话",
+                extra = mapOf("comicId" to "18741", "chapterId" to "110"),
+            ),
+            MediaItem(
+                siteId = SiteId.GUAZIMANHUA,
+                id = "18741:10",
+                url = "https://www.guazimanhua.com/chapter.php?id=10",
+                kind = MediaKind.SERIAL_COMIC,
+                title = "第10话",
+                extra = mapOf("comicId" to "18741", "chapterId" to "10"),
+            ),
+        )
+        val rootWithShortHint = sampleGalleryDetail(
+            siteId = SiteId.GUAZIMANHUA,
+            mediaId = "18741",
+            pageCount = 2,
+            kind = MediaKind.SERIAL_COMIC,
+        ).let {
+            it.copy(
+                item = it.item.copy(
+                    extra = mapOf("comicId" to "18741", "chapterId" to "10"),
+                ),
+                chaptersUrl = "https://www.guazimanhua.com/comic.php?id=18741#chapters",
+            )
+        }
+        val vmShort = reader(
+            harness = harness,
+            detail = rootWithShortHint,
+            persistenceScope = backgroundScope,
+            chapterLoader = SerialChapterLoader { _, _ -> shortAndLongChapters },
+        )
+        advanceUntilIdle()
+        assertEquals("18741:110", vmShort.uiState.value.previousChapter?.id)
+        assertNull(vmShort.uiState.value.nextChapter)
+
+        // MH160 chapterUrl hint enables nextChapter when root opens first chapter.
+        val mhChapters = listOf(
+            MediaItem(
+                siteId = SiteId.MH160,
+                id = "26001:583501",
+                url = "https://www.mh160ba.com/kanmanhua/26001/583501.html",
+                kind = MediaKind.SERIAL_COMIC,
+                title = "第1话",
+                extra = mapOf("comicId" to "26001"),
+            ),
+            MediaItem(
+                siteId = SiteId.MH160,
+                id = "26001:590566",
+                url = "https://www.mh160ba.com/kanmanhua/26001/590566.html",
+                kind = MediaKind.SERIAL_COMIC,
+                title = "第2话",
+                extra = mapOf("comicId" to "26001"),
+            ),
+        )
+        val mhRootDetail = sampleGalleryDetail(
+            siteId = SiteId.MH160,
+            mediaId = "26001",
+            pageCount = 2,
+            kind = MediaKind.SERIAL_COMIC,
+        ).let {
+            it.copy(
+                item = it.item.copy(
+                    extra = mapOf("chapterUrl" to "https://www.mh160ba.com/kanmanhua/26001/583501.html"),
+                ),
+                chaptersUrl = "https://www.mh160ba.com/kanmanhua/26001/#chapters",
+            )
+        }
+        val vmMh = reader(
+            harness = harness,
+            detail = mhRootDetail,
+            persistenceScope = backgroundScope,
+            chapterLoader = SerialChapterLoader { _, _ -> mhChapters },
+        )
+        advanceUntilIdle()
+        assertNull(vmMh.uiState.value.previousChapter)
+        assertEquals("26001:590566", vmMh.uiState.value.nextChapter?.id)
     }
 }

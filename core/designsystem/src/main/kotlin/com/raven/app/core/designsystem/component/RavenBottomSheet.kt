@@ -1,5 +1,7 @@
 package com.raven.app.core.designsystem.component
 
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
@@ -32,11 +34,13 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.key
@@ -51,11 +55,13 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import com.raven.app.core.designsystem.theme.LocalMotionReduced
 import com.raven.app.core.designsystem.theme.LocalRavenColors
 import com.raven.app.core.designsystem.theme.LocalRavenFeedback
 import com.raven.app.core.designsystem.theme.LocalReduceTransparency
 import com.raven.app.core.designsystem.theme.RavenFeedbackEffect
 import com.raven.app.core.designsystem.theme.RavenLayout
+import com.raven.app.core.designsystem.theme.RavenMotion
 import com.raven.app.core.designsystem.theme.RavenShapes
 
 /**
@@ -212,11 +218,26 @@ fun RavenBottomSheet(
     }
 
     if (useCenterPanel) {
+        val motionReduced = LocalMotionReduced.current
         val maxHeight = (minOf(screenHeightDp, screenWidthDp).coerceAtLeast(360) *
             RavenLayout.SHEET_CENTER_MAX_HEIGHT_FRACTION).dp
         val effectiveMaxHeight = maxOf(maxHeight, (screenHeightDp * RavenLayout.SHEET_CENTER_MAX_HEIGHT_FRACTION).dp)
-        val containerColor = if (reduceTransparency) colors.surface2 else colors.surface2
+        val containerColor = colors.surface2
         val borderColor = if (reduceTransparency) colors.outlineSubtle else colors.hairline
+        val enterProgress = remember(motionReduced) { Animatable(if (motionReduced) 1f else 0f) }
+        LaunchedEffect(motionReduced) {
+            if (motionReduced) {
+                enterProgress.snapTo(1f)
+            } else {
+                enterProgress.animateTo(
+                    targetValue = 1f,
+                    animationSpec = tween(
+                        durationMillis = 200,
+                        easing = RavenMotion.HarmonyDecelerationEasing,
+                    ),
+                )
+            }
+        }
         val detentModifier = when (detent) {
             is RavenSheetDetent.Fixed -> Modifier.height(detent.height.coerceAtMost(effectiveMaxHeight))
             RavenSheetDetent.Large -> Modifier.heightIn(
@@ -248,6 +269,14 @@ fun RavenBottomSheet(
                     .widthIn(max = RavenLayout.SheetCenterMaxWidth)
                     .fillMaxWidth()
                     .then(detentModifier)
+                    .graphicsLayer {
+                        val p = enterProgress.value
+                        alpha = p
+                        val scale = 0.95f + 0.05f * p
+                        scaleX = scale
+                        scaleY = scale
+                        translationY = (1f - p) * 14.dp.toPx()
+                    }
                     .border(0.75.dp, borderColor, RavenShapes.DialogShape)
                     .onPreviewKeyEvent { keyEvent ->
                         if (dismissOnScrimClick &&

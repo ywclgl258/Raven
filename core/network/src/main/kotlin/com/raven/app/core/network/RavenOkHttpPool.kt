@@ -10,6 +10,7 @@ import okhttp3.Dispatcher
 import okhttp3.Dns
 import okhttp3.OkHttpClient
 import java.io.File
+import java.net.Proxy
 import java.util.concurrent.TimeUnit
 
 /**
@@ -40,6 +41,8 @@ class RavenOkHttpPool(
         .eventListenerFactory(peerTracker.eventListenerFactory())
         .build()
 
+    private val credentialGuard = CrossHostCredentialGuardInterceptor(siteRegistryProvider)
+
     /** Standard HTML/document browsing client (5s connect, 12s read, 25s call, 32 MiB HTTP cache). */
     val pageClient: OkHttpClient = sharedBase.newBuilder()
         .connectTimeout(5, TimeUnit.SECONDS)
@@ -48,6 +51,7 @@ class RavenOkHttpPool(
         .cookieJar(cookieJar)
         .cache(httpCache)
         .addInterceptor(SiteRequestHeaderInterceptor(SiteRequestKind.PAGE, siteRegistryProvider))
+        .addNetworkInterceptor(credentialGuard)
         .build()
 
     /** REST/JSON API client (5s connect, 15s read, 25s call, 32 MiB HTTP cache). */
@@ -58,6 +62,7 @@ class RavenOkHttpPool(
         .cookieJar(cookieJar)
         .cache(httpCache)
         .addInterceptor(SiteRequestHeaderInterceptor(SiteRequestKind.API, siteRegistryProvider))
+        .addNetworkInterceptor(credentialGuard)
         .build()
 
     /**
@@ -71,6 +76,7 @@ class RavenOkHttpPool(
         .cookieJar(cookieJar)
         .cache(null)
         .addInterceptor(SiteRequestHeaderInterceptor(SiteRequestKind.IMAGE, siteRegistryProvider))
+        .addNetworkInterceptor(credentialGuard)
         .build()
 
     /**
@@ -86,6 +92,23 @@ class RavenOkHttpPool(
         .addInterceptor(mediaRedirectCache.interceptor)
         .addNetworkInterceptor(mediaRedirectCache.networkInterceptor)
         .addInterceptor(SiteRequestHeaderInterceptor(SiteRequestKind.MEDIA, siteRegistryProvider))
+        .addNetworkInterceptor(credentialGuard)
+        .build()
+
+    /**
+     * Dedicated LAN DLNA/UPnP casting client: strictly no redirects, no cookies, direct LAN
+     * socket (`Proxy.NO_PROXY`), short timeouts, and zero site header decoration.
+     */
+    val lanClient: OkHttpClient = sharedBase.newBuilder()
+        .connectTimeout(3, TimeUnit.SECONDS)
+        .readTimeout(5, TimeUnit.SECONDS)
+        .callTimeout(8, TimeUnit.SECONDS)
+        .cookieJar(CookieJar.NO_COOKIES)
+        .cache(null)
+        .followRedirects(false)
+        .followSslRedirects(false)
+        .retryOnConnectionFailure(false)
+        .proxy(Proxy.NO_PROXY)
         .build()
 
     /**

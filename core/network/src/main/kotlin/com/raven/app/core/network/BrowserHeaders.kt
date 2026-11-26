@@ -8,6 +8,7 @@ import com.raven.app.core.sitespi.SiteHttpRequest
 import com.raven.app.core.sitespi.SitePlugin
 import com.raven.app.core.sitespi.SiteRegistry
 import com.raven.app.core.sitespi.SiteRequestKind
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.Interceptor
 import okhttp3.MediaType
 import okhttp3.Request
@@ -22,6 +23,15 @@ import okio.BufferedSink
 data class SiteRequestTag(
     val siteId: SiteId? = null,
     val siteRequest: SiteHttpRequest? = null,
+)
+
+/**
+ * Tracks the original site host that initiated a request before any application-level headers
+ * were attached, so [CrossHostCredentialGuardInterceptor] can strip credentials on cross-host hops.
+ */
+internal data class CredentialScopeOriginTag(
+    val siteId: SiteId?,
+    val originHost: String,
 )
 
 /**
@@ -151,6 +161,12 @@ internal class SiteRequestHeaderInterceptor(
         val effectiveKind = tag?.siteRequest?.kind ?: defaultKind
 
         val builder = original.newBuilder()
+        if (plugin != null && original.tag(CredentialScopeOriginTag::class.java) == null) {
+            builder.tag(
+                CredentialScopeOriginTag::class.java,
+                CredentialScopeOriginTag(siteId = plugin.id, originHost = host),
+            )
+        }
 
         // Cloudflare rejects a blank User-Agent; always guarantee a non-blank UA.
         if (original.header("User-Agent") == null) {
@@ -181,7 +197,9 @@ internal class SiteRequestHeaderInterceptor(
                     kind = effectiveKind,
                 )
                 val decorated = plugin.authProvider.decorateRequestHeaders(siteReq, host)
-                val allowAuthCredentials = descriptor.matchesRequestHost(host) && effectiveKind != SiteRequestKind.PROBE
+                val allowAuthCredentials = descriptor.matchesRequestHost(host) &&
+                    effectiveKind != SiteRequestKind.PROBE &&
+                    (effectiveKind != SiteRequestKind.IMAGE || plugin.authProvider.requiresAuthGate)
                 for ((name, value) in decorated) {
                     val isCredentialHeader = name.equals("Authorization", ignoreCase = true) ||
                         name.equals("Cookie", ignoreCase = true)
@@ -212,5 +230,59 @@ internal class SiteRequestHeaderInterceptor(
         }
 
         return chain.proceed(builder.build())
+    }
+}
+
+/**
+ * Network-layer defense-in-depth interceptor ensuring manually attached `Authorization` or
+ * `Cookie` headers NEVER leak onto a redirected third-party CDN or foreign host.
+ *
+ * Unscoped requests (e.g. user WebDAV Basic Auth without site/redirect origin tags) are untouched.
+ */
+internal class CrossHostCredentialGuardInterceptor(
+    private val siteRegistryProvider: () -> SiteRegistry,
+) : Interceptor {
+
+    override fun intercept(chain: Interceptor.Chain): Response {
+        val request = chain.request()
+        val hasAuth = request.header("Authorization") != null
+        val hasCookie = request.header("Cookie") != null
+        if (!hasAuth && !hasCookie) {
+            return chain.proceed(request)
+        }
+
+        val hopHost = request.url.host
+        val registry = siteRegistryProvider()
+        val siteTag = request.tag(SiteRequestTag::class.java)
+        val scopeOrigin = request.tag(CredentialScopeOriginTag::class.java)
+        val redirectOrigin = request.tag(MediaRedirectCache.RedirectOriginTag::class.java)
+
+        var stripCredentials = false
+        val taggedSiteId = siteTag?.siteId ?: scopeOrigin?.siteId
+        if (taggedSiteId != null) {
+            val descriptor = registry.get(taggedSiteId)?.descriptor
+            if (descriptor == null || !descriptor.matchesRequestHost(hopHost)) {
+                stripCredentials = true
+            }
+        }
+        if (!stripCredentials && redirectOrigin != null) {
+            val originHost = redirectOrigin.originUrl.toHttpUrlOrNull()?.host
+            if (originHost != null && !hopHost.equals(originHost, ignoreCase = true)) {
+                val originPlugin = registry.findForMediaHost(originHost)
+                    ?: registry.allPlugins().firstOrNull { it.descriptor.matchesRequestHost(originHost) }
+                if (originPlugin == null || !originPlugin.descriptor.matchesRequestHost(hopHost)) {
+                    stripCredentials = true
+                }
+            }
+        }
+
+        if (!stripCredentials) {
+            return chain.proceed(request)
+        }
+        val sanitized = request.newBuilder()
+            .removeHeader("Authorization")
+            .removeHeader("Cookie")
+            .build()
+        return chain.proceed(sanitized)
     }
 }

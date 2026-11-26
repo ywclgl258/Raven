@@ -490,5 +490,55 @@ class SiteHttpClientTest {
             SiteHttpRequest(url = "https://x.test/", kind = SiteRequestKind.PROBE, followRedirects = true),
         )
         assertTrue(probeFollow.followRedirects)
+        assertSame(stack.pool.connectionPool, stack.pool.lanClient.connectionPool)
+        assertFalse(stack.pool.lanClient.followRedirects)
+        assertSame(CookieJar.NO_COOKIES, stack.pool.lanClient.cookieJar)
+    }
+
+    @Test
+    fun `cross-host 302 redirect strips manually attached Cookie and Authorization while preserving unscoped WebDAV Basic auth`() = runTest {
+        val originServer = MockWebServer()
+        val foreignCdn = MockWebServer()
+        val webdavServer = MockWebServer()
+        originServer.start()
+        foreignCdn.start()
+        webdavServer.start()
+        try {
+            val stack = buildTestStack(
+                serverHostAlias = "apiq.iwara.tv",
+                cdnHostAlias = "foreign-cdn.example",
+            )
+            stack.vault.saveBearerToken(SiteId.IWARA, "iwara-secret-jwt", "alice")
+
+            val cdnTarget = "http://foreign-cdn.example:${foreignCdn.port}/stream.mp4"
+            originServer.enqueue(MockResponse().setResponseCode(302).setHeader("Location", cdnTarget))
+            foreignCdn.enqueue(MockResponse().setResponseCode(200).setBody("stream-bytes"))
+
+            val siteRes = stack.client.execute(
+                SiteHttpRequest(
+                    url = "http://apiq.iwara.tv:${originServer.port}/video/1",
+                    siteId = SiteId.IWARA,
+                    kind = SiteRequestKind.API,
+                    headers = mapOf("Cookie" to "manual=secret"),
+                ),
+            )
+            assertEquals(200, siteRes.code)
+            val cdnReq = foreignCdn.takeRequest()
+            assertNull("Manual Cookie must be stripped on cross-host redirect", cdnReq.getHeader("Cookie"))
+            assertNull("Bearer Authorization must be stripped on cross-host redirect", cdnReq.getHeader("Authorization"))
+
+            // Unscoped WebDAV Basic auth on apiClient must remain untouched
+            webdavServer.enqueue(MockResponse().setResponseCode(200).setBody("ok"))
+            val webdavReq = okhttp3.Request.Builder()
+                .url(webdavServer.url("/vault/"))
+                .header("Authorization", "Basic dXNlcjpwYXNz")
+                .build()
+            stack.pool.apiClient.newCall(webdavReq).execute().use { assertEquals(200, it.code) }
+            assertEquals("Basic dXNlcjpwYXNz", webdavServer.takeRequest().getHeader("Authorization"))
+        } finally {
+            originServer.shutdown()
+            foreignCdn.shutdown()
+            webdavServer.shutdown()
+        }
     }
 }

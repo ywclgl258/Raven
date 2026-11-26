@@ -260,4 +260,43 @@ class RavenUpdaterTest {
             server.shutdown()
         }
     }
+
+    @Test
+    fun `release APK signature verification requires pinned releaseCertSha256 in addition to installed cert`() {
+        val pinnedCert = "1F9407377D2D3AB5C04527CF6E587F0B789BA8B971D60AD8F99360D05CA52F3A"
+        val rogueCert = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+
+        // Release build signed with rogue cert even if matching installed rogue cert must be rejected
+        assertFalse(
+            AndroidApkSignatureVerifier.isCandidateSignatureAccepted(
+                isDebug = false,
+                expectedReleaseCertSha256 = pinnedCert,
+                candidateCerts = setOf(rogueCert),
+                installedCerts = setOf(rogueCert),
+                exactMatchLegacy = false,
+            ),
+        )
+
+        // Release build matching both installed signer and pinned cert (case-insensitive) passes
+        assertTrue(
+            AndroidApkSignatureVerifier.isCandidateSignatureAccepted(
+                isDebug = false,
+                expectedReleaseCertSha256 = pinnedCert,
+                candidateCerts = setOf(pinnedCert.lowercase(Locale.ROOT)),
+                installedCerts = setOf(pinnedCert.lowercase(Locale.ROOT)),
+                exactMatchLegacy = true,
+            ),
+        )
+
+        // Debug build ignores pinned releaseCertSha256 and checks installed debug cert
+        assertTrue(
+            AndroidApkSignatureVerifier.isCandidateSignatureAccepted(
+                isDebug = true,
+                expectedReleaseCertSha256 = pinnedCert,
+                candidateCerts = setOf(rogueCert),
+                installedCerts = setOf(rogueCert),
+                exactMatchLegacy = false,
+            ),
+        )
+    }
 }

@@ -1,6 +1,14 @@
 package com.raven.app.feature.reader
 
 import android.graphics.Bitmap
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.EnterTransition
+import androidx.compose.animation.ExitTransition
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -92,8 +100,10 @@ import com.raven.app.core.designsystem.component.RavenGroupedSection
 import com.raven.app.core.designsystem.component.RavenGroupedSliderRow
 import com.raven.app.core.designsystem.component.RavenGroupedSwitchRow
 import com.raven.app.core.designsystem.component.RavenImage
+import com.raven.app.core.designsystem.theme.LocalMotionReduced
 import com.raven.app.core.designsystem.theme.LocalRavenColors
 import com.raven.app.core.designsystem.theme.LocalReduceTransparency
+import com.raven.app.core.designsystem.theme.RavenMotion
 import com.raven.app.core.designsystem.theme.RavenShapes
 import com.raven.app.core.designsystem.theme.RavenTabularTextStyle
 import com.raven.app.core.designsystem.theme.ravenFrostedSurface
@@ -462,15 +472,22 @@ internal fun ReaderSettingsSheet(
                     checked = uiState.isPerBookOverride,
                     onCheckedChange = onSetPerBookOverride,
                 )
-                if (uiState.isPerBookOverride) {
-                    RavenGroupedDivider(insetWithIcon = true)
-                    RavenGroupedRow(
-                        title = "恢复来源默认",
-                        subtitle = "清除本书独立配置并继承来源默认设置",
-                        icon = Icons.Rounded.RestartAlt,
-                        iconTint = colors.crimson,
-                        onClick = onResetToSiteDefault,
-                    )
+                val motionReduced = LocalMotionReduced.current
+                AnimatedVisibility(
+                    visible = uiState.isPerBookOverride,
+                    enter = if (motionReduced) EnterTransition.None else expandVertically(tween(180, easing = RavenMotion.HarmonyDecelerationEasing)) + fadeIn(tween(140)),
+                    exit = if (motionReduced) ExitTransition.None else shrinkVertically(tween(150, easing = RavenMotion.HarmonyDecelerationEasing)) + fadeOut(tween(110)),
+                ) {
+                    Column {
+                        RavenGroupedDivider(insetWithIcon = true)
+                        RavenGroupedRow(
+                            title = "恢复来源默认",
+                            subtitle = "清除本书独立配置并继承来源默认设置",
+                            icon = Icons.Rounded.RestartAlt,
+                            iconTint = colors.crimson,
+                            onClick = onResetToSiteDefault,
+                        )
+                    }
                 }
             }
 
@@ -586,6 +603,7 @@ internal fun ReaderSettingsSheet(
 
             // 3. Screen, Brightness & Volume Keys
             RavenGroupedSection(title = "屏幕与物理按键") {
+                val motionReduced = LocalMotionReduced.current
                 val followSystemBrightness = prefs.brightnessPercent < 0
                 RavenGroupedSwitchRow(
                     title = "亮度跟随系统",
@@ -595,15 +613,21 @@ internal fun ReaderSettingsSheet(
                         onBrightnessPercentChange(if (follow) -1 else 60)
                     },
                 )
-                if (!followSystemBrightness) {
-                    RavenGroupedDivider(insetWithIcon = true)
-                    RavenGroupedSliderRow(
-                        title = "阅读器屏幕亮度",
-                        value = prefs.brightnessPercent.coerceIn(0, 100).toFloat(),
-                        onValueChange = { onBrightnessPercentChange(it.roundToInt()) },
-                        valueLabel = "${prefs.brightnessPercent.coerceIn(0, 100)}%",
-                        valueRange = 0f..100f,
-                    )
+                AnimatedVisibility(
+                    visible = !followSystemBrightness,
+                    enter = if (motionReduced) EnterTransition.None else expandVertically(tween(180, easing = RavenMotion.HarmonyDecelerationEasing)) + fadeIn(tween(140)),
+                    exit = if (motionReduced) ExitTransition.None else shrinkVertically(tween(150, easing = RavenMotion.HarmonyDecelerationEasing)) + fadeOut(tween(110)),
+                ) {
+                    Column {
+                        RavenGroupedDivider(insetWithIcon = true)
+                        RavenGroupedSliderRow(
+                            title = "阅读器屏幕亮度",
+                            value = prefs.brightnessPercent.coerceIn(0, 100).toFloat(),
+                            onValueChange = { onBrightnessPercentChange(it.roundToInt()) },
+                            valueLabel = "${prefs.brightnessPercent.coerceIn(0, 100)}%",
+                            valueRange = 0f..100f,
+                        )
+                    }
                 }
                 RavenGroupedDivider(insetWithIcon = true)
                 RavenGroupedSwitchRow(
@@ -620,14 +644,20 @@ internal fun ReaderSettingsSheet(
                     checked = prefs.volumeKeyPaging,
                     onCheckedChange = onVolumeKeyPagingChange,
                 )
-                if (prefs.volumeKeyPaging) {
-                    RavenGroupedDivider(insetWithIcon = true)
-                    RavenGroupedSwitchRow(
-                        title = "反转音量键方向",
-                        subtitle = "音量 + 翻至下一页，音量 - 返回上一页",
-                        checked = prefs.reverseVolumeKeys,
-                        onCheckedChange = onReverseVolumeKeysChange,
-                    )
+                AnimatedVisibility(
+                    visible = prefs.volumeKeyPaging,
+                    enter = if (motionReduced) EnterTransition.None else expandVertically(tween(180, easing = RavenMotion.HarmonyDecelerationEasing)) + fadeIn(tween(140)),
+                    exit = if (motionReduced) ExitTransition.None else shrinkVertically(tween(150, easing = RavenMotion.HarmonyDecelerationEasing)) + fadeOut(tween(110)),
+                ) {
+                    Column {
+                        RavenGroupedDivider(insetWithIcon = true)
+                        RavenGroupedSwitchRow(
+                            title = "反转音量键方向",
+                            subtitle = "音量 + 翻至下一页，音量 - 返回上一页",
+                            checked = prefs.reverseVolumeKeys,
+                            onCheckedChange = onReverseVolumeKeysChange,
+                        )
+                    }
                 }
             }
 
@@ -760,7 +790,12 @@ internal fun ReaderSettingsSheet(
                     enabled = !uiState.isExporting,
                     onClick = { cbzExpanded = !cbzExpanded },
                 )
-                if (cbzExpanded) {
+                val motionReduced = LocalMotionReduced.current
+                AnimatedVisibility(
+                    visible = cbzExpanded,
+                    enter = if (motionReduced) EnterTransition.None else expandVertically(tween(180, easing = RavenMotion.HarmonyDecelerationEasing)) + fadeIn(tween(140)),
+                    exit = if (motionReduced) ExitTransition.None else shrinkVertically(tween(150, easing = RavenMotion.HarmonyDecelerationEasing)) + fadeOut(tween(110)),
+                ) {
                     Column(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -782,7 +817,11 @@ internal fun ReaderSettingsSheet(
                                 onClick = { cbzRangeAll = false },
                             )
                         }
-                        if (!cbzRangeAll) {
+                        AnimatedVisibility(
+                            visible = !cbzRangeAll,
+                            enter = if (motionReduced) EnterTransition.None else expandVertically(tween(160, easing = RavenMotion.HarmonyDecelerationEasing)) + fadeIn(tween(120)),
+                            exit = if (motionReduced) ExitTransition.None else shrinkVertically(tween(140, easing = RavenMotion.HarmonyDecelerationEasing)) + fadeOut(tween(100)),
+                        ) {
                             OutlinedTextField(
                                 value = cbzRangeInput,
                                 onValueChange = { cbzRangeInput = it },

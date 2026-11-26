@@ -30,7 +30,6 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonArray
-import kotlinx.serialization.json.jsonPrimitive
 import org.jsoup.Jsoup
 
 /**
@@ -72,6 +71,9 @@ class MycomicSitePlugin(
             val doc = Jsoup.parse(html, url)
             val items = parseComicCards(doc)
             if (items.isEmpty()) {
+                if (query.isNotEmpty()) {
+                    return FeedPage(items = emptyList(), nextPage = null, hasMore = false, title = query)
+                }
                 throw SiteException.ParseError("MyComic 列表结构不可识别", siteId = SiteId.MYCOMIC)
             }
             val hasMore = doc.selectFirst("a[href*='page=${page + 1}']") != null
@@ -151,6 +153,8 @@ class MycomicSitePlugin(
                 detail.pages.firstOrNull { it.index == pageIndex && it.imageUrl.isNotBlank() }?.let { return it }
             }
             val chapterId = detail.item.extra["chapterId"].orEmpty()
+                .ifBlank { detail.pages.firstOrNull()?.pageUrl?.let { extractChapterId(it) }.orEmpty() }
+                .ifBlank { extractChapterId(detail.item.url).orEmpty() }
             if (chapterId.isBlank()) {
                 throw SiteException.ParseError("MyComic 章节信息缺失", siteId = SiteId.MYCOMIC)
             }
@@ -166,7 +170,7 @@ class MycomicSitePlugin(
         ): GalleryPage {
             val parsed = ComicUrl.parse(pageUrl)
                 ?: throw SiteException.ParseError("无法识别 MyComic 图页地址", siteId = SiteId.MYCOMIC)
-            val chapterId = parsed.pathSegments.lastOrNull { it.all(Char::isDigit) }
+            val chapterId = parsed.pathSegments.lastOrNull { it.isNotEmpty() && it.all(Char::isDigit) }
                 ?: throw SiteException.ParseError("无法识别 MyComic 章节编号", siteId = SiteId.MYCOMIC)
             val pageIndex = parsed.fragment?.toIntOrNull()?.takeIf { it > 0 } ?: 1
             val pages = loadChapterPages(chapterId)
@@ -251,7 +255,7 @@ class MycomicSitePlugin(
         doc.select("a[href*='/comics/']").forEach { anchor ->
             val href = anchor.attr("href")
             if (href.contains("?") || href.contains("#")) return@forEach
-            val id = href.substringAfterLast("/").takeIf { it.all(Char::isDigit) } ?: return@forEach
+            val id = href.substringAfterLast("/").takeIf { it.isNotEmpty() && it.all(Char::isDigit) } ?: return@forEach
             anchorsById.getOrPut(id) { mutableListOf() }.add(anchor)
         }
         anchorsById.forEach { (id, anchors) ->
@@ -286,9 +290,9 @@ class MycomicSitePlugin(
                 runCatching { json.parseToJsonElement(jsonText).jsonArray }.getOrNull()
                     ?.forEach { item ->
                         val obj = item as? JsonObject ?: return@forEach
-                        val id = obj["id"]?.jsonPrimitive?.content?.takeIf { it.all(Char::isDigit) }
+                        val id = obj.safeString("id").takeIf { it.isNotEmpty() && it.all(Char::isDigit) }
                             ?: return@forEach
-                        val title = obj["title"]?.jsonPrimitive?.content?.trim().orEmpty()
+                        val title = obj.safeString("title")
                         seen.putIfAbsent(id, title.ifBlank { "章节 $id" })
                     }
             }
@@ -359,7 +363,7 @@ class MycomicSitePlugin(
         val parsed = ComicUrl.parse(url) ?: return null
         val idx = parsed.pathSegments.indexOf("chapters")
         if (idx < 0) return null
-        return parsed.pathSegments.getOrNull(idx + 1)?.takeIf { it.all(Char::isDigit) }
+        return parsed.pathSegments.getOrNull(idx + 1)?.takeIf { it.isNotEmpty() && it.all(Char::isDigit) }
     }
 
     private data class ChapterEntry(val id: String, val title: String)
@@ -414,7 +418,7 @@ class MycomicSitePlugin(
         val segments = parsed.pathSegments
         val idx = segments.indexOf("comics")
         if (idx >= 0 && idx + 1 < segments.size) {
-            return segments[idx + 1].takeIf { it.all(Char::isDigit) }
+            return segments[idx + 1].takeIf { it.isNotEmpty() && it.all(Char::isDigit) }
         }
         return null
     }

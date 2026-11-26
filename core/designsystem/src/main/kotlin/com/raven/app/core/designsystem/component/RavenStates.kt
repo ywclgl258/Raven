@@ -321,6 +321,10 @@ fun rememberRavenShimmerProgress(): State<Float> {
  * Animated dark obsidian shimmer brush (degrades to static [RavenColors.ShimmerBase] when reduced
  * motion is active).
  */
+@Deprecated(
+    message = "Use rememberRavenShimmerProgress() with RavenSkeletonBox(progress = ...) for zero-recomposition 120Hz shimmer.",
+    replaceWith = ReplaceWith("rememberRavenShimmerProgress()"),
+)
 @Composable
 fun rememberRavenShimmerBrush(): Brush {
     val colors = LocalRavenColors.current
@@ -368,7 +372,7 @@ fun RavenSkeletonBox(
         modifier = modifier
             .clip(shape)
             .drawWithCache {
-                val bandWidth = 280f
+                val bandWidth = 220.dp.toPx()
                 val highlightBrush = Brush.linearGradient(
                     colors = listOf(
                         colors.shimmerBase,

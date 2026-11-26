@@ -207,7 +207,7 @@ val coreMediaModule: Module = module {
     single {
         LanCastManager(
             context = androidContext(),
-            okHttpClient = get(NetworkQualifiers.MEDIA),
+            okHttpClient = get(NetworkQualifiers.LAN),
             dispatchers = get(),
         )
     }

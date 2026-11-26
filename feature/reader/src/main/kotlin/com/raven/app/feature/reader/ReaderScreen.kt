@@ -2,9 +2,17 @@ package com.raven.app.feature.reader
 
 import android.view.KeyEvent as AndroidKeyEvent
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.EnterTransition
+import androidx.compose.animation.ExitTransition
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.snap
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.BorderStroke
@@ -69,12 +77,14 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
@@ -108,12 +118,17 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.raven.app.core.designsystem.component.RavenContentCrossfade
 import com.raven.app.core.designsystem.component.RavenErrorState
 import com.raven.app.core.designsystem.component.RavenFormatters
 import com.raven.app.core.designsystem.component.RavenTopBar
+import com.raven.app.core.designsystem.theme.LocalMotionReduced
 import com.raven.app.core.designsystem.theme.LocalRavenColors
+import com.raven.app.core.designsystem.theme.LocalRavenFeedback
 import com.raven.app.core.designsystem.theme.LocalReduceTransparency
+import com.raven.app.core.designsystem.theme.RavenFeedbackEffect
 import com.raven.app.core.designsystem.theme.RavenFrostedBox
+import com.raven.app.core.designsystem.theme.RavenMotion
 import com.raven.app.core.designsystem.theme.RavenShapes
 import com.raven.app.core.designsystem.theme.RavenTabularTextStyle
 import com.raven.app.core.designsystem.theme.ravenFrostedSurface
@@ -124,9 +139,11 @@ import com.raven.app.core.media.reader.ReaderGeometry
 import com.raven.app.core.media.reader.SpreadNavigator
 import com.raven.app.core.model.ReaderFit
 import com.raven.app.core.model.ReaderMode
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.launch
 import kotlin.math.abs
 import kotlin.math.roundToInt
 
@@ -150,6 +167,8 @@ fun ReaderScreen(
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val colors = LocalRavenColors.current
     val reduceTransparency = LocalReduceTransparency.current
+    val motionReduced = LocalMotionReduced.current
+    val feedback = LocalRavenFeedback.current
     val context = LocalContext.current
     val snackbarHostState = remember { SnackbarHostState() }
     val focusRequester = remember { FocusRequester() }
@@ -192,6 +211,7 @@ fun ReaderScreen(
     }
     LifecycleEventEffect(Lifecycle.Event.ON_START) {
         viewModel.setAutoPagePausedByLifecycle(false)
+        viewModel.onScreenStarted()
     }
 
     // Snackbar messages
@@ -325,110 +345,118 @@ fun ReaderScreen(
         }
 
         // Main Reader Content Layer
-        when {
-            uiState.isLoading && uiState.detail == null -> {
-                Box(
-                    modifier = Modifier.fillMaxSize(),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Column(
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.spacedBy(12.dp),
+        val readerStageKey = when {
+            uiState.isLoading && uiState.detail == null -> "loading"
+            uiState.authRequired -> "auth"
+            uiState.detail == null || uiState.pageNumbers.isEmpty() -> "error"
+            else -> "mode_${uiState.preferences.mode.name}"
+        }
+        RavenContentCrossfade(targetState = readerStageKey) { stage ->
+            when (stage) {
+                "loading" -> {
+                    Box(
+                        modifier = Modifier.fillMaxSize(),
+                        contentAlignment = Alignment.Center,
                     ) {
-                        CircularProgressIndicator(color = colors.crimson, trackColor = colors.surface3)
-                        Text(
-                            text = "正在加载图集…",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = colors.inkSecondary,
+                        Column(
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.spacedBy(12.dp),
+                        ) {
+                            CircularProgressIndicator(color = colors.crimson, trackColor = colors.surface3)
+                            Text(
+                                text = "正在加载图集…",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = colors.inkSecondary,
+                            )
+                        }
+                    }
+                }
+                "auth" -> {
+                    Box(
+                        modifier = Modifier.fillMaxSize(),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        ReaderAuthGateCard(
+                            siteName = uiState.siteDisplayName,
+                            message = uiState.authMessage ?: "阅读该站点图集需要先完成账号登录或导入 Cookie。",
+                            onOpenAccount = { navigator.openSiteAccount(uiState.siteId) },
+                            onRetry = { viewModel.loadGallery(forceRefresh = true) },
                         )
                     }
                 }
-            }
-            uiState.authRequired -> {
-                Box(
-                    modifier = Modifier.fillMaxSize(),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    ReaderAuthGateCard(
-                        siteName = uiState.siteDisplayName,
-                        message = uiState.authMessage ?: "阅读该站点图集需要先完成账号登录或导入 Cookie。",
-                        onOpenAccount = { navigator.openSiteAccount(uiState.siteId) },
-                        onRetry = { viewModel.loadGallery(forceRefresh = true) },
-                    )
+                "error" -> {
+                    Box(
+                        modifier = Modifier.fillMaxSize(),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        RavenErrorState(
+                            title = "无法打开阅读器",
+                            message = uiState.errorMessage ?: "图集暂无可阅读页面，请检查网络或下载完整性。",
+                            onRetry = { viewModel.loadGallery(forceRefresh = true) },
+                            secondaryActionLabel = "返回",
+                            onSecondaryActionClick = navigator::navigateBack,
+                        )
+                    }
                 }
-            }
-            uiState.detail == null || uiState.pageNumbers.isEmpty() -> {
-                Box(
-                    modifier = Modifier.fillMaxSize(),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    RavenErrorState(
-                        title = "无法打开阅读器",
-                        message = uiState.errorMessage ?: "图集暂无可阅读页面，请检查网络或下载完整性。",
-                        onRetry = { viewModel.loadGallery(forceRefresh = true) },
-                        secondaryActionLabel = "返回",
-                        onSecondaryActionClick = navigator::navigateBack,
-                    )
-                }
-            }
-            else -> {
-                when (uiState.preferences.mode) {
-                    ReaderMode.STRIP -> {
-                        StripReaderViewport(
-                            uiState = uiState,
-                            events = viewModel.events,
-                            onVisiblePagesChanged = viewModel::onVisiblePagesChanged,
-                            onConsumePendingOffset = viewModel::consumePendingStripRestoreOffset,
-                            onSingleTap = viewModel::toggleChrome,
-                            onRetryPage = viewModel::retryPage,
-                            onInteractionChanged = viewModel::onInteractionStateChanged,
-                            onEndReached = viewModel::onStripEndReached,
-                        )
-                    }
-                    ReaderMode.LTR -> {
-                        PagedHorizontalViewport(
-                            reverseLayout = false,
-                            uiState = uiState,
-                            events = viewModel.events,
-                            onPageChanged = { page -> viewModel.onVisiblePagesChanged(page, setOf(page)) },
-                            onSingleTap = viewModel::toggleChrome,
-                            onRetryPage = viewModel::retryPage,
-                            onZoomedChanged = viewModel::onInteractionStateChanged,
-                            onPreviousPage = { viewModel.navigateAdjacentPage(forward = false) },
-                            onNextPage = { viewModel.navigateAdjacentPage(forward = true) },
-                        )
-                    }
-                    ReaderMode.RTL -> {
-                        PagedHorizontalViewport(
-                            reverseLayout = true,
-                            uiState = uiState,
-                            events = viewModel.events,
-                            onPageChanged = { page -> viewModel.onVisiblePagesChanged(page, setOf(page)) },
-                            onSingleTap = viewModel::toggleChrome,
-                            onRetryPage = viewModel::retryPage,
-                            onZoomedChanged = viewModel::onInteractionStateChanged,
-                            onPreviousPage = { viewModel.navigateAdjacentPage(forward = false) },
-                            onNextPage = { viewModel.navigateAdjacentPage(forward = true) },
-                        )
-                    }
-                    ReaderMode.SPREAD -> {
-                        val nav = uiState.spreadNavigator
-                        if (nav != null) {
-                            SpreadReaderViewport(
-                                navigator = nav,
+                else -> {
+                    when (uiState.preferences.mode) {
+                        ReaderMode.STRIP -> {
+                            StripReaderViewport(
                                 uiState = uiState,
                                 events = viewModel.events,
-                                onSheetChanged = { sheet ->
-                                    if (sheet.isNotEmpty()) {
-                                        viewModel.onVisiblePagesChanged(sheet.first(), sheet.toSet())
-                                    }
-                                },
+                                onVisiblePagesChanged = viewModel::onVisiblePagesChanged,
+                                onConsumePendingOffset = viewModel::consumePendingStripRestoreOffset,
+                                onSingleTap = viewModel::toggleChrome,
+                                onRetryPage = viewModel::retryPage,
+                                onInteractionChanged = viewModel::onInteractionStateChanged,
+                                onEndReached = viewModel::onStripEndReached,
+                            )
+                        }
+                        ReaderMode.LTR -> {
+                            PagedHorizontalViewport(
+                                reverseLayout = false,
+                                uiState = uiState,
+                                events = viewModel.events,
+                                onPageChanged = { page -> viewModel.onVisiblePagesChanged(page, setOf(page)) },
                                 onSingleTap = viewModel::toggleChrome,
                                 onRetryPage = viewModel::retryPage,
                                 onZoomedChanged = viewModel::onInteractionStateChanged,
                                 onPreviousPage = { viewModel.navigateAdjacentPage(forward = false) },
                                 onNextPage = { viewModel.navigateAdjacentPage(forward = true) },
                             )
+                        }
+                        ReaderMode.RTL -> {
+                            PagedHorizontalViewport(
+                                reverseLayout = true,
+                                uiState = uiState,
+                                events = viewModel.events,
+                                onPageChanged = { page -> viewModel.onVisiblePagesChanged(page, setOf(page)) },
+                                onSingleTap = viewModel::toggleChrome,
+                                onRetryPage = viewModel::retryPage,
+                                onZoomedChanged = viewModel::onInteractionStateChanged,
+                                onPreviousPage = { viewModel.navigateAdjacentPage(forward = false) },
+                                onNextPage = { viewModel.navigateAdjacentPage(forward = true) },
+                            )
+                        }
+                        ReaderMode.SPREAD -> {
+                            val nav = uiState.spreadNavigator
+                            if (nav != null) {
+                                SpreadReaderViewport(
+                                    navigator = nav,
+                                    uiState = uiState,
+                                    events = viewModel.events,
+                                    onSheetChanged = { sheet ->
+                                        if (sheet.isNotEmpty()) {
+                                            viewModel.onVisiblePagesChanged(sheet.first(), sheet.toSet())
+                                        }
+                                    },
+                                    onSingleTap = viewModel::toggleChrome,
+                                    onRetryPage = viewModel::retryPage,
+                                    onZoomedChanged = viewModel::onInteractionStateChanged,
+                                    onPreviousPage = { viewModel.navigateAdjacentPage(forward = false) },
+                                    onNextPage = { viewModel.navigateAdjacentPage(forward = true) },
+                                )
+                            }
                         }
                     }
                 }
@@ -437,8 +465,8 @@ fun ReaderScreen(
 
         AnimatedVisibility(
             visible = uiState.isChapterTransitionLoading,
-            enter = fadeIn(tween(120)),
-            exit = fadeOut(tween(120)),
+            enter = if (motionReduced) EnterTransition.None else fadeIn(tween(120, easing = RavenMotion.HarmonyDecelerationEasing)),
+            exit = if (motionReduced) ExitTransition.None else fadeOut(tween(120, easing = RavenMotion.HarmonyDecelerationEasing)),
             modifier = Modifier.align(Alignment.Center),
         ) {
             Row(
@@ -464,21 +492,35 @@ fun ReaderScreen(
         }
 
         // Corner Status Bar (visible when chrome hidden & configured enabled)
-        if (!uiState.chromeVisible && uiState.showStatusBar && uiState.detail != null) {
+        AnimatedVisibility(
+            visible = !uiState.chromeVisible && uiState.showStatusBar && uiState.detail != null,
+            enter = if (motionReduced) EnterTransition.None else fadeIn(tween(140, easing = RavenMotion.HarmonyDecelerationEasing)),
+            exit = if (motionReduced) ExitTransition.None else fadeOut(tween(100, easing = RavenMotion.HarmonyDecelerationEasing)),
+            modifier = Modifier.align(Alignment.BottomEnd),
+        ) {
             ReaderStatusBar(
                 currentPage = uiState.currentPage,
                 totalPages = uiState.totalPages,
                 progressPercent = uiState.progressPercent,
                 autoPageIntervalSeconds = uiState.autoPageIntervalSeconds,
-                modifier = Modifier.align(Alignment.BottomEnd),
             )
         }
 
         // Top Frosted Chrome Bar
         AnimatedVisibility(
             visible = uiState.chromeVisible,
-            enter = fadeIn(tween(150)) + slideInVertically(tween(180)) { -it },
-            exit = fadeOut(tween(140)) + slideOutVertically(tween(160)) { -it },
+            enter = if (motionReduced) {
+                EnterTransition.None
+            } else {
+                fadeIn(tween(150, easing = RavenMotion.HarmonyDecelerationEasing)) +
+                    slideInVertically(tween(180, easing = RavenMotion.HarmonyDecelerationEasing)) { -it }
+            },
+            exit = if (motionReduced) {
+                ExitTransition.None
+            } else {
+                fadeOut(tween(140, easing = RavenMotion.HarmonyDecelerationEasing)) +
+                    slideOutVertically(tween(160, easing = RavenMotion.HarmonyDecelerationEasing)) { -it }
+            },
             modifier = Modifier
                 .align(Alignment.TopCenter)
                 .fillMaxWidth()
@@ -507,7 +549,24 @@ fun ReaderScreen(
                 },
                 actions = {
                     if (uiState.detail != null) {
-                        IconButton(onClick = { viewModel.toggleCurrentPageBookmark() }) {
+                        val bookmarkScaleState = animateFloatAsState(
+                            targetValue = if (uiState.isCurrentPageBookmarked) 1.15f else 1.0f,
+                            animationSpec = if (motionReduced) snap() else RavenMotion.interactiveSpringSpec(),
+                            label = "readerBookmarkScale",
+                        )
+                        val bookmarkTint by animateColorAsState(
+                            targetValue = if (uiState.isCurrentPageBookmarked) colors.crimson else colors.inkPrimary,
+                            animationSpec = if (motionReduced) snap() else tween(durationMillis = 150),
+                            label = "readerBookmarkTint",
+                        )
+                        IconButton(
+                            onClick = {
+                                feedback.perform(
+                                    if (uiState.isCurrentPageBookmarked) RavenFeedbackEffect.TOGGLE_OFF else RavenFeedbackEffect.FAVORITE,
+                                )
+                                viewModel.toggleCurrentPageBookmark()
+                            },
+                        ) {
                             Icon(
                                 imageVector = if (uiState.isCurrentPageBookmarked) {
                                     Icons.Filled.Bookmark
@@ -515,10 +574,33 @@ fun ReaderScreen(
                                     Icons.Outlined.BookmarkBorder
                                 },
                                 contentDescription = if (uiState.isCurrentPageBookmarked) "取消书签" else "添加书签",
-                                tint = if (uiState.isCurrentPageBookmarked) colors.crimson else colors.inkPrimary,
+                                tint = bookmarkTint,
+                                modifier = Modifier.graphicsLayer {
+                                    val s = bookmarkScaleState.value
+                                    scaleX = s
+                                    scaleY = s
+                                },
                             )
                         }
-                        IconButton(onClick = viewModel::toggleCurrentPageImageFavorite) {
+
+                        val favScaleState = animateFloatAsState(
+                            targetValue = if (uiState.isCurrentPageImageFavorited) 1.15f else 1.0f,
+                            animationSpec = if (motionReduced) snap() else RavenMotion.interactiveSpringSpec(),
+                            label = "readerImageFavScale",
+                        )
+                        val favTint by animateColorAsState(
+                            targetValue = if (uiState.isCurrentPageImageFavorited) colors.crimson else colors.inkPrimary,
+                            animationSpec = if (motionReduced) snap() else tween(durationMillis = 150),
+                            label = "readerImageFavTint",
+                        )
+                        IconButton(
+                            onClick = {
+                                feedback.perform(
+                                    if (uiState.isCurrentPageImageFavorited) RavenFeedbackEffect.TOGGLE_OFF else RavenFeedbackEffect.FAVORITE,
+                                )
+                                viewModel.toggleCurrentPageImageFavorite()
+                            },
+                        ) {
                             Icon(
                                 imageVector = if (uiState.isCurrentPageImageFavorited) {
                                     Icons.Filled.Favorite
@@ -526,7 +608,12 @@ fun ReaderScreen(
                                     Icons.Outlined.FavoriteBorder
                                 },
                                 contentDescription = if (uiState.isCurrentPageImageFavorited) "取消收藏单图" else "收藏单图",
-                                tint = if (uiState.isCurrentPageImageFavorited) colors.crimson else colors.inkPrimary,
+                                tint = favTint,
+                                modifier = Modifier.graphicsLayer {
+                                    val s = favScaleState.value
+                                    scaleX = s
+                                    scaleY = s
+                                },
                             )
                         }
                     }
@@ -538,8 +625,18 @@ fun ReaderScreen(
         val activeQueueSession = uiState.queueSession
         AnimatedVisibility(
             visible = uiState.showQueueNextCard && activeQueueSession?.hasNext == true && !uiState.chromeVisible,
-            enter = fadeIn(tween(160)) + slideInVertically(tween(200)) { it },
-            exit = fadeOut(tween(140)) + slideOutVertically(tween(160)) { it },
+            enter = if (motionReduced) {
+                EnterTransition.None
+            } else {
+                fadeIn(tween(160, easing = RavenMotion.HarmonyDecelerationEasing)) +
+                    slideInVertically(tween(200, easing = RavenMotion.HarmonyDecelerationEasing)) { it }
+            },
+            exit = if (motionReduced) {
+                ExitTransition.None
+            } else {
+                fadeOut(tween(140, easing = RavenMotion.HarmonyDecelerationEasing)) +
+                    slideOutVertically(tween(160, easing = RavenMotion.HarmonyDecelerationEasing)) { it }
+            },
             modifier = Modifier
                 .align(Alignment.BottomCenter)
                 .navigationBarsPadding()
@@ -558,8 +655,18 @@ fun ReaderScreen(
         // Bottom Frosted Quick Icon Bar + Page Scrubber + Optional Inline Panels
         AnimatedVisibility(
             visible = uiState.chromeVisible && uiState.detail != null && uiState.pageNumbers.isNotEmpty(),
-            enter = fadeIn(tween(150)) + slideInVertically(tween(180)) { it },
-            exit = fadeOut(tween(140)) + slideOutVertically(tween(160)) { it },
+            enter = if (motionReduced) {
+                EnterTransition.None
+            } else {
+                fadeIn(tween(150, easing = RavenMotion.HarmonyDecelerationEasing)) +
+                    slideInVertically(tween(180, easing = RavenMotion.HarmonyDecelerationEasing)) { it }
+            },
+            exit = if (motionReduced) {
+                ExitTransition.None
+            } else {
+                fadeOut(tween(140, easing = RavenMotion.HarmonyDecelerationEasing)) +
+                    slideOutVertically(tween(160, easing = RavenMotion.HarmonyDecelerationEasing)) { it }
+            },
             modifier = Modifier
                 .align(Alignment.BottomCenter)
                 .fillMaxWidth()
@@ -580,27 +687,45 @@ fun ReaderScreen(
                 }
 
                 // Inline Quick Panels (Mode / Brightness + Auto-Page)
-                when (uiState.activeQuickPanel) {
-                    ReaderQuickPanel.MODE -> {
-                        ReaderQuickModePanel(
-                            currentMode = uiState.preferences.mode,
-                            currentFit = uiState.preferences.fit,
-                            isLandscapeViewport = uiState.isLandscapeViewport,
-                            onSelectMode = viewModel::setReadingMode,
-                            onSelectFit = viewModel::setReaderFit,
-                        )
+                AnimatedVisibility(
+                    visible = uiState.activeQuickPanel != ReaderQuickPanel.NONE,
+                    enter = if (motionReduced) {
+                        EnterTransition.None
+                    } else {
+                        expandVertically(tween(180, easing = RavenMotion.HarmonyDecelerationEasing)) +
+                            fadeIn(tween(160, easing = RavenMotion.HarmonyDecelerationEasing))
+                    },
+                    exit = if (motionReduced) {
+                        ExitTransition.None
+                    } else {
+                        shrinkVertically(tween(150, easing = RavenMotion.HarmonyDecelerationEasing)) +
+                            fadeOut(tween(120, easing = RavenMotion.HarmonyDecelerationEasing))
+                    },
+                ) {
+                    RavenContentCrossfade(targetState = uiState.activeQuickPanel) { panel ->
+                        when (panel) {
+                            ReaderQuickPanel.MODE -> {
+                                ReaderQuickModePanel(
+                                    currentMode = uiState.preferences.mode,
+                                    currentFit = uiState.preferences.fit,
+                                    isLandscapeViewport = uiState.isLandscapeViewport,
+                                    onSelectMode = viewModel::setReadingMode,
+                                    onSelectFit = viewModel::setReaderFit,
+                                )
+                            }
+                            ReaderQuickPanel.BRIGHTNESS_AUTO_PAGE -> {
+                                ReaderQuickBrightnessAutoPagePanel(
+                                    brightnessPercent = uiState.preferences.brightnessPercent,
+                                    autoPageIntervalSeconds = uiState.autoPageIntervalSeconds,
+                                    slideshowOrder = uiState.slideshowOrder,
+                                    onBrightnessPercentChange = viewModel::setBrightnessPercent,
+                                    onAutoPageIntervalChange = viewModel::setAutoPageInterval,
+                                    onSlideshowOrderChange = viewModel::setSlideshowOrder,
+                                )
+                            }
+                            ReaderQuickPanel.NONE -> Unit
+                        }
                     }
-                    ReaderQuickPanel.BRIGHTNESS_AUTO_PAGE -> {
-                        ReaderQuickBrightnessAutoPagePanel(
-                            brightnessPercent = uiState.preferences.brightnessPercent,
-                            autoPageIntervalSeconds = uiState.autoPageIntervalSeconds,
-                            slideshowOrder = uiState.slideshowOrder,
-                            onBrightnessPercentChange = viewModel::setBrightnessPercent,
-                            onAutoPageIntervalChange = viewModel::setAutoPageInterval,
-                            onSlideshowOrderChange = viewModel::setSlideshowOrder,
-                        )
-                    }
-                    ReaderQuickPanel.NONE -> Unit
                 }
 
                 ReaderBottomControlBar(
@@ -624,28 +749,34 @@ fun ReaderScreen(
 
         // Export Progress Pill Overlay
         val exportText = uiState.exportStatusText
-        if (uiState.isExporting && !exportText.isNullOrBlank()) {
-            Row(
-                modifier = Modifier
-                    .align(Alignment.Center)
-                    .ravenFrostedSurface(
-                        reduceTransparency = reduceTransparency,
-                        shape = RavenShapes.PillShape,
+        AnimatedVisibility(
+            visible = uiState.isExporting && !exportText.isNullOrBlank(),
+            enter = if (motionReduced) EnterTransition.None else fadeIn(tween(150, easing = RavenMotion.HarmonyDecelerationEasing)),
+            exit = if (motionReduced) ExitTransition.None else fadeOut(tween(120, easing = RavenMotion.HarmonyDecelerationEasing)),
+            modifier = Modifier.align(Alignment.Center),
+        ) {
+            if (!exportText.isNullOrBlank()) {
+                Row(
+                    modifier = Modifier
+                        .ravenFrostedSurface(
+                            reduceTransparency = reduceTransparency,
+                            shape = RavenShapes.PillShape,
+                        )
+                        .padding(horizontal = 18.dp, vertical = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(18.dp),
+                        strokeWidth = 2.dp,
+                        color = colors.crimson,
                     )
-                    .padding(horizontal = 18.dp, vertical = 12.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(10.dp),
-            ) {
-                CircularProgressIndicator(
-                    modifier = Modifier.size(18.dp),
-                    strokeWidth = 2.dp,
-                    color = colors.crimson,
-                )
-                Text(
-                    text = exportText,
-                    style = MaterialTheme.typography.labelLarge.tabular(),
-                    color = colors.inkPrimary,
-                )
+                    Text(
+                        text = exportText,
+                        style = MaterialTheme.typography.labelLarge.tabular(),
+                        color = colors.inkPrimary,
+                    )
+                }
             }
         }
 
@@ -737,14 +868,20 @@ private fun StripReaderViewport(
         initialFirstVisibleItemScrollOffset = initialOffset,
     )
 
+    val motionReduced = LocalMotionReduced.current
+    val scope = rememberCoroutineScope()
     var zoom by remember { mutableFloatStateOf(ReaderGeometry.MIN_ZOOM) }
     var pan by remember { mutableStateOf(PanOffset.ZERO) }
+    var doubleTapAnimJob by remember { mutableStateOf<Job?>(null) }
     var viewportSize by remember { mutableStateOf(IntSize.Zero) }
     val currentOnSingleTap by rememberUpdatedState(onSingleTap)
     val currentOnInteraction by rememberUpdatedState(onInteractionChanged)
+    val currentOnVisiblePagesChanged by rememberUpdatedState(onVisiblePagesChanged)
+    val currentPageNumbers by rememberUpdatedState(pageNumbers)
+    val isZoomed by remember { derivedStateOf { zoom > ReaderGeometry.MIN_ZOOM + 0.01f } }
 
-    LaunchedEffect(zoom) {
-        currentOnInteraction(zoom > ReaderGeometry.MIN_ZOOM + 0.01f)
+    LaunchedEffect(isZoomed) {
+        currentOnInteraction(isZoomed)
     }
 
     // Restore exact pixel offset when returning to STRIP mode or initial resume.
@@ -761,6 +898,7 @@ private fun StripReaderViewport(
             if (event is ReaderEvent.ScrollToPage) {
                 val idx = pageNumbers.indexOf(event.page)
                 if (idx in pageNumbers.indices) {
+                    doubleTapAnimJob?.cancel()
                     zoom = ReaderGeometry.MIN_ZOOM
                     pan = PanOffset.ZERO
                     listState.scrollToItem(idx, event.scrollOffsetPx.coerceAtLeast(0))
@@ -769,24 +907,57 @@ private fun StripReaderViewport(
         }
     }
 
-    // Observe visible strip pages & pixel offset cleanly.
+    // 120Hz zero-recomposition page tracker: emits only when visible page set changes (NOT on every px).
     LaunchedEffect(listState, pageNumbers) {
         snapshotFlow {
             val visible = listState.layoutInfo.visibleItemsInfo.mapNotNull { item ->
                 pageNumbers.getOrNull(item.index)
             }
-            Triple(
-                visible.firstOrNull(),
-                visible.toSet(),
-                listState.firstVisibleItemScrollOffset,
-            )
+            visible.firstOrNull() to visible.toSet()
         }
             .distinctUntilChanged()
-            .collectLatest { (anchor, visibleSet, offsetPx) ->
+            .collectLatest { (anchor, visibleSet) ->
                 if (anchor != null) {
-                    onVisiblePagesChanged(anchor, visibleSet, offsetPx)
+                    currentOnVisiblePagesChanged(anchor, visibleSet, listState.firstVisibleItemScrollOffset)
                 }
             }
+    }
+
+    // Flush exact pixel offset only when strip scrolling settles (or on dispose).
+    LaunchedEffect(listState) {
+        snapshotFlow { listState.isScrollInProgress }
+            .distinctUntilChanged()
+            .collectLatest { inProgress ->
+                if (!inProgress) {
+                    val visible = listState.layoutInfo.visibleItemsInfo.mapNotNull { item ->
+                        currentPageNumbers.getOrNull(item.index)
+                    }
+                    val anchor = visible.firstOrNull()
+                    if (anchor != null) {
+                        currentOnVisiblePagesChanged(
+                            anchor,
+                            visible.toSet(),
+                            listState.firstVisibleItemScrollOffset,
+                        )
+                    }
+                }
+            }
+    }
+
+    DisposableEffect(listState) {
+        onDispose {
+            val visible = listState.layoutInfo.visibleItemsInfo.mapNotNull { item ->
+                currentPageNumbers.getOrNull(item.index)
+            }
+            val anchor = visible.firstOrNull()
+            if (anchor != null) {
+                currentOnVisiblePagesChanged(
+                    anchor,
+                    visible.toSet(),
+                    listState.firstVisibleItemScrollOffset,
+                )
+            }
+        }
     }
 
     // A strip only advances after the user actually scrolls the final page to its bottom.
@@ -811,15 +982,37 @@ private fun StripReaderViewport(
                 detectTapGestures(
                     onTap = { currentOnSingleTap() },
                     onDoubleTap = {
-                        val nextZoom = ReaderGeometry.toggleDoubleTapZoom(zoom)
-                        zoom = nextZoom
-                        if (nextZoom <= ReaderGeometry.MIN_ZOOM) pan = PanOffset.ZERO
+                        doubleTapAnimJob?.cancel()
+                        val startZoom = zoom
+                        val startPan = pan
+                        val nextZoom = ReaderGeometry.toggleDoubleTapZoom(startZoom)
+                        val targetPan = if (nextZoom <= ReaderGeometry.MIN_ZOOM) PanOffset.ZERO else startPan
+                        if (motionReduced) {
+                            zoom = nextZoom
+                            pan = targetPan
+                        } else {
+                            doubleTapAnimJob = scope.launch {
+                                val progress = Animatable(0f)
+                                progress.animateTo(
+                                    targetValue = 1f,
+                                    animationSpec = RavenMotion.interactiveSpringSpec(),
+                                ) {
+                                    val t = value
+                                    zoom = startZoom + (nextZoom - startZoom) * t
+                                    pan = PanOffset(
+                                        x = startPan.x + (targetPan.x - startPan.x) * t,
+                                        y = startPan.y + (targetPan.y - startPan.y) * t,
+                                    )
+                                }
+                            }
+                        }
                     },
                 )
             }
             .pointerInput(Unit) {
                 awaitEachGesture {
                     awaitFirstDown(requireUnconsumed = false)
+                    doubleTapAnimJob?.cancel()
                     var gestureActive = false
                     val touchSlop = viewConfiguration.touchSlop
                     var accumZoom = 1f
@@ -877,7 +1070,7 @@ private fun StripReaderViewport(
     ) {
         LazyColumn(
             state = listState,
-            userScrollEnabled = zoom <= ReaderGeometry.MIN_ZOOM + 0.01f,
+            userScrollEnabled = !isZoomed,
             modifier = Modifier
                 .fillMaxSize()
                 .graphicsLayer {
@@ -1311,8 +1504,19 @@ private fun ReaderQuickBarButton(
     modifier: Modifier = Modifier,
 ) {
     val colors = LocalRavenColors.current
+    val motionReduced = LocalMotionReduced.current
+    val feedback = LocalRavenFeedback.current
     val interactionSource = remember { MutableInteractionSource() }
-    val tint = if (active) colors.crimson else colors.inkPrimary
+    val tint by animateColorAsState(
+        targetValue = if (active) colors.crimson else colors.inkPrimary,
+        animationSpec = if (motionReduced) snap() else tween(durationMillis = 150),
+        label = "readerQuickBtnTint",
+    )
+    val labelColor by animateColorAsState(
+        targetValue = if (active) colors.crimson else colors.inkSecondary,
+        animationSpec = if (motionReduced) snap() else tween(durationMillis = 150),
+        label = "readerQuickBtnLabel",
+    )
 
     Column(
         modifier = modifier
@@ -1323,7 +1527,10 @@ private fun ReaderQuickBarButton(
                 interactionSource = interactionSource,
                 indication = null,
                 role = Role.Button,
-                onClick = onClick,
+                onClick = {
+                    feedback.perform(RavenFeedbackEffect.TAP)
+                    onClick()
+                },
             )
             .padding(vertical = 6.dp, horizontal = 2.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
@@ -1338,7 +1545,7 @@ private fun ReaderQuickBarButton(
         Text(
             text = label,
             style = MaterialTheme.typography.labelSmall.tabular(),
-            color = if (active) colors.crimson else colors.inkSecondary,
+            color = labelColor,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
         )

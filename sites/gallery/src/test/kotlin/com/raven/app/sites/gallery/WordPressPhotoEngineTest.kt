@@ -209,4 +209,57 @@ class WordPressPhotoEngineTest {
         val detail = plugin.gallerySource.loadGalleryDetail("https://galleryepic.com/en/cosplay/555")
         assertEquals(listOf("https://static.galleryepic.xyz/image/$imageUuid"), detail.pages.map { it.imageUrl })
     }
+
+    @Test
+    fun contentPageCountDeduplicatesRepeatedPaginationBarsAndTinyAnchorImagesAreFiltered() = runTest {
+        val fakeHttp = FakeHttpClientAdapter()
+        val cosplayPlugin = CosplayteleSitePlugin(fakeHttp)
+
+        // Two pagination bars (top + bottom) with pages 1..3 must count 3, not 6.
+        val everiaPlugin = EveriaSitePlugin(fakeHttp)
+        val duplicateBarsDoc = Jsoup.parse(
+            """
+            <html><body>
+              <div class="page-links"><span class="post-page-numbers">1</span><a class="post-page-numbers" href="/p/2/">2</a><a class="post-page-numbers" href="/p/3/">3</a></div>
+              <div class="page-links"><span class="post-page-numbers">1</span><a class="post-page-numbers" href="/p/2/">2</a><a class="post-page-numbers" href="/p/3/">3</a></div>
+            </body></html>
+            """.trimIndent(),
+        )
+        assertEquals(3, everiaPlugin.engine.extractContentPageCount(duplicateBarsDoc))
+
+        // Nested <a href="full"><picture><img data-src="thumb"/></picture></a> must resolve full URL ONCE without duplicating thumb.
+        val nestedDoc = Jsoup.parse(
+            """
+            <html><body><div class="entry-content">
+              <figure>
+                <a href="https://cdn.example.net/full-nested.webp">
+                  <picture><img data-src="https://cdn.example.net/thumb-nested.webp" /></picture>
+                </a>
+              </figure>
+              <figure>
+                <a href="https://cdn.example.net/ad-click.jpg">
+                  <img width="1" height="1" src="https://cdn.example.net/pixel.jpg" alt="banner" />
+                </a>
+              </figure>
+            </div></body></html>
+            """.trimIndent(),
+        )
+        assertEquals(listOf("https://cdn.example.net/full-nested.webp"), everiaPlugin.engine.extractImages(nestedDoc))
+
+        // Normal post containing English phrase "Just a moment" alongside gallery content marker is NOT a CF challenge.
+        val phraseUrl = "https://cosplaytele.com/just-a-moment-post/"
+        fakeHttp.stubHtml(
+            phraseUrl,
+            """
+            <!DOCTYPE html><html><head><title>Just a moment - Cosplaytele</title></head><body>
+              <article class="post"><div class="entry-content">
+                <p>Just a moment before the photoshoot!</p>
+                <div id="gallery-1"><figure><img src="https://cosplaytele.com/wp-content/uploads/2026/11/ok.webp" /></figure></div>
+              </div></article>
+            </body></html>
+            """.trimIndent(),
+        )
+        val phraseDetail = cosplayPlugin.gallerySource.loadGalleryDetail(phraseUrl)
+        assertEquals(listOf("https://cosplaytele.com/wp-content/uploads/2026/11/ok.webp"), phraseDetail.pages.map { it.imageUrl })
+    }
 }

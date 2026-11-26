@@ -1,9 +1,15 @@
 package com.raven.app.feature.reader
 
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.EnterTransition
+import androidx.compose.animation.ExitTransition
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.snap
 import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -108,11 +114,14 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.raven.app.core.designsystem.component.RavenBottomSheet
+import com.raven.app.core.designsystem.component.RavenContentCrossfade
 import com.raven.app.core.designsystem.component.RavenCrimsonProgressBar
 import com.raven.app.core.designsystem.component.RavenErrorState
 import com.raven.app.core.designsystem.component.RavenShelfOption
 import com.raven.app.core.designsystem.component.RavenShelfPickerSheet
 import com.raven.app.core.designsystem.component.RavenFilterChip
+import com.raven.app.core.designsystem.theme.LocalMotionReduced
+import com.raven.app.core.designsystem.theme.RavenMotion
 import com.raven.app.core.designsystem.component.RavenFormatters
 import com.raven.app.core.designsystem.component.RavenGalleryCard
 import com.raven.app.core.designsystem.component.RavenGroupedDivider
@@ -238,124 +247,137 @@ fun GalleryDetailScreen(
                 .padding(innerPadding),
         ) {
             val detail = uiState.detail
-            when {
-                uiState.isLoading && detail == null -> {
-                    RavenLoadingSkeleton(rowCount = 6)
-                }
-                uiState.authRequired -> {
-                    GalleryAuthGateCard(
-                        siteName = uiState.siteDisplayName,
-                        message = uiState.authMessage
-                            ?: "该站点需要有效登录会话后才能浏览图集，请前往账号管理完成登录或导入 Cookie。",
-                        onOpenAccount = { navigator.openSiteAccount(uiState.siteId) },
-                        onRetry = { viewModel.loadDetail(forceRefresh = true) },
-                        modifier = Modifier.align(Alignment.TopCenter),
-                    )
-                }
-                detail == null -> {
-                    RavenErrorState(
+            val motionReduced = LocalMotionReduced.current
+            val stageKey = when {
+                uiState.isLoading && detail == null -> 0
+                uiState.authRequired -> 1
+                detail == null -> 2
+                else -> 3
+            }
+            RavenContentCrossfade(targetState = stageKey) { stage ->
+                when (stage) {
+                    0 -> RavenLoadingSkeleton(rowCount = 6)
+                    1 -> Box(modifier = Modifier.fillMaxSize()) {
+                        GalleryAuthGateCard(
+                            siteName = uiState.siteDisplayName,
+                            message = uiState.authMessage
+                                ?: "该站点需要有效登录会话后才能浏览图集，请前往账号管理完成登录或导入 Cookie。",
+                            onOpenAccount = { navigator.openSiteAccount(uiState.siteId) },
+                            onRetry = { viewModel.loadDetail(forceRefresh = true) },
+                            modifier = Modifier.align(Alignment.TopCenter),
+                        )
+                    }
+                    2 -> RavenErrorState(
                         title = "图集加载失败",
                         message = uiState.errorMessage ?: "无法获取图集详情，请检查网络或重试。",
                         onRetry = { viewModel.loadDetail(forceRefresh = true) },
                     )
-                }
-                else -> {
-                    GalleryDetailContent(
-                        uiState = uiState,
-                        detail = detail,
-                        onRefreshChapters = viewModel::refreshChapters,
-                        onOpenChapter = { chapter ->
-                            navigator.openGallery(
-                                siteId = uiState.siteId,
-                                mediaId = chapter.id,
-                                url = chapter.url,
-                            )
-                        },
-                        showAllPreviewPages = showAllPreviewPages,
-                        onExpandAllPages = { showAllPreviewPages = true },
-                        formatTagLabel = viewModel::formatTagLabel,
-                        isTagBlocked = viewModel::isTagBlocked,
-                        onOpenReader = { startPage, offline ->
-                            navigator.openReader(
-                                siteId = detail.item.siteId,
-                                mediaId = detail.item.id,
-                                url = detail.item.url,
-                                startPage = startPage,
-                                offlineOnly = offline,
-                                queueToken = null,
-                            )
-                        },
-                        onOpenVideo = { video ->
-                            navigator.openVideo(
-                                siteId = video.siteId,
-                                mediaId = video.id,
-                                url = video.url,
-                                title = video.title,
-                                coverUrl = video.coverUrl,
-                            )
-                        },
-                        onOpenAuthor = { author ->
-                            navigator.openAuthorFeed(detail.item.siteId, author)
-                        },
-                        onOpenTag = { tag ->
-                            navigator.openTagFeed(detail.item.siteId, tag)
-                        },
-                        onLongPressTag = viewModel::openTagActions,
-                        onToggleWatchLater = viewModel::toggleWatchLater,
-                        onToggleFavorite = viewModel::toggleFavorite,
-                        onOpenShelfPicker = viewModel::openShelfPicker,
-                        onOpenDownloadSheet = viewModel::openDownloadSheet,
-                        onExportCbz = { viewModel.exportCbz() },
-                        onDeleteBookmark = viewModel::deleteBookmark,
-                        onOpenRelated = { item ->
-                            if (item.kind.isVideo) {
-                                navigator.openVideo(
-                                    siteId = item.siteId,
-                                    mediaId = item.id,
-                                    url = item.url,
-                                    title = item.title,
-                                    coverUrl = item.coverUrl,
-                                )
-                            } else {
+                    else -> {
+                        val activeDetail = detail ?: return@RavenContentCrossfade
+                        GalleryDetailContent(
+                            uiState = uiState,
+                            detail = activeDetail,
+                            onRefreshChapters = viewModel::refreshChapters,
+                            onOpenChapter = { chapter ->
                                 navigator.openGallery(
-                                    siteId = item.siteId,
-                                    mediaId = item.id,
-                                    url = item.url,
+                                    siteId = uiState.siteId,
+                                    mediaId = chapter.id,
+                                    url = chapter.url,
                                 )
-                            }
-                        },
-                    )
+                            },
+                            showAllPreviewPages = showAllPreviewPages,
+                            onExpandAllPages = { showAllPreviewPages = true },
+                            formatTagLabel = viewModel::formatTagLabel,
+                            isTagBlocked = viewModel::isTagBlocked,
+                            onOpenReader = { startPage, offline ->
+                                navigator.openReader(
+                                    siteId = activeDetail.item.siteId,
+                                    mediaId = activeDetail.item.id,
+                                    url = activeDetail.item.url,
+                                    startPage = startPage,
+                                    offlineOnly = offline,
+                                    queueToken = null,
+                                )
+                            },
+                            onOpenVideo = { video ->
+                                navigator.openVideo(
+                                    siteId = video.siteId,
+                                    mediaId = video.id,
+                                    url = video.url,
+                                    title = video.title,
+                                    coverUrl = video.coverUrl,
+                                )
+                            },
+                            onOpenAuthor = { author ->
+                                navigator.openAuthorFeed(activeDetail.item.siteId, author)
+                            },
+                            onOpenTag = { tag ->
+                                navigator.openTagFeed(activeDetail.item.siteId, tag)
+                            },
+                            onLongPressTag = viewModel::openTagActions,
+                            onToggleWatchLater = viewModel::toggleWatchLater,
+                            onToggleFavorite = viewModel::toggleFavorite,
+                            onOpenShelfPicker = viewModel::openShelfPicker,
+                            onOpenDownloadSheet = viewModel::openDownloadSheet,
+                            onExportCbz = { viewModel.exportCbz() },
+                            onDeleteBookmark = viewModel::deleteBookmark,
+                            onOpenRelated = { item ->
+                                if (item.kind.isVideo) {
+                                    navigator.openVideo(
+                                        siteId = item.siteId,
+                                        mediaId = item.id,
+                                        url = item.url,
+                                        title = item.title,
+                                        coverUrl = item.coverUrl,
+                                    )
+                                } else {
+                                    navigator.openGallery(
+                                        siteId = item.siteId,
+                                        mediaId = item.id,
+                                        url = item.url,
+                                    )
+                                }
+                            },
+                        )
+                    }
                 }
             }
 
             // Export progress overlay pill at bottom
             val exportText = uiState.exportStatusText
-            if (uiState.isExporting && !exportText.isNullOrBlank()) {
-                Row(
-                    modifier = Modifier
-                        .align(Alignment.BottomCenter)
-                        .navigationBarsPadding()
-                        .padding(horizontal = 16.dp, vertical = 14.dp)
-                        .ravenFrostedSurface(
-                            reduceTransparency = LocalReduceTransparency.current,
-                            shape = RavenShapes.PillShape,
+            AnimatedVisibility(
+                visible = uiState.isExporting && !exportText.isNullOrBlank(),
+                enter = if (motionReduced) EnterTransition.None else fadeIn(tween(150, easing = RavenMotion.HarmonyDecelerationEasing)),
+                exit = if (motionReduced) ExitTransition.None else fadeOut(tween(120, easing = RavenMotion.HarmonyDecelerationEasing)),
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .navigationBarsPadding()
+                    .padding(horizontal = 16.dp, vertical = 14.dp),
+            ) {
+                if (!exportText.isNullOrBlank()) {
+                    Row(
+                        modifier = Modifier
+                            .ravenFrostedSurface(
+                                reduceTransparency = LocalReduceTransparency.current,
+                                shape = RavenShapes.PillShape,
+                            )
+                            .padding(horizontal = 16.dp, vertical = 10.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    ) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(16.dp),
+                            strokeWidth = 2.dp,
+                            color = colors.crimson,
                         )
-                        .padding(horizontal = 16.dp, vertical = 10.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(10.dp),
-                ) {
-                    CircularProgressIndicator(
-                        modifier = Modifier.size(16.dp),
-                        strokeWidth = 2.dp,
-                        color = colors.crimson,
-                    )
-                    Text(
-                        text = exportText,
-                        style = MaterialTheme.typography.labelMedium.tabular(),
-                        color = colors.inkPrimary,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
+                        Text(
+                            text = exportText,
+                            style = MaterialTheme.typography.labelMedium.tabular(),
+                            color = colors.inkPrimary,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
                 }
             }
         }
@@ -587,6 +609,7 @@ private fun GalleryDetailContent(
                         loading = uiState.chaptersLoading,
                         error = uiState.chaptersError,
                         currentChapterId = detail.item.id,
+                        currentChapterUrl = detail.item.extra["chapterUrl"].orEmpty(),
                         currentChapterHints = listOfNotNull(
                             detail.item.extra["chapterId"],
                             detail.item.extra["chapterUuid"],
@@ -772,6 +795,7 @@ private fun GalleryHeroHeader(
             .padding(horizontal = 16.dp, vertical = 16.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
+        val canReadImages = (detail.pageCount > 0 || detail.pages.isNotEmpty())
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(14.dp),
@@ -785,8 +809,14 @@ private fun GalleryHeroHeader(
                     .clip(RavenShapes.CardShape)
                     .background(colors.surface1)
                     .border(0.5.dp, colors.hairline, RavenShapes.CardShape)
-                    .clickable(role = Role.Button) {
-                        onOpenReader(uiState.resumeStartPage, uiState.isLocal)
+                    .let { base ->
+                        if (canReadImages) {
+                            base.clickable(role = Role.Button) {
+                                onOpenReader(uiState.resumeStartPage, uiState.isLocal)
+                            }
+                        } else {
+                            base
+                        }
                     },
             ) {
                 RavenImage(
@@ -927,35 +957,37 @@ private fun GalleryHeroHeader(
             horizontalArrangement = Arrangement.spacedBy(10.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Button(
-                onClick = {
-                    feedback.perform(RavenFeedbackEffect.TAP)
-                    onOpenReader(uiState.resumeStartPage, uiState.isLocal)
-                },
-                shape = RavenShapes.PillShape,
-                contentPadding = PaddingValues(horizontal = 20.dp, vertical = 13.dp),
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = colors.primaryCtaContainer,
-                    contentColor = colors.primaryCtaInk,
-                ),
-                modifier = Modifier
-                    .weight(1f)
-                    .heightIn(min = 50.dp)
-                    .ravenSpringPress()
-                    .testTag(ReaderTestTags.GALLERY_DETAIL_PRIMARY_CTA),
-            ) {
-                Icon(
-                    imageVector = Icons.Rounded.PlayArrow,
-                    contentDescription = null,
-                    modifier = Modifier.size(20.dp),
-                )
-                Spacer(modifier = Modifier.width(6.dp))
-                Text(
-                    text = uiState.primaryCtaLabel,
-                    style = MaterialTheme.typography.labelLarge.tabular().copy(fontWeight = FontWeight.Bold),
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
+            if (detail.pageCount > 0 || detail.pages.isNotEmpty()) {
+                Button(
+                    onClick = {
+                        feedback.perform(RavenFeedbackEffect.TAP)
+                        onOpenReader(uiState.resumeStartPage, uiState.isLocal)
+                    },
+                    shape = RavenShapes.PillShape,
+                    contentPadding = PaddingValues(horizontal = 20.dp, vertical = 13.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = colors.primaryCtaContainer,
+                        contentColor = colors.primaryCtaInk,
+                    ),
+                    modifier = Modifier
+                        .weight(1f)
+                        .heightIn(min = 50.dp)
+                        .ravenSpringPress()
+                        .testTag(ReaderTestTags.GALLERY_DETAIL_PRIMARY_CTA),
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.PlayArrow,
+                        contentDescription = null,
+                        modifier = Modifier.size(20.dp),
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(
+                        text = uiState.primaryCtaLabel,
+                        style = MaterialTheme.typography.labelLarge.tabular().copy(fontWeight = FontWeight.Bold),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
             }
 
             if (!uiState.isLocal && uiState.canOpenOffline) {
@@ -1740,6 +1772,7 @@ private fun GalleryChapterPickerSection(
     loading: Boolean,
     error: String?,
     currentChapterId: String,
+    currentChapterUrl: String,
     currentChapterHints: List<String>,
     onSelect: (MediaItem) -> Unit,
     onRefresh: () -> Unit,
@@ -1749,10 +1782,9 @@ private fun GalleryChapterPickerSection(
     val ordered = remember(chapters, ascending) {
         if (ascending) chapters else chapters.asReversed()
     }
-    val currentIndex = remember(ordered, currentChapterId, currentChapterHints) {
+    val currentIndex = remember(ordered, currentChapterId, currentChapterUrl, currentChapterHints) {
         ordered.indexOfFirst { chapter ->
-            chapter.id == currentChapterId ||
-                currentChapterHints.any { hint -> hint.isNotBlank() && chapter.id.endsWith(hint) }
+            isMatchingSerialChapter(chapter, currentChapterId, currentChapterUrl, currentChapterHints)
         }.coerceAtLeast(0)
     }
     val gridState = rememberLazyGridState(initialFirstVisibleItemIndex = currentIndex)
@@ -1848,8 +1880,12 @@ private fun GalleryChapterPickerSection(
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 gridItems(ordered, key = { it.id }) { chapter ->
-                    val selected = chapter.id == currentChapterId ||
-                        currentChapterHints.any { hint -> hint.isNotBlank() && chapter.id.endsWith(hint) }
+                    val selected = isMatchingSerialChapter(
+                        chapter = chapter,
+                        currentChapterId = currentChapterId,
+                        currentChapterUrl = currentChapterUrl,
+                        hints = currentChapterHints,
+                    )
                     GalleryChapterTile(
                         title = chapter.title,
                         selected = selected,
@@ -1860,6 +1896,16 @@ private fun GalleryChapterPickerSection(
         }
     }
 }
+
+private fun isMatchingSerialChapter(
+    chapter: MediaItem,
+    currentChapterId: String,
+    currentChapterUrl: String,
+    hints: List<String>,
+): Boolean =
+    chapter.id == currentChapterId ||
+        (currentChapterUrl.isNotBlank() && chapter.url == currentChapterUrl) ||
+        hints.any { hint -> hint.isNotBlank() && (chapter.id == hint || chapter.id.endsWith(":$hint")) }
 
 @Composable
 private fun GalleryChapterTile(

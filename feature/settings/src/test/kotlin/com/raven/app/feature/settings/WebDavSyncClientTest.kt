@@ -226,6 +226,87 @@ class WebDavSyncClientTest {
         assertEquals("777", db.favoriteDao.getAll().single().targetId)
     }
 
+    @Test
+    fun `testConnection rejects HTTPS downgrade and cross-host redirect on 405 HEAD probe`() = runTest {
+        val db = FakeDatabaseBundle()
+        val registry = createTestSiteRegistry()
+        val validator = BackupValidator(registry)
+        val codec = BackupCodec(validator = validator, siteRegistry = registry)
+
+        val downgradeClient = OkHttpClient.Builder()
+            .dispatcher(directDispatcher())
+            .addInterceptor { chain ->
+                val req = chain.request()
+                val downgraded = req.newBuilder()
+                    .url(req.url.newBuilder().scheme("http").build())
+                    .build()
+                Response.Builder()
+                    .request(downgraded)
+                    .protocol(Protocol.HTTP_1_1)
+                    .code(200)
+                    .message("OK")
+                    .body("".toResponseBody(null))
+                    .build()
+            }
+            .build()
+
+        val cfg = WebDavConfig(
+            endpointUrl = "https://dav.example.com/vault",
+            username = "raven-user",
+            password = "app-password",
+            backupPassphrase = "StrongPassphrase#9",
+            remoteFileName = "backup.rvnbk",
+        )
+        val downgradeWebDav = WebDavSyncClient(
+            apiClient = downgradeClient,
+            backupDataRepository = db.backupDataRepository,
+            backupCodec = codec,
+            backupValidator = validator,
+            preferencesRepository = db.preferencesRepository,
+            appInfo = RavenAppInfo("1.0.0", 1L, isDebug = false, packageName = "com.raven.app"),
+            dispatchers = mainDispatcherRule.appDispatchers,
+        )
+        val downgradeOutcome = downgradeWebDav.testConnection(cfg)
+        assertTrue(downgradeOutcome is WebDavSyncOutcome.Error)
+
+        val headRedirectClient = OkHttpClient.Builder()
+            .dispatcher(directDispatcher())
+            .addInterceptor { chain ->
+                val req = chain.request()
+                if (req.method == "PROPFIND") {
+                    Response.Builder()
+                        .request(req)
+                        .protocol(Protocol.HTTP_1_1)
+                        .code(405)
+                        .message("Method Not Allowed")
+                        .body("".toResponseBody(null))
+                        .build()
+                } else {
+                    val foreignReq = req.newBuilder().url("https://evil.example/backup.rvnbk").build()
+                    Response.Builder()
+                        .request(foreignReq)
+                        .protocol(Protocol.HTTP_1_1)
+                        .code(200)
+                        .message("OK")
+                        .body("".toResponseBody(null))
+                        .build()
+                }
+            }
+            .build()
+
+        val headRedirectWebDav = WebDavSyncClient(
+            apiClient = headRedirectClient,
+            backupDataRepository = db.backupDataRepository,
+            backupCodec = codec,
+            backupValidator = validator,
+            preferencesRepository = db.preferencesRepository,
+            appInfo = RavenAppInfo("1.0.0", 1L, isDebug = false, packageName = "com.raven.app"),
+            dispatchers = mainDispatcherRule.appDispatchers,
+        )
+        val headOutcome = headRedirectWebDav.testConnection(cfg)
+        assertTrue(headOutcome is WebDavSyncOutcome.Error)
+    }
+
     private fun directDispatcher(): Dispatcher = Dispatcher(
         object : AbstractExecutorService() {
             private var shutdown = false

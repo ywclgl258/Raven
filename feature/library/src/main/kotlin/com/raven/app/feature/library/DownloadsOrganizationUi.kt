@@ -1,5 +1,8 @@
 package com.raven.app.feature.library
 
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.snap
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -48,6 +51,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.heading
@@ -218,11 +222,22 @@ internal fun DownloadSectionHeader(
                 overflow = TextOverflow.Ellipsis,
             )
         }
+        val motionReduced = com.raven.app.core.designsystem.theme.LocalMotionReduced.current
+        val chevronRotation = animateFloatAsState(
+            targetValue = if (section.isCollapsed) 0f else 180f,
+            animationSpec = if (motionReduced) {
+                snap()
+            } else {
+                tween(durationMillis = 180, easing = com.raven.app.core.designsystem.theme.RavenMotion.HarmonyDecelerationEasing)
+            },
+            label = "dlSectionChevronRotation",
+        )
         IconButton(onClick = onToggle, modifier = Modifier.size(48.dp)) {
             Icon(
-                imageVector = if (section.isCollapsed) Icons.Outlined.ExpandMore else Icons.Outlined.KeyboardArrowUp,
+                imageVector = Icons.Outlined.ExpandMore,
                 contentDescription = if (section.isCollapsed) "展开${section.title}" else "收起${section.title}",
                 tint = colors.inkSecondary,
+                modifier = Modifier.graphicsLayer { rotationZ = chevronRotation.value },
             )
         }
     }

@@ -65,6 +65,13 @@ val appModule: Module = module {
         createOrderedSiteRegistry(getAll<SitePlugin>())
     }
 
+    single {
+        AppLockSessionCoordinator(
+            privacyLockStore = get(),
+            dispatchers = get(),
+        )
+    }
+
     workerOf(::RavenBackgroundMaintenanceWorker)
 }
 

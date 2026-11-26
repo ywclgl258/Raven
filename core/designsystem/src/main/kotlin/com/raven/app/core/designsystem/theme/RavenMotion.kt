@@ -33,33 +33,42 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.composed
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.drawBehind
-import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.draw.drawWithCache
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Outline
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.addOutline
 import androidx.compose.ui.graphics.drawOutline
+import androidx.compose.ui.graphics.drawscope.ContentDrawScope
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.clipPath
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.PointerEvent
 import androidx.compose.ui.input.pointer.PointerEventPass
-import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.PointerId
+import androidx.compose.ui.input.pointer.changedToDownIgnoreConsumed
+import androidx.compose.ui.input.pointer.changedToUpIgnoreConsumed
 import androidx.compose.ui.layout.Measurable
 import androidx.compose.ui.layout.MeasureResult
 import androidx.compose.ui.layout.MeasureScope
 import androidx.compose.ui.node.CompositionLocalConsumerModifierNode
+import androidx.compose.ui.node.DrawModifierNode
 import androidx.compose.ui.node.LayoutModifierNode
 import androidx.compose.ui.node.ModifierNodeElement
 import androidx.compose.ui.node.PointerInputModifierNode
 import androidx.compose.ui.node.currentValueOf
+import androidx.compose.ui.node.invalidateDraw
 import androidx.compose.ui.platform.InspectorInfo
 import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.platform.LocalViewConfiguration
 import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntSize
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
@@ -444,8 +453,8 @@ private class RavenSpringPressNode(
 
 /**
  * HarmonyOS Design pointer-origin interactive light effect + top specular rim highlight.
- * Tracks touch coordinates from [interactionSource] via [PressInteraction.Press.pressPosition]
- * and radiates a soft radial sheen across the surface while pressed.
+ * Zero-recomposition `ModifierNodeElement` implementation backed by `DrawModifierNode` +
+ * cached outline/path so 120Hz presses never allocate Paths or trigger composition work.
  */
 fun Modifier.ravenInteractiveLight(
     interactionSource: InteractionSource,
@@ -453,85 +462,239 @@ fun Modifier.ravenInteractiveLight(
     enabled: Boolean = true,
     glowColor: Color = RavenColors.InteractiveGlow,
     highlightAlpha: Float = 0.08f,
-): Modifier = composed {
-    var pressOrigin by remember(interactionSource) { mutableStateOf(Offset.Unspecified) }
-    var isPressed by remember(interactionSource) { mutableStateOf(false) }
-    var isHovered by remember(interactionSource) { mutableStateOf(false) }
-    var isFocused by remember(interactionSource) { mutableStateOf(false) }
-    LaunchedEffect(interactionSource) {
-        interactionSource.interactions.collect { interaction ->
-            when (interaction) {
-                is PressInteraction.Press -> {
-                    pressOrigin = interaction.pressPosition
-                    isPressed = true
+): Modifier = this then RavenInteractiveLightElement(
+    interactionSource = interactionSource,
+    shape = shape,
+    enabled = enabled,
+    glowColor = glowColor,
+    highlightAlpha = highlightAlpha,
+)
+
+private data class RavenInteractiveLightElement(
+    val interactionSource: InteractionSource,
+    val shape: Shape,
+    val enabled: Boolean,
+    val glowColor: Color,
+    val highlightAlpha: Float,
+) : ModifierNodeElement<RavenInteractiveLightNode>() {
+    override fun create(): RavenInteractiveLightNode = RavenInteractiveLightNode(
+        interactionSource = interactionSource,
+        shape = shape,
+        enabled = enabled,
+        glowColor = glowColor,
+        highlightAlpha = highlightAlpha,
+    )
+
+    override fun update(node: RavenInteractiveLightNode) {
+        node.updateParams(
+            newSource = interactionSource,
+            newShape = shape,
+            newEnabled = enabled,
+            newGlowColor = glowColor,
+            newHighlightAlpha = highlightAlpha,
+        )
+    }
+
+    override fun InspectorInfo.inspectableProperties() {
+        name = "ravenInteractiveLight"
+        properties["shape"] = shape
+        properties["enabled"] = enabled
+        properties["highlightAlpha"] = highlightAlpha
+    }
+}
+
+private class RavenInteractiveLightNode(
+    private var interactionSource: InteractionSource,
+    private var shape: Shape,
+    private var enabled: Boolean,
+    private var glowColor: Color,
+    private var highlightAlpha: Float,
+) : Modifier.Node(),
+    DrawModifierNode,
+    CompositionLocalConsumerModifierNode {
+
+    private val glowIntensity = Animatable(0f)
+    private val activePresses = mutableSetOf<PressInteraction.Press>()
+    private var isHovered = false
+    private var isFocused = false
+    private var pressOrigin: Offset = Offset.Unspecified
+    private var interactionJob: Job? = null
+    private var animJob: Job? = null
+
+    private var cachedSize: Size = Size.Unspecified
+    private var cachedDirection: LayoutDirection? = null
+    private var cachedDensity: Float = -1f
+    private var cachedShape: Shape? = null
+    private var cachedOutline: Outline? = null
+    private var cachedClipPath: Path? = null
+
+    override val shouldAutoInvalidate: Boolean get() = false
+
+    override fun onAttach() {
+        startCollecting()
+    }
+
+    override fun onDetach() {
+        interactionJob?.cancel()
+        animJob?.cancel()
+        activePresses.clear()
+        isHovered = false
+        isFocused = false
+    }
+
+    fun updateParams(
+        newSource: InteractionSource,
+        newShape: Shape,
+        newEnabled: Boolean,
+        newGlowColor: Color,
+        newHighlightAlpha: Float,
+    ) {
+        val sourceChanged = interactionSource !== newSource
+        val shapeChanged = shape != newShape
+        interactionSource = newSource
+        shape = newShape
+        enabled = newEnabled
+        glowColor = newGlowColor
+        highlightAlpha = newHighlightAlpha
+        if (shapeChanged) {
+            cachedOutline = null
+            cachedClipPath = null
+        }
+        if (sourceChanged) {
+            activePresses.clear()
+            isHovered = false
+            isFocused = false
+            pressOrigin = Offset.Unspecified
+            startCollecting()
+        }
+        animateIntensity()
+        invalidateDraw()
+    }
+
+    private fun startCollecting() {
+        interactionJob?.cancel()
+        if (!isAttached) return
+        val source = interactionSource
+        interactionJob = coroutineScope.launch {
+            source.interactions.collect { interaction ->
+                when (interaction) {
+                    is PressInteraction.Press -> {
+                        pressOrigin = interaction.pressPosition
+                        activePresses.add(interaction)
+                        animateIntensity()
+                    }
+                    is PressInteraction.Release -> {
+                        activePresses.remove(interaction.press)
+                        animateIntensity()
+                    }
+                    is PressInteraction.Cancel -> {
+                        activePresses.remove(interaction.press)
+                        animateIntensity()
+                    }
+                    is HoverInteraction.Enter -> {
+                        isHovered = true
+                        animateIntensity()
+                    }
+                    is HoverInteraction.Exit -> {
+                        isHovered = false
+                        animateIntensity()
+                    }
+                    is FocusInteraction.Focus -> {
+                        isFocused = true
+                        animateIntensity()
+                    }
+                    is FocusInteraction.Unfocus -> {
+                        isFocused = false
+                        animateIntensity()
+                    }
                 }
-                is PressInteraction.Release,
-                is PressInteraction.Cancel,
-                -> isPressed = false
-                is HoverInteraction.Enter -> isHovered = true
-                is HoverInteraction.Exit -> isHovered = false
-                is FocusInteraction.Focus -> isFocused = true
-                is FocusInteraction.Unfocus -> isFocused = false
             }
         }
     }
-    val motionReduced = LocalMotionReduced.current
-    val targetAlpha = when {
-        !enabled -> 0f
-        isPressed -> 1f
-        isHovered || isFocused -> 0.45f
-        else -> 0f
-    }
-    val overlayAlpha by animateFloatAsState(
-        targetValue = targetAlpha,
-        animationSpec = if (motionReduced) {
-            snap()
-        } else if (isPressed) {
-            RavenMotion.responsiveSpringSpec()
-        } else {
-            RavenMotion.interactiveSpringSpec()
-        },
-        label = "ravenInteractiveLightAlpha",
-    )
-    if (overlayAlpha <= 0.005f) {
-        this
-    } else {
-        val clampedRimAlpha = highlightAlpha.coerceIn(0f, 0.25f) * overlayAlpha
-        val clampedGlowAlpha = (glowColor.alpha * overlayAlpha).coerceIn(0f, 0.35f)
-        this.drawWithContent {
-            drawContent()
-            val outline = shape.createOutline(size, layoutDirection, this)
-            val clipOutlinePath = Path().apply { addOutline(outline) }
-            val resolvedOrigin = if (pressOrigin == Offset.Unspecified) {
-                Offset(size.width * 0.5f, size.height * 0.5f)
+
+    private fun animateIntensity() {
+        if (!isAttached) return
+        val pressed = activePresses.isNotEmpty()
+        val target = when {
+            !enabled -> 0f
+            pressed -> 1f
+            isHovered || isFocused -> 0.45f
+            else -> 0f
+        }
+        val motionReduced = currentValueOf(LocalMotionReduced)
+        animJob?.cancel()
+        animJob = coroutineScope.launch {
+            if (motionReduced) {
+                glowIntensity.snapTo(target)
             } else {
-                Offset(
-                    x = pressOrigin.x.coerceIn(0f, size.width),
-                    y = pressOrigin.y.coerceIn(0f, size.height),
+                glowIntensity.animateTo(
+                    targetValue = target,
+                    animationSpec = if (pressed) {
+                        RavenMotion.responsiveSpringSpec()
+                    } else {
+                        RavenMotion.interactiveSpringSpec()
+                    },
                 )
             }
-            val radius = maxOf(size.width, size.height).coerceAtLeast(1f) * 0.9f
-            clipPath(clipOutlinePath) {
-                drawCircle(
-                    brush = Brush.radialGradient(
-                        colors = listOf(
-                            glowColor.copy(alpha = clampedGlowAlpha),
-                            glowColor.copy(alpha = clampedGlowAlpha * 0.30f),
-                            Color.Transparent,
-                        ),
-                        center = resolvedOrigin,
-                        radius = radius,
+        }
+    }
+
+    override fun ContentDrawScope.draw() {
+        drawContent()
+        val intensity = glowIntensity.value
+        if (intensity <= 0.005f || size.width <= 0f || size.height <= 0f) return
+
+        if (cachedOutline == null ||
+            cachedClipPath == null ||
+            cachedSize != size ||
+            cachedDirection != layoutDirection ||
+            cachedDensity != density ||
+            cachedShape != shape
+        ) {
+            val outline = shape.createOutline(size, layoutDirection, this)
+            val path = Path().apply { addOutline(outline) }
+            cachedOutline = outline
+            cachedClipPath = path
+            cachedSize = size
+            cachedDirection = layoutDirection
+            cachedDensity = density
+            cachedShape = shape
+        }
+
+        val outline = cachedOutline ?: return
+        val clipOutlinePath = cachedClipPath ?: return
+        val clampedRimAlpha = highlightAlpha.coerceIn(0f, 0.25f) * intensity
+        val clampedGlowAlpha = (glowColor.alpha * intensity).coerceIn(0f, 0.35f)
+        val resolvedOrigin = if (pressOrigin == Offset.Unspecified) {
+            Offset(size.width * 0.5f, size.height * 0.5f)
+        } else {
+            Offset(
+                x = pressOrigin.x.coerceIn(0f, size.width),
+                y = pressOrigin.y.coerceIn(0f, size.height),
+            )
+        }
+        val radius = maxOf(size.width, size.height).coerceAtLeast(1f) * 0.9f
+        clipPath(clipOutlinePath) {
+            drawCircle(
+                brush = Brush.radialGradient(
+                    colors = listOf(
+                        glowColor.copy(alpha = clampedGlowAlpha),
+                        glowColor.copy(alpha = clampedGlowAlpha * 0.30f),
+                        Color.Transparent,
                     ),
-                    radius = radius,
                     center = resolvedOrigin,
-                )
-            }
-            if (clampedRimAlpha > 0f) {
-                drawOutline(
-                    outline = outline,
-                    color = Color.White.copy(alpha = clampedRimAlpha),
-                )
-            }
+                    radius = radius,
+                ),
+                radius = radius,
+                center = resolvedOrigin,
+            )
+        }
+        if (clampedRimAlpha > 0f) {
+            drawOutline(
+                outline = outline,
+                color = Color.White.copy(alpha = clampedRimAlpha),
+                style = Stroke(width = 1.dp.toPx()),
+            )
         }
     }
 }
@@ -561,29 +724,118 @@ fun Modifier.ravenPressHaptic(
     interactionSource: InteractionSource? = null,
     hapticType: HapticFeedbackType = HapticFeedbackType.ContextClick,
     enabled: Boolean = true,
-): Modifier = composed {
-    val haptic = LocalHapticFeedback.current
-    if (interactionSource != null) {
-        LaunchedEffect(interactionSource, enabled, hapticType) {
-            if (!enabled) return@LaunchedEffect
-            interactionSource.interactions.collect { interaction ->
-                if (interaction is PressInteraction.Release) {
-                    haptic.performHapticFeedback(hapticType)
+): Modifier = this then RavenPressHapticElement(
+    interactionSource = interactionSource,
+    hapticType = hapticType,
+    enabled = enabled,
+)
+
+private data class RavenPressHapticElement(
+    val interactionSource: InteractionSource?,
+    val hapticType: HapticFeedbackType,
+    val enabled: Boolean,
+) : ModifierNodeElement<RavenPressHapticNode>() {
+    override fun create(): RavenPressHapticNode = RavenPressHapticNode(
+        interactionSource = interactionSource,
+        hapticType = hapticType,
+        enabled = enabled,
+    )
+
+    override fun update(node: RavenPressHapticNode) {
+        node.updateParams(
+            newSource = interactionSource,
+            newHapticType = hapticType,
+            newEnabled = enabled,
+        )
+    }
+
+    override fun InspectorInfo.inspectableProperties() {
+        name = "ravenPressHaptic"
+        properties["hapticType"] = hapticType
+        properties["enabled"] = enabled
+    }
+}
+
+private class RavenPressHapticNode(
+    private var interactionSource: InteractionSource?,
+    private var hapticType: HapticFeedbackType,
+    private var enabled: Boolean,
+) : Modifier.Node(),
+    PointerInputModifierNode,
+    CompositionLocalConsumerModifierNode {
+
+    private var interactionJob: Job? = null
+    private var trackedPointerId: PointerId? = null
+    private var downPosition: Offset = Offset.Zero
+
+    override val shouldAutoInvalidate: Boolean get() = false
+
+    override fun onAttach() {
+        startCollecting()
+    }
+
+    override fun onDetach() {
+        interactionJob?.cancel()
+        trackedPointerId = null
+    }
+
+    fun updateParams(
+        newSource: InteractionSource?,
+        newHapticType: HapticFeedbackType,
+        newEnabled: Boolean,
+    ) {
+        val changed = interactionSource !== newSource || enabled != newEnabled
+        interactionSource = newSource
+        hapticType = newHapticType
+        enabled = newEnabled
+        if (changed) {
+            trackedPointerId = null
+            startCollecting()
+        }
+    }
+
+    private fun startCollecting() {
+        interactionJob?.cancel()
+        val source = interactionSource ?: return
+        if (!enabled || !isAttached) return
+        interactionJob = coroutineScope.launch {
+            source.interactions.collect { interaction ->
+                if (interaction is PressInteraction.Release && enabled) {
+                    currentValueOf(LocalHapticFeedback).performHapticFeedback(hapticType)
                 }
             }
         }
-        this
-    } else {
-        this.pointerInput(enabled, hapticType) {
-            if (!enabled) return@pointerInput
-            awaitEachGesture {
-                awaitFirstDown(requireUnconsumed = false)
-                val up = waitForUpOrCancellation()
-                if (up != null) {
-                    haptic.performHapticFeedback(hapticType)
-                }
+    }
+
+    override fun onPointerEvent(
+        pointerEvent: PointerEvent,
+        pass: PointerEventPass,
+        bounds: IntSize,
+    ) {
+        if (interactionSource != null || !enabled || pass != PointerEventPass.Final) return
+        val touchSlop = currentValueOf(LocalViewConfiguration).touchSlop
+        val tracked = trackedPointerId
+        if (tracked == null) {
+            val down = pointerEvent.changes.firstOrNull { it.changedToDownIgnoreConsumed() }
+            if (down != null) {
+                trackedPointerId = down.id
+                downPosition = down.position
             }
+            return
         }
+        val match = pointerEvent.changes.firstOrNull { it.id == tracked }
+        if (match == null || (match.position - downPosition).getDistance() > touchSlop) {
+            trackedPointerId = null
+            return
+        }
+        if (match.changedToUpIgnoreConsumed()) {
+            trackedPointerId = null
+            currentValueOf(LocalHapticFeedback).performHapticFeedback(hapticType)
+        }
+    }
+
+    override fun onCancelPointerInput() {
+        trackedPointerId = null
     }
 }
 
@@ -744,19 +996,20 @@ fun Modifier.ambientHeroGlow(
 ): Modifier {
     val clampedAlpha = RavenMotion.clampAmbientGlowAlpha(alpha)
     if (clampedAlpha <= 0f) return this
-    return this.drawBehind {
+    return this.drawWithCache {
         val radius = maxOf(size.width, size.height).coerceAtLeast(1f) * 0.85f
         val center = Offset(x = size.width * 0.68f, y = size.height * 0.18f)
-        drawRect(
-            brush = Brush.radialGradient(
-                colors = listOf(
-                    tint.copy(alpha = clampedAlpha),
-                    tint.copy(alpha = clampedAlpha * 0.35f),
-                    Color.Transparent,
-                ),
-                center = center,
-                radius = radius,
+        val glowBrush = Brush.radialGradient(
+            colors = listOf(
+                tint.copy(alpha = clampedAlpha),
+                tint.copy(alpha = clampedAlpha * 0.35f),
+                Color.Transparent,
             ),
+            center = center,
+            radius = radius,
         )
+        onDrawBehind {
+            drawRect(brush = glowBrush)
+        }
     }
 }

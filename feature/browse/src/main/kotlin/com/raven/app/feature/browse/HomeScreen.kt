@@ -1,5 +1,13 @@
 package com.raven.app.feature.browse
 
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.EnterTransition
+import androidx.compose.animation.ExitTransition
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -44,6 +52,7 @@ import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.key
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
@@ -71,10 +80,12 @@ import com.raven.app.core.designsystem.component.RavenSkeletonBox
 import com.raven.app.core.designsystem.component.RavenTopBar
 import com.raven.app.core.designsystem.component.RavenVideoCard
 import com.raven.app.core.designsystem.component.RavenVideoCardSkeleton
-import com.raven.app.core.designsystem.component.rememberRavenShimmerBrush
+import com.raven.app.core.designsystem.component.rememberRavenShimmerProgress
+import com.raven.app.core.designsystem.theme.LocalMotionReduced
 import com.raven.app.core.designsystem.theme.LocalRavenColors
 import com.raven.app.core.designsystem.theme.LocalRavenFeedback
 import com.raven.app.core.designsystem.theme.RavenFeedbackEffect
+import com.raven.app.core.designsystem.theme.RavenMotion
 import com.raven.app.core.designsystem.theme.RavenShapes
 import com.raven.app.core.model.ComicLanguage
 import com.raven.app.core.model.MediaItem
@@ -152,49 +163,60 @@ fun HomeScreenContent(
             .background(colors.canvas)
             .testTag("browse_home_screen"),
     ) {
-        when {
-            activeSite == null -> {
-                RavenEmptyState(
-                    title = "暂无可用站点",
-                    message = "未检测到已注册的站点插件。",
-                    modifier = Modifier.align(Alignment.Center),
-                )
-            }
-            uiState.isVideoHome -> {
-                CinemaVideoHome(
-                    uiState = uiState,
-                    activeSite = activeSite,
-                    navigator = navigator,
-                    onOpenSiteSwitcher = {
-                        onDismissTutorial()
-                        showSiteSwitcher = true
-                    },
-                    onRefresh = onRefresh,
-                    onLoadNextPage = onLoadNextPage,
-                    onToggleWatchLater = onToggleWatchLater,
-                    onDismissTutorial = onDismissTutorial,
-                    onSaveBrowsePosition = onSaveBrowsePosition,
-                    onDismissRestoredPosition = onDismissRestoredPosition,
-                    onItemLongClick = { actionTargetItem = it },
-                )
-            }
-            else -> {
-                GalleryMasonryHome(
-                    uiState = uiState,
-                    activeSite = activeSite,
-                    navigator = navigator,
-                    onOpenSiteSwitcher = {
-                        onDismissTutorial()
-                        showSiteSwitcher = true
-                    },
-                    onSelectLanguage = onSelectLanguage,
-                    onRefresh = onRefresh,
-                    onLoadNextPage = onLoadNextPage,
-                    onDismissTutorial = onDismissTutorial,
-                    onSaveBrowsePosition = onSaveBrowsePosition,
-                    onDismissRestoredPosition = onDismissRestoredPosition,
-                    onItemLongClick = { actionTargetItem = it },
-                )
+        val homeStageKey = when {
+            activeSite == null -> "none"
+            uiState.isVideoHome -> "video"
+            else -> "gallery"
+        }
+        RavenContentCrossfade(targetState = homeStageKey) { stage ->
+            when (stage) {
+                "none" -> {
+                    Box(modifier = Modifier.fillMaxSize()) {
+                        RavenEmptyState(
+                            title = "暂无可用站点",
+                            message = "未检测到已注册的站点插件。",
+                            modifier = Modifier.align(Alignment.Center),
+                        )
+                    }
+                }
+                "video" -> {
+                    val site = activeSite ?: return@RavenContentCrossfade
+                    CinemaVideoHome(
+                        uiState = uiState,
+                        activeSite = site,
+                        navigator = navigator,
+                        onOpenSiteSwitcher = {
+                            onDismissTutorial()
+                            showSiteSwitcher = true
+                        },
+                        onRefresh = onRefresh,
+                        onLoadNextPage = onLoadNextPage,
+                        onToggleWatchLater = onToggleWatchLater,
+                        onDismissTutorial = onDismissTutorial,
+                        onSaveBrowsePosition = onSaveBrowsePosition,
+                        onDismissRestoredPosition = onDismissRestoredPosition,
+                        onItemLongClick = { actionTargetItem = it },
+                    )
+                }
+                else -> {
+                    val site = activeSite ?: return@RavenContentCrossfade
+                    GalleryMasonryHome(
+                        uiState = uiState,
+                        activeSite = site,
+                        navigator = navigator,
+                        onOpenSiteSwitcher = {
+                            onDismissTutorial()
+                            showSiteSwitcher = true
+                        },
+                        onSelectLanguage = onSelectLanguage,
+                        onRefresh = onRefresh,
+                        onLoadNextPage = onLoadNextPage,
+                        onDismissTutorial = onDismissTutorial,
+                        onSaveBrowsePosition = onSaveBrowsePosition,
+                        onDismissRestoredPosition = onDismissRestoredPosition,
+                        onItemLongClick = { actionTargetItem = it },
+                    )
+                }
             }
         }
     }
@@ -271,13 +293,16 @@ private fun CinemaVideoHome(
     }
 
     // Persist browse position anchor when scrolling through primary video stream
-    LaunchedEffect(listState, activeSite.id, uiState.primaryItems, uiState.currentPage) {
+    val currentPrimaryItems by rememberUpdatedState(uiState.primaryItems)
+    val currentPageNum by rememberUpdatedState(uiState.currentPage)
+    LaunchedEffect(listState, activeSite.id) {
         snapshotFlow { listState.firstVisibleItemIndex }
             .distinctUntilChanged()
             .collect { firstIdx ->
-                val anchor = uiState.primaryItems.getOrNull(firstIdx.coerceIn(0, (uiState.primaryItems.size - 1).coerceAtLeast(0)))
+                val itemsList = currentPrimaryItems
+                val anchor = itemsList.getOrNull(firstIdx.coerceIn(0, (itemsList.size - 1).coerceAtLeast(0)))
                 if (anchor != null && firstIdx > 0) {
-                    onSaveBrowsePosition(anchor.id, uiState.currentPage, "latest")
+                    onSaveBrowsePosition(anchor.id, currentPageNum, "latest")
                 }
             }
     }
@@ -554,6 +579,7 @@ private fun CinemaVideoHome(
                                 ) { _, rowItems ->
                                     Row(
                                         modifier = Modifier
+                                            .animateItem()
                                             .fillMaxWidth()
                                             .padding(horizontal = 16.dp),
                                         horizontalArrangement = Arrangement.spacedBy(12.dp),
@@ -662,11 +688,11 @@ private fun GalleryMasonryHome(
 
     // Collapsible language bar state driven by vertical scroll direction
     var languageBarVisible by remember(activeSite.id) { mutableStateOf(true) }
-    var previousIndex by remember(activeSite.id) { mutableIntStateOf(0) }
-    var previousOffset by remember(activeSite.id) { mutableIntStateOf(0) }
 
-    LaunchedEffect(gridState, uiState.supportsLanguageFilter) {
+    LaunchedEffect(gridState, uiState.supportsLanguageFilter, activeSite.id) {
         if (!uiState.supportsLanguageFilter) return@LaunchedEffect
+        var previousIndex = 0
+        var previousOffset = 0
         snapshotFlow { gridState.firstVisibleItemIndex to gridState.firstVisibleItemScrollOffset }
             .distinctUntilChanged()
             .collect { (index, offset) ->
@@ -702,13 +728,16 @@ private fun GalleryMasonryHome(
     }
 
     // Browse position persistence
-    LaunchedEffect(gridState, activeSite.id, uiState.primaryItems, uiState.currentPage) {
+    val currentGalleryItems by rememberUpdatedState(uiState.primaryItems)
+    val currentGalleryPage by rememberUpdatedState(uiState.currentPage)
+    LaunchedEffect(gridState, activeSite.id) {
         snapshotFlow { gridState.firstVisibleItemIndex }
             .distinctUntilChanged()
             .collect { firstIdx ->
-                val anchor = uiState.primaryItems.getOrNull(firstIdx.coerceIn(0, (uiState.primaryItems.size - 1).coerceAtLeast(0)))
+                val itemsList = currentGalleryItems
+                val anchor = itemsList.getOrNull(firstIdx.coerceIn(0, (itemsList.size - 1).coerceAtLeast(0)))
                 if (anchor != null && firstIdx > 0) {
-                    onSaveBrowsePosition(anchor.id, uiState.currentPage, "")
+                    onSaveBrowsePosition(anchor.id, currentGalleryPage, "")
                 }
             }
     }
@@ -771,7 +800,22 @@ private fun GalleryMasonryHome(
             )
         }
 
-        if (uiState.showSiteSwitchTutorial) {
+        val motionReduced = LocalMotionReduced.current
+        AnimatedVisibility(
+            visible = uiState.showSiteSwitchTutorial,
+            enter = if (motionReduced) {
+                EnterTransition.None
+            } else {
+                expandVertically(tween(200, easing = RavenMotion.HarmonyDecelerationEasing)) +
+                    fadeIn(tween(180, easing = RavenMotion.HarmonyDecelerationEasing))
+            },
+            exit = if (motionReduced) {
+                ExitTransition.None
+            } else {
+                shrinkVertically(tween(180, easing = RavenMotion.HarmonyDecelerationEasing)) +
+                    fadeOut(tween(140, easing = RavenMotion.HarmonyDecelerationEasing))
+            },
+        ) {
             SiteSwitchTutorialCard(
                 siteCount = uiState.allSites.size,
                 onOpenSwitcher = onOpenSiteSwitcher,
@@ -949,7 +993,7 @@ private enum class HomeStreamStage {
 
 @Composable
 private fun CinemaHomeSkeleton() {
-    val brush = rememberRavenShimmerBrush()
+    val shimmerProgress = rememberRavenShimmerProgress()
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -958,7 +1002,7 @@ private fun CinemaHomeSkeleton() {
     ) {
         RavenSkeletonBox(
             shape = RavenShapes.CardShape,
-            brush = brush,
+            progress = shimmerProgress,
             modifier = Modifier
                 .fillMaxWidth()
                 .height(380.dp),
@@ -968,14 +1012,14 @@ private fun CinemaHomeSkeleton() {
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             RavenSkeletonBox(
-                brush = brush,
+                progress = shimmerProgress,
                 modifier = Modifier
                     .width(120.dp)
                     .height(18.dp),
             )
             Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                RavenVideoCardSkeleton(brush = brush, modifier = Modifier.weight(1f))
-                RavenVideoCardSkeleton(brush = brush, modifier = Modifier.weight(1f))
+                RavenVideoCardSkeleton(progress = shimmerProgress, modifier = Modifier.weight(1f))
+                RavenVideoCardSkeleton(progress = shimmerProgress, modifier = Modifier.weight(1f))
             }
         }
     }
@@ -983,7 +1027,7 @@ private fun CinemaHomeSkeleton() {
 
 @Composable
 private fun GalleryMasonrySkeleton() {
-    val brush = rememberRavenShimmerBrush()
+    val shimmerProgress = rememberRavenShimmerProgress()
     BoxWithConstraints(
         modifier = Modifier
             .fillMaxSize()
@@ -1001,7 +1045,7 @@ private fun GalleryMasonrySkeleton() {
                     repeat(columns) { colIdx ->
                         RavenGalleryCardSkeleton(
                             aspectRatio = ratios[(rowIdx * columns + colIdx) % ratios.size],
-                            brush = brush,
+                            progress = shimmerProgress,
                             modifier = Modifier.weight(1f),
                         )
                     }

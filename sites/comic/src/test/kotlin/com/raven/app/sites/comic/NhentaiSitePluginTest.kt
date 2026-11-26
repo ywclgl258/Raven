@@ -314,4 +314,37 @@ class NhentaiSitePluginTest {
         val page = plugin.feedSource!!.loadFeed(FeedRequest(SiteId.NHENTAI, page = 1))
         assertEquals(listOf("123"), page.items.map { it.id })
     }
+
+    @Test
+    fun `nhentai quotes multiword scoped queries, validates mediaId prefix, and maps 401 and 403 challenge`() = runTest {
+        val http = FakeHttpClientAdapter()
+        http.onUrlText("https://nhentai.net/api/v2/cdn", cdnJson)
+        http.onMatch({ req -> req.url.startsWith("https://nhentai.net/api/v2/search") }) { req ->
+            FakeHttpClientAdapter.htmlResponse(req.url, """{"num_pages": 1, "result": []}""")
+        }
+        val plugin = NhentaiSitePlugin(http)
+        plugin.searchSource!!.search(FeedRequest(SiteId.NHENTAI, query = "artist:shindo l", scope = SearchScope.AUTHOR))
+        val searchReq = http.recordedRequests.first { it.url.contains("/api/v2/search") }
+        val qParam = ComicUrl.requireParse(searchReq.url).queryParameter("query")
+        assertEquals("""artist:"shindo l"""", qParam)
+
+        http.onUrlText(
+            "https://nhentai.net/api/v2/galleries/500",
+            """{"id":500,"media_id":"999","title":{"english":"Bad Media"},"num_pages":1,"pages":[{"path":"galleries/888/1.jpg"}],"tags":[]}""",
+        )
+        assertTrue(
+            runCatching { plugin.gallerySource!!.loadGalleryDetail("https://nhentai.net/g/500/") }
+                .exceptionOrNull() is SiteException.ParseError,
+        )
+
+        http.onUrlText("https://nhentai.net/api/v2/galleries/401", "unauthorized", code = 401)
+        assertTrue(
+            runCatching { plugin.gallerySource!!.loadGalleryDetail("https://nhentai.net/g/401/") }
+                .exceptionOrNull() is SiteException.AuthRequired,
+        )
+
+        http.onUrlText("https://nhentai.net/api/v2/galleries/403", "<html>Just a moment...</html>", code = 403)
+        val err403 = runCatching { plugin.gallerySource!!.loadGalleryDetail("https://nhentai.net/g/403/") }.exceptionOrNull()
+        assertTrue(err403 is SiteException.Forbidden && err403.isChallenge)
+    }
 }

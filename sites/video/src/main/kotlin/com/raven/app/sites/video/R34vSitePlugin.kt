@@ -231,9 +231,14 @@ class R34vSitePlugin(
                 throw SiteException.AuthRequired("登录未成功，请检查用户名、密码和邮箱验证", siteId = SiteId.R34V)
             }
 
-            cookies.putAll(VideoSiteSupport.extractSetCookies(postResp))
-            if (cookies.isNotEmpty()) {
-                sessionStore.saveCookies(SiteId.R34V, cookies)
+            cookies.putAll(sessionStore.getCookies(SiteId.R34V))
+            cookies.putAll(VideoSiteSupport.extractSetCookies(getResp))
+            // Merge order during 302 login: preCookies -> cookie-jar stored 302 cookies -> final postResp Set-Cookie.
+            val merged = LinkedHashMap<String, String>(cookies)
+            merged.putAll(sessionStore.getCookies(SiteId.R34V))
+            merged.putAll(VideoSiteSupport.extractSetCookies(postResp))
+            if (merged.isNotEmpty()) {
+                sessionStore.saveCookies(SiteId.R34V, merged)
             }
             val persisted = sessionStore.getCookies(SiteId.R34V)
             if (!persisted.containsKey("PHPSESSID")) {
@@ -417,7 +422,7 @@ class R34vSitePlugin(
         private val pageOfRegex = Regex("Page\\s+([\\d,]+)\\s+of\\s+([\\d,]+)")
         private val pathPageRegex = Regex("/(\\d+)/?(?:\\?.*)?$")
         private val groupLinkRegex = Regex("/(characters|categories|models|tags|channels)/([^/?#]+)/?")
-        private val workLinkRegex = Regex("^/top-characters/([^/?#]+)/$")
+        private val workLinkRegex = Regex("(?:^|^https?://(?:www\\.)?rule34video\\.com)/top-characters/([^/?#]+)/?")
         private val allCountRegex = Regex("^All \\d+", RegexOption.IGNORE_CASE)
         private val durationClockRegex = Regex("\\d+:\\d{2}(:\\d{2})?")
         private val downloadQualityRegex = Regex("(\\d{3,4})p?\\.mp4", RegexOption.IGNORE_CASE)
@@ -766,19 +771,19 @@ class R34vSitePlugin(
 
             if (tags.isEmpty() && categories.isEmpty() && authors.isEmpty() && characters.isEmpty()) {
                 for (a in doc.select("[data-suggest-type=tag] a[href*=/tags/]")) {
-                    val slug = a.attr("href").trimEnd('/').substringAfterLast('/')
+                    val slug = a.attr("href").substringBefore('?').substringBefore('#').trimEnd('/').substringAfterLast('/')
                     if (slug.isNotBlank() && tags.none { it.slug == slug }) {
                         tags.add(TagRef(slug = slug, label = a.cleanText().ifBlank { slug }, url = VideoSiteSupport.resolveAbsolute(baseUrl, a.attr("href"))))
                     }
                 }
                 for (a in doc.select("[data-suggest-type=category] a[href*=/categories/]")) {
-                    val slug = a.attr("href").trimEnd('/').substringAfterLast('/')
+                    val slug = a.attr("href").substringBefore('?').substringBefore('#').trimEnd('/').substringAfterLast('/')
                     if (slug.isNotBlank() && categories.none { it.slug == slug }) {
                         categories.add(TagRef(slug = slug, label = a.cleanText().ifBlank { slug }, namespace = "category", url = VideoSiteSupport.resolveAbsolute(baseUrl, a.attr("href"))))
                     }
                 }
                 for (a in doc.select("[data-suggest-type=model] a[href*=/models/]")) {
-                    val slug = a.attr("href").trimEnd('/').substringAfterLast('/')
+                    val slug = a.attr("href").substringBefore('?').substringBefore('#').trimEnd('/').substringAfterLast('/')
                     if (slug.isNotBlank() && authors.none { it.id == slug }) {
                         authors.add(AuthorRef(id = slug, name = a.cleanText().ifBlank { slug }, role = "artist", url = VideoSiteSupport.resolveAbsolute(baseUrl, a.attr("href"))))
                     }
@@ -918,7 +923,7 @@ class R34vSitePlugin(
             if (rows.isNotEmpty()) {
                 return rows.mapNotNull { row ->
                     val a = row.selectFirst("a[href*=/tags/], a[href*=/characters/]") ?: return@mapNotNull null
-                    val slug = a.attr("href").trimEnd('/').substringAfterLast('/')
+                    val slug = a.attr("href").substringBefore('?').substringBefore('#').trimEnd('/').substringAfterLast('/')
                     if (slug.isBlank()) return@mapNotNull null
                     DirectoryEntry(
                         siteId = SiteId.R34V,
@@ -934,7 +939,7 @@ class R34vSitePlugin(
             val title = doc.select("h2.title").firstOrNull { it.text().equals("Top Artists", ignoreCase = true) }
             val root = title?.parent()?.parent()?.selectFirst(".aside_wrap") ?: return emptyList()
             return root.select("a.item[href*=/models/]").mapNotNull { a ->
-                val slug = a.attr("href").trimEnd('/').substringAfterLast('/')
+                val slug = a.attr("href").substringBefore('?').substringBefore('#').trimEnd('/').substringAfterLast('/')
                 if (slug.isBlank()) return@mapNotNull null
                 DirectoryEntry(
                     siteId = SiteId.R34V,

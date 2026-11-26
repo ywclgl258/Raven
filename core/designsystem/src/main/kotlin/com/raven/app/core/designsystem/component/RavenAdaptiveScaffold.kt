@@ -1,9 +1,19 @@
 package com.raven.app.core.designsystem.component
 
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.snap
 import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
+import androidx.compose.animation.shrinkVertically
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -183,6 +193,7 @@ fun RavenAdaptiveScaffold(
     val colors = LocalRavenColors.current
     val feedback = LocalRavenFeedback.current
     val reduceTransparency = LocalReduceTransparency.current
+    val motionReduced = LocalMotionReduced.current
     val adaptiveInfo = currentWindowAdaptiveInfo()
     val layoutType = when {
         !showNavigation -> NavigationSuiteType.None
@@ -277,18 +288,32 @@ fun RavenAdaptiveScaffold(
                     },
                     badge = if (badgeCount > 0) {
                         {
+                            val badgeText = if (badgeCount > 99) "99+" else badgeCount.toString()
                             Badge(
                                 containerColor = colors.crimson,
                                 contentColor = colors.inkPrimary,
                             ) {
-                                Text(
-                                    text = if (badgeCount > 99) "99+" else badgeCount.toString(),
-                                    style = RavenTabularTextStyle.copy(
-                                        fontSize = 10.sp,
-                                        lineHeight = 12.sp,
-                                        fontWeight = FontWeight.Bold,
-                                    ),
-                                )
+                                AnimatedContent(
+                                    targetState = badgeText,
+                                    transitionSpec = {
+                                        if (motionReduced) {
+                                            fadeIn(snap()) togetherWith fadeOut(snap())
+                                        } else {
+                                            (fadeIn(tween(140)) + scaleIn(initialScale = 0.78f, animationSpec = RavenMotion.interactiveSpringSpec()))
+                                                .togetherWith(fadeOut(tween(100)) + scaleOut(targetScale = 0.78f))
+                                        }
+                                    },
+                                    label = "ravenNavBadgeCount",
+                                ) { countLabel ->
+                                    Text(
+                                        text = countLabel,
+                                        style = RavenTabularTextStyle.copy(
+                                            fontSize = 10.sp,
+                                            lineHeight = 12.sp,
+                                            fontWeight = FontWeight.Bold,
+                                        ),
+                                    )
+                                }
                             }
                         }
                     } else {
@@ -301,32 +326,66 @@ fun RavenAdaptiveScaffold(
     ) {
         Box(modifier = Modifier.fillMaxSize()) {
             Column(modifier = Modifier.fillMaxSize()) {
-                if (isIncognito) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .background(colors.surface2)
-                            .statusBarsPadding()
-                            .padding(horizontal = 14.dp, vertical = 5.dp)
-                            .testTag("raven_incognito_strip"),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    ) {
-                        Box(
+                AnimatedVisibility(
+                    visible = isIncognito,
+                    enter = if (motionReduced) {
+                        fadeIn(snap())
+                    } else {
+                        expandVertically(
+                            animationSpec = tween(
+                                durationMillis = 200,
+                                easing = RavenMotion.HarmonyDecelerationEasing,
+                            ),
+                        ) + fadeIn(
+                            animationSpec = tween(
+                                durationMillis = 180,
+                                easing = RavenMotion.HarmonyDecelerationEasing,
+                            ),
+                        )
+                    },
+                    exit = if (motionReduced) {
+                        fadeOut(snap())
+                    } else {
+                        shrinkVertically(
+                            animationSpec = tween(
+                                durationMillis = 180,
+                                easing = RavenMotion.HarmonyDecelerationEasing,
+                            ),
+                        ) + fadeOut(
+                            animationSpec = tween(
+                                durationMillis = 140,
+                                easing = RavenMotion.HarmonyDecelerationEasing,
+                            ),
+                        )
+                    },
+                ) {
+                    Column(modifier = Modifier.fillMaxWidth()) {
+                        Row(
                             modifier = Modifier
-                                .size(6.dp)
-                                .clip(CircleShape)
-                                .background(colors.crimson),
-                        )
-                        Text(
-                            text = "无痕模式已开启 · 暂停保存历史、搜索与浏览进度",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = colors.inkPrimary,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                        )
+                                .fillMaxWidth()
+                                .background(colors.surface2)
+                                .statusBarsPadding()
+                                .padding(horizontal = 14.dp, vertical = 5.dp)
+                                .testTag("raven_incognito_strip"),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(6.dp)
+                                    .clip(CircleShape)
+                                    .background(colors.crimson),
+                            )
+                            Text(
+                                text = "无痕模式已开启 · 暂停保存历史、搜索与浏览进度",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = colors.inkPrimary,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        }
+                        HorizontalDivider(thickness = 0.5.dp, color = colors.hairline)
                     }
-                    HorizontalDivider(thickness = 0.5.dp, color = colors.hairline)
                 }
                 Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
                     content()
@@ -365,7 +424,7 @@ private fun RavenNavDestinationIcon(
     selected: Boolean,
 ) {
     val motionReduced = LocalMotionReduced.current
-    val iconScale by animateFloatAsState(
+    val iconScaleState = animateFloatAsState(
         targetValue = if (selected) 1.10f else 1.0f,
         animationSpec = if (motionReduced) {
             snap()
@@ -378,8 +437,9 @@ private fun RavenNavDestinationIcon(
         imageVector = if (selected) destination.selectedIcon else destination.unselectedIcon,
         contentDescription = destination.label,
         modifier = Modifier.graphicsLayer {
-            scaleX = iconScale
-            scaleY = iconScale
+            val s = iconScaleState.value
+            scaleX = s
+            scaleY = s
         },
     )
 }

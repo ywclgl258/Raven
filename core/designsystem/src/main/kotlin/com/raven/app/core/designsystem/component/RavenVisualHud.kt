@@ -26,6 +26,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.TransformOrigin
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
@@ -35,6 +37,7 @@ import com.raven.app.core.designsystem.theme.LocalMotionReduced
 import com.raven.app.core.designsystem.theme.LocalRavenColors
 import com.raven.app.core.designsystem.theme.LocalReduceTransparency
 import com.raven.app.core.designsystem.theme.RavenFrostedBox
+import com.raven.app.core.designsystem.theme.RavenMotion
 import com.raven.app.core.designsystem.theme.RavenShapes
 import com.raven.app.core.designsystem.theme.RavenTabularTextStyle
 
@@ -58,14 +61,36 @@ fun RavenVisualHud(
     val motionReduced = LocalMotionReduced.current
 
     val enterTransition = if (motionReduced) {
-        fadeIn(androidx.compose.animation.core.snap())
+        fadeIn(snap())
     } else {
-        fadeIn(tween(120)) + scaleIn(initialScale = 0.94f, animationSpec = tween(140))
+        fadeIn(
+            tween(
+                durationMillis = 120,
+                easing = RavenMotion.HarmonyDecelerationEasing,
+            ),
+        ) + scaleIn(
+            initialScale = 0.92f,
+            animationSpec = tween(
+                durationMillis = 150,
+                easing = RavenMotion.HarmonyDecelerationEasing,
+            ),
+        )
     }
     val exitTransition = if (motionReduced) {
-        fadeOut(androidx.compose.animation.core.snap())
+        fadeOut(snap())
     } else {
-        fadeOut(tween(150)) + scaleOut(targetScale = 0.94f, animationSpec = tween(150))
+        fadeOut(
+            tween(
+                durationMillis = 150,
+                easing = RavenMotion.HarmonyDecelerationEasing,
+            ),
+        ) + scaleOut(
+            targetScale = 0.94f,
+            animationSpec = tween(
+                durationMillis = 150,
+                easing = RavenMotion.HarmonyDecelerationEasing,
+            ),
+        )
     }
 
     AnimatedVisibility(
@@ -94,7 +119,7 @@ fun RavenVisualHud(
 
                 if (progress != null) {
                     val target = if (progress.isFinite()) progress.coerceIn(0f, 1f) else 0f
-                    val animatedProgress by animateFloatAsState(
+                    val animatedProgressState = animateFloatAsState(
                         targetValue = target,
                         animationSpec = if (motionReduced) snap() else tween(durationMillis = 80),
                         label = "ravenHudProgress",
@@ -108,8 +133,12 @@ fun RavenVisualHud(
                     ) {
                         Box(
                             modifier = Modifier
-                                .fillMaxWidth(animatedProgress)
+                                .fillMaxWidth()
                                 .height(4.dp)
+                                .graphicsLayer {
+                                    scaleX = animatedProgressState.value.coerceIn(0f, 1f)
+                                    transformOrigin = TransformOrigin(0f, 0.5f)
+                                }
                                 .clip(CircleShape)
                                 .background(accentColor),
                         )

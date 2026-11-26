@@ -403,7 +403,7 @@ class JableSitePlugin(
                 if (label.isBlank()) return@mapNotNull null
                 val encoded = HtmlUrlCleaner.encodePathSegment(label)
                 TagRef(
-                    slug = encoded,
+                    slug = label,
                     label = label,
                     url = "${baseUrl.trimEnd('/')}/vodsearch/$encoded-time----------/",
                 )

@@ -234,15 +234,17 @@ internal object GalleryUrlUtils {
         val candidates = ArrayList<String>(4)
         val anchor = when {
             element.tagName().equals("a", ignoreCase = true) -> element
-            element.parent()?.tagName().equals("a", ignoreCase = true) -> element.parent()
-            else -> null
+            else -> element.closest("a")
         }
         val img = when {
             element.tagName().equals("img", ignoreCase = true) -> element
             else -> element.selectFirst("img")
         }
 
-        if (preferAnchorHref && anchor != null) {
+        val imgFilteredOut = img != null && (
+            img.attr("alt").trim().lowercase() in chromeAltLabels || isTinyIconElement(img)
+        )
+        if (!imgFilteredOut && preferAnchorHref && anchor != null) {
             val hrefRaw = anchor.absUrl("href").ifBlank { anchor.attr("href") }
             val resolvedHref = resolveAbsoluteUrl(hrefRaw, baseUrl)
             if (resolvedHref != null && isLikelyImageHref(resolvedHref, allowedUrlSubstrings)) {
@@ -250,25 +252,21 @@ internal object GalleryUrlUtils {
             }
         }
 
-        if (img != null) {
-            val hasChromeAlt = img.attr("alt").trim().lowercase() in chromeAltLabels
-            val isTinyIcon = isTinyIconElement(img)
-            if (!hasChromeAlt && !isTinyIcon) {
-                for (attr in lazyImageAttributes) {
-                    val raw = img.attr(attr).trim()
-                    if (raw.isNotEmpty()) {
-                        resolveAbsoluteUrl(raw, baseUrl)?.let { candidates += it }
-                    }
+        if (img != null && !imgFilteredOut) {
+            for (attr in lazyImageAttributes) {
+                val raw = img.attr(attr).trim()
+                if (raw.isNotEmpty()) {
+                    resolveAbsoluteUrl(raw, baseUrl)?.let { candidates += it }
                 }
-                for (attr in srcsetAttributes) {
-                    val raw = img.attr(attr).trim()
-                    if (raw.isNotEmpty()) {
-                        pickBestSrcsetUrl(raw, baseUrl)?.let { candidates += it }
-                    }
-                }
-                val srcRaw = img.absUrl("src").ifBlank { img.attr("src") }
-                resolveAbsoluteUrl(srcRaw, baseUrl)?.let { candidates += it }
             }
+            for (attr in srcsetAttributes) {
+                val raw = img.attr(attr).trim()
+                if (raw.isNotEmpty()) {
+                    pickBestSrcsetUrl(raw, baseUrl)?.let { candidates += it }
+                }
+            }
+            val srcRaw = img.absUrl("src").ifBlank { img.attr("src") }
+            resolveAbsoluteUrl(srcRaw, baseUrl)?.let { candidates += it }
         }
 
         return candidates.distinct()
@@ -317,11 +315,12 @@ internal object GalleryUrlUtils {
      */
     fun isChallengeHtml(body: String, cfMitigatedHeader: String? = null): Boolean {
         if (cfMitigatedHeader.equals("challenge", ignoreCase = true)) return true
-        if (body.contains("Checking your browser", ignoreCase = true)) return true
-        if (body.contains("Just a moment", ignoreCase = true)) return true
+        val hasContent = hasContentMarker(body)
+        if (!hasContent && body.contains("Checking your browser", ignoreCase = true)) return true
+        if (!hasContent && body.contains("Just a moment", ignoreCase = true)) return true
         if (body.contains("cf-mitigated", ignoreCase = true)) return true
         if (body.contains("DDoS-Guard", ignoreCase = true) && !body.contains("class=\"thumbs")) return true
-        if (body.contains("challenge-platform", ignoreCase = true) && !hasContentMarker(body)) return true
+        if (body.contains("challenge-platform", ignoreCase = true) && !hasContent) return true
         return false
     }
 

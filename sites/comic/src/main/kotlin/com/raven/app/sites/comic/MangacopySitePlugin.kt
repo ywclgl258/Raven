@@ -31,10 +31,8 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
-import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
-import kotlinx.serialization.json.jsonPrimitive
 
 /**
  * 拷贝漫画 (`SiteId.MANGACOPY`) 连载漫画插件。
@@ -92,8 +90,8 @@ class MangacopySitePlugin(
             if (items.isEmpty()) {
                 throw SiteException.ParseError("拷贝漫画列表结构不可识别", siteId = SiteId.MANGACOPY)
             }
-            val total = results.int("total") ?: 0
-            val offset = results.int("offset") ?: ((page - 1) * PAGE_SIZE)
+            val total = results.safeInt("total") ?: 0
+            val offset = results.safeInt("offset") ?: ((page - 1) * PAGE_SIZE)
             val title = when {
                 theme != null -> THEMES.firstOrNull { it.first == theme }?.second ?: theme
                 ordering == "-popular" -> "人气"
@@ -129,12 +127,21 @@ class MangacopySitePlugin(
             val pathWord = extractPathWord(url)
                 ?: throw SiteException.ParseError("无法识别拷贝漫画地址：$url", siteId = SiteId.MANGACOPY)
             val results = api("comic2/$pathWord", listOf("platform" to "1"))
-            val comic = results["comic"] as? JsonObject
+            val comic = results.safeObject("comic")
                 ?: throw SiteException.ParseError("拷贝漫画详情数据为空", siteId = SiteId.MANGACOPY)
-            val name = comic.string("name").ifBlank { "Comic $pathWord" }
-            val cover = stripCoverSize(comic.string("cover"))
-            val chapters = loadChapters(pathWord, results["groups"] as? JsonObject)
+            val name = comic.safeString("name").ifBlank { "Comic $pathWord" }
+            val cover = stripCoverSize(comic.safeString("cover"))
+            val groupsObj = results.safeObject("groups")
             val directChapterUuid = parseChapterUuid(url)
+            val chaptersResult = try {
+                Result.success(loadChapters(pathWord, groupsObj, throwIfAllFailed = true))
+            } catch (ce: CancellationException) {
+                throw ce
+            } catch (error: Throwable) {
+                if (directChapterUuid == null) throw error
+                Result.failure(error)
+            }
+            val chapters = chaptersResult.getOrDefault(emptyList())
             val target = if (directChapterUuid != null) {
                 chapters.firstOrNull { it.uuid == directChapterUuid }
                     ?: ChapterEntry(directChapterUuid, "章节 $directChapterUuid")
@@ -150,7 +157,12 @@ class MangacopySitePlugin(
                 emptyList()
             }
             val itemId = if (directChapterUuid != null) "$pathWord:$directChapterUuid" else pathWord
-            val itemUrl = chapterWebUrl ?: "${descriptor.baseUrl}/comic/$pathWord"
+            val itemUrl = if (directChapterUuid != null) {
+                chapterWebUrl ?: "${descriptor.baseUrl}/comic/$pathWord"
+            } else {
+                "${descriptor.baseUrl}/comic/$pathWord"
+            }
+            val hasMultipleChapters = chapters.size > 1 || (directChapterUuid != null && chaptersResult.isFailure)
             return GalleryDetail(
                 item = MediaItem(
                     siteId = SiteId.MANGACOPY,
@@ -166,10 +178,10 @@ class MangacopySitePlugin(
                         put("chapterName", target?.name.orEmpty())
                     },
                 ),
-                description = comic.string("brief"),
+                description = comic.safeString("brief"),
                 pageCount = pages.size.coerceAtLeast(1),
                 pages = pages,
-                chaptersUrl = if (chapters.size > 1) "${descriptor.baseUrl}/comic/$pathWord#chapters" else null,
+                chaptersUrl = if (hasMultipleChapters) "${descriptor.baseUrl}/comic/$pathWord#chapters" else null,
             )
         }
 
@@ -193,9 +205,13 @@ class MangacopySitePlugin(
             if (uuid.isBlank()) {
                 throw SiteException.ParseError("拷贝漫画章节信息缺失", siteId = SiteId.MANGACOPY)
             }
-            val images = loadChapterImages(detail.item.id, uuid)
+            val pathWord = detail.item.extra["comicId"].orEmpty()
+                .ifBlank { extractPathWord(detail.item.url).orEmpty() }
+                .ifBlank { detail.item.id.substringBefore(':') }
+            val images = loadChapterImages(pathWord, uuid)
+            val canonicalChapterUrl = "${descriptor.baseUrl}/comic/$pathWord/chapter/$uuid"
             return images.getOrNull(pageIndex - 1)?.let { imageUrl ->
-                GalleryPage(index = pageIndex, pageUrl = "$uuid#$pageIndex", imageUrl = imageUrl)
+                GalleryPage(index = pageIndex, pageUrl = "$canonicalChapterUrl#$pageIndex", imageUrl = imageUrl)
             } ?: throw SiteException.NotFound("页码超出范围：$pageIndex / ${images.size}", siteId = SiteId.MANGACOPY)
         }
 
@@ -208,11 +224,13 @@ class MangacopySitePlugin(
                 ?: throw SiteException.ParseError("无法识别拷贝漫画图页地址", siteId = SiteId.MANGACOPY)
             val pathWord = extractPathWord(pageUrl)
                 ?: throw SiteException.ParseError("无法识别拷贝漫画作品编号", siteId = SiteId.MANGACOPY)
-            val uuid = parsed.pathSegments.lastOrNull().orEmpty()
+            val uuid = parseChapterUuid(pageUrl)
+                ?: throw SiteException.ParseError("无法识别拷贝漫画章节编号", siteId = SiteId.MANGACOPY)
             val pageIndex = parsed.fragment?.toIntOrNull()?.takeIf { it > 0 } ?: 1
             val images = loadChapterImages(pathWord, uuid)
+            val canonicalChapterUrl = "${descriptor.baseUrl}/comic/$pathWord/chapter/$uuid"
             return images.getOrNull(pageIndex - 1)?.let { imageUrl ->
-                GalleryPage(index = pageIndex, pageUrl = "$uuid#$pageIndex", imageUrl = imageUrl)
+                GalleryPage(index = pageIndex, pageUrl = "$canonicalChapterUrl#$pageIndex", imageUrl = imageUrl)
             } ?: throw SiteException.NotFound("页码超出范围：$pageIndex / ${images.size}", siteId = SiteId.MANGACOPY)
         }
     }
@@ -251,10 +269,10 @@ class MangacopySitePlugin(
                 "offset" to ((page - 1) * PAGE_SIZE).toString(),
             ),
         )
-        val items = (results["list"] as? JsonArray).orEmpty()
+        val items = results.safeArray("list").orEmpty()
             .mapNotNull { (it as? JsonObject)?.let(::parseComicSummary) }
-        val total = results.int("total") ?: 0
-        val offset = results.int("offset") ?: ((page - 1) * PAGE_SIZE)
+        val total = results.safeInt("total") ?: 0
+        val offset = results.safeInt("offset") ?: ((page - 1) * PAGE_SIZE)
         return FeedPage(
             items = items,
             hasMore = offset + items.size < total,
@@ -265,45 +283,59 @@ class MangacopySitePlugin(
     }
 
     private fun parseComicSummary(obj: JsonObject): MediaItem? {
-        val name = obj.string("name").takeIf { it.isNotBlank() } ?: return null
-        val pathWord = obj.string("path_word").takeIf { it.isNotBlank() } ?: return null
+        val name = obj.safeString("name").takeIf { it.isNotBlank() } ?: return null
+        val pathWord = obj.safeString("path_word").takeIf { it.isNotBlank() } ?: return null
         return MediaItem(
             siteId = SiteId.MANGACOPY,
             id = pathWord,
             url = "${descriptor.baseUrl}/comic/$pathWord",
             kind = MediaKind.SERIAL_COMIC,
             title = name,
-            coverUrl = stripCoverSize(obj.string("cover")),
+            coverUrl = stripCoverSize(obj.safeString("cover")),
         )
     }
 
-    private suspend fun loadChapters(pathWord: String, groups: JsonObject?): List<ChapterEntry> {
+    private suspend fun loadChapters(
+        pathWord: String,
+        groups: JsonObject?,
+        throwIfAllFailed: Boolean = true,
+    ): List<ChapterEntry> {
         val groupWords = groups?.values?.mapNotNull { element ->
-            (element as? JsonObject)?.string("path_word")?.takeIf { it.isNotBlank() }
+            (element as? JsonObject)?.safeString("path_word")?.takeIf { it.isNotBlank() }
         }.orEmpty().ifEmpty { listOf("default") }
-        val collected = mutableListOf<ChapterEntry>()
+        val collected = LinkedHashMap<String, ChapterEntry>()
+        var succeededGroups = 0
+        var firstError: Throwable? = null
         for (group in groupWords) {
-            val results = runCatching {
+            val results = try {
                 api(
                     path = "comic/$pathWord/group/$group/chapters",
                     query = listOf("limit" to "500", "offset" to "0"),
                 )
-            }.getOrNull() ?: continue
-            val list = (results["list"] as? JsonArray).orEmpty()
-                .mapNotNull { (it as? JsonObject)?.let { chapter ->
-                    val uuid = chapter.string("uuid").takeIf { it.isNotBlank() } ?: return@let null
-                    val name = chapter.string("name").ifBlank { uuid }
-                    ChapterEntry(uuid, name)
-                } }
-            // 官方接口已按阅读顺序（最早 → 最新）返回
-            collected += list
+            } catch (ce: CancellationException) {
+                throw ce
+            } catch (error: Throwable) {
+                if (firstError == null) firstError = error
+                continue
+            }
+            succeededGroups += 1
+            results.safeArray("list").orEmpty()
+                .forEach { element ->
+                    val chapter = element as? JsonObject ?: return@forEach
+                    val uuid = chapter.safeString("uuid").takeIf { it.isNotBlank() } ?: return@forEach
+                    val name = chapter.safeString("name").ifBlank { uuid }
+                    collected.putIfAbsent(uuid, ChapterEntry(uuid, name))
+                }
         }
-        return collected
+        if (throwIfAllFailed && succeededGroups == 0 && firstError != null) {
+            throw firstError
+        }
+        return collected.values.toList()
     }
 
     private suspend fun loadChapterFeed(pathWord: String): FeedPage {
         val results = api("comic2/$pathWord", listOf("platform" to "1"))
-        val chapters = loadChapters(pathWord, results["groups"] as? JsonObject)
+        val chapters = loadChapters(pathWord, results.safeObject("groups"), throwIfAllFailed = true)
         val items = chapters.map { chapter ->
             MediaItem(
                 siteId = SiteId.MANGACOPY,
@@ -325,8 +357,8 @@ class MangacopySitePlugin(
         val contentKey = CONTENT_KEY_REGEX.find(html)?.groupValues?.get(1)
             ?: throw SiteException.ParseError("拷贝漫画章节内容缺失", siteId = SiteId.MANGACOPY)
         if (contentKey.length <= 16) return emptyList()
-        val cipherText = hexToBytes(contentKey.drop(16))
         val plain = runCatching {
+            val cipherText = hexToBytes(contentKey.drop(16))
             val cipher = Cipher.getInstance("AES/CBC/PKCS5Padding")
             cipher.init(
                 Cipher.DECRYPT_MODE,
@@ -339,7 +371,7 @@ class MangacopySitePlugin(
             json.parseToJsonElement(String(plain, Charsets.UTF_8)).jsonArray
         }.getOrNull() ?: throw SiteException.ParseError("拷贝漫画图页数据格式异常", siteId = SiteId.MANGACOPY)
         return array.mapNotNull { element ->
-            (element as? JsonObject)?.string("url")?.takeIf { it.isNotBlank() }
+            (element as? JsonObject)?.safeString("url")?.takeIf { it.isNotBlank() }
         }
     }
 
@@ -370,14 +402,22 @@ class MangacopySitePlugin(
         response.throwIfNotSuccessful(SiteId.MANGACOPY, descriptor.displayName)
         val root = runCatching { json.parseToJsonElement(response.bodyText()).jsonObject }.getOrNull()
             ?: throw SiteException.ParseError("拷贝漫画接口数据格式异常", siteId = SiteId.MANGACOPY)
-        val code = root.int("code") ?: 200
+        val code = root.safeInt("code") ?: 200
         if (code != 200) {
+            val apiMsg = root.safeString("message")
+            if (code == 210) {
+                throw SiteException.Forbidden(
+                    isChallenge = true,
+                    message = "拷贝漫画上游访问受限 (210)：${apiMsg.ifBlank { "第三方客户端暂受限制，请稍后重试" }}",
+                    siteId = SiteId.MANGACOPY,
+                )
+            }
             throw SiteException.ParseError(
-                "拷贝漫画接口返回 $code：${root.string("message")}",
+                "拷贝漫画接口返回 $code：$apiMsg",
                 siteId = SiteId.MANGACOPY,
             )
         }
-        return root["results"] as? JsonObject ?: JsonObject(emptyMap())
+        return root.safeObject("results") ?: JsonObject(emptyMap())
     }
 
     /**
@@ -445,12 +485,6 @@ class MangacopySitePlugin(
         val idx = segments.indexOf("chapter")
         return segments.getOrNull(idx + 1)?.takeIf { idx >= 0 && it.isNotBlank() }
     }
-
-    private fun JsonObject.string(name: String): String =
-        this[name]?.jsonPrimitive?.content?.trim().orEmpty()
-
-    private fun JsonObject.int(name: String): Int? =
-        this[name]?.jsonPrimitive?.intOrNull
 
     private data class ChapterEntry(val uuid: String, val name: String)
 

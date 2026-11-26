@@ -484,6 +484,165 @@ class GallerySitesPluginsTest {
         }
     }
 
+    @Test
+    fun gallerySitesHandleTagRoutesBloggerExtensionlessUrlsDirectoryPaginationAndPureVideoPosts() = runTest {
+        val fakeHttp = FakeHttpClientAdapter()
+
+        // 1. 4KHD & Everia TAG / category routes
+        val fourKhd = FourKhdSitePlugin(fakeHttp)
+        assertEquals(
+            "https://www.4khd.com/tag/cosplay?query-3-page=2",
+            fourKhd.engine.resolveFeedUrl(FeedRequest(SiteId.FOURKHD, query = "cosplay", scope = SearchScope.TAG, page = 2)),
+        )
+        assertEquals(
+            "https://www.4khd.com/pages/cosplay?query-3-page=2",
+            fourKhd.engine.resolveFeedUrl(FeedRequest(SiteId.FOURKHD, category = "cosplay", page = 2)),
+        )
+
+        val everia = EveriaSitePlugin(fakeHttp)
+        assertEquals(
+            "https://everia.club/tag/gravure/page/2/",
+            everia.engine.resolveFeedUrl(FeedRequest(SiteId.EVERIA, query = "gravure", scope = SearchScope.TAG, page = 2)),
+        )
+        assertEquals(
+            "https://everia.club/category/gravure/page/2/",
+            everia.engine.resolveFeedUrl(FeedRequest(SiteId.EVERIA, category = "gravure", page = 2)),
+        )
+
+        // 2. 4KUp accepts extensionless Blogger full-size URLs & resolves page images
+        val fourKup = FourKupSitePlugin(fakeHttp)
+        val post4kup = "https://4kup.net/extensionless-blogger-set/"
+        fakeHttp.stubHtml(
+            post4kup,
+            """
+            <!DOCTYPE html><html><head><title>4KUp Blogger - 4KUp</title></head><body>
+              <article><div class="entry-content">
+                <a class="thumb-photo" href="https://blogger.googleusercontent.com/img/b/R29vZ2xl/AVvXsDemoToken/s1600/photo_01">
+                  <picture><img data-src="https://blogger.googleusercontent.com/img/b/R29vZ2xl/AVvXsDemoToken/s400/photo_01" src="data:image/gif;base64,R0lGOD" /></picture>
+                </a>
+              </div></article>
+            </body></html>
+            """.trimIndent(),
+        )
+        val kupDetail = fourKup.gallerySource.loadGalleryDetail(post4kup)
+        assertEquals(
+            listOf("https://blogger.googleusercontent.com/img/b/R29vZ2xl/AVvXsDemoToken/s1600/photo_01"),
+            kupDetail.pages.map { it.imageUrl },
+        )
+        assertEquals(
+            kupDetail.pages.single().imageUrl,
+            fourKup.gallerySource.resolvePageImage("$post4kup#1-1-0", preferOriginal = false, forceReload = true).imageUrl,
+        )
+
+        // 3. GalleryEpic cosers:<basePage>:<query> advances when caller passes page > 1
+        val epic = GalleryEpicSitePlugin(fakeHttp)
+        fakeHttp.stubHtml(
+            "https://galleryepic.com/en/cosers/3?coserName=alice",
+            """<html><body><a href="/en/coser/301/1"><h3>Alice P3</h3></a></body></html>""",
+        )
+        val dirPage3 = epic.directorySource.loadDirectory(section = "cosers:2:alice", page = 3)
+        assertEquals(listOf("301"), dirPage3.map { it.id })
+
+        // 4. Cosplaytele pure-video post (no #gallery-1, protocol-relative data-src iframe) & /about/#video canonicalize guard
+        val cosplay = CosplayteleSitePlugin(fakeHttp)
+        val videoOnlyUrl = "https://cosplaytele.com/video-only-post/"
+        val embedUuid = "44444444-5555-4666-8777-888888888888"
+        fakeHttp.stubHtml(
+            videoOnlyUrl,
+            """
+            <!DOCTYPE html><html><head><title>Video Only - Cosplaytele</title></head><body>
+              <article class="post"><div class="entry-content single-page">
+                <iframe data-src="//cossora.stream/embed/$embedUuid"></iframe>
+              </div></article>
+            </body></html>
+            """.trimIndent(),
+        )
+        val pureVideoDetail = cosplay.gallerySource.loadGalleryDetail(videoOnlyUrl)
+        assertEquals(0, pureVideoDetail.pageCount)
+        assertTrue(pureVideoDetail.pages.isEmpty())
+        assertEquals(listOf("video-$embedUuid"), pureVideoDetail.embeddedVideos.map { it.id })
+        assertNull(cosplay.linkResolver.canonicalize("https://cosplaytele.com/about/#video-$embedUuid"))
+    }
+
+    @Test
+    fun galleryPluginRegexLiteralsEscapeBracesAndBracketsForAndroidArtIcu() {
+        val targetClasses = listOf(
+            FourKhdSitePlugin::class.java,
+            EveriaSitePlugin::class.java,
+            FourKupSitePlugin::class.java,
+            GalleryEpicSitePlugin::class.java,
+            CosplayteleSitePlugin::class.java,
+            WordPressPhotoEngine::class.java,
+            GalleryUrlUtils::class.java,
+            PhotoPageAddress::class.java,
+        )
+        val violations = mutableListOf<String>()
+        var checkedCount = 0
+        targetClasses.forEach { targetClass ->
+            val holders = listOf(targetClass) + targetClass.declaredClasses.toList()
+            holders.forEach { holder ->
+                holder.declaredFields
+                    .filter { java.lang.reflect.Modifier.isStatic(it.modifiers) && Regex::class.java.isAssignableFrom(it.type) }
+                    .forEach { field ->
+                        field.isAccessible = true
+                        val pattern = (field.get(null) as? Regex)?.pattern ?: return@forEach
+                        checkedCount++
+                        val err = findIcuRegexViolation(pattern)
+                        if (err != null) {
+                            violations += "${targetClass.simpleName}.${field.name} [$err]: $pattern"
+                        }
+                    }
+            }
+        }
+        assertTrue("Expected >0 static Regex fields scanned across gallery plugins, got $checkedCount", checkedCount > 0)
+        assertTrue("Unescaped {/}/] will crash Android ART ICU: $violations", violations.isEmpty())
+    }
+
+    private fun findIcuRegexViolation(pattern: String): String? {
+        var i = 0
+        val n = pattern.length
+        var inCharClass = false
+        var ccStart = -1
+        while (i < n) {
+            val ch = pattern[i]
+            if (ch == '\\') {
+                if (i + 1 < n && (pattern[i + 1] == 'p' || pattern[i + 1] == 'P') && i + 2 < n && pattern[i + 2] == '{') {
+                    val closeProp = pattern.indexOf('}', i + 3)
+                    if (closeProp != -1) {
+                        i = closeProp + 1
+                        continue
+                    }
+                }
+                i += 2
+                continue
+            }
+            if (inCharClass) {
+                if (ch == '{' || ch == '}') return "unescaped '$ch' inside character class"
+                if (ch == ']' && i > ccStart + 1) inCharClass = false
+                i++
+                continue
+            }
+            when (ch) {
+                '[' -> {
+                    inCharClass = true
+                    ccStart = if (i + 1 < n && pattern[i + 1] == '^') i + 1 else i
+                }
+                ']' -> return "unescaped ']'"
+                '{' -> {
+                    val qMatch = Regex("^\\{\\d+(?:,\\d*)?\\}").find(pattern.substring(i))
+                    if (qMatch != null) {
+                        i += qMatch.value.length
+                        continue
+                    }
+                    return "unescaped '{'"
+                }
+                '}' -> return "unescaped '}'"
+            }
+            i++
+        }
+        return null
+    }
+
     // ============================================================================================
     // Neutral HTML Test Fixtures
     // ============================================================================================

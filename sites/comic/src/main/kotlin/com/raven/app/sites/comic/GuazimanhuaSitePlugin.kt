@@ -29,8 +29,6 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
-import kotlinx.serialization.json.jsonObject
-import kotlinx.serialization.json.jsonPrimitive
 import org.jsoup.Jsoup
 
 /**
@@ -60,8 +58,8 @@ class GuazimanhuaSitePlugin(
 
         override suspend fun loadFeed(request: FeedRequest): FeedPage {
             if (request.section.equals(CHAPTERS_SECTION, ignoreCase = true)) {
-                val comicId = request.category?.trim()?.takeIf { it.all(Char::isDigit) }
-                    ?: request.query?.trim()?.takeIf { it.all(Char::isDigit) }
+                val comicId = request.category?.trim()?.takeIf { it.isNotEmpty() && it.all(Char::isDigit) }
+                    ?: request.query?.trim()?.takeIf { it.isNotEmpty() && it.all(Char::isDigit) }
                     ?: throw SiteException.ParseError("章节请求缺少漫画编号", siteId = SiteId.GUAZIMANHUA)
                 return buildChapterFeed(comicId)
             }
@@ -72,6 +70,9 @@ class GuazimanhuaSitePlugin(
             val doc = Jsoup.parse(html, url)
             val items = parseComicCards(doc)
             if (items.isEmpty()) {
+                if (query.isNotEmpty()) {
+                    return FeedPage(items = emptyList(), nextPage = null, hasMore = false, title = query)
+                }
                 throw SiteException.ParseError("瓜子漫画列表结构不可识别", siteId = SiteId.GUAZIMANHUA)
             }
             val hasMore = doc.selectFirst("a[href*='page=${page + 1}']") != null ||
@@ -200,16 +201,16 @@ class GuazimanhuaSitePlugin(
         val section = request.section?.trim()?.lowercase().orEmpty()
         val params = mutableListOf<String>()
         when {
-            section.startsWith("cid_") && section.removePrefix("cid_").all(Char::isDigit) ->
+            section.startsWith("cid_") && section.removePrefix("cid_").let { it.isNotEmpty() && it.all(Char::isDigit) } ->
                 params += "cid=${section.removePrefix("cid_")}"
-            section.startsWith("city_") && section.removePrefix("city_").all(Char::isDigit) ->
+            section.startsWith("city_") && section.removePrefix("city_").let { it.isNotEmpty() && it.all(Char::isDigit) } ->
                 params += "city=${section.removePrefix("city_")}"
-            section.startsWith("aud_") && section.removePrefix("aud_").all(Char::isDigit) ->
+            section.startsWith("aud_") && section.removePrefix("aud_").let { it.isNotEmpty() && it.all(Char::isDigit) } ->
                 params += "audience=${section.removePrefix("aud_")}"
-            section.startsWith("end_") && section.removePrefix("end_").all(Char::isDigit) ->
+            section.startsWith("end_") && section.removePrefix("end_").let { it.isNotEmpty() && it.all(Char::isDigit) } ->
                 params += "is_end=${section.removePrefix("end_")}"
         }
-        request.category?.trim()?.takeIf { it.all(Char::isDigit) }?.let { params += "cid=$it" }
+        request.category?.trim()?.takeIf { it.isNotEmpty() && it.all(Char::isDigit) }?.let { params += "cid=$it" }
         val sort = sortParam(request.sort)
             ?: if (section == "popular") "hits" else "update"
         params += "sort=$sort"
@@ -236,7 +237,7 @@ class GuazimanhuaSitePlugin(
         val seen = LinkedHashMap<String, MediaItem>()
         doc.select("a[href*='comic.php?id=']").forEach { anchor ->
             val href = anchor.attr("href")
-            val id = href.substringAfter("id=", "").substringBefore("&").takeIf { it.all(Char::isDigit) }
+            val id = href.substringAfter("id=", "").substringBefore("&").takeIf { it.isNotEmpty() && it.all(Char::isDigit) }
                 ?: return@forEach
             val container = anchor.closest("li, .comic-card, .item, article, .book-item") ?: anchor
             val title = HtmlUrlCleaner.cleanText(
@@ -273,17 +274,17 @@ class GuazimanhuaSitePlugin(
         doc.select("script[type=application/ld+json]").forEach { script ->
             val root = runCatching { json.parseToJsonElement(script.data()) }.getOrNull() ?: return@forEach
             collectChapterNodes(root).forEach { node ->
-                val url = node["url"]?.jsonPrimitive?.content.orEmpty()
-                val id = url.substringAfter("id=", "").substringBefore("&").takeIf { it.all(Char::isDigit) }
+                val url = node.safeString("url")
+                val id = url.substringAfter("id=", "").substringBefore("&").takeIf { it.isNotEmpty() && it.all(Char::isDigit) }
                     ?: return@forEach
-                val name = node["name"]?.jsonPrimitive?.content.orEmpty().trim()
+                val name = node.safeString("name")
                 seen.putIfAbsent(id, ChapterEntry(id, name.ifBlank { "第 ${seen.size + 1} 话" }))
             }
         }
         if (seen.isEmpty()) {
             doc.select("a[href*='chapter.php?id=']").forEach { anchor ->
                 val id = anchor.attr("href").substringAfter("id=", "").substringBefore("&")
-                    .takeIf { it.all(Char::isDigit) } ?: return@forEach
+                    .takeIf { it.isNotEmpty() && it.all(Char::isDigit) } ?: return@forEach
                 val name = HtmlUrlCleaner.cleanText(anchor.attr("title").ifBlank { anchor.text() })
                     .ifBlank { "第 ${seen.size + 1} 话" }
                 seen.putIfAbsent(id, ChapterEntry(id, name))
@@ -297,7 +298,7 @@ class GuazimanhuaSitePlugin(
         when (element) {
             is JsonArray -> element.forEach { out += collectChapterNodes(it) }
             is JsonObject -> {
-                if (element["url"]?.jsonPrimitive?.content?.contains("chapter.php?id=") == true) {
+                if (element.safeString("url").contains("chapter.php?id=")) {
                     out += element
                 }
                 // JSON-LD 允许任意嵌套（@graph / itemListElement / mainEntity 等），统一递归。
@@ -312,17 +313,17 @@ class GuazimanhuaSitePlugin(
         ComicUrl.parse(url)?.encodedPath?.endsWith("/chapter.php") == true
 
     private suspend fun loadChapterDetail(url: String): GalleryDetail {
-        val chapterId = ComicUrl.parse(url)?.queryParameter("id")?.takeIf { it.all(Char::isDigit) }
+        val chapterId = ComicUrl.parse(url)?.queryParameter("id")?.takeIf { it.isNotEmpty() && it.all(Char::isDigit) }
             ?: throw SiteException.ParseError("无法识别瓜子漫画章节地址：$url", siteId = SiteId.GUAZIMANHUA)
         val html = fetchHtml(url)
         val doc = Jsoup.parse(html, url)
         val comicId = doc.selectFirst("a[href*='comic.php?id=']")?.attr("href")
             ?.substringAfter("id=", "")?.substringBefore("&")
-            ?.takeIf { it.all(Char::isDigit) }
+            ?.takeIf { it.isNotEmpty() && it.all(Char::isDigit) }
             .orEmpty()
         val title = HtmlUrlCleaner.cleanText(doc.title().substringBefore("漫画在线阅读"))
             .ifBlank { "章节 $chapterId" }
-        val pages = loadChapterPages(chapterId)
+        val pages = loadChapterPages(chapterId, preloadedHtml = html)
         return GalleryDetail(
             item = MediaItem(
                 siteId = SiteId.GUAZIMANHUA,
@@ -343,9 +344,12 @@ class GuazimanhuaSitePlugin(
         )
     }
 
-    private suspend fun loadChapterPages(chapterId: String): List<GalleryPage> {
+    private suspend fun loadChapterPages(
+        chapterId: String,
+        preloadedHtml: String? = null,
+    ): List<GalleryPage> {
         val url = "${descriptor.baseUrl}/chapter.php?id=$chapterId"
-        val html = fetchHtml(url)
+        val html = preloadedHtml ?: fetchHtml(url)
         val seen = LinkedHashMap<String, Int>()
         CHAPTER_IMAGE_REGEX.findAll(html).forEach { match ->
             val imageUrl = match.value.replace("&amp;", "&")
@@ -362,15 +366,16 @@ class GuazimanhuaSitePlugin(
 
     private fun parseChapterPageIdentity(pageUrl: String): ChapterPageIdentity? {
         val parsed = ComicUrl.parse(pageUrl) ?: return null
-        val chapterId = parsed.queryParameter("id")?.takeIf { it.all(Char::isDigit) } ?: return null
+        val chapterId = parsed.queryParameter("id")?.takeIf { it.isNotEmpty() && it.all(Char::isDigit) } ?: return null
         val pageIndex = parsed.fragment?.toIntOrNull()?.takeIf { it > 0 } ?: 1
         return ChapterPageIdentity(chapterId, pageIndex)
     }
 
     private fun extractComicId(url: String): String? {
+        if (isChapterUrl(url)) return null
         val parsed = ComicUrl.parse(url) ?: return null
-        parsed.queryParameter("id")?.takeIf { it.all(Char::isDigit) }?.let { return it }
-        return parsed.pathSegments.lastOrNull()?.takeIf { it.all(Char::isDigit) }
+        parsed.queryParameter("id")?.takeIf { it.isNotEmpty() && it.all(Char::isDigit) }?.let { return it }
+        return parsed.pathSegments.lastOrNull()?.takeIf { it.isNotEmpty() && it.all(Char::isDigit) }
     }
 
     private suspend fun fetchHtml(url: String): String {

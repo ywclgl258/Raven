@@ -226,7 +226,8 @@ class GalleryEpicSitePlugin(
             } else if (trimmedSection.startsWith("cosers:")) {
                 val parts = trimmedSection.split(':', limit = 3)
                 if (parts.size != 3) return null
-                effectivePage = parts[1].toIntOrNull()?.takeIf { it > 0 } ?: page.coerceAtLeast(1)
+                val basePage = parts[1].toIntOrNull()?.takeIf { it > 0 } ?: 1
+                effectivePage = if (page > 1) page else basePage
                 effectiveQuery = query?.trim()?.takeIf { it.isNotEmpty() } ?: parts[2].trim()
             } else {
                 return null

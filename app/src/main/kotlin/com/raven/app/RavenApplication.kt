@@ -50,6 +50,7 @@ class RavenApplication : Application(), SingletonImageLoader.Factory {
         SingletonImageLoader.setSafe(this)
 
         val koin = getKoin()
+        koin.get<AppLockSessionCoordinator>().attach(this)
         val networkMonitor = koin.get<NetworkMonitor>()
         runCatching { networkMonitor.start() }
             .onFailure { Log.w(TAG, "Failed to start NetworkMonitor", it) }

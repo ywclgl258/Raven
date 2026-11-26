@@ -49,6 +49,7 @@ import com.raven.app.core.database.repository.ShelfRepository
 import com.raven.app.core.database.repository.SubscriptionRepository
 import com.raven.app.core.database.repository.TagDictionaryRepository
 import com.raven.app.core.designsystem.component.RavenBottomSheet
+import com.raven.app.core.designsystem.component.RavenContentCrossfade
 import com.raven.app.core.designsystem.component.RavenEmptyState
 import com.raven.app.core.designsystem.component.RavenErrorState
 import com.raven.app.core.designsystem.component.RavenFilterChipRow
@@ -730,66 +731,79 @@ fun SiteFeedScreenContent(
                 .fillMaxWidth(),
         ) {
             val site = uiState.site
-            when {
-                site == null -> {
-                    RavenEmptyState(
-                        title = "站点不可用",
-                        message = "未找到对应站点插件。",
-                    )
-                }
-                uiState.authGateRequired -> {
-                    BrowseAuthGateCard(
-                        site = site,
-                        detailMessage = uiState.errorMessage,
-                        onOpenAccount = { navigator.openSiteAccount(site.id) },
-                        onRefreshStatus = onRefresh,
-                    )
-                }
-                uiState.isLoading && uiState.items.isEmpty() -> {
-                    ExploreLoadingGrid(isVideo = uiState.effectiveMediaKind == MediaKind.VIDEO)
-                }
-                uiState.errorMessage != null && uiState.items.isEmpty() -> {
-                    RavenErrorState(
-                        message = uiState.errorMessage,
-                        onRetry = onRefresh,
-                    )
-                }
-                uiState.items.isEmpty() -> {
-                    RavenEmptyState(
-                        title = "暂无列表内容",
-                        message = "当前分类或标签下没有匹配作品。",
-                        actionLabel = "重新加载",
-                        onActionClick = onRefresh,
-                    )
-                }
-                uiState.effectiveMediaKind == MediaKind.VIDEO -> {
-                    ExploreVideoGrid(
-                        items = uiState.items,
-                        watchProgressMap = uiState.watchProgressMap,
-                        isLoadingMore = uiState.isLoadingMore,
-                        paginationError = uiState.paginationErrorMessage,
-                        hasMore = uiState.hasMore,
-                        currentPage = uiState.currentPage,
-                        onItemClick = { navigator.openSearchResultItem(plugin, it) },
-                        onItemLongClick = { actionTargetItem = it },
-                        onLoadNextPage = onLoadNextPage,
-                        onSaveBrowsePosition = onSaveBrowsePosition,
-                    )
-                }
-                else -> {
-                    ExploreGalleryGrid(
-                        siteId = site.id,
-                        items = uiState.items,
-                        readingProgressMap = uiState.readingProgressMap,
-                        isLoadingMore = uiState.isLoadingMore,
-                        paginationError = uiState.paginationErrorMessage,
-                        hasMore = uiState.hasMore,
-                        currentPage = uiState.currentPage,
-                        onItemClick = { navigator.openSearchResultItem(plugin, it) },
-                        onItemLongClick = { actionTargetItem = it },
-                        onLoadNextPage = onLoadNextPage,
-                        onSaveBrowsePosition = onSaveBrowsePosition,
-                    )
+            val feedStage = when {
+                site == null -> "no_site"
+                uiState.authGateRequired -> "auth"
+                uiState.isLoading && uiState.items.isEmpty() -> "loading"
+                uiState.errorMessage != null && uiState.items.isEmpty() -> "error"
+                uiState.items.isEmpty() -> "empty"
+                uiState.effectiveMediaKind == MediaKind.VIDEO -> "video"
+                else -> "gallery"
+            }
+            RavenContentCrossfade(targetState = feedStage) { stage ->
+                when (stage) {
+                    "no_site" -> {
+                        RavenEmptyState(
+                            title = "站点不可用",
+                            message = "未找到对应站点插件。",
+                        )
+                    }
+                    "auth" -> {
+                        val activeSite = site ?: return@RavenContentCrossfade
+                        BrowseAuthGateCard(
+                            site = activeSite,
+                            detailMessage = uiState.errorMessage,
+                            onOpenAccount = { navigator.openSiteAccount(activeSite.id) },
+                            onRefreshStatus = onRefresh,
+                        )
+                    }
+                    "loading" -> {
+                        ExploreLoadingGrid(isVideo = uiState.effectiveMediaKind == MediaKind.VIDEO)
+                    }
+                    "error" -> {
+                        RavenErrorState(
+                            message = uiState.errorMessage ?: "加载失败，请重试",
+                            onRetry = onRefresh,
+                        )
+                    }
+                    "empty" -> {
+                        RavenEmptyState(
+                            title = "暂无列表内容",
+                            message = "当前分类或标签下没有匹配作品。",
+                            actionLabel = "重新加载",
+                            onActionClick = onRefresh,
+                        )
+                    }
+                    "video" -> {
+                        ExploreVideoGrid(
+                            items = uiState.items,
+                            watchProgressMap = uiState.watchProgressMap,
+                            isLoadingMore = uiState.isLoadingMore,
+                            paginationError = uiState.paginationErrorMessage,
+                            hasMore = uiState.hasMore,
+                            currentPage = uiState.currentPage,
+                            onItemClick = { navigator.openSearchResultItem(plugin, it) },
+                            onItemLongClick = { actionTargetItem = it },
+                            onLoadNextPage = onLoadNextPage,
+                            onSaveBrowsePosition = onSaveBrowsePosition,
+                        )
+                    }
+                    else -> {
+                        val activeSite = site ?: return@RavenContentCrossfade
+                        ExploreGalleryGrid(
+                            siteId = activeSite.id,
+                            items = uiState.items,
+                            readingProgressMap = uiState.readingProgressMap,
+                            isLoadingMore = uiState.isLoadingMore,
+                            paginationError = uiState.paginationErrorMessage,
+                            hasMore = uiState.hasMore,
+                            currentPage = uiState.currentPage,
+                            onItemClick = { navigator.openSearchResultItem(plugin, it) },
+                            onItemLongClick = { actionTargetItem = it },
+                            onLoadNextPage = onLoadNextPage,
+                            onSaveBrowsePosition = onSaveBrowsePosition,
+                        )
+                    }
                 }
             }
         }

@@ -1,5 +1,13 @@
 package com.raven.app.feature.library
 
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.EnterTransition
+import androidx.compose.animation.ExitTransition
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -463,7 +471,9 @@ fun FavoritesScreen(
                                     }
                                 }
                             },
-                            modifier = Modifier.padding(horizontal = 16.dp),
+                            modifier = Modifier
+                                .animateItem()
+                                .padding(horizontal = 16.dp),
                         )
                     } else {
                         // Tag / Author / Character favorite row
@@ -550,7 +560,22 @@ fun FavoritesScreen(
             }
         }
 
-        if (uiState.selectionMode) {
+        val motionReduced = com.raven.app.core.designsystem.theme.LocalMotionReduced.current
+        AnimatedVisibility(
+            visible = uiState.selectionMode,
+            enter = if (motionReduced) {
+                EnterTransition.None
+            } else {
+                expandVertically(tween(200, easing = com.raven.app.core.designsystem.theme.RavenMotion.HarmonyDecelerationEasing)) +
+                    fadeIn(tween(160))
+            },
+            exit = if (motionReduced) {
+                ExitTransition.None
+            } else {
+                shrinkVertically(tween(170, easing = com.raven.app.core.designsystem.theme.RavenMotion.HarmonyDecelerationEasing)) +
+                    fadeOut(tween(120))
+            },
+        ) {
             val selectedItems = uiState.items.filter { it.compositeKey in uiState.selectedKeys }
             LibrarySelectionActionBar(
                 selectedCount = selectedItems.size,

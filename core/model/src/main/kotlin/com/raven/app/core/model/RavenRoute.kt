@@ -56,6 +56,7 @@ sealed interface RavenRoute {
         val siteId: String,
         val mediaId: String,
         val url: String,
+        val offlineOnly: Boolean = false,
     ) : RavenRoute
 
     @Serializable

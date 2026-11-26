@@ -9,6 +9,7 @@ import android.view.ViewGroup
 import android.widget.FrameLayout
 import androidx.activity.compose.BackHandler
 import androidx.annotation.OptIn
+import androidx.compose.animation.core.Animatable
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.calculatePan
@@ -66,7 +67,9 @@ import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
 import com.raven.app.core.designsystem.component.RavenFormatters
+import com.raven.app.core.designsystem.theme.LocalMotionReduced
 import com.raven.app.core.designsystem.theme.LocalRavenColors
+import com.raven.app.core.designsystem.theme.RavenMotion
 import com.raven.app.core.designsystem.theme.RavenShapes
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -95,13 +98,15 @@ fun VideoPlayerScreen(
     isInPipMode: Boolean = false,
     isFullscreen: Boolean? = null,
     onVideoBoundsChanged: (android.graphics.Rect) -> Unit = {},
+    onInteractiveOverlayChanged: (Boolean) -> Unit = {},
 ) {
     val colors = LocalRavenColors.current
+    val motionReduced = LocalMotionReduced.current
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
     val scope = rememberCoroutineScope()
 
-    val uiState by viewModel.uiState.collectAsStateWithLifecycle()
+    val uiState by viewModel.structuralUiState.collectAsStateWithLifecycle()
     val seekPreviewFrame by viewModel.seekPreviewFrame.collectAsStateWithLifecycle()
 
     val snackbarHostState = remember { SnackbarHostState() }
@@ -112,6 +117,16 @@ fun VideoPlayerScreen(
     var doubleTapHudJob by remember { mutableStateOf<Job?>(null) }
     var unlockPillVisible by remember { mutableStateOf(true) }
     var unlockPillTick by remember { mutableIntStateOf(0) }
+    val currentOverlayCallback by rememberUpdatedState(onInteractiveOverlayChanged)
+
+    LaunchedEffect(controlsVisible, activeSheet, isScrubbing, gestureHudState) {
+        currentOverlayCallback(
+            controlsVisible ||
+                activeSheet != null ||
+                isScrubbing ||
+                gestureHudState !is PlayerGestureHudState.Hidden,
+        )
+    }
 
     val audioManager = remember(context) {
         context.applicationContext.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
@@ -170,16 +185,20 @@ fun VideoPlayerScreen(
         }
     }
 
-    // Collect one-shot ViewModel side effects
+    // Collect one-shot ViewModel side effects (launch snackbars asynchronously so they never stall navigation)
     LaunchedEffect(viewModel, navigator) {
+        var snackbarJob: Job? = null
         viewModel.sideEffects.collect { effect ->
             when (effect) {
                 is PlayerSideEffect.ShowMessage -> {
+                    snackbarJob?.cancel()
                     snackbarHostState.currentSnackbarData?.dismiss()
-                    snackbarHostState.showSnackbar(
-                        message = effect.message,
-                        duration = SnackbarDuration.Short,
-                    )
+                    snackbarJob = launch {
+                        snackbarHostState.showSnackbar(
+                            message = effect.message,
+                            duration = SnackbarDuration.Short,
+                        )
+                    }
                 }
                 is PlayerSideEffect.RequestAutoFullscreen -> {
                     if (!currentPipState) {
@@ -288,9 +307,8 @@ fun VideoPlayerScreen(
     val currentVideoFrameReady by rememberUpdatedState(uiState.isVideoFrameReady)
     val currentVideoRecoveryGeneration by rememberUpdatedState(uiState.videoRecoveryGeneration)
     val currentResizeMode by rememberUpdatedState(resizeMode)
-    val currentZoomScale by rememberUpdatedState(zoomScale)
-    val currentPanOffset by rememberUpdatedState(panOffset)
     val currentBoundsCallback by rememberUpdatedState(onVideoBoundsChanged)
+    var zoomSnapJob by remember { mutableStateOf<Job?>(null) }
 
     val movableMediaSurface = remember {
         movableContentOf {
@@ -300,8 +318,8 @@ fun VideoPlayerScreen(
                 isVideoFrameReady = currentVideoFrameReady,
                 videoRecoveryGeneration = currentVideoRecoveryGeneration,
                 resizeMode = currentResizeMode,
-                zoomScale = currentZoomScale,
-                panOffset = currentPanOffset,
+                motionReduced = motionReduced,
+                transformProvider = { zoomScale to panOffset },
                 modifier = Modifier
                     .fillMaxSize()
                     .onGloballyPositioned { coords ->
@@ -345,6 +363,7 @@ fun VideoPlayerScreen(
                 .pointerInput(uiState.isLocked) {
                     if (uiState.isLocked) return@pointerInput
                     awaitEachGesture {
+                        zoomSnapJob?.cancel()
                         var zoomDetected = false
                         while (true) {
                             val event = awaitPointerEvent(PointerEventPass.Initial)
@@ -356,8 +375,8 @@ fun VideoPlayerScreen(
                                 val nextScale = (zoomScale * zoomChange).coerceIn(1f, 3f)
                                 val maxOffsetX = (viewportSize.width * (nextScale - 1f)) * 0.5f
                                 val maxOffsetY = (viewportSize.height * (nextScale - 1f)) * 0.5f
-                                zoomScale = if (nextScale <= 1.02f) 1f else nextScale
-                                panOffset = if (zoomScale <= 1f) {
+                                zoomScale = nextScale
+                                panOffset = if (zoomScale <= 1.005f) {
                                     Offset.Zero
                                 } else {
                                     Offset(
@@ -367,6 +386,31 @@ fun VideoPlayerScreen(
                                 }
                                 event.changes.forEach { it.consume() }
                             } else if (zoomDetected && pressedCount == 0) {
+                                if (zoomScale < 1.05f) {
+                                    val startScale = zoomScale
+                                    val startPan = panOffset
+                                    if (motionReduced) {
+                                        zoomScale = 1f
+                                        panOffset = Offset.Zero
+                                    } else {
+                                        zoomSnapJob = scope.launch {
+                                            val anim = Animatable(0f)
+                                            anim.animateTo(
+                                                targetValue = 1f,
+                                                animationSpec = RavenMotion.interactiveSpringSpec(),
+                                            ) {
+                                                val t = value
+                                                zoomScale = startScale + (1f - startScale) * t
+                                                panOffset = Offset(
+                                                    x = startPan.x * (1f - t),
+                                                    y = startPan.y * (1f - t),
+                                                )
+                                            }
+                                            zoomScale = 1f
+                                            panOffset = Offset.Zero
+                                        }
+                                    }
+                                }
                                 break
                             } else if (pressedCount == 0) {
                                 break
@@ -381,6 +425,7 @@ fun VideoPlayerScreen(
                 isLocked = uiState.isLocked,
                 durationMs = uiState.effectiveDurationMs,
                 currentPositionMs = uiState.positionMs,
+                currentPositionMsProvider = { viewModel.progressState.value.positionMs },
                 sensitivitySeconds = uiState.playbackPreferences.gestureSensitivitySeconds,
                 currentBrightnessProvider = { currentBrightness },
                 currentVolumeRatioProvider = { readMediaVolumeRatio(audioManager) },
@@ -460,6 +505,7 @@ fun VideoPlayerScreen(
 
             PlayerControlsOverlay(
                 uiState = uiState.copy(isFullscreen = effectiveFullscreen),
+                progressStateFlow = viewModel.progressState,
                 controlsVisible = controlsVisible,
                 unlockPillVisible = unlockPillVisible,
                 scrubbingPreviewFrame = if (isScrubbing) seekPreviewFrame else null,
@@ -526,7 +572,7 @@ fun VideoPlayerScreen(
             onToggleFavorite = { viewModel.toggleFavorite() },
             onOpenDownloadSheet = { activeSheet = PlayerSheet.Download },
             onOpenAddBookmark = {
-                activeSheet = PlayerSheet.BookmarkEditor(initialPositionMs = uiState.positionMs)
+                activeSheet = PlayerSheet.BookmarkEditor(initialPositionMs = viewModel.progressState.value.positionMs)
             },
             onShareClick = {
                 shareVideoText(context, uiState.title, uiState.url)
@@ -717,8 +763,8 @@ private fun Media3PlayerSurface(
     isVideoFrameReady: Boolean = true,
     videoRecoveryGeneration: Long = 0L,
     resizeMode: VideoResizeMode = VideoResizeMode.FIT,
-    zoomScale: Float = 1f,
-    panOffset: Offset = Offset.Zero,
+    motionReduced: Boolean = false,
+    transformProvider: () -> Pair<Float, Offset> = { 1f to Offset.Zero },
     modifier: Modifier = Modifier,
 ) {
     val targetResizeMode = when (resizeMode) {
@@ -761,18 +807,30 @@ private fun Media3PlayerSurface(
             if (view.resizeMode != targetResizeMode) {
                 view.resizeMode = targetResizeMode
             }
-            view.alpha = if (isVideoFrameReady) 1f else 0f
+            if (!isVideoFrameReady) {
+                view.animate().cancel()
+                if (view.alpha != 0f) view.alpha = 0f
+            } else if (view.alpha < 0.99f) {
+                if (motionReduced) {
+                    view.animate().cancel()
+                    view.alpha = 1f
+                } else {
+                    view.animate().alpha(1f).setDuration(180L).start()
+                }
+            }
         },
         onRelease = { view ->
+            view.animate().cancel()
             view.player = null
             view.keepScreenOn = false
         },
         modifier = modifier
             .graphicsLayer {
-                scaleX = zoomScale
-                scaleY = zoomScale
-                translationX = panOffset.x
-                translationY = panOffset.y
+                val (scale, pan) = transformProvider()
+                scaleX = scale
+                scaleY = scale
+                translationX = pan.x
+                translationY = pan.y
             }
             .testTag(PlayerTestTags.PLAYER_SURFACE),
     )

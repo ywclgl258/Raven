@@ -3,8 +3,13 @@ package com.raven.app.feature.player
 import android.graphics.Bitmap
 import android.os.SystemClock
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.EnterTransition
+import androidx.compose.animation.ExitTransition
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -29,14 +34,20 @@ import androidx.compose.material.icons.rounded.FastRewind
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Immutable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.changedToUpIgnoreConsumed
@@ -48,7 +59,9 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.raven.app.core.designsystem.component.RavenFormatters
 import com.raven.app.core.designsystem.component.RavenVisualHud
+import com.raven.app.core.designsystem.theme.LocalMotionReduced
 import com.raven.app.core.designsystem.theme.LocalRavenColors
+import com.raven.app.core.designsystem.theme.RavenMotion
 import com.raven.app.core.designsystem.theme.RavenShapes
 import com.raven.app.core.designsystem.theme.RavenTabularTextStyle
 import kotlinx.coroutines.Job
@@ -174,11 +187,12 @@ internal fun PlayerGestureLayer(
     onVolumeChange: (Float) -> Unit,
     onVerticalDragEnd: () -> Unit,
     modifier: Modifier = Modifier,
+    currentPositionMsProvider: () -> Long = { currentPositionMs },
 ) {
     val scope = rememberCoroutineScope()
     val lockedState by rememberUpdatedState(isLocked)
     val durationState by rememberUpdatedState(durationMs)
-    val positionState by rememberUpdatedState(currentPositionMs)
+    val positionProvider by rememberUpdatedState(currentPositionMsProvider)
     val sensitivityState by rememberUpdatedState(sensitivitySeconds)
     val brightnessProvider by rememberUpdatedState(currentBrightnessProvider)
     val volumeProvider by rememberUpdatedState(currentVolumeRatioProvider)
@@ -237,7 +251,7 @@ internal fun PlayerGestureLayer(
                     var dragMode = ActiveDragMode.NONE
                     var cumulativeDeltaX = 0f
                     var cumulativeDeltaY = 0f
-                    var seekStartMs = positionState
+                    var seekStartMs = positionProvider()
                     var lastSeekTargetMs = seekStartMs
                     var verticalStartRatio = 0.5f
                     var longPressTriggered = false
@@ -288,7 +302,7 @@ internal fun PlayerGestureLayer(
                             dragMode = when {
                                 abs(dx) >= abs(dy) -> {
                                     if (durationState > 0L) {
-                                        seekStartMs = positionState
+                                        seekStartMs = positionProvider()
                                         cumulativeDeltaX = dx
                                         lastSeekTargetMs = computeHorizontalSeekTargetMs(
                                             startPositionMs = seekStartMs,
@@ -468,19 +482,67 @@ internal fun PlayerGestureHudOverlay(
     modifier: Modifier = Modifier,
 ) {
     val colors = LocalRavenColors.current
+    val motionReduced = LocalMotionReduced.current
+    var lastActiveHud by remember { mutableStateOf<PlayerGestureHudState>(PlayerGestureHudState.Hidden) }
+    if (hudState !is PlayerGestureHudState.Hidden) {
+        lastActiveHud = hudState
+    }
+    val visible = hudState !is PlayerGestureHudState.Hidden
+    val displayedHud = if (visible) hudState else lastActiveHud
+
+    val doubleTapSkip = hudState as? PlayerGestureHudState.DoubleTapSkip
+    val rippleProgress = remember { Animatable(0f) }
+    LaunchedEffect(doubleTapSkip) {
+        if (doubleTapSkip != null && !motionReduced) {
+            rippleProgress.snapTo(0f)
+            rippleProgress.animateTo(
+                targetValue = 1f,
+                animationSpec = tween(durationMillis = 480, easing = RavenMotion.HarmonyDecelerationEasing),
+            )
+        } else {
+            rippleProgress.snapTo(0f)
+        }
+    }
 
     Box(
         modifier = modifier.fillMaxSize(),
         contentAlignment = Alignment.Center,
     ) {
+        if (doubleTapSkip != null && !motionReduced) {
+            val isForward = doubleTapSkip.forward
+            val glowColor = colors.crimson
+            Canvas(modifier = Modifier.fillMaxSize()) {
+                val p = rippleProgress.value
+                if (p > 0f && p < 1f) {
+                    val alpha = (1f - p) * 0.24f
+                    val centerX = if (isForward) size.width * 0.92f else size.width * 0.08f
+                    val centerY = size.height * 0.5f
+                    val radius = size.minDimension * (0.28f + 0.52f * p)
+                    drawCircle(
+                        brush = Brush.radialGradient(
+                            colors = listOf(
+                                glowColor.copy(alpha = alpha),
+                                glowColor.copy(alpha = alpha * 0.35f),
+                                Color.Transparent,
+                            ),
+                            center = Offset(centerX, centerY),
+                            radius = radius.coerceAtLeast(1f),
+                        ),
+                        radius = radius.coerceAtLeast(1f),
+                        center = Offset(centerX, centerY),
+                    )
+                }
+            }
+        }
+
         Column(
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
             AnimatedVisibility(
                 visible = hudState is PlayerGestureHudState.Seek && previewFrame != null,
-                enter = fadeIn(),
-                exit = fadeOut(),
+                enter = if (motionReduced) EnterTransition.None else fadeIn(tween(120, easing = RavenMotion.HarmonyDecelerationEasing)),
+                exit = if (motionReduced) ExitTransition.None else fadeOut(tween(150, easing = RavenMotion.HarmonyDecelerationEasing)),
             ) {
                 val frame = previewFrame
                 val seekState = hudState as? PlayerGestureHudState.Seek
@@ -492,24 +554,24 @@ internal fun PlayerGestureHudOverlay(
                 }
             }
 
-            when (hudState) {
+            when (val active = displayedHud) {
                 PlayerGestureHudState.Hidden -> Unit
                 is PlayerGestureHudState.Seek -> {
-                    val progress = if (hudState.durationMs > 0L) {
-                        (hudState.targetMs.toFloat() / hudState.durationMs.toFloat()).coerceIn(0f, 1f)
+                    val progress = if (active.durationMs > 0L) {
+                        (active.targetMs.toFloat() / active.durationMs.toFloat()).coerceIn(0f, 1f)
                     } else {
                         0f
                     }
-                    val icon = if (hudState.deltaMs >= 0L) {
+                    val icon = if (active.deltaMs >= 0L) {
                         Icons.Rounded.FastForward
                     } else {
                         Icons.Rounded.FastRewind
                     }
-                    val label = "${RavenFormatters.formatDurationMs(hudState.targetMs)} / " +
-                        "${RavenFormatters.formatDurationMs(hudState.durationMs)} " +
-                        "(${formatSignedSecondsDelta(hudState.deltaMs)})"
+                    val label = "${RavenFormatters.formatDurationMs(active.targetMs)} / " +
+                        "${RavenFormatters.formatDurationMs(active.durationMs)} " +
+                        "(${formatSignedSecondsDelta(active.deltaMs)})"
                     RavenVisualHud(
-                        visible = true,
+                        visible = visible,
                         icon = icon,
                         label = label,
                         progress = progress,
@@ -517,46 +579,46 @@ internal fun PlayerGestureHudOverlay(
                     )
                 }
                 is PlayerGestureHudState.Brightness -> {
-                    val percent = (hudState.fraction.coerceIn(0f, 1f) * 100f).roundToInt()
+                    val percent = (active.fraction.coerceIn(0f, 1f) * 100f).roundToInt()
                     val icon = when {
                         percent <= 30 -> Icons.Rounded.BrightnessLow
                         percent <= 70 -> Icons.Rounded.BrightnessMedium
                         else -> Icons.Rounded.BrightnessHigh
                     }
                     RavenVisualHud(
-                        visible = true,
+                        visible = visible,
                         icon = icon,
                         label = "$percent%",
-                        progress = hudState.fraction,
+                        progress = active.fraction,
                         accentColor = colors.inkPrimary,
                     )
                 }
                 is PlayerGestureHudState.Volume -> {
-                    val percent = (hudState.fraction.coerceIn(0f, 1f) * 100f).roundToInt()
+                    val percent = (active.fraction.coerceIn(0f, 1f) * 100f).roundToInt()
                     val icon = when {
                         percent == 0 -> Icons.AutoMirrored.Rounded.VolumeOff
                         percent <= 45 -> Icons.AutoMirrored.Rounded.VolumeDown
                         else -> Icons.AutoMirrored.Rounded.VolumeUp
                     }
                     RavenVisualHud(
-                        visible = true,
+                        visible = visible,
                         icon = icon,
                         label = "$percent%",
-                        progress = hudState.fraction,
+                        progress = active.fraction,
                         accentColor = colors.inkPrimary,
                     )
                 }
                 is PlayerGestureHudState.DoubleTapSkip -> {
-                    val icon = if (hudState.forward) {
+                    val icon = if (active.forward) {
                         Icons.Rounded.FastForward
                     } else {
                         Icons.Rounded.FastRewind
                     }
-                    val prefix = if (hudState.forward) "+" else "-"
+                    val prefix = if (active.forward) "+" else "-"
                     RavenVisualHud(
-                        visible = true,
+                        visible = visible,
                         icon = icon,
-                        label = "${prefix}${hudState.stepSeconds}s",
+                        label = "${prefix}${active.stepSeconds}s",
                         progress = null,
                         accentColor = colors.crimson,
                     )

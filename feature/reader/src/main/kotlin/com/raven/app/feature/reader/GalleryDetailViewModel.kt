@@ -46,6 +46,7 @@ import com.raven.app.core.model.TagRef
 import com.raven.app.core.model.TagSubscription
 import com.raven.app.core.sitespi.SiteRegistry
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -56,6 +57,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
@@ -234,6 +236,7 @@ class GalleryDetailViewModel(
     private val isInvalidSiteId: Boolean = parsedSiteId == null
     private val mediaId: String = route.mediaId
     private val url: String = route.url
+    private val offlineOnly: Boolean = route.offlineOnly
 
     private val plugin = if (isInvalidSiteId) null else siteRegistry.get(siteId)
     private val descriptor: SiteDescriptor? = plugin?.descriptor
@@ -262,6 +265,7 @@ class GalleryDetailViewModel(
     private var exportJob: Job? = null
     private var chaptersJob: Job? = null
     private var resumeApplied: Boolean = false
+    private val activeMediaId = MutableStateFlow(mediaId)
     @Volatile
     private var latestCachedTagsByKey: Map<String, List<TagRef>> = emptyMap()
 
@@ -270,33 +274,34 @@ class GalleryDetailViewModel(
         loadDetail()
     }
 
+    @OptIn(ExperimentalCoroutinesApi::class)
     private fun observeLocalPersonalState() {
         if (isInvalidSiteId) return
-        // Combine reading progress, bookmarks, watch-later / shelf membership, and downloads.
+        // Combine reading progress, bookmarks, watch-later / shelf membership, and downloads
+        // keyed by the active work/chapter id so serial auto-resume stays synchronized.
         viewModelScope.launch(dispatchers.main) {
-            combine(
-                historyRepository.observeReadingProgress(siteId, mediaId),
-                bookmarkRepository.observePageBookmarks(siteId, mediaId),
-                shelfRepository.observeContainingShelfIds(siteId, mediaId),
-                downloadGateway.observeByMedia(siteId, mediaId),
-                preferencesRepository.settings,
-            ) { progress, bookmarks, shelfIds, downloads, settings ->
-                PersonalBaseSnapshot(
-                    progress = progress,
-                    bookmarks = bookmarks,
-                    containingShelfIds = shelfIds.toSet(),
-                    activeDownload = downloads.maxByOrNull { it.updatedAt },
-                    translateTags = settings.translateTags,
-                    blockTagsGlobally = settings.blockTagsGlobally,
-                )
+            activeMediaId.flatMapLatest { targetMediaId ->
+                combine(
+                    historyRepository.observeReadingProgress(siteId, targetMediaId),
+                    bookmarkRepository.observePageBookmarks(siteId, targetMediaId),
+                    shelfRepository.observeContainingShelfIds(siteId, targetMediaId),
+                    downloadGateway.observeByMedia(siteId, targetMediaId),
+                    preferencesRepository.settings,
+                ) { progress, bookmarks, shelfIds, downloads, settings ->
+                    PersonalBaseSnapshot(
+                        progress = progress,
+                        bookmarks = bookmarks,
+                        containingShelfIds = shelfIds.toSet(),
+                        activeDownload = downloads.maxByOrNull { it.updatedAt },
+                        translateTags = settings.translateTags,
+                        blockTagsGlobally = settings.blockTagsGlobally,
+                    )
+                }
             }.collectLatest { snapshot ->
                 _uiState.update { state ->
                     state.copy(
-                        // Auto-resume can replace a series root with a chapter; keep that chapter's loaded progress.
-                        readingProgress = if (state.detail != null && state.detail.item.id != mediaId) {
-                            state.readingProgress
-                        } else {
-                            snapshot.progress
+                        readingProgress = snapshot.progress ?: state.readingProgress.takeIf {
+                            state.detail != null && state.detail.item.id != mediaId
                         },
                         pageBookmarks = snapshot.bookmarks,
                         containingShelfIds = snapshot.containingShelfIds,
@@ -320,25 +325,30 @@ class GalleryDetailViewModel(
         val dictRevisionFlow = tagDictionaryRepository?.observeRevision() ?: flowOf(0L)
         viewModelScope.launch(dispatchers.main) {
             combine(
-                favoriteRepository.observeBySite(siteId),
-                subscriptionRepository.observeSubscriptions(siteId),
-                blockedTermsRepository.observeEffectiveTermsBySite(siteId),
-                cachedTagsFlow,
-                dictRevisionFlow,
-            ) { favorites, subscriptions, blocked, cachedTags, dictRevision ->
-                SitePersonalSnapshot(
-                    favorites = favorites,
-                    subscribedSlugs = subscriptions.mapTo(linkedSetOf()) { it.slug.lowercase() },
-                    blockedTerms = blocked.mapTo(linkedSetOf()) { ContentFilter.normalizeTerm(it) },
-                    cachedTagsByKey = cachedTags,
-                    dictRevision = dictRevision,
-                )
-            }.collectLatest { snapshot ->
+                combine(
+                    favoriteRepository.observeBySite(siteId),
+                    subscriptionRepository.observeSubscriptions(siteId),
+                    blockedTermsRepository.observeEffectiveTermsBySite(siteId),
+                    cachedTagsFlow,
+                    dictRevisionFlow,
+                ) { favorites, subscriptions, blocked, cachedTags, dictRevision ->
+                    SitePersonalSnapshot(
+                        favorites = favorites,
+                        subscribedSlugs = subscriptions.mapTo(linkedSetOf()) { it.slug.lowercase() },
+                        blockedTerms = blocked.mapTo(linkedSetOf()) { ContentFilter.normalizeTerm(it) },
+                        cachedTagsByKey = cachedTags,
+                        dictRevision = dictRevision,
+                    )
+                },
+                activeMediaId,
+            ) { snapshot, currentTargetId ->
+                snapshot to currentTargetId
+            }.collectLatest { (snapshot, currentTargetId) ->
                 latestCachedTagsByKey = snapshot.cachedTagsByKey
                 _uiState.update { state ->
                     val detailKind = state.detail?.item?.kind
                     val isWorkFav = snapshot.favorites.any { fav ->
-                        fav.targetId == mediaId && (
+                        fav.targetId == currentTargetId && (
                             (detailKind == MediaKind.PHOTO && fav.kind == FavoriteKind.PHOTO) ||
                                 (detailKind != MediaKind.PHOTO && fav.kind == FavoriteKind.COMIC) ||
                                 (detailKind == null && (fav.kind == FavoriteKind.COMIC || fav.kind == FavoriteKind.PHOTO))
@@ -400,7 +410,7 @@ class GalleryDetailViewModel(
 
             // Pre-check auth gate on auth-gated sites (e.g., ExHentai) before firing network load.
             val currentPlugin = plugin
-            if (!siteId.isLocal && currentPlugin != null && currentPlugin.authProvider.requiresAuthGate) {
+            if (!offlineOnly && !siteId.isLocal && currentPlugin != null && currentPlugin.authProvider.requiresAuthGate) {
                 val authState = runCatching { currentPlugin.authProvider.currentAuthState() }.getOrNull()
                 if (authState?.isAuthenticated != true) {
                     val accessNote = descriptor?.accessNote
@@ -430,11 +440,13 @@ class GalleryDetailViewModel(
                     siteId = siteId,
                     mediaId = mediaId,
                     url = url,
-                    offlineOnly = false,
+                    offlineOnly = offlineOnly,
                 )
+                val resolvedId = snapshot.detail.item.id.ifBlank { mediaId }
+                activeMediaId.value = resolvedId
                 val favoriteKind = favoriteKindFor(snapshot.detail.item.kind)
                 val isFavNow = runCatching {
-                    favoriteRepository.isFavorite(siteId, favoriteKind, mediaId)
+                    favoriteRepository.isFavorite(siteId, favoriteKind, resolvedId)
                 }.getOrDefault(_uiState.value.isFavorite)
                 cacheDetailTags(snapshot.detail)
 
@@ -457,7 +469,7 @@ class GalleryDetailViewModel(
                         errorMessage = null,
                     )
                 }
-                if (!resumeApplied) {
+                if (!resumeApplied && !offlineOnly) {
                     resumeApplied = true
                     loadChaptersAndMaybeResume(snapshot.detail)
                 }
@@ -576,12 +588,18 @@ class GalleryDetailViewModel(
             }
             // A refresh or a newer selection may have changed the visible detail while resume was loading.
             if (_uiState.value.detail?.item?.id != detail.item.id) return@launch
+            val resumedId = snapshot.detail.item.id.ifBlank { chapter.id }
+            activeMediaId.value = resumedId
+            val resumedFav = runCatching {
+                favoriteRepository.isFavorite(siteId, favoriteKindFor(snapshot.detail.item.kind), resumedId)
+            }.getOrDefault(_uiState.value.isFavorite)
             _uiState.update {
                 it.copy(
                     detail = snapshot.detail,
                     downloadedPages = snapshot.downloadedPages,
                     isOfflineComplete = snapshot.isComplete,
                     sourceRoot = snapshot.sourceRoot,
+                    isFavorite = resumedFav,
                     readingProgress = runCatching {
                         historyRepository.getReadingProgress(siteId, chapter.id)
                     }.getOrNull(),
@@ -746,6 +764,10 @@ class GalleryDetailViewModel(
         val detail = _uiState.value.detail ?: return
         if (siteId.isLocal) {
             emitSnackbar("本地导入作品已在设备本地保存")
+            return
+        }
+        if (detail.pageCount <= 0 && detail.pages.isEmpty()) {
+            emitSnackbar("该作品暂无可下载图页")
             return
         }
         val totalPages = detail.pageCount.coerceAtLeast(1)

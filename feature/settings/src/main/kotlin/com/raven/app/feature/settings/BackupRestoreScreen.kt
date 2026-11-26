@@ -209,6 +209,7 @@ fun BackupRestoreScreenContent(
                         RavenGroupedSection(
                             title = "设置备份加密密码",
                             footer = "请妥善保管备份密码；密码不会存储在设备中，遗忘后将无法解密备份文件。",
+                            modifier = Modifier.animateItem(),
                         ) {
                             Column(
                                 modifier = Modifier
@@ -306,6 +307,7 @@ fun BackupRestoreScreenContent(
                         RavenGroupedSection(
                             title = "第一步：选择备份文件",
                             footer = "自动识别渡鸦原生 RVNBK01 与旧版 R34V 的 R34VBK01 加密备份文件。",
+                            modifier = Modifier.animateItem(),
                         ) {
                             RavenGroupedRow(
                                 title = if (uiState.hasSelectedImportFile) "重新选择备份文件" else "从设备存储选择备份文件",
@@ -552,6 +554,7 @@ fun BackupRestoreScreenContent(
                             } else {
                                 "仅支持 HTTPS WebDAV 地址；上传前在本地先执行 RVNBK01 端到端加密，服务端无法窥探任何数据。"
                             },
+                            modifier = Modifier.animateItem(),
                         ) {
                             Column(
                                 modifier = Modifier

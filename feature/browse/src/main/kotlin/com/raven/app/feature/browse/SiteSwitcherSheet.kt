@@ -1,6 +1,12 @@
 package com.raven.app.feature.browse
 
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.EnterTransition
+import androidx.compose.animation.ExitTransition
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.snap
+import androidx.compose.animation.core.tween
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -49,6 +55,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
@@ -58,6 +65,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.raven.app.core.designsystem.component.RavenBottomSheet
+import com.raven.app.core.designsystem.theme.LocalMotionReduced
+import com.raven.app.core.designsystem.theme.RavenMotion
 import com.raven.app.core.designsystem.component.RavenStatusPill
 import com.raven.app.core.designsystem.component.RavenStatusTone
 import com.raven.app.core.designsystem.theme.LocalRavenColors
@@ -197,18 +206,41 @@ fun SiteSwitcherDrawerContent(
                             )
                         }
 
+                        val motionReduced = LocalMotionReduced.current
+                        val chevronRotation = animateFloatAsState(
+                            targetValue = if (pinnedExpanded) 180f else 0f,
+                            animationSpec = if (motionReduced) {
+                                snap()
+                            } else {
+                                tween(durationMillis = 180, easing = RavenMotion.HarmonyDecelerationEasing)
+                            },
+                            label = "siteSwitcherPinnedChevron",
+                        )
                         Icon(
-                            imageVector = if (pinnedExpanded) Icons.Rounded.ExpandLess else Icons.Rounded.ExpandMore,
+                            imageVector = Icons.Rounded.ExpandMore,
                             contentDescription = if (pinnedExpanded) "收起常用站点" else "展开常用站点",
                             tint = colors.inkSecondary,
-                            modifier = Modifier.size(20.dp),
+                            modifier = Modifier
+                                .size(20.dp)
+                                .graphicsLayer { rotationZ = chevronRotation.value },
                         )
                     }
 
+                    val motionReduced = LocalMotionReduced.current
                     AnimatedVisibility(
                         visible = pinnedExpanded,
-                        enter = expandVertically() + fadeIn(),
-                        exit = shrinkVertically() + fadeOut(),
+                        enter = if (motionReduced) {
+                            EnterTransition.None
+                        } else {
+                            expandVertically(tween(200, easing = RavenMotion.HarmonyDecelerationEasing)) +
+                                fadeIn(tween(160, easing = RavenMotion.HarmonyDecelerationEasing))
+                        },
+                        exit = if (motionReduced) {
+                            ExitTransition.None
+                        } else {
+                            shrinkVertically(tween(170, easing = RavenMotion.HarmonyDecelerationEasing)) +
+                                fadeOut(tween(120, easing = RavenMotion.HarmonyDecelerationEasing))
+                        },
                     ) {
                         if (pinnedSites.isEmpty()) {
                             Text(
@@ -403,19 +435,30 @@ private fun SiteSwitcherTile(
     modifier: Modifier = Modifier,
 ) {
     val colors = LocalRavenColors.current
+    val motionReduced = LocalMotionReduced.current
     val interactionSource = remember { MutableInteractionSource() }
     val accessNote = site.accessNote
     val requiresAuth = site.networkProfile.requiresAuthGate || site.hasCapability(SiteCapability.AUTH)
+    val colorSpec = if (motionReduced) {
+        snap<androidx.compose.ui.graphics.Color>()
+    } else {
+        tween(durationMillis = RavenMotion.CHIP_TRANSITION_DURATION_MS, easing = RavenMotion.HarmonyDecelerationEasing)
+    }
 
-    val containerColor = when {
-        isSelected -> colors.surface3
-        else -> colors.surface1
-    }
-    val borderColor = when {
-        isSelected -> colors.crimson.copy(alpha = 0.72f)
-        editPinsMode && isPinned -> colors.rimHighlight
-        else -> colors.hairline
-    }
+    val containerColor by animateColorAsState(
+        targetValue = if (isSelected) colors.surface3 else colors.surface1,
+        animationSpec = colorSpec,
+        label = "siteTileContainer",
+    )
+    val borderColor by animateColorAsState(
+        targetValue = when {
+            isSelected -> colors.crimson.copy(alpha = 0.72f)
+            editPinsMode && isPinned -> colors.rimHighlight
+            else -> colors.hairline
+        },
+        animationSpec = colorSpec,
+        label = "siteTileBorder",
+    )
 
     Column(
         modifier = modifier

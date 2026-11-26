@@ -237,6 +237,9 @@ fun LibraryHubScreenContent(
 
         BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
             val localGridColumns = computeLibraryGridColumns(maxWidth.value.toInt())
+            val localBookRows = remember(uiState.localBooks, localGridColumns) {
+                uiState.localBooks.chunked(localGridColumns)
+            }
             LazyColumn(
                 modifier = Modifier.fillMaxSize(),
                 contentPadding = PaddingValues(top = 12.dp, bottom = 28.dp),
@@ -403,13 +406,13 @@ fun LibraryHubScreenContent(
                             )
                         }
                     } else {
-                        val rows = uiState.localBooks.chunked(localGridColumns)
                         itemsIndexed(
-                            items = rows,
+                            items = localBookRows,
                             key = { idx, row -> "hub_local_row_${idx}_${row.first().id}" },
                         ) { _, rowBooks ->
                             Row(
                                 modifier = Modifier
+                                    .animateItem()
                                     .fillMaxWidth()
                                     .padding(horizontal = 16.dp),
                                 horizontalArrangement = Arrangement.spacedBy(10.dp),

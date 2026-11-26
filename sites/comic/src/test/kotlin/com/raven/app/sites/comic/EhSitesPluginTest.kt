@@ -435,4 +435,56 @@ class EhSitesPluginTest {
         val detail = eh.gallerySource!!.loadGalleryDetail("https://e-hentai.org/g/1/aaaaaaaaaa/")
         assertEquals(listOf("alice"), detail.authors.map { it.id })
     }
+
+    @Test
+    fun `exhentai 403 challenge throws Forbidden and ehentai skips translated language tag and handles limits`() = runTest {
+        val exHttp = FakeHttpClientAdapter()
+        val exStore = InMemorySiteSessionStore()
+        exStore.saveCookies(SiteId.EXHENTAI, mapOf("ipb_member_id" to "1", "ipb_pass_hash" to "0123456789abcdef0123456789abcdef"))
+        exHttp.onMatch({ true }) { req ->
+            FakeHttpClientAdapter.htmlResponse(
+                req.url,
+                "<html><title>Just a moment...</title></html>",
+                code = 403,
+                headers = mapOf("cf-mitigated" to listOf("challenge")),
+            )
+        }
+        val ex = ExhentaiSitePlugin(exHttp, exStore)
+        try {
+            ex.feedSource!!.loadFeed(FeedRequest(SiteId.EXHENTAI))
+            fail("Expected SiteException.Forbidden challenge")
+        } catch (err: SiteException.Forbidden) {
+            assertTrue(err.isChallenge)
+        }
+
+        val ehHttp = FakeHttpClientAdapter()
+        val eh = EhentaiSitePlugin(ehHttp, InMemorySiteSessionStore())
+        val translatedFirstHtml = """
+            <html><body><table class="itg"><tr>
+              <td class="gl2c"><div class="cn">Manga</div></td>
+              <td class="gl3c glname"><a href="https://e-hentai.org/g/3001/abcdef1234/"><div class="glink">Demo</div><div class="gt" title="language:translated">translated</div><div class="gt" title="language:chinese">chinese</div></a></td>
+              <td class="gl4c"><div>20 pages</div></td>
+            </tr></table></body></html>
+        """.trimIndent()
+        ehHttp.onMatch({ req -> req.url.contains("f_search=tag") }) { req ->
+            FakeHttpClientAdapter.htmlResponse(req.url, translatedFirstHtml)
+        }
+        val langFeed = eh.searchSource!!.search(FeedRequest(SiteId.EHENTAI, query = "tag"))
+        assertEquals("chinese", langFeed.items.single().language)
+
+        ehHttp.onMatch({ req -> req.url.contains("f_search=none") }) { req ->
+            FakeHttpClientAdapter.htmlResponse(req.url, "<html><body><p>No hits found</p></body></html>")
+        }
+        assertTrue(eh.searchSource!!.search(FeedRequest(SiteId.EHENTAI, query = "none")).items.isEmpty())
+
+        ehHttp.onMatch({ req -> req.url.contains("f_search=quota") }) { req ->
+            FakeHttpClientAdapter.htmlResponse(req.url, "Image View Limit Exceeded")
+        }
+        assertTrue(runCatching { eh.searchSource!!.search(FeedRequest(SiteId.EHENTAI, query = "quota")) }.exceptionOrNull() is SiteException.QuotaExceeded)
+
+        ehHttp.onMatch({ req -> req.url.contains("f_search=ban") }) { req ->
+            FakeHttpClientAdapter.htmlResponse(req.url, "Your IP address has been temporarily banned")
+        }
+        assertTrue(runCatching { eh.searchSource!!.search(FeedRequest(SiteId.EHENTAI, query = "ban")) }.exceptionOrNull() is SiteException.RateLimited)
+    }
 }

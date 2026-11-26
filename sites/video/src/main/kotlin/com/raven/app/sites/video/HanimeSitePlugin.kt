@@ -209,9 +209,12 @@ class HanimeSitePlugin(
                 }
                 throw SiteException.AuthRequired("邮箱或密码错误，或站点要求完成验证", siteId = SiteId.HANIME1)
             }
-            cookies.putAll(VideoSiteSupport.extractSetCookies(verifyResp))
-            if (cookies.isNotEmpty()) {
-                sessionStore.saveCookies(SiteId.HANIME1, cookies)
+            val merged = LinkedHashMap<String, String>(cookies)
+            merged.putAll(sessionStore.getCookies(SiteId.HANIME1))
+            merged.putAll(VideoSiteSupport.extractSetCookies(postResp))
+            merged.putAll(VideoSiteSupport.extractSetCookies(verifyResp))
+            if (merged.isNotEmpty()) {
+                sessionStore.saveCookies(SiteId.HANIME1, merged)
             }
             sessionStore.saveUsername(SiteId.HANIME1, trimmedEmail)
             sessionStore.saveSecret(SiteId.HANIME1, SESSION_MARKER_KEY, "1")
@@ -227,8 +230,7 @@ class HanimeSitePlugin(
         }
 
         override suspend fun currentAuthState(): AuthState {
-            val isAuthenticated = sessionStore.getCookies(SiteId.HANIME1).isNotEmpty() ||
-                sessionStore.getSecret(SiteId.HANIME1, SESSION_MARKER_KEY) == "1"
+            val isAuthenticated = sessionStore.getSecret(SiteId.HANIME1, SESSION_MARKER_KEY) == "1"
             return AuthState(
                 isAuthenticated = isAuthenticated,
                 username = if (isAuthenticated) sessionStore.getUsername(SiteId.HANIME1) else null,

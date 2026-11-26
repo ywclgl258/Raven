@@ -1,5 +1,8 @@
 package com.raven.app.core.designsystem.component
 
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.snap
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.combinedClickable
@@ -31,6 +34,8 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shadow
+import androidx.compose.ui.graphics.TransformOrigin
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalHapticFeedback
@@ -40,9 +45,11 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.raven.app.core.designsystem.theme.LocalMotionReduced
 import com.raven.app.core.designsystem.theme.LocalRavenColors
 import com.raven.app.core.designsystem.theme.LocalRavenFeedback
 import com.raven.app.core.designsystem.theme.RavenFeedbackEffect
+import com.raven.app.core.designsystem.theme.RavenMotion
 import com.raven.app.core.designsystem.theme.RavenShapes
 import com.raven.app.core.designsystem.theme.RavenTabularTextStyle
 import com.raven.app.core.designsystem.theme.ravenPressSurfaceHighlight
@@ -551,17 +558,34 @@ fun RavenCrimsonProgressBar(
     trackHeight: Dp = 2.5.dp,
 ) {
     val colors = LocalRavenColors.current
+    val motionReduced = LocalMotionReduced.current
     val clamped = if (fraction.isFinite()) fraction.coerceIn(0f, 1f) else 0f
+    val animatedFraction = animateFloatAsState(
+        targetValue = clamped,
+        animationSpec = if (motionReduced) {
+            snap()
+        } else {
+            tween(
+                durationMillis = 220,
+                easing = RavenMotion.HarmonyDecelerationEasing,
+            )
+        },
+        label = "ravenCrimsonProgress",
+    )
     Box(
         modifier = modifier
             .height(trackHeight)
             .background(colors.inkPrimary.copy(alpha = 0.22f)),
     ) {
-        if (clamped > 0f) {
+        if (clamped > 0f || animatedFraction.value > 0.002f) {
             Box(
                 modifier = Modifier
-                    .fillMaxWidth(clamped)
+                    .fillMaxWidth()
                     .height(trackHeight)
+                    .graphicsLayer {
+                        scaleX = animatedFraction.value.coerceIn(0f, 1f)
+                        transformOrigin = TransformOrigin(0f, 0.5f)
+                    }
                     .background(colors.crimson),
             )
         }

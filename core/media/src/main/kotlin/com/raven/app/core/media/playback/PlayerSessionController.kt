@@ -30,6 +30,7 @@ import com.raven.app.core.common.DefaultAppDispatchers
 import com.raven.app.core.model.SiteId
 import com.raven.app.core.model.VideoStream
 import java.io.File
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -157,6 +158,8 @@ class PlayerSessionController(
     private var activeSeekCacheEnabled: Boolean = true
     private var lastObservedVideoPositionMs: Long = -1L
     private var lastObservedVideoGeneration: Long = -1L
+    @Volatile
+    private var loadGeneration: Long = 0L
 
     private val _state = MutableStateFlow(PlayerEngineState())
     val state: StateFlow<PlayerEngineState> = _state.asStateFlow()
@@ -265,6 +268,7 @@ class PlayerSessionController(
         artworkUrl: String = "",
     ): VideoStream {
         require(streams.isNotEmpty()) { "没有可播放的视频流" }
+        loadGeneration += 1L
         val chosen = StreamSelector.pick(streams, preferredQuality, bandwidthKbps)
         val isNewMedia = _state.value.siteId != siteId || _state.value.mediaId != mediaId
         if (isNewMedia) {
@@ -403,6 +407,7 @@ class PlayerSessionController(
         artworkUrl: String,
         preResolvedHlsUri: String?,
     ) {
+        loadGeneration += 1L
         stallTracker.reset()
         closeActiveHlsSeekSession()
         beginVideoRecovery(clearRenderedFrame = true)
@@ -500,6 +505,7 @@ class PlayerSessionController(
     ) {
         val file = File(filePath)
         require(file.isFile && file.canRead()) { "本地视频文件不可用：$filePath" }
+        loadGeneration += 1L
         stallTracker.reset()
         closeActiveHlsSeekSession()
         beginVideoRecovery(clearRenderedFrame = true)
@@ -609,18 +615,32 @@ class PlayerSessionController(
         refresher: suspend () -> List<VideoStream>,
     ): Boolean {
         val snapshot = _state.value
+        val startGeneration = loadGeneration
         if (snapshot.isOffline || snapshot.isLocal || snapshot.hasRefreshedExpiredStream) return false
         val previous = snapshot.currentStream ?: return false
         _state.update { it.copy(hasRefreshedExpiredStream = true) }
 
-        val freshStreams = runCatching { refresher() }.getOrNull().orEmpty()
+        val freshStreams = try {
+            refresher()
+        } catch (ce: CancellationException) {
+            throw ce
+        } catch (_: Throwable) {
+            emptyList()
+        }
         if (freshStreams.isEmpty()) return false
         val selected = StreamSelector.afterRefresh(freshStreams, previous, linkSpeedEstimator.estimateKbps())
-        withContext(dispatchers.main) {
+        return withContext(dispatchers.main) {
+            val current = _state.value
+            if (loadGeneration != startGeneration ||
+                current.siteId != snapshot.siteId ||
+                current.mediaId != snapshot.mediaId
+            ) {
+                return@withContext false
+            }
             _state.update { it.copy(availableStreams = freshStreams) }
             switchStream(selected, preservePosition = true, notice = "播放地址已自动刷新")
+            true
         }
-        return true
     }
 
     fun play() {
@@ -794,6 +814,7 @@ class PlayerSessionController(
     }
 
     fun release() {
+        loadGeneration += 1L
         closeActiveHlsSeekSession()
         runCatching { mediaSession?.release() }
         mediaSession = null
@@ -871,6 +892,7 @@ class PlayerSessionController(
             .setLoadControl(BufferPlanner.createLoadControl(plan, memoryClassMb))
             .setBandwidthMeter(linkSpeedEstimator.meter)
             .setSeekParameters(SeekParameters.CLOSEST_SYNC)
+            .setVideoChangeFrameRateStrategy(C.VIDEO_CHANGE_FRAME_RATE_STRATEGY_ONLY_IF_SEAMLESS)
             .setAudioAttributes(audioAttributes, true)
             .setHandleAudioBecomingNoisy(true)
             .build()

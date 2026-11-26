@@ -155,4 +155,25 @@ class SiteKitRoutingAndCacheTest {
         assertEquals(99, computed)
         assertEquals(99, cache.get("fresh"))
     }
+
+    @Test
+    fun `dual language merger advances past empty locally filtered page when hasNext is true`() = runTest {
+        val streamA = mapOf(
+            1 to StreamSlice<String>(items = emptyList(), hasNext = true),
+            2 to StreamSlice(items = listOf("80"), hasNext = false),
+        )
+        val streamB = mapOf(
+            1 to StreamSlice(items = listOf("90"), hasNext = false),
+        )
+        val merged = DualLanguageMerger.merge(
+            cursorRaw = null,
+            pageSize = 5,
+            strategy = DualMergeStrategy.DESCENDING_NUMERIC_ID,
+            idOf = { it },
+            fetchStreamA = { p -> streamA[p] ?: StreamSlice(emptyList(), false) },
+            fetchStreamB = { p -> streamB[p] ?: StreamSlice(emptyList(), false) },
+        )
+        assertEquals(listOf("90", "80"), merged.items)
+        assertFalse(merged.hasMore)
+    }
 }
