@@ -66,6 +66,9 @@ jobs:
 
       - name: Run instrumented tests on Android 14
         uses: reactivecircus/android-emulator-runner@v2
+        env:
+          # Current emulator builds reject `-accel off` unless software CPU emulation is explicit.
+          ANDROID_I_WANT_MY_TCG: "yes"
         with:
           api-level: 34
           target: google_apis
