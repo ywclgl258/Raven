@@ -101,6 +101,8 @@ data class SearchUiState(
     val allSites: List<SiteDescriptor> = emptyList(),
     val searchableSites: List<SiteDescriptor> = emptyList(),
     val pinnedSiteIds: List<SiteId> = emptyList(),
+    val siteOpenCounts: Map<SiteId, Int> = emptyMap(),
+    val startupDefaultSiteId: SiteId? = null,
     val query: String = "",
     val submittedQuery: String = "",
     val scope: SearchScope = SearchScope.ALL,
@@ -520,9 +522,11 @@ class SearchViewModel(
         SearchUiState(
             mode = input.mode,
             activeSite = activeDescriptor,
-            allSites = allDescriptors,
-            searchableSites = searchableDescriptors,
+            allSites = settings.sortSitesByUsage(allDescriptors) { it.id },
+            searchableSites = settings.sortSitesByUsage(searchableDescriptors) { it.id },
             pinnedSiteIds = settings.pinnedSiteIds,
+            siteOpenCounts = settings.siteOpenCounts,
+            startupDefaultSiteId = settings.startupDefaultSiteId,
             query = input.query,
             submittedQuery = input.submittedQuery,
             scope = effectiveScope,
@@ -611,13 +615,20 @@ class SearchViewModel(
             )
         }
         viewModelScope.launch {
-            preferencesRepository.setActiveSiteId(siteId)
+            preferencesRepository.selectActiveSiteAndRecordOpen(siteId)
         }
     }
 
     fun togglePinnedSite(siteId: SiteId) {
         viewModelScope.launch {
             preferencesRepository.togglePinnedSite(siteId)
+        }
+    }
+
+    fun setStartupDefaultSiteId(siteId: SiteId?) {
+        if (siteId != null && siteRegistry.get(siteId) == null) return
+        viewModelScope.launch {
+            preferencesRepository.setStartupDefaultSiteId(siteId)
         }
     }
 

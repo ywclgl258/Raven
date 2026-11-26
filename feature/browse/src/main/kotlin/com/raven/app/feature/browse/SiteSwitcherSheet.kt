@@ -33,6 +33,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.AutoStories
+import androidx.compose.material.icons.outlined.Home
 import androidx.compose.material.icons.outlined.Lock
 import androidx.compose.material.icons.outlined.MenuBook
 import androidx.compose.material.icons.outlined.Movie
@@ -40,6 +41,7 @@ import androidx.compose.material.icons.outlined.PhotoLibrary
 import androidx.compose.material.icons.outlined.PushPin
 import androidx.compose.material.icons.rounded.ExpandLess
 import androidx.compose.material.icons.rounded.ExpandMore
+import androidx.compose.material.icons.rounded.Home
 import androidx.compose.material.icons.rounded.PushPin
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -92,25 +94,43 @@ fun SiteSwitcherSheet(
     onTogglePinSite: (SiteId) -> Unit,
     onDismissRequest: () -> Unit,
     modifier: Modifier = Modifier,
+    siteOpenCounts: Map<SiteId, Int> = emptyMap(),
+    startupDefaultSiteId: SiteId? = null,
+    onSelectStartupDefaultSite: (SiteId?) -> Unit = {},
 ) {
     var editPinsMode by rememberSaveable { mutableStateOf(false) }
+    var startupSiteMode by rememberSaveable { mutableStateOf(false) }
 
     RavenBottomSheet(
         onDismissRequest = onDismissRequest,
         modifier = modifier.testTag("site_switcher_sheet"),
         title = "切换站点",
-        subtitle = "共 ${sites.size} 个可用站点 · 长按或编辑可置顶常用站点",
+        subtitle = if (startupSiteMode) {
+            "点击下方任意站点设为 APP 启动时打开的第一个站点"
+        } else {
+            "共 ${sites.size} 个可用站点 · 长按或编辑可置顶常用站点"
+        },
         trailingAction = {
             TextButton(
-                onClick = { editPinsMode = !editPinsMode },
+                onClick = {
+                    if (startupSiteMode) {
+                        startupSiteMode = false
+                    } else {
+                        editPinsMode = !editPinsMode
+                    }
+                },
                 modifier = Modifier
                     .heightIn(min = 48.dp)
                     .testTag("site_switcher_edit_pins_button"),
             ) {
                 Text(
-                    text = if (editPinsMode) "完成" else "编辑常用",
+                    text = if (startupSiteMode || editPinsMode) "完成" else "编辑常用",
                     style = MaterialTheme.typography.labelLarge,
-                    color = if (editPinsMode) LocalRavenColors.current.crimson else LocalRavenColors.current.inkPrimary,
+                    color = if (startupSiteMode || editPinsMode) {
+                        LocalRavenColors.current.crimson
+                    } else {
+                        LocalRavenColors.current.inkPrimary
+                    },
                 )
             }
         },
@@ -120,7 +140,19 @@ fun SiteSwitcherSheet(
             sites = sites,
             activeSiteId = activeSiteId,
             pinnedSiteIds = pinnedSiteIds,
+            siteOpenCounts = siteOpenCounts,
+            startupDefaultSiteId = startupDefaultSiteId,
             editPinsMode = editPinsMode,
+            startupSiteMode = startupSiteMode,
+            onToggleStartupSiteMode = {
+                val next = !startupSiteMode
+                startupSiteMode = next
+                if (next) editPinsMode = false
+            },
+            onSelectStartupDefaultSite = { siteId ->
+                onSelectStartupDefaultSite(siteId)
+                startupSiteMode = false
+            },
             onSelectSite = { siteId ->
                 onSelectSite(siteId)
                 onDismissRequest()
@@ -134,9 +166,17 @@ fun SiteSwitcherSheet(
     }
 }
 
+private data class SiteSwitcherGroupSpec(
+    val kind: MediaKind,
+    val title: String,
+    val icon: ImageVector,
+    val sites: List<SiteDescriptor>,
+)
+
 /**
- * Reusable compact adaptive site switcher content grouped by `VIDEO (8) / COMIC (6) / PHOTO (5)`
- * with a collapsible **常用站点 (Pinned)** section.
+ * Reusable compact adaptive site switcher content grouped by `VIDEO / COMIC / SERIAL_COMIC / PHOTO`
+ * with a collapsible **常用站点 (Pinned)** section. Both sites and category groups are automatically
+ * ordered descending by local visit frequency when counts are present.
  */
 @Composable
 fun SiteSwitcherDrawerContent(
@@ -147,19 +187,47 @@ fun SiteSwitcherDrawerContent(
     onTogglePinSite: (SiteId) -> Unit,
     modifier: Modifier = Modifier,
     editPinsMode: Boolean = false,
+    siteOpenCounts: Map<SiteId, Int> = emptyMap(),
+    startupDefaultSiteId: SiteId? = null,
+    startupSiteMode: Boolean = false,
+    onToggleStartupSiteMode: () -> Unit = {},
+    onSelectStartupDefaultSite: (SiteId?) -> Unit = {},
 ) {
     val colors = LocalRavenColors.current
     var pinnedExpanded by rememberSaveable { mutableStateOf(true) }
 
     val pinnedSet = remember(pinnedSiteIds) { pinnedSiteIds.toSet() }
     val sitesById = remember(sites) { sites.associateBy { it.id } }
-    val pinnedSites = remember(pinnedSiteIds, sitesById) {
-        pinnedSiteIds.mapNotNull { sitesById[it] }
+    val startupDefaultSiteName = remember(startupDefaultSiteId, sitesById) {
+        startupDefaultSiteId?.let { id -> sitesById[id]?.shortName ?: id.value }
     }
-    val videoSites = remember(sites) { sites.filter { it.primaryKind == MediaKind.VIDEO } }
-    val comicSites = remember(sites) { sites.filter { it.primaryKind == MediaKind.COMIC } }
-    val serialComicSites = remember(sites) { sites.filter { it.primaryKind == MediaKind.SERIAL_COMIC } }
-    val photoSites = remember(sites) { sites.filter { it.primaryKind == MediaKind.PHOTO } }
+    val pinnedSites = remember(pinnedSiteIds, sitesById, siteOpenCounts) {
+        val resolved = pinnedSiteIds.mapNotNull { sitesById[it] }
+        if (siteOpenCounts.isEmpty()) resolved
+        else resolved.sortedByDescending { siteOpenCounts[it.id] ?: 0 }
+    }
+    val orderedGroups = remember(sites, siteOpenCounts) {
+        val baseGroups = listOf(
+            SiteSwitcherGroupSpec(MediaKind.VIDEO, "视频", Icons.Outlined.Movie, sites.filter { it.primaryKind == MediaKind.VIDEO }),
+            SiteSwitcherGroupSpec(MediaKind.COMIC, "漫画", Icons.Outlined.MenuBook, sites.filter { it.primaryKind == MediaKind.COMIC }),
+            SiteSwitcherGroupSpec(MediaKind.SERIAL_COMIC, "连载漫画", Icons.Outlined.AutoStories, sites.filter { it.primaryKind == MediaKind.SERIAL_COMIC }),
+            SiteSwitcherGroupSpec(MediaKind.PHOTO, "写真", Icons.Outlined.PhotoLibrary, sites.filter { it.primaryKind == MediaKind.PHOTO }),
+        ).mapNotNull { spec ->
+            if (spec.sites.isEmpty()) null
+            else {
+                val sortedSites = if (siteOpenCounts.isEmpty()) spec.sites
+                else spec.sites.sortedByDescending { siteOpenCounts[it.id] ?: 0 }
+                spec.copy(sites = sortedSites)
+            }
+        }
+        if (siteOpenCounts.isEmpty()) {
+            baseGroups
+        } else {
+            baseGroups.sortedByDescending { spec ->
+                spec.sites.sumOf { (siteOpenCounts[it.id] ?: 0).toLong() }
+            }
+        }
+    }
 
     BoxWithConstraints(
         modifier = modifier.testTag("site_switcher_content"),
@@ -172,6 +240,14 @@ fun SiteSwitcherDrawerContent(
                 .padding(bottom = 16.dp),
             verticalArrangement = Arrangement.spacedBy(14.dp),
         ) {
+            StartupDefaultSiteActionBar(
+                startupDefaultSiteName = startupDefaultSiteName,
+                hasCustomStartupSite = startupDefaultSiteId != null,
+                startupSiteMode = startupSiteMode,
+                onToggleMode = onToggleStartupSiteMode,
+                onResetDefault = { onSelectStartupDefaultSite(null) },
+            )
+
             if (pinnedSites.isNotEmpty() || editPinsMode) {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Row(
@@ -254,9 +330,12 @@ fun SiteSwitcherDrawerContent(
                                 sites = pinnedSites,
                                 columns = columns,
                                 activeSiteId = activeSiteId,
+                                startupDefaultSiteId = startupDefaultSiteId,
                                 pinnedSet = pinnedSet,
                                 editPinsMode = editPinsMode,
+                                startupSiteMode = startupSiteMode,
                                 onSelectSite = onSelectSite,
+                                onSelectStartupDefaultSite = { siteId -> onSelectStartupDefaultSite(siteId) },
                                 onTogglePinSite = onTogglePinSite,
                             )
                         }
@@ -264,65 +343,114 @@ fun SiteSwitcherDrawerContent(
                 }
             }
 
-            if (videoSites.isNotEmpty()) {
+            orderedGroups.forEach { group ->
                 SiteSwitcherGroupSection(
-                    title = "视频",
-                    count = videoSites.size,
-                    icon = Icons.Outlined.Movie,
-                    sites = videoSites,
+                    title = group.title,
+                    count = group.sites.size,
+                    icon = group.icon,
+                    sites = group.sites,
                     columns = columns,
                     activeSiteId = activeSiteId,
+                    startupDefaultSiteId = startupDefaultSiteId,
                     pinnedSet = pinnedSet,
                     editPinsMode = editPinsMode,
+                    startupSiteMode = startupSiteMode,
                     onSelectSite = onSelectSite,
+                    onSelectStartupDefaultSite = { siteId -> onSelectStartupDefaultSite(siteId) },
                     onTogglePinSite = onTogglePinSite,
                 )
             }
+        }
+    }
+}
 
-            if (comicSites.isNotEmpty()) {
-                SiteSwitcherGroupSection(
-                    title = "漫画",
-                    count = comicSites.size,
-                    icon = Icons.Outlined.MenuBook,
-                    sites = comicSites,
-                    columns = columns,
-                    activeSiteId = activeSiteId,
-                    pinnedSet = pinnedSet,
-                    editPinsMode = editPinsMode,
-                    onSelectSite = onSelectSite,
-                    onTogglePinSite = onTogglePinSite,
-                )
-            }
+@Composable
+private fun StartupDefaultSiteActionBar(
+    startupDefaultSiteName: String?,
+    hasCustomStartupSite: Boolean,
+    startupSiteMode: Boolean,
+    onToggleMode: () -> Unit,
+    onResetDefault: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val colors = LocalRavenColors.current
+    val interactionSource = remember { MutableInteractionSource() }
+    val containerColor = if (startupSiteMode) colors.surface3 else colors.surface1
+    val borderColor = if (startupSiteMode) colors.crimson.copy(alpha = 0.72f) else colors.hairline
 
-            if (serialComicSites.isNotEmpty()) {
-                SiteSwitcherGroupSection(
-                    title = "连载漫画",
-                    count = serialComicSites.size,
-                    icon = Icons.Outlined.AutoStories,
-                    sites = serialComicSites,
-                    columns = columns,
-                    activeSiteId = activeSiteId,
-                    pinnedSet = pinnedSet,
-                    editPinsMode = editPinsMode,
-                    onSelectSite = onSelectSite,
-                    onTogglePinSite = onTogglePinSite,
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .heightIn(min = 48.dp)
+            .clip(RavenShapes.ControlShape)
+            .background(containerColor)
+            .border(
+                width = if (startupSiteMode) 1.dp else 0.5.dp,
+                color = borderColor,
+                shape = RavenShapes.ControlShape,
+            )
+            .ravenSpringPress(interactionSource = interactionSource)
+            .clickable(
+                interactionSource = interactionSource,
+                indication = null,
+                role = Role.Button,
+                onClick = onToggleMode,
+            )
+            .padding(horizontal = 12.dp, vertical = 8.dp)
+            .testTag("site_switcher_startup_site_button"),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        Icon(
+            imageVector = if (startupSiteMode || hasCustomStartupSite) Icons.Rounded.Home else Icons.Outlined.Home,
+            contentDescription = null,
+            tint = if (startupSiteMode || hasCustomStartupSite) colors.crimson else colors.inkSecondary,
+            modifier = Modifier.size(18.dp),
+        )
+        Column(
+            modifier = Modifier.weight(1f),
+            verticalArrangement = Arrangement.spacedBy(2.dp),
+        ) {
+            Text(
+                text = "设置APP启动页",
+                style = MaterialTheme.typography.titleSmall,
+                color = colors.inkPrimary,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Text(
+                text = if (startupDefaultSiteName != null) {
+                    "当前：$startupDefaultSiteName"
+                } else {
+                    "当前：记住上次打开"
+                },
+                style = MaterialTheme.typography.labelSmall,
+                color = if (startupDefaultSiteName != null) colors.inkSecondary else colors.inkTertiary,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+        if (startupSiteMode && hasCustomStartupSite) {
+            TextButton(
+                onClick = onResetDefault,
+                modifier = Modifier
+                    .heightIn(min = 36.dp)
+                    .testTag("site_switcher_startup_reset_button"),
+                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+            ) {
+                Text(
+                    text = "恢复默认",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = colors.crimson,
                 )
             }
-
-            if (photoSites.isNotEmpty()) {
-                SiteSwitcherGroupSection(
-                    title = "写真",
-                    count = photoSites.size,
-                    icon = Icons.Outlined.PhotoLibrary,
-                    sites = photoSites,
-                    columns = columns,
-                    activeSiteId = activeSiteId,
-                    pinnedSet = pinnedSet,
-                    editPinsMode = editPinsMode,
-                    onSelectSite = onSelectSite,
-                    onTogglePinSite = onTogglePinSite,
-                )
-            }
+        } else if (startupSiteMode) {
+            RavenStatusPill(text = "请选择站点", tone = RavenStatusTone.ACCENT)
+        } else {
+            RavenStatusPill(
+                text = startupDefaultSiteName ?: "选择站点",
+                tone = if (hasCustomStartupSite) RavenStatusTone.ACCENT else RavenStatusTone.NEUTRAL,
+            )
         }
     }
 }
@@ -335,9 +463,12 @@ private fun SiteSwitcherGroupSection(
     sites: List<SiteDescriptor>,
     columns: Int,
     activeSiteId: SiteId,
+    startupDefaultSiteId: SiteId?,
     pinnedSet: Set<SiteId>,
     editPinsMode: Boolean,
+    startupSiteMode: Boolean,
     onSelectSite: (SiteId) -> Unit,
+    onSelectStartupDefaultSite: (SiteId) -> Unit,
     onTogglePinSite: (SiteId) -> Unit,
 ) {
     val colors = LocalRavenColors.current
@@ -371,9 +502,12 @@ private fun SiteSwitcherGroupSection(
             sites = sites,
             columns = columns,
             activeSiteId = activeSiteId,
+            startupDefaultSiteId = startupDefaultSiteId,
             pinnedSet = pinnedSet,
             editPinsMode = editPinsMode,
+            startupSiteMode = startupSiteMode,
             onSelectSite = onSelectSite,
+            onSelectStartupDefaultSite = onSelectStartupDefaultSite,
             onTogglePinSite = onTogglePinSite,
         )
     }
@@ -384,9 +518,12 @@ private fun SiteSwitcherCompactGrid(
     sites: List<SiteDescriptor>,
     columns: Int,
     activeSiteId: SiteId,
+    startupDefaultSiteId: SiteId?,
     pinnedSet: Set<SiteId>,
     editPinsMode: Boolean,
+    startupSiteMode: Boolean,
     onSelectSite: (SiteId) -> Unit,
+    onSelectStartupDefaultSite: (SiteId) -> Unit,
     onTogglePinSite: (SiteId) -> Unit,
 ) {
     val rows = remember(sites, columns) { sites.chunked(columns.coerceAtLeast(1)) }
@@ -399,17 +536,20 @@ private fun SiteSwitcherCompactGrid(
             ) {
                 rowSites.forEach { site ->
                     val isSelected = site.id == activeSiteId
+                    val isStartupDefault = site.id == startupDefaultSiteId
                     val isPinned = site.id in pinnedSet
                     SiteSwitcherTile(
                         site = site,
                         isSelected = isSelected,
+                        isStartupDefault = isStartupDefault,
                         isPinned = isPinned,
                         editPinsMode = editPinsMode,
+                        startupSiteMode = startupSiteMode,
                         onClick = {
-                            if (editPinsMode) {
-                                onTogglePinSite(site.id)
-                            } else {
-                                onSelectSite(site.id)
+                            when {
+                                startupSiteMode -> onSelectStartupDefaultSite(site.id)
+                                editPinsMode -> onTogglePinSite(site.id)
+                                else -> onSelectSite(site.id)
                             }
                         },
                         onLongClick = { onTogglePinSite(site.id) },
@@ -428,8 +568,10 @@ private fun SiteSwitcherCompactGrid(
 private fun SiteSwitcherTile(
     site: SiteDescriptor,
     isSelected: Boolean,
+    isStartupDefault: Boolean,
     isPinned: Boolean,
     editPinsMode: Boolean,
+    startupSiteMode: Boolean,
     onClick: () -> Unit,
     onLongClick: () -> Unit,
     modifier: Modifier = Modifier,
@@ -446,13 +588,19 @@ private fun SiteSwitcherTile(
     }
 
     val containerColor by animateColorAsState(
-        targetValue = if (isSelected) colors.surface3 else colors.surface1,
+        targetValue = when {
+            startupSiteMode && isStartupDefault -> colors.surface3
+            isSelected -> colors.surface3
+            else -> colors.surface1
+        },
         animationSpec = colorSpec,
         label = "siteTileContainer",
     )
     val borderColor by animateColorAsState(
         targetValue = when {
             isSelected -> colors.crimson.copy(alpha = 0.72f)
+            startupSiteMode && isStartupDefault -> colors.crimson.copy(alpha = 0.72f)
+            isStartupDefault -> colors.rimHighlight
             editPinsMode && isPinned -> colors.rimHighlight
             else -> colors.hairline
         },
@@ -522,14 +670,31 @@ private fun SiteSwitcherTile(
         }
 
         val secondaryLine = accessNote?.takeIf { it.isNotBlank() } ?: site.defaultHost
-        if (secondaryLine.isNotBlank()) {
-            Text(
-                text = secondaryLine,
-                style = MaterialTheme.typography.labelSmall,
-                color = if (!accessNote.isNullOrBlank()) colors.inkSecondary else colors.inkTertiary,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
+        if (secondaryLine.isNotBlank() || isStartupDefault) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                if (secondaryLine.isNotBlank()) {
+                    Text(
+                        text = secondaryLine,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = if (!accessNote.isNullOrBlank()) colors.inkSecondary else colors.inkTertiary,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f),
+                    )
+                } else {
+                    Spacer(modifier = Modifier.weight(1f))
+                }
+                if (isStartupDefault) {
+                    RavenStatusPill(
+                        text = "启动页",
+                        tone = RavenStatusTone.ACCENT,
+                    )
+                }
+            }
         }
     }
 }

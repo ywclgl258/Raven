@@ -226,4 +226,91 @@ class ExploreViewModelTest {
                 cancelAndIgnoreRemainingEvents()
             }
         }
+
+    @Test
+    fun `selecting sites and sections increments visit counts and sorts both lists descending`() =
+        runTest(mainDispatcherRule.dispatcher) {
+            val harness = BrowseTestHarness(mainDispatcherRule.dispatcher)
+            val sections = listOf(
+                SiteSectionSpec(id = "latest", title = "最新"),
+                SiteSectionSpec(id = "popular", title = "热门"),
+                SiteSectionSpec(id = "top_rated", title = "好评"),
+            )
+            val hanime = FakeSitePlugin(
+                descriptor = SiteDescriptor(
+                    id = SiteId.HANIME1,
+                    displayName = "Hanime1",
+                    primaryKind = MediaKind.VIDEO,
+                    defaultHost = "hanime1.me",
+                    sections = sections,
+                    capabilities = setOf(SiteCapability.EXPLORE),
+                ),
+                feedHandler = { FeedPage(items = emptyList()) },
+            )
+            val r34 = FakeSitePlugin(
+                descriptor = SiteDescriptor(
+                    id = SiteId.R34V,
+                    displayName = "Rule34Video",
+                    primaryKind = MediaKind.VIDEO,
+                    defaultHost = "rule34video.com",
+                    sections = sections,
+                    capabilities = setOf(SiteCapability.EXPLORE),
+                ),
+                feedHandler = { FeedPage(items = emptyList()) },
+            )
+            val nhentai = FakeSitePlugin(
+                descriptor = SiteDescriptor(
+                    id = SiteId.NHENTAI,
+                    displayName = "nhentai",
+                    primaryKind = MediaKind.COMIC,
+                    defaultHost = "nhentai.net",
+                    capabilities = setOf(SiteCapability.EXPLORE),
+                ),
+                feedHandler = { FeedPage(items = emptyList()) },
+            )
+
+            val vm = ExploreViewModel(
+                siteRegistry = SiteRegistry(listOf(hanime, r34, nhentai)),
+                preferencesRepository = harness.preferencesRepository,
+                blockedTermsRepository = harness.blockedTermsRepository,
+                historyRepository = harness.historyRepository,
+                shelfRepository = harness.shelfRepository,
+                browsePositionRepository = harness.browsePositionRepository,
+                dispatchers = harness.dispatchers,
+            )
+
+            vm.uiState.test {
+                advanceUntilIdle()
+                val initial = expectMostRecentItem()
+                assertEquals(listOf(SiteId.HANIME1, SiteId.R34V, SiteId.NHENTAI), initial.allSites.map { it.id })
+                assertEquals(listOf("latest", "popular", "top_rated"), initial.availableSections.map { it.id })
+
+                // Open top_rated twice & popular once -> top_rated leads, popular second
+                vm.selectSection(sections[1])
+                vm.selectSection(sections[2])
+                vm.selectSection(sections[2])
+                // Open NHENTAI 3 times, R34V 2 times, HANIME1 once -> [NHENTAI(3), R34V(2), HANIME1(1)]
+                vm.selectSite(SiteId.NHENTAI)
+                vm.selectSite(SiteId.R34V)
+                vm.selectSite(SiteId.NHENTAI)
+                vm.selectSite(SiteId.R34V)
+                vm.selectSite(SiteId.NHENTAI)
+                advanceUntilIdle()
+
+                // Verify section counts on HANIME1 persisted & sorted (switches HANIME1 -> count = 1)
+                vm.selectSite(SiteId.HANIME1)
+                advanceUntilIdle()
+
+                val reordered = expectMostRecentItem()
+                assertEquals(
+                    listOf(SiteId.NHENTAI, SiteId.R34V, SiteId.HANIME1),
+                    reordered.allSites.map { it.id },
+                )
+                assertEquals(
+                    listOf("top_rated", "popular", "latest"),
+                    reordered.availableSections.map { it.id },
+                )
+                cancelAndIgnoreRemainingEvents()
+            }
+        }
 }

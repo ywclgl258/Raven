@@ -212,7 +212,7 @@ class SettingsViewModel(
             activeSiteBlockedTermsCount = blockedCount,
             tagDictionaryStats = dictStats,
             authSites = aux.authSites,
-            allSites = siteRegistry.allDescriptors(),
+            allSites = settings.sortSitesByUsage(siteRegistry.allDescriptors()) { it.id },
             readingCache = aux.readingCache,
             mediaCache = aux.mediaCache,
             hasAppPin = aux.hasAppPin,

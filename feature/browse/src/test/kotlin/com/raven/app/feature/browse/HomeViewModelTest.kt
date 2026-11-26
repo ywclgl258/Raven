@@ -314,10 +314,17 @@ class HomeViewModelTest {
 
             vm.uiState.test {
                 advanceUntilIdle()
+                val initial = expectMostRecentItem()
+                assertEquals(listOf(SiteId.R34V, SiteId.NHENTAI, SiteId.EXHENTAI), initial.allSites.map { it.id })
+
+                vm.selectSite(SiteId.NHENTAI)
+                advanceUntilIdle()
+                vm.selectSite(SiteId.EXHENTAI)
                 vm.selectSite(SiteId.NHENTAI)
                 advanceUntilIdle()
 
                 val comicAll = expectMostRecentItem()
+                assertEquals(listOf(SiteId.NHENTAI, SiteId.EXHENTAI, SiteId.R34V), comicAll.allSites.map { it.id })
                 assertFalse(comicAll.isVideoHome)
                 assertTrue(comicAll.supportsLanguageFilter)
                 assertEquals(ComicLanguage.ALL, comicAll.comicLanguage)
@@ -558,5 +565,43 @@ class HomeViewModelTest {
             val afterRemove = harness.shelfRepository.observeShelvesWithSummary().first()
                 .first { it.shelf.id == created.shelf.id }
             assertEquals(0, afterRemove.itemCount)
+        }
+
+    @Test
+    fun `setStartupDefaultSiteId persists custom startup site without changing current active site and resets cleanly`() =
+        runTest(mainDispatcherRule.dispatcher) {
+            val harness = BrowseTestHarness(mainDispatcherRule.dispatcher)
+            val (registry, _, _) = buildRegistry()
+            val vm = HomeViewModel(
+                siteRegistry = registry,
+                preferencesRepository = harness.preferencesRepository,
+                blockedTermsRepository = harness.blockedTermsRepository,
+                historyRepository = harness.historyRepository,
+                favoriteRepository = harness.favoriteRepository,
+                shelfRepository = harness.shelfRepository,
+                browsePositionRepository = harness.browsePositionRepository,
+                dispatchers = harness.dispatchers,
+            )
+
+            vm.uiState.test {
+                advanceUntilIdle()
+                val initial = expectMostRecentItem()
+                assertNull(initial.startupDefaultSiteId)
+                assertEquals(SiteId.R34V, initial.activeSite?.id)
+
+                vm.setStartupDefaultSiteId(SiteId.NHENTAI)
+                advanceUntilIdle()
+                val updated = expectMostRecentItem()
+                assertEquals(SiteId.NHENTAI, updated.startupDefaultSiteId)
+                assertEquals(SiteId.R34V, updated.activeSite?.id)
+                assertEquals(SiteId.NHENTAI, harness.preferencesRepository.currentSettings().startupDefaultSiteId)
+
+                vm.setStartupDefaultSiteId(null)
+                advanceUntilIdle()
+                val reset = expectMostRecentItem()
+                assertNull(reset.startupDefaultSiteId)
+                assertNull(harness.preferencesRepository.currentSettings().startupDefaultSiteId)
+                cancelAndIgnoreRemainingEvents()
+            }
         }
 }

@@ -30,7 +30,7 @@ class SettingsDataStoreTest {
         settingsStore.settings.test {
             val initial = awaitItem()
             assertEquals(AppSettings(), initial)
-            assertEquals(SiteId.R34V, initial.activeSiteId)
+            assertEquals(SiteId.HANIME1, initial.activeSiteId)
             assertNull(initial.startupDefaultSiteId)
             assertTrue(initial.translateTags)
             assertFalse(initial.autoFullscreen)
@@ -213,5 +213,93 @@ class SettingsDataStoreTest {
         }
         val settingsStore = SettingsDataStore(failingStore)
         assertEquals(AppSettings(), settingsStore.currentSettings())
+    }
+
+    @Test
+    fun `records local site and section open counts, respects incognito mode, and sorts by frequency`() = runTest {
+        val settingsStore = SettingsDataStore(InMemoryPreferencesDataStore())
+
+        settingsStore.selectActiveSiteAndRecordOpen(SiteId.MANGACOPY)
+        settingsStore.selectActiveSiteAndRecordOpen(SiteId.NHENTAI)
+        settingsStore.selectActiveSiteAndRecordOpen(SiteId.NHENTAI)
+        settingsStore.recordSiteOpen(SiteId.MANWA2)
+        settingsStore.recordSiteOpen(SiteId.MANWA2)
+        settingsStore.recordSiteOpen(SiteId.MANWA2)
+
+        settingsStore.setSiteExploreFilterAndRecordSection(
+            siteId = SiteId.MANGACOPY,
+            filter = ExploreFilterState(section = "popular"),
+            recordedSectionId = "popular",
+        )
+        settingsStore.recordSectionOpen(SiteId.MANGACOPY, "popular")
+        settingsStore.recordSectionOpen(SiteId.MANGACOPY, "finish")
+        // Virtual chapters section must not be counted
+        settingsStore.recordSectionOpen(SiteId.MANGACOPY, "chapters")
+
+        // Incognito mode still updates activeSiteId / filter, but skips visit counter increments
+        settingsStore.setIncognitoMode(true)
+        settingsStore.selectActiveSiteAndRecordOpen(SiteId.R34V)
+        settingsStore.recordSectionOpen(SiteId.MANGACOPY, "finish")
+
+        val snap = settingsStore.currentSettings()
+        assertEquals(SiteId.R34V, snap.activeSiteId)
+        assertEquals(1, snap.siteOpenCount(SiteId.MANGACOPY))
+        assertEquals(2, snap.siteOpenCount(SiteId.NHENTAI))
+        assertEquals(3, snap.siteOpenCount(SiteId.MANWA2))
+        assertEquals(0, snap.siteOpenCount(SiteId.R34V))
+        assertEquals(2, snap.sectionOpenCount(SiteId.MANGACOPY, "popular"))
+        assertEquals(1, snap.sectionOpenCount(SiteId.MANGACOPY, "finish"))
+        assertEquals(0, snap.sectionOpenCount(SiteId.MANGACOPY, "chapters"))
+
+        val orderedSites = snap.sortSitesByUsage(
+            listOf(SiteId.HANIME1, SiteId.R34V, SiteId.MANGACOPY, SiteId.NHENTAI, SiteId.MANWA2),
+        ) { it }
+        assertEquals(
+            listOf(SiteId.MANWA2, SiteId.NHENTAI, SiteId.MANGACOPY, SiteId.HANIME1, SiteId.R34V),
+            orderedSites,
+        )
+
+        val orderedSections = snap.sortSectionsByUsage(
+            SiteId.MANGACOPY,
+            listOf("latest", "finish", "popular"),
+        ) { it }
+        assertEquals(listOf("popular", "finish", "latest"), orderedSections)
+
+        val descriptors = listOf(
+            com.raven.app.core.model.SiteDescriptor(
+                id = SiteId.HANIME1,
+                displayName = "Hanime",
+                primaryKind = com.raven.app.core.model.MediaKind.VIDEO,
+                defaultHost = "hanime1.me",
+            ),
+            com.raven.app.core.model.SiteDescriptor(
+                id = SiteId.NHENTAI,
+                displayName = "nhentai",
+                primaryKind = com.raven.app.core.model.MediaKind.COMIC,
+                defaultHost = "nhentai.net",
+            ),
+            com.raven.app.core.model.SiteDescriptor(
+                id = SiteId.MANWA2,
+                displayName = "Manwa2",
+                primaryKind = com.raven.app.core.model.MediaKind.SERIAL_COMIC,
+                defaultHost = "manwauu.cc",
+            ),
+            com.raven.app.core.model.SiteDescriptor(
+                id = SiteId.MANGACOPY,
+                displayName = "Copy",
+                primaryKind = com.raven.app.core.model.MediaKind.SERIAL_COMIC,
+                defaultHost = "mangacopy.com",
+            ),
+        )
+        // SERIAL_COMIC sum = 3 + 1 = 4, COMIC sum = 2, VIDEO = 0, PHOTO = 0
+        assertEquals(
+            listOf(
+                com.raven.app.core.model.MediaKind.SERIAL_COMIC,
+                com.raven.app.core.model.MediaKind.COMIC,
+                com.raven.app.core.model.MediaKind.VIDEO,
+                com.raven.app.core.model.MediaKind.PHOTO,
+            ),
+            snap.sortMediaKindsByUsage(descriptors),
+        )
     }
 }

@@ -156,4 +156,37 @@ class SiteKitProtocolsTest {
             runCatching { JmcomicStripMath.computeSlicePlan(imageHeight = 0, stripCount = 4) }.exceptionOrNull()?.javaClass,
         )
     }
+
+    @Test
+    fun `manwa image aes protocol roundtrips AES-CBC images, skips plain images, and parses js key`() {
+        val fakeWebp = "RIFF\u0010\u0000\u0000\u0000WEBPVP8 demo-manwa-payload".toByteArray(Charsets.ISO_8859_1)
+        val encrypted = ManwaImageAesProtocol.encryptForTest(fakeWebp)
+        assertFalse(ManwaImageAesProtocol.isPlainImageBytes(encrypted))
+        assertTrue(ManwaImageAesProtocol.isPlainImageBytes(fakeWebp))
+        assertEquals("image/webp", ManwaImageAesProtocol.detectImageMime(fakeWebp))
+
+        val decrypted = ManwaImageAesProtocol.decryptImage(encrypted)
+        assertNotNull(decrypted)
+        assertArrayEquals(fakeWebp, decrypted)
+        // Plain images are never corrupted
+        assertNull(ManwaImageAesProtocol.decryptImage(fakeWebp))
+
+        val js = """window.CONFIG = { AES_KEY: "12345678-ABCD-EFGH-IJKL-MNOPQRSTUVWX" };"""
+        val extractedKey = ManwaImageAesProtocol.extractAesKeyFromJs(js)
+        assertEquals("12345678-ABCD-EFGH-IJKL-MNOPQRSTUVWX", extractedKey)
+
+        val customEncrypted = ManwaImageAesProtocol.encryptForTest(fakeWebp, aesKey = extractedKey!!)
+        val hook = ManwaImageAesProtocol.createTransportHook(
+            keyProvider = { extractedKey },
+            urlMatcher = { url -> url.contains("/en_images/") },
+        )
+        assertTrue(hook.requiresFullResponseUnwrap("https://cdn.example.com/en_images/1.webp"))
+        assertFalse(hook.requiresFullResponseUnwrap("https://cdn.example.com/static/cover.jpg"))
+
+        val unwrapped = hook.unwrapMediaBytes("https://cdn.example.com/en_images/1.webp", customEncrypted)
+        assertNotNull(unwrapped)
+        assertEquals("image/webp", unwrapped!!.contentType)
+        assertArrayEquals(fakeWebp, unwrapped.bytes)
+        assertNull(hook.unwrapMediaBytes("https://cdn.example.com/en_images/plain.webp", fakeWebp))
+    }
 }

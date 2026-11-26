@@ -56,6 +56,8 @@ data class HomeUiState(
     val activeSite: SiteDescriptor? = null,
     val allSites: List<SiteDescriptor> = emptyList(),
     val pinnedSiteIds: List<SiteId> = emptyList(),
+    val siteOpenCounts: Map<SiteId, Int> = emptyMap(),
+    val startupDefaultSiteId: SiteId? = null,
     val comicLanguage: ComicLanguage = ComicLanguage.ALL,
     val supportsLanguageFilter: Boolean = false,
     val translateTags: Boolean = true,
@@ -222,12 +224,13 @@ class HomeViewModel(
         }
 
         val filteredSections = if (isAligned) {
-            network.rawSections.mapNotNull { section ->
+            val allowedSections = network.rawSections.mapNotNull { section ->
                 val allowed = section.items
                     .filter(isItemAllowed)
                     .withLocalizedTags(tagDictionary, translateTags)
                 if (allowed.isEmpty()) null else section.copy(items = allowed)
             }
+            settings.sortSectionsByUsage(siteId, allowedSections) { it.id }
         } else {
             emptyList()
         }
@@ -286,8 +289,10 @@ class HomeViewModel(
 
         HomeUiState(
             activeSite = descriptor,
-            allSites = allDescriptors,
+            allSites = settings.sortSitesByUsage(allDescriptors) { it.id },
             pinnedSiteIds = settings.pinnedSiteIds,
+            siteOpenCounts = settings.siteOpenCounts,
+            startupDefaultSiteId = settings.startupDefaultSiteId,
             comicLanguage = effectiveLanguage,
             supportsLanguageFilter = supportsLanguage,
             translateTags = translateTags,
@@ -354,13 +359,20 @@ class HomeViewModel(
         if (siteRegistry.get(siteId) == null) return
         showSiteSwitchTutorial.value = false
         viewModelScope.launch {
-            preferencesRepository.setActiveSiteId(siteId)
+            preferencesRepository.selectActiveSiteAndRecordOpen(siteId)
         }
     }
 
     fun togglePinnedSite(siteId: SiteId) {
         viewModelScope.launch {
             preferencesRepository.togglePinnedSite(siteId)
+        }
+    }
+
+    fun setStartupDefaultSiteId(siteId: SiteId?) {
+        if (siteId != null && siteRegistry.get(siteId) == null) return
+        viewModelScope.launch {
+            preferencesRepository.setStartupDefaultSiteId(siteId)
         }
     }
 

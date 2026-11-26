@@ -186,10 +186,16 @@ class SiteDirectoryViewModel(
             }
         }
 
+        val orderedSections = if (siteId != null) {
+            settings.sortSectionsByUsage(siteId, availableSections) { it.id }
+        } else {
+            availableSections
+        }
+
         SiteDirectoryUiState(
             site = plugin?.descriptor,
             activeSection = section,
-            sections = availableSections,
+            sections = orderedSections,
             filterQuery = query,
             entries = filtered,
             totalLoadedCount = state.rawEntries.size,
@@ -213,6 +219,13 @@ class SiteDirectoryViewModel(
     )
 
     init {
+        val targetSiteId = siteId
+        val initialSection = activeSection.value.trim()
+        if (targetSiteId != null && initialSection.isNotEmpty()) {
+            viewModelScope.launch {
+                preferencesRepository.recordSectionOpen(targetSiteId, initialSection)
+            }
+        }
         viewModelScope.launch {
             activeSection.collect { section ->
                 triggerLoad(section = section, remoteQuery = null, isRefresh = false)
@@ -224,6 +237,12 @@ class SiteDirectoryViewModel(
         if (sectionId == activeSection.value) return
         filterQuery.value = ""
         activeSection.value = sectionId
+        val targetSiteId = siteId
+        if (targetSiteId != null && sectionId.isNotBlank()) {
+            viewModelScope.launch {
+                preferencesRepository.recordSectionOpen(targetSiteId, sectionId)
+            }
+        }
     }
 
     fun updateFilterQuery(query: String) {

@@ -35,6 +35,20 @@ class PreferencesRepository(
 
     suspend fun setActiveSiteId(siteId: SiteId) = settingsDataStore.setActiveSiteId(siteId)
 
+    suspend fun recordSiteOpen(siteId: SiteId) = settingsDataStore.recordSiteOpen(siteId)
+
+    suspend fun selectActiveSiteAndRecordOpen(siteId: SiteId) =
+        settingsDataStore.selectActiveSiteAndRecordOpen(siteId)
+
+    suspend fun recordSectionOpen(siteId: SiteId, sectionId: String) =
+        settingsDataStore.recordSectionOpen(siteId, sectionId)
+
+    suspend fun setSiteExploreFilterAndRecordSection(
+        siteId: SiteId,
+        filter: ExploreFilterState?,
+        recordedSectionId: String?,
+    ) = settingsDataStore.setSiteExploreFilterAndRecordSection(siteId, filter, recordedSectionId)
+
     suspend fun setStartupDefaultSiteId(siteId: SiteId?) =
         settingsDataStore.setStartupDefaultSiteId(siteId)
 

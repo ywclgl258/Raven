@@ -290,6 +290,13 @@ class SiteFeedViewModel(
     )
 
     init {
+        val targetSiteId = siteId
+        val targetSection = route.section?.trim()?.takeIf { it.isNotEmpty() && !it.equals("chapters", ignoreCase = true) }
+        if (targetSiteId != null && targetSection != null) {
+            viewModelScope.launch {
+                preferencesRepository.recordSectionOpen(targetSiteId, targetSection)
+            }
+        }
         viewModelScope.launch {
             combine(selectedSort, languageFlow) { sort, lang -> sort to lang }
                 .distinctUntilChanged()

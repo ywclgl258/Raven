@@ -76,6 +76,7 @@ class RavenOkHttpPool(
         .cookieJar(cookieJar)
         .cache(null)
         .addInterceptor(SiteRequestHeaderInterceptor(SiteRequestKind.IMAGE, siteRegistryProvider))
+        .addInterceptor(SiteImageTransportUnwrapInterceptor(siteRegistryProvider))
         .addNetworkInterceptor(credentialGuard)
         .build()
 

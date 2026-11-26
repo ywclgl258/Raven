@@ -12,12 +12,14 @@ class SiteModelsTest {
     private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }
 
     @Test
-    fun `site id collections contain exact 24 live plus local and 3 retired`() {
+    fun `site id collections contain exact 24 live plus local and 7 retired`() {
         assertEquals(7, SiteId.VIDEO_SITES.size)
-        assertEquals(7, SiteId.COMIC_SITES.size)
-        assertEquals(5, SiteId.SERIAL_COMIC_SITES.size)
+        assertEquals(SiteId.HANIME1, SiteId.VIDEO_SITES.first())
+        assertEquals(6, SiteId.COMIC_SITES.size)
+        assertEquals(6, SiteId.SERIAL_COMIC_SITES.size)
         assertEquals(5, SiteId.PHOTO_SITES.size)
         assertEquals(24, SiteId.ALL_LIVE.size)
+        assertEquals(SiteId.HANIME1, SiteId.ALL_LIVE.first())
         assertEquals(24, SiteId.ALL_LIVE.toSet().size)
         assertEquals(25, SiteId.LIBRARY_SOURCES.size)
         assertTrue(SiteId.LOCAL.isLocal)
@@ -31,8 +33,20 @@ class SiteModelsTest {
         assertTrue(SiteId.RETIRED_KBJ.isRetired)
         assertTrue(SiteId.RETIRED_KBJFREE.isRetired)
         assertTrue(SiteId.RETIRED_NETFLAV.isRetired)
+        assertTrue(SiteId.RETIRED_HDOUJIN.isRetired)
+        assertTrue(SiteId.RETIRED_MH160.isRetired)
+        assertTrue(SiteId.RETIRED_MYCOMIC.isRetired)
+        assertTrue(SiteId.RETIRED_VOMIC.isRetired)
         assertTrue(SiteId.RETIRED_KBJ.isKnown)
         assertTrue(SiteId.RETIRED_KBJFREE.isKnown)
+        assertTrue(SiteId.RETIRED_HDOUJIN.isKnown)
+        assertTrue(SiteId.RETIRED_MH160.isKnown)
+        assertTrue(SiteId.RETIRED_MYCOMIC.isKnown)
+        assertTrue(SiteId.RETIRED_VOMIC.isKnown)
+        assertFalse(SiteId.RETIRED_HDOUJIN.isLive)
+        assertFalse(SiteId.RETIRED_MH160.isLive)
+        assertFalse(SiteId.RETIRED_MYCOMIC.isLive)
+        assertFalse(SiteId.RETIRED_VOMIC.isLive)
         assertFalse(SiteId("unknown").isKnown)
     }
 

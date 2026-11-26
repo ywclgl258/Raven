@@ -56,6 +56,8 @@ data class ExploreUiState(
     val activeSite: SiteDescriptor? = null,
     val allSites: List<SiteDescriptor> = emptyList(),
     val pinnedSiteIds: List<SiteId> = emptyList(),
+    val siteOpenCounts: Map<SiteId, Int> = emptyMap(),
+    val startupDefaultSiteId: SiteId? = null,
     val filter: ExploreFilterState = ExploreFilterState(),
     val availableSections: List<SiteSectionSpec> = emptyList(),
     val availableSorts: List<FeedSort> = listOf(FeedSort.NEWEST),
@@ -214,8 +216,14 @@ class ExploreViewModel(
         val plugin = siteRegistry.get(key.siteId)
         val descriptor = plugin?.descriptor
         val supportsLang = descriptor?.hasCapability(SiteCapability.LANGUAGE_FILTER) == true
-        val feedSections = descriptor?.sections?.filterNot { it.isDirectory }.orEmpty()
-        val directorySections = buildDirectorySections(plugin)
+        val feedSections = settings.sortSectionsByUsage(
+            key.siteId,
+            descriptor?.sections?.filterNot { it.isDirectory }.orEmpty(),
+        ) { it.id }
+        val directorySections = settings.sortSectionsByUsage(
+            key.siteId,
+            buildDirectorySections(plugin),
+        ) { it.id }
         val request = buildFeedRequest(plugin, key.siteId, key.filter, page = 1, cursor = null)
         val availableSorts = plugin?.feedSource?.supportedSorts(request)
             ?.takeIf { it.isNotEmpty() }
@@ -250,8 +258,10 @@ class ExploreViewModel(
 
         ExploreUiState(
             activeSite = descriptor,
-            allSites = allDescriptors,
+            allSites = settings.sortSitesByUsage(allDescriptors) { it.id },
             pinnedSiteIds = settings.pinnedSiteIds,
+            siteOpenCounts = settings.siteOpenCounts,
+            startupDefaultSiteId = settings.startupDefaultSiteId,
             filter = key.filter,
             availableSections = feedSections,
             availableSorts = availableSorts,
@@ -293,7 +303,7 @@ class ExploreViewModel(
     fun selectSite(siteId: SiteId) {
         if (siteRegistry.get(siteId) == null) return
         viewModelScope.launch {
-            preferencesRepository.setActiveSiteId(siteId)
+            preferencesRepository.selectActiveSiteAndRecordOpen(siteId)
         }
     }
 
@@ -303,8 +313,15 @@ class ExploreViewModel(
         }
     }
 
+    fun setStartupDefaultSiteId(siteId: SiteId?) {
+        if (siteId != null && siteRegistry.get(siteId) == null) return
+        viewModelScope.launch {
+            preferencesRepository.setStartupDefaultSiteId(siteId)
+        }
+    }
+
     fun selectSection(section: SiteSectionSpec?) {
-        mutateActiveFilter { current ->
+        mutateActiveFilter(recordedSectionId = section?.id) { current ->
             current.copy(
                 section = section?.id,
                 category = section?.category?.takeIf { it.isNotBlank() },
@@ -360,6 +377,7 @@ class ExploreViewModel(
 
     private fun mutateActiveFilter(
         alsoSetLanguage: ComicLanguage? = null,
+        recordedSectionId: String? = null,
         transform: (ExploreFilterState) -> ExploreFilterState,
     ) {
         viewModelScope.launch {
@@ -371,7 +389,11 @@ class ExploreViewModel(
                 if (alsoSetLanguage != null) {
                     preferencesRepository.setSiteLanguage(siteId, alsoSetLanguage)
                 }
-                preferencesRepository.setSiteExploreFilter(siteId, next.takeUnless { it.isEmpty })
+                preferencesRepository.setSiteExploreFilterAndRecordSection(
+                    siteId = siteId,
+                    filter = next.takeUnless { it.isEmpty },
+                    recordedSectionId = recordedSectionId,
+                )
             }
         }
     }

@@ -22,7 +22,7 @@ flowchart LR
 
     subgraph Sites["Pure JVM 站点实现层 (:sites:*)"]
         SV[":sites:video (7 站)\nvideoSitesModule"]
-        SC[":sites:comic (12 站 = 7 + 5)\ncomicSitesModule"]
+        SC[":sites:comic (13 站 = 6 + 7)\ncomicSitesModule"]
         SG[":sites:gallery (5 站)\ngallerySitesModule"]
     end
 
@@ -66,7 +66,8 @@ flowchart LR
 
 - **`SiteDescriptor` 与 `SiteNetworkProfile`**（`core/model/src/main/kotlin/com/raven/app/core/model/SiteModels.kt`）  
   声明式描述一个站点的全部静态元信息，驱动站点切换器、探索分区、搜索过滤、网络限速与域名隔离：
-  - `id: SiteId`：`@JvmInline value class`，内置 24 个在线常量（`VIDEO_SITES` 7 个 + `COMIC_SITES` 7 个 + `SERIAL_COMIC_SITES` 5 个 + `PHOTO_SITES` 5 个 = `ALL_LIVE`）、本地库 `SiteId.LOCAL`，以及 3 个历史退役占位（`RETIRED_KBJ` / `RETIRED_KBJFREE` / `RETIRED_NETFLAV`，仅保留用于旧备份和历史记录识别）。
+  - `id: SiteId`：`@JvmInline value class`，内置 24 个在线常量（`VIDEO_SITES` 7 个，首站为 `HANIME1` + `COMIC_SITES` 6 个 + `SERIAL_COMIC_SITES` 6 个 + `PHOTO_SITES` 5 个 = `ALL_LIVE`）、本地库 `SiteId.LOCAL`，以及 7 个历史退役占位（`RETIRED_KBJ` / `RETIRED_KBJFREE` / `RETIRED_NETFLAV` / `RETIRED_HDOUJIN` / `RETIRED_MH160` / `RETIRED_MYCOMIC` / `RETIRED_VOMIC`，仅保留用于旧备份和历史记录识别）。
+  - **新站收录硬约束**：今后**不再收录必须登录才能浏览或阅读正文内容的站点**（此前如 `vomic` 因正文章节强制要求登录而被移除并迁入退役列表）。
   - `primaryKind: MediaKind` & `supportedKinds: Set<MediaKind>`：支持单媒（`VIDEO` / `COMIC` / `PHOTO`）或双媒（如 `iwara` 与 `cosplaytele` 同时支持 `VIDEO` 和 `PHOTO`）。
   - `defaultHost` / `mirrorHosts` / `allHosts`：主域名与镜像域名列表；提供 `matchesHost(hostname)`、`matchesRequestHost(hostname)`（含 `apiHosts`）、`matchesMediaHost(hostname)`（含 `mediaDomains` 及其子域）。
   - `capabilities: Set<SiteCapability>`：18 种声明式能力标签（`FEED`、`EXPLORE`、`SEARCH`、`ADVANCED_SEARCH`、`DIRECTORY`、`TAGS`、`AUTHORS`、`CHARACTERS`、`COMMENTS`、`RELATED`、`AUTH`、`COOKIE_IMPORT`、`MIRRORS`、`LANGUAGE_FILTER`、`ORIGINAL_IMAGES`、`STREAM_QUALITIES`、`DUAL_MEDIA`、`PREVIEW_ONLY`）。
@@ -108,8 +109,8 @@ flowchart LR
   - 提供查询：`allPlugins()`、`allDescriptors()`、`get(siteId)`、`require(siteId)`（对退役站点自动抛出带提示的 `SiteException.Unsupported`）、`byPrimaryKind(kind)`、`supportingKind(kind)`、`withCapability(cap)`、`findForHost`、`findForRequestHost`、`findForMediaHost`、`isRegisteredSiteHost`、`resolveLink(url)`、`resolveLinkFromText(text)`。
 - **Koin Multi-binding 自动装配**：
   1. 三个站点模块各自通过 `bind SitePlugin::class` 注册单例：
-     - `sites/video/src/main/kotlin/com/raven/app/sites/video/VideoSitesModule.kt`（`videoSitesModule`，7 站）
-     - `sites/comic/src/main/kotlin/com/raven/app/sites/comic/ComicSitesModule.kt`（`comicSitesModule`，12 站：7 漫画 + 5 连载漫画）
+     - `sites/video/src/main/kotlin/com/raven/app/sites/video/VideoSitesModule.kt`（`videoSitesModule`，7 站，首站默认 `hanime1`）
+     - `sites/comic/src/main/kotlin/com/raven/app/sites/comic/ComicSitesModule.kt`（`comicSitesModule`，13 站：6 漫画 + 7 连载漫画）
      - `sites/gallery/src/main/kotlin/com/raven/app/sites/gallery/GallerySitesModule.kt`（`gallerySitesModule`，5 站）
   2. `app/src/main/kotlin/com/raven/app/AppModule.kt` 通过 `single<SiteRegistry> { createOrderedSiteRegistry(getAll<SitePlugin>()) }` 收集全部插件，按 `SiteId.ALL_LIVE` 严格排序并校验**零缺失、零重复、顺序完全一致**。
   3. `RavenApplication` 加载 `allRavenKoinModules`（共 13 个 Koin 模块），并由 `AppDiGraphTest` 在纯 JVM 单测中持续守卫。
@@ -127,19 +128,20 @@ flowchart LR
 | `DualLanguageMerger` | `DualLanguageMerger.kt` | 无原生 `OR` 语种语法时的双流归并分页器；通过 `DualCursor(pageA, indexA, pageB, indexB)` 编码为 `"pA,iA,pB,iB"` 字符串游标，支持 `DualMergeStrategy.DESCENDING_NUMERIC_ID`（按数字 ID 降序合并最新流）和 `INTERLEAVED`（热门流交替归并），自动跨流去重 | `NhentaiSitePlugin`、`HitomiSitePlugin`、`WnacgSitePlugin` |
 | `MirrorLeaseRouter` | `MirrorLeaseRouter.kt` | 实现 `HostRouter` 的路由键控镜像租约路由器；默认租约 10 分钟（`DEFAULT_LEASE_DURATION_MS = 600_000L`）、故障冷却 2 分钟（`DEFAULT_FAILURE_COOLDOWN_MS = 120_000L`）；当网络切换/代理变化导致 `routeKey` 变更或当前节点失败时，通过 `Mutex` 串行探活并自动切至健康镜像；支持 `invalidate()` | `MissavSitePlugin`、`JmcomicSitePlugin` |
 | `LruCache` | `LruCache.kt` | 线程安全（`synchronized`）有界 LRU 缓存，支持可选全局/单条 TTL 过期、懒淘汰与主动 `evictExpired()`；API：`get`、`put`、`getOrPut`、`getOrPutSuspend`、`remove`、`clear`、`size` | `IwaraSitePlugin`、`EhSharedEngine`、`NhentaiSitePlugin`、`HitomiSitePlugin`、`WnacgSitePlugin`、`JmcomicSitePlugin`、`WordPressPhotoEngine` |
-| `HtmlUrlCleaner` | `HtmlUrlCleaner.kt` | 纯 Kotlin HTML 文本清理与 URL 编解码；API：`cleanText`（清零宽字符/BOM/NBSP/合并空白）、`decodeBasicHtmlEntities`、`encodePathSegment`（空格编码为 `%20`）、`encodeQueryParam`、`decodeUrlComponent`、`deduplicateImageExtension`（修复 `1.webp.webp`）、`stripFragment`（移除 `#fragment` 保持 Referer 洁净） | 全部 24 站 |
+| `HtmlUrlCleaner` | `HtmlUrlCleaner.kt` | 纯 Kotlin HTML 文本清理与 URL 编解码；API：`cleanText`（清零宽字符/BOM/NBSP/合并空白）、`decodeBasicHtmlEntities`、`encodePathSegment`（空格编码为 `%20`）、`encodeQueryParam`、`decodeUrlComponent`、`deduplicateImageExtension`（修复 `1.webp.webp`）、`stripFragment`（移除 `#fragment` 保持 Referer 洁净） | 全部 25 站 |
+| `ManwaImageAesProtocol` | `ManwaImageAesProtocol.kt` | 漫蛙2 图片 AES-256-CBC（16B IV + PKCS#5）及 legacy 2022 解密与 `MediaTransportHook`；按魔数幂等判断明文图片并提取 `base.js` `AES_KEY` | `Manwa2SitePlugin`、`:core:network`（`SiteImageTransportUnwrapInterceptor`）、`:core:media`（`GalleryPageRepository` 兜底） |
 | `RouPngProtocol` | `RouPngProtocol.kt` | `rou.video` 专用协议栈：`unwrap(body)` / `wrap(payload, deflate)` 解析/封装 PNG 自定义 `roUd`（`0x726f5564`）块 + 标准 zlib（`Inflater(nowrap = false)`，上限 `MAX_UNWRAPPED_BYTES = 64 MiB`）；`detectContentType` 嗅探 `#EXTM3U` / MPEG-TS `0x47`；`extractEvFromHtml` / `decodeEv` 解码 `ev` Base64+偏移载荷；内置即用 `transportHook: MediaTransportHook` | `RouvideoSitePlugin`、`:core:media`（经 `MediaTransportDataSourceFactory` 透明调用） |
 | `CossoraAesProtocol` | `CossoraAesProtocol.kt` | `cosplaytele` 内嵌 `cossora.stream` 视频的 AES-256-CBC 解密器；载荷为 `Base64(iv[16] \|\| ciphertext)`，密钥为 HTML 中 32 字符 hex 口令的 UTF-8 原始字节（32 字节）；强制校验解密后 URL 为 `https://*.cossora.stream/...m3u8`；API：`extractEmbeds`、`parseEmbedHtml`、`decrypt`、`encrypt` | `CosplayteleSitePlugin` |
 | `JmcomicStripMath` | `JmcomicStripMath.kt` | 实现 `ImageUnscrambler` 的 JMComic 条带反混淆数学内核（对齐 `jquery.photo-0.4.js`）；阈值 `LEGACY_FIXED_TEN_THRESHOLD = 268_850L`、`MOD_EIGHT_THRESHOLD = 421_926L`，限制 `MAX_UNSCRAMBLE_PIXELS = 12_000_000L`、`MAX_GALLERY_IMAGE_BYTES = 24 MiB`；API：`computeStripCount`、`computeSlicePlan`、`validateDimensions` | `JmcomicSitePlugin`、`:core:media`（`JmcomicBitmapUnscrambler`） |
 
 > **站点模块内共享基础设施**：除 `SiteKit` 外，三个站点模块还各自封装了内部复用引擎，均位于各自模块包内：
 > - `:sites:video`：`VideoSiteSupport`（统一 429 重试与 `Retry-After` 退避、镜像重试 `fetchHtmlWithMirror`、CF/DDoS-Guard 挑战检测、时长/播放量/星级解析、本地筛选与首页 `HomeFeed` 组装）。
-> - `:sites:comic`：`EhSharedEngine`（共享给 E-Hentai 与 ExHentai）、`ComicUrl`（无 OkHttp 依赖的 RFC 感知 URL 构建/解析器，自动转义非 ASCII 与引号）；连载漫画（`mangacopy` / `mh160` / `guazimanhua` / `mycomic` / `hipmh`）复用同一 `ComicUrl` 做主机校验与路径解析。
+> - `:sites:comic`：`EhSharedEngine`（共享给 E-Hentai 与 ExHentai）、`CopyHotApiSupport`（拷贝与热辣漫画共享官方 3.1.1 签名头生成、设备身份派生、响应体/章节乱序重组解析）、`ComicUrl`（无 OkHttp 依赖的 RFC 感知 URL 构建/解析器，自动转义非 ASCII 与引号）；连载漫画（7 站）复用同一 `ComicUrl` 做主机校验与路径解析。
 > - `:sites:gallery`：`WordPressPhotoEngine`、`PhotoSiteConfig`、`PhotoPageAddress`、`GalleryUrlUtils`（一套声明式配置驱动全部 5 个写真站）。
 
 ---
 
-## 3. 全部 24 个在线站点维护总表
+## 3. 全部 25 个在线站点维护总表
 
 ### 3.1 视频站点（`:sites:video`，7 站）
 
@@ -153,7 +155,7 @@ flowchart LR
 | `rouvideo` | `RouvideoSitePlugin.kt` | `rou.video`；媒体：`rn221.xyz`, `rn252.xyz` | `None` | `Feed`, `Video`, `Search`, `Directory`, `MediaTransportHook`, `Link` | TanStack Start SSR；详情页用 `RouPngProtocol.extractEvFromHtml` + `decodeEv`（Base64 后逐字节减偏移 `k`）解出 `/api/hls/<id>` 与 `thumbVTTUrl`；**挂载 `RouPngProtocol.transportHook`**，由播放器 DataSource 透明剥离 PNG `roUd` 壳并 zlib 解压 m3u8/TS |
 | `pornhub` | `PornhubSitePlugin.kt` | `www.pornhub.com` / `pornhub.com`；媒体：`*.phncdn.com` | `None` | `Feed`, `Video`, `Search`, `Directory`, `Link` | 双 DOM 解析：优先桌面端 `li.pcVideoListItem`，自动回退移动端 `li[data-video-vkey]`；详情从 `flashvars_*` 的 `mediaDefinitions` 数组（`JsExtractor.extractBalanced(..., '[', ']')` + 正则兜底）提取多档 HLS/MP4，排序 HLS 优先、高分辨率优先；目录支持 `/categories` 与 `/pornstars` |
 
-### 3.2 漫画站点（`:sites:comic`，7 站）
+### 3.2 漫画站点（`:sites:comic`，6 站）
 
 | `SiteId` | 实现类（`sites/comic/src/main/kotlin/com/raven/app/sites/comic/`） | 主域名 / 镜像 & 媒体域 | 认证方式 | 暴露能力接口 | 核心解析与特殊协议要点 |
 |---|---|---|---|---|---|
@@ -163,17 +165,17 @@ flowchart LR
 | `hitomi` | `HitomiSitePlugin.kt` | `hitomi.la`；API/索引：`ltn.gold-usergeneratedcontent.net`；媒体：`*.gold-usergeneratedcontent.net` | `None` | `Feed`, `Gallery`, `Search`, `Link` | 纯二进制静态索引协议：**零远程 JS 执行**。分页通过 HTTP 206 `Range` 请求读取 4 字节大端 `.nozomi`（每次 `12 * 4 = 48B`，校验 `Content-Range`）；关键词检索使用 `SHA-256` 前 4 字节遍历 464B 磁盘 B-Tree（上限 16 层 + 环检测）；`gg.js` 仅用正则提取 `b` 前缀、`var o` 与 `case` 桶映射（10 分钟缓存），算出 `w{1+server}`/`{a|b}tn` URL；元数据并发 `Semaphore(3)` |
 | `wnacg` | `WnacgSitePlugin.kt` | `www.wnacg.com`；封面：`t2/t3.wnimg1.ru`, `t4.qy0.ru`；图源：`img2/img5.wnimg1.ru`, `img5.qy0.ru` | `None` | `Feed`, `Gallery`, `Search`, `Link` | **全请求强制 `DESKTOP_WINDOWS_UA`**（移动与桌面 DOM 不同）；按语言映射分类 ID（如汉化 `5->1`, `6->9`, `7->10`, `19->20`，日语 `5->12` 等），中日双语走 `DualLanguageMerger`；阅读页 `/photos-gallery-aid-<id>.html` 解包 `document.writeln(...)` 内的 `imglist = [...]`，自动剔除尾部广告图 `/themes/weitu/images/bg/shoucang.jpg` 并严格比对声明页数与白名单主机 |
 | `jmcomic` | `JmcomicSitePlugin.kt` | `jmcomic-zzz.one` / 镜像 `18comic.ink`, `jmcomic-zzz.org`, `18comic.vip`；CDN：`cdn-msp[2\|3].(18comic.ink\|jmcomic-zzz.one)` | `None` | `Feed`, `Gallery`, `Search`, `HostRouter`, `ImageUnscrambler`, `Link` | 4 镜像 10 分钟租约 `MirrorLeaseRouter`（按 `routeKey` 变更自动失效，单次探活 5s、手动限 3 次重定向校验同站点）；支持多章节漫画（`#chapters` 虚拟流）；阅读页解析脚本变量 `scramble_id`/`aid`/`speed`，通过 `JmcomicStripMath` 计算 `stripCount` 与 `unscrambleSeed`（`"$chapterId:$scrambleId:$filenameStem"`），由 `:core:media` 的 `JmcomicBitmapUnscrambler` 重组位图 |
-| `hdoujin` | `HdoujinSitePlugin.kt` | `hdoujin.org`；API：`api.hdoujin.org`；媒体：`erocdn.net` | `None`（阅读需登录） | `Feed`, `Search`, `Link` | Svelte SPA + 公开 JSON API：首页 `GET /books/index` 聚合 popular/doujinshi/manga 三区；详情 `GET /books/detail/<id>/<key>/`（**尾部斜杠必需**，缺失返回 400）；阅读页 `GET /books/data/...?crt=<clearance>` 需登录后申请 clearance，未登录时插件抛出 `SiteException.AuthRequired` 并给出提示 |
 
-### 3.3 连载漫画站点（`:sites:comic`，5 站）
+### 3.3 连载漫画站点（`:sites:comic`，6 站）
 
 | `SiteId` | 实现类（`sites/comic/src/main/kotlin/com/raven/app/sites/comic/`） | 主域名 / 镜像 & 媒体域 | 认证方式 | 暴露能力接口 | 核心解析与特殊协议要点 |
 |---|---|---|---|---|---|
-| `mangacopy` | `MangacopySitePlugin.kt` | `www.mangacopy.com`；镜像 `copymanga.com` / `www.copy4000.com`；API：`api.mangacopy.com`；封面：`*.mangafunb.fun` | `None` | `Feed`, `Search`, `Mirrors` | 列表走 `/api/v3/update/newest`、搜索走 `/api/v3/search/comic`；详情/章节图页接口可能对第三方客户端返回业务码 210 限制，当前由 `api()` 统一抛为 `SiteException.ParseError`；真机现象见第 5 节已记录问题 |
-| `mh160` | `Mh160SitePlugin.kt` | `mh160mh.com` | `None` | `Feed`, `Search` | 标准目录式漫画站解析；站点当前对默认网络返回 404，`accessNote` 标注可能换域 |
-| `guazimanhua` | `GuazimanhuaSitePlugin.kt` | `www.guazimanhua.com`；图源 `img.guazicdn.com` | `None` | `Feed`, `Search` | 列表 `/update.php`、`/category.php`、搜索 `/search.php`；详情 `/comic.php?id=` 用 `application/ld+json` 递归抽取章节目录；阅读页 `/chapter.php?id=` 图页 URL 内嵌 HTML，直接正则收集并按序分页 |
-| `mycomic` | `MycomicSitePlugin.kt` | `mycomic.com` | `None` | `Feed`, `Search` | Cloudflare 托管质询站点：检测 403 / `Just a moment` 时抛 `SiteException.Forbidden(isChallenge = true)`，提示切换网络或代理 |
-| `hipmh` | `HipmhSitePlugin.kt` | `m.hipmh.com`；镜像 `hipmh.com`；阅读器 `reader.hipmh.top` | `None` | `Feed`, `Search` | Astro SSR：列表/详情解析 `/works/<slug>` 与 `/chapter/go?hid=`；阅读页由独立阅读器 JS 动态拼装，服务端无图页地址，插件以 `SiteException.Unsupported` 明示 |
+| `mangacopy` | `MangacopySitePlugin.kt` | `www.mangacopy.com`；镜像 `copymanga.com` / `www.copy4000.com`；API：`api.copy202601.com` 等（`MirrorLeaseRouter` 动态刷新 `network2`）；热辣兜底簇：`mapi.hotmangasg.com` 等；桌面 HTML AES 兜底 | `JwtBearer`（`POST /api/v3/login` 密码加盐后传参，token 附带 `Token <token>`） | `Feed`, `Gallery`, `Search`, `Auth`, `Link`, `Mirrors` | 复刻 CopyManga 3.1.1（85）完整握手头（`COPY/3.1.1`、`X-Auth-Timestamp`/`X-Auth-Signature` HMAC-SHA256、`umstring`、`dt`、稳定 `device`/`pseudoid`）；三层抗 210 容灾链：官方 App API（`chapter2` 按 `words` 索引重排）→ 热辣同源 API 簇 → 桌面端 HTML AES-CBC；内置 `LruCache` 缓减高频限流，支持 `homeIndex2`、榜单/完结/推荐、作者搜索与完整分页 |
+| `relamanhua` | `RelamanhuaSitePlugin.kt` | `m.relamanhua.org`；镜像 `www.relamanhua.com` / `www.hotmangasd.com` / `2024manga.com`；API：`mapi.hotmangasg.com` / `api.manga2026.xyz` / `mapi.fgjfghkk.club`（`MirrorLeaseRouter`） | `JwtBearer` | `Feed`, `Gallery`, `Search`, `Auth`, `Link`, `Mirrors` | 与拷贝同源的热辣漫画（HotManga）独立插件，复刻 HotManga 客户端签名头；支持 `discoverIndex` 首页、`freeComic`/更新/人气/题材/推荐分区、直接 `/chapter/` JSON 免重排读图、作者/关键字搜索、登录与 `LruCache` |
+| `guazimanhua` | `GuazimanhuaSitePlugin.kt` | `www.guazimanhua.com`；图源 `img.guazicdn.com` | `None` | `Feed`, `Gallery`, `Search` | 列表 `/update.php`、`/category.php`、搜索 `/search.php`；详情 `/comic.php?id=` 用 `application/ld+json` 递归抽取章节目录；阅读页 `/chapter.php?id=` 图页 URL 内嵌 HTML，直接正则收集并按序分页 |
+| `hipmh` | `HipmhSitePlugin.kt` | `m.hipmh.com`；镜像 `hipmh.com`；API：`hipapi1.s3file.top`；阅读器 `reader.hipmh.top` | `None` | `Feed`, `Gallery`, `Search`, `Link` | 列表与搜索优先走 `/v1/search` 并在缺省时兜底 `/v1/mangas`；支持热门/最新/完结/连载中分区；完整拉取多页章节目录及作者/标签/别名/简介元数据；`decodeImages` 校验 `Vx`/`pL0` 哨兵并支持 `hip-tx-*` ↔ `hip-cf-*` 双读图线路错误自动换线（`reloadUrlOnError`） |
+| `manwa2` | `Manwa2SitePlugin.kt` | `manwari.cc` → `manwauu.cc` 等（302 自动跟随解析真实主机）；图源：`*.manwamh.com` 等 | `None` | `Feed`, `Gallery`, `Search`, `Link`, `Mirrors` | 进入前先通过 302 跳转解析真实可用主机，避免 `POST /api/cate` 被重定向为 `GET 405`；支持 `/api/cate` 与 HTML 兜底、`/api/search`、详情/章节/图页 JSON、`base.js` 动态提取 `AES_KEY`、多 CDN 线路自动轮换（`reloadUrlOnError`），并通过 `ManwaImageAesProtocol` 在 `:core:network` 透明解密 `/en_images/` AES-256-CBC 图页 |
+| `baozimh` | `BaozimhSitePlugin.kt` | `tw.webmota.com` / `www.baozimh.com` / `cn.baozimh.com` / `www.twmanga.com`（`MirrorLeaseRouter`） | `None` | `Feed`, `Gallery`, `Search`, `Link`, `Mirrors` | 支持 `/api/bzmhq/amp_comic_list` JSON 分类接口、`/list/new` 与 `/search`；对 `page_direct` 缩略图规整与多分页章节（`章节_N.html`）自动拼接；遇到 `404` 自动尝试 `CHAPTER_FALLBACK_HOSTS`（`www.webmota.com` 等）；支持阅读图源 CDN 自动切线与人机验证拦截显式报错（不绕过） |
 
 > 连载漫画统一使用 `MediaKind.SERIAL_COMIC`，在站点切换器、媒体筛选与 `LibraryMediaFilter` 中单独成组。
 

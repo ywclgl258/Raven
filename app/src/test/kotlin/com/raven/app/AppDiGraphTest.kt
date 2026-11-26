@@ -89,6 +89,7 @@ class AppDiGraphTest {
 
         assertEquals(24, registry.size)
         assertEquals(SiteId.ALL_LIVE, orderedIds)
+        assertEquals(SiteId.HANIME1, orderedIds.first())
         assertEquals(orderedIds.size, orderedIds.toSet().size)
 
         assertEquals(
@@ -184,6 +185,21 @@ class AppDiGraphTest {
         assertNotNull(jmcomic)
         assertEquals(SiteId.JMCOMIC, jmcomic!!.first.id)
         assertTrue(jmcomic.second is ResolvedLink.Feed)
+
+        val relamanhua = registry.resolveLinkFromText("Comic https://www.hotmangasd.com/comic/demo")
+        assertNotNull(relamanhua)
+        assertEquals(SiteId.RELAMANHUA, relamanhua!!.first.id)
+        assertTrue(relamanhua.second is ResolvedLink.Gallery)
+
+        val manwa2 = registry.resolveLinkFromText("Comic https://manwauu.cc/comic/999")
+        assertNotNull(manwa2)
+        assertEquals(SiteId.MANWA2, manwa2!!.first.id)
+        assertTrue(manwa2.second is ResolvedLink.Gallery)
+
+        val baozimh = registry.resolveLinkFromText("Comic https://tw.webmota.com/comic/demo-slug")
+        assertNotNull(baozimh)
+        assertEquals(SiteId.BAOZIMH, baozimh!!.first.id)
+        assertTrue(baozimh.second is ResolvedLink.Gallery)
 
         // Photo / Gallery sites
         val fourKhd = registry.resolveLinkFromText(

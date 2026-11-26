@@ -6,6 +6,7 @@ import com.raven.app.core.model.DownloadStatus
 import com.raven.app.core.model.FeedSort
 import com.raven.app.core.model.MediaKind
 import com.raven.app.core.model.Shelf
+import com.raven.app.core.model.SiteDescriptor
 import com.raven.app.core.model.SiteId
 import com.raven.app.core.model.StorageLocation
 import kotlinx.serialization.Serializable
@@ -45,11 +46,13 @@ data class DownloadViewPreferences(
  */
 @Serializable
 data class AppSettings(
-    val activeSiteId: SiteId = SiteId.R34V,
+    val activeSiteId: SiteId = DEFAULT_ACTIVE_SITE_ID,
     /** `null` keeps the last active site; a value is applied once on process cold start. */
     val startupDefaultSiteId: SiteId? = null,
     val pinnedSiteIds: List<SiteId> = emptyList(),
     val crossSearchSiteIds: List<SiteId> = emptyList(),
+    val siteOpenCounts: Map<SiteId, Int> = emptyMap(),
+    val sectionOpenCounts: Map<SiteId, Map<String, Int>> = emptyMap(),
     val siteLanguages: Map<SiteId, ComicLanguage> = emptyMap(),
     val siteExploreFilters: Map<SiteId, ExploreFilterState> = emptyMap(),
     val translateTags: Boolean = true,
@@ -93,7 +96,50 @@ data class AppSettings(
     fun exploreFilterFor(siteId: SiteId): ExploreFilterState =
         siteExploreFilters[siteId] ?: ExploreFilterState()
 
+    fun siteOpenCount(siteId: SiteId): Int = siteOpenCounts[siteId] ?: 0
+
+    fun sectionOpenCount(siteId: SiteId, sectionId: String): Int =
+        sectionOpenCounts[siteId]?.get(sectionId) ?: 0
+
+    fun <T> sortSitesByUsage(sites: List<T>, siteIdSelector: (T) -> SiteId): List<T> {
+        if (siteOpenCounts.isEmpty() || sites.size <= 1) return sites
+        return sites.sortedByDescending { siteOpenCount(siteIdSelector(it)) }
+    }
+
+    fun <T> sortSectionsByUsage(
+        siteId: SiteId,
+        sections: List<T>,
+        sectionIdSelector: (T) -> String,
+    ): List<T> {
+        val counts = sectionOpenCounts[siteId]
+        if (counts.isNullOrEmpty() || sections.size <= 1) return sections
+        return sections.sortedByDescending { counts[sectionIdSelector(it)] ?: 0 }
+    }
+
+    fun sortMediaKindsByUsage(
+        sites: List<SiteDescriptor>,
+        defaultOrder: List<MediaKind> = DEFAULT_MEDIA_KIND_ORDER,
+    ): List<MediaKind> {
+        if (siteOpenCounts.isEmpty()) return defaultOrder
+        val groupTotals = LinkedHashMap<MediaKind, Long>(defaultOrder.size)
+        for (site in sites) {
+            val count = siteOpenCount(site.id)
+            if (count > 0) {
+                groupTotals[site.primaryKind] = (groupTotals[site.primaryKind] ?: 0L) + count
+            }
+        }
+        if (groupTotals.isEmpty()) return defaultOrder
+        return defaultOrder.sortedByDescending { groupTotals[it] ?: 0L }
+    }
+
     companion object {
+        val DEFAULT_ACTIVE_SITE_ID: SiteId = SiteId.HANIME1
+        val DEFAULT_MEDIA_KIND_ORDER: List<MediaKind> = listOf(
+            MediaKind.VIDEO,
+            MediaKind.COMIC,
+            MediaKind.SERIAL_COMIC,
+            MediaKind.PHOTO,
+        )
         const val DEFAULT_PREFERRED_QUALITY: String = "auto"
         const val DEFAULT_PLAYBACK_SPEED: Float = 1.0f
         const val MIN_PLAYBACK_SPEED: Float = 0.25f

@@ -4,6 +4,7 @@ import com.raven.app.core.database.model.AppSettings
 import com.raven.app.core.model.SiteId
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class StartupDefaultSiteTest {
@@ -48,5 +49,18 @@ class StartupDefaultSiteTest {
         )
 
         assertNull(resolveStartupDefaultSite(settings, registeredSiteIds))
+    }
+
+    @Test
+    fun `app settings default active site is hanime1`() {
+        assertEquals(SiteId.HANIME1, AppSettings().activeSiteId)
+    }
+
+    @Test
+    fun `retired vomic active site is replaced by registered fallback`() {
+        val settings = AppSettings(activeSiteId = SiteId.RETIRED_VOMIC)
+
+        assertNull(resolveStartupDefaultSite(settings, registeredSiteIds))
+        assertTrue(settings.activeSiteId !in registeredSiteIds)
     }
 }

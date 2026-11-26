@@ -176,12 +176,22 @@ class SiteFunctionsViewModel(
         val supportsAuth = descriptor?.hasCapability(SiteCapability.AUTH) == true ||
             descriptor?.hasCapability(SiteCapability.COOKIE_IMPORT) == true
 
-        val feedSections = descriptor?.sections?.filterNot { it.isDirectory }.orEmpty()
-        val directorySections = buildList {
+        val rawFeedSections = descriptor?.sections?.filterNot { it.isDirectory }.orEmpty()
+        val rawDirectorySections = buildList {
             plugin?.directorySource?.directorySections()?.let(::addAll)
             descriptor?.sections?.filter { it.isDirectory }?.forEach { spec ->
                 if (none { it.id == spec.id }) add(spec)
             }
+        }
+        val feedSections = if (siteId != null) {
+            settings.sortSectionsByUsage(siteId, rawFeedSections) { it.id }
+        } else {
+            rawFeedSections
+        }
+        val directorySections = if (siteId != null) {
+            settings.sortSectionsByUsage(siteId, rawDirectorySections) { it.id }
+        } else {
+            rawDirectorySections
         }
 
         SiteFunctionsUiState(
@@ -225,7 +235,7 @@ class SiteFunctionsViewModel(
         val id = siteId ?: return
         if (plugin == null) return
         viewModelScope.launch {
-            preferencesRepository.setActiveSiteId(id)
+            preferencesRepository.selectActiveSiteAndRecordOpen(id)
         }
     }
 

@@ -32,20 +32,20 @@ value class SiteId(val value: String) {
         val ROUVIDEO = SiteId("rouvideo")
         val PORNHUB = SiteId("pornhub")
 
-        // Comic sites (7)
+        // Comic sites (6)
         val EHENTAI = SiteId("ehentai")
         val EXHENTAI = SiteId("exhentai")
         val NHENTAI = SiteId("nhentai")
         val HITOMI = SiteId("hitomi")
         val WNACG = SiteId("wnacg")
         val JMCOMIC = SiteId("jmcomic")
-        val HDOUJIN = SiteId("hdoujin")
 
-        // Serial manga sites (5)
+        // Serial manga sites (6)
         val MANGACOPY = SiteId("mangacopy")
-        val MH160 = SiteId("mh160")
+        val RELAMANHUA = SiteId("relamanhua")
+        val MANWA2 = SiteId("manwa2")
+        val BAOZIMH = SiteId("baozimh")
         val GUAZIMANHUA = SiteId("guazimanhua")
-        val MYCOMIC = SiteId("mycomic")
         val HIPMH = SiteId("hipmh")
 
         // Photo / Gallery sites (5)
@@ -61,21 +61,25 @@ value class SiteId(val value: String) {
         // Global cross-site wildcard scope (used by global blocked terms; excluded from ALL_LIVE)
         val GLOBAL = SiteId("*")
 
-        // Retired video site identities retained only for historical records & backups
+        // Retired site identities retained only for historical records & backups
         val RETIRED_KBJ = SiteId("kbj")
         val RETIRED_KBJFREE = SiteId("kbjfree")
         val RETIRED_NETFLAV = SiteId("netflav")
+        val RETIRED_HDOUJIN = SiteId("hdoujin")
+        val RETIRED_MH160 = SiteId("mh160")
+        val RETIRED_MYCOMIC = SiteId("mycomic")
+        val RETIRED_VOMIC = SiteId("vomic")
 
         val VIDEO_SITES: List<SiteId> = listOf(
-            R34V, HANIME1, IWARA, MISSAV, JABLE, ROUVIDEO, PORNHUB,
+            HANIME1, R34V, IWARA, MISSAV, JABLE, ROUVIDEO, PORNHUB,
         )
 
         val COMIC_SITES: List<SiteId> = listOf(
-            EHENTAI, EXHENTAI, NHENTAI, HITOMI, WNACG, JMCOMIC, HDOUJIN,
+            EHENTAI, EXHENTAI, NHENTAI, HITOMI, WNACG, JMCOMIC,
         )
 
         val SERIAL_COMIC_SITES: List<SiteId> = listOf(
-            MANGACOPY, MH160, GUAZIMANHUA, MYCOMIC, HIPMH,
+            MANGACOPY, RELAMANHUA, MANWA2, BAOZIMH, HIPMH, GUAZIMANHUA,
         )
 
         val PHOTO_SITES: List<SiteId> = listOf(
@@ -87,13 +91,17 @@ value class SiteId(val value: String) {
 
         private val LIVE_SET: Set<SiteId> = ALL_LIVE.toSet()
 
-        /** All sources that may appear in personal library records (18 live + local). */
+        /** All sources that may appear in personal library records (24 live + local). */
         val LIBRARY_SOURCES: List<SiteId> = ALL_LIVE + LOCAL
 
         val RETIRED_HOSTS: Map<SiteId, String> = mapOf(
             RETIRED_KBJ to "kbj.im",
             RETIRED_KBJFREE to "kbjfree.com",
             RETIRED_NETFLAV to "netflav.com",
+            RETIRED_HDOUJIN to "hdoujin.org",
+            RETIRED_MH160 to "www.mh160ba.com",
+            RETIRED_MYCOMIC to "mycomic.com",
+            RETIRED_VOMIC to "www.vomicmh.com",
         )
 
         fun of(raw: String): SiteId = SiteId(raw.trim().lowercase(Locale.ROOT))

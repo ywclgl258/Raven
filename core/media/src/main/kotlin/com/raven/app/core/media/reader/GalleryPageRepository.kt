@@ -1171,7 +1171,7 @@ class GalleryPageRepository(
                 }
             }
             val body = res.body ?: throw SiteException.Network("图片响应为空", siteId = siteId)
-            body.byteStream().use { stream ->
+            val rawBytes = body.byteStream().use { stream ->
                 val out = ByteArrayOutputStream()
                 val buf = ByteArray(16 * 1024)
                 while (true) {
@@ -1184,6 +1184,12 @@ class GalleryPageRepository(
                     out.write(buf, 0, count)
                 }
                 out.toByteArray()
+            }
+            val transportHook = siteRegistryProvider().get(siteId)?.mediaTransportHook
+            if (transportHook != null && transportHook.requiresFullResponseUnwrap(targetUrl)) {
+                transportHook.unwrapMediaBytes(targetUrl, rawBytes)?.bytes ?: rawBytes
+            } else {
+                rawBytes
             }
         }
     }

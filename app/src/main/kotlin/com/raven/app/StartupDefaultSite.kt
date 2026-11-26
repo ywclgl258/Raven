@@ -21,9 +21,19 @@ internal suspend fun applyStartupDefaultSiteOnColdStart(
     siteRegistry: SiteRegistry,
 ) {
     val settings = preferencesRepository.currentSettings()
+    val registeredIds = siteRegistry.allPlugins().map { it.id }
     val target = resolveStartupDefaultSite(
         settings = settings,
-        registeredSiteIds = siteRegistry.allPlugins().map { it.id },
-    ) ?: return
-    preferencesRepository.setActiveSiteId(target)
+        registeredSiteIds = registeredIds,
+    )
+    if (target != null) {
+        preferencesRepository.selectActiveSiteAndRecordOpen(target)
+        return
+    }
+    if (settings.activeSiteId in registeredIds) {
+        preferencesRepository.recordSiteOpen(settings.activeSiteId)
+        return
+    }
+    val fallback = registeredIds.firstOrNull() ?: return
+    preferencesRepository.selectActiveSiteAndRecordOpen(fallback)
 }

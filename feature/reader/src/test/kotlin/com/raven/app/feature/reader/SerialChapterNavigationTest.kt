@@ -320,36 +320,36 @@ class SerialChapterNavigationTest {
         assertEquals("18741:110", vmShort.uiState.value.previousChapter?.id)
         assertNull(vmShort.uiState.value.nextChapter)
 
-        // MH160 chapterUrl hint enables nextChapter when root opens first chapter.
+        // Guazi chapterUrl hint enables nextChapter when root opens first chapter.
         val mhChapters = listOf(
             MediaItem(
-                siteId = SiteId.MH160,
+                siteId = SiteId.GUAZIMANHUA,
                 id = "26001:583501",
-                url = "https://www.mh160ba.com/kanmanhua/26001/583501.html",
+                url = "https://www.guazimanhua.com/chapter.php?id=583501",
                 kind = MediaKind.SERIAL_COMIC,
                 title = "第1话",
                 extra = mapOf("comicId" to "26001"),
             ),
             MediaItem(
-                siteId = SiteId.MH160,
+                siteId = SiteId.GUAZIMANHUA,
                 id = "26001:590566",
-                url = "https://www.mh160ba.com/kanmanhua/26001/590566.html",
+                url = "https://www.guazimanhua.com/chapter.php?id=590566",
                 kind = MediaKind.SERIAL_COMIC,
                 title = "第2话",
                 extra = mapOf("comicId" to "26001"),
             ),
         )
         val mhRootDetail = sampleGalleryDetail(
-            siteId = SiteId.MH160,
+            siteId = SiteId.GUAZIMANHUA,
             mediaId = "26001",
             pageCount = 2,
             kind = MediaKind.SERIAL_COMIC,
         ).let {
             it.copy(
                 item = it.item.copy(
-                    extra = mapOf("chapterUrl" to "https://www.mh160ba.com/kanmanhua/26001/583501.html"),
+                    extra = mapOf("chapterUrl" to "https://www.guazimanhua.com/chapter.php?id=583501"),
                 ),
-                chaptersUrl = "https://www.mh160ba.com/kanmanhua/26001/#chapters",
+                chaptersUrl = "https://www.guazimanhua.com/comic.php?id=26001#chapters",
             )
         }
         val vmMh = reader(

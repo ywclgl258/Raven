@@ -7,7 +7,7 @@ import org.koin.dsl.module
 
 /**
  * Koin DI module registering all 12 comic [SitePlugin] implementations via multi-binding
- * (`bind SitePlugin::class`): 7 standard comics and 5 serial comics.
+ * (`bind SitePlugin::class`): 6 standard comics and 6 serial comics.
  * Dependencies resolved from core modules: `HttpClientAdapter` and `SiteSessionStore`.
  */
 val comicSitesModule: Module = module {
@@ -17,10 +17,10 @@ val comicSitesModule: Module = module {
     single { HitomiSitePlugin(get()) } bind SitePlugin::class
     single { WnacgSitePlugin(get()) } bind SitePlugin::class
     single { JmcomicSitePlugin(get()) } bind SitePlugin::class
-    single { HdoujinSitePlugin(get()) } bind SitePlugin::class
-    single { MangacopySitePlugin(get()) } bind SitePlugin::class
-    single { Mh160SitePlugin(get()) } bind SitePlugin::class
+    single { MangacopySitePlugin(get(), get()) } bind SitePlugin::class
+    single { RelamanhuaSitePlugin(get(), get()) } bind SitePlugin::class
+    single { Manwa2SitePlugin(get()) } bind SitePlugin::class
+    single { BaozimhSitePlugin(get()) } bind SitePlugin::class
     single { GuazimanhuaSitePlugin(get()) } bind SitePlugin::class
-    single { MycomicSitePlugin(get()) } bind SitePlugin::class
     single { HipmhSitePlugin(get()) } bind SitePlugin::class
 }

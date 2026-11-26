@@ -215,7 +215,7 @@ class SettingsViewModelTest {
             assertTrue(updated.settings.autoFullscreen)
             assertEquals("1080p", updated.settings.preferredQuality)
             assertEquals(SiteId.NHENTAI, updated.settings.startupDefaultSiteId)
-            assertEquals(SiteId.R34V, updated.settings.activeSiteId)
+            assertEquals(SiteId.HANIME1, updated.settings.activeSiteId)
             assertEquals(1.5f, updated.settings.defaultPlaybackSpeed, 0.001f)
             assertTrue(updated.settings.streamCacheEnabled)
             assertFalse(updated.settings.seekCacheEnabled)

@@ -354,12 +354,12 @@ class WnacgAndJmcomicPluginTest {
             assertNotNull(registry.resolveLinkFromText("View https://hitomi.la/galleries/404.html"))
             assertNotNull(registry.resolveLinkFromText("Open https://www.wnacg.com/photos-index-aid-505.html"))
             assertNotNull(registry.resolveLinkFromText("Chapters https://18comic.ink/album/606#chapters"))
-            assertNotNull(registry.resolveLinkFromText("Book https://hdoujin.org/book/12345/abcdef123456"))
             assertNotNull(registry.resolveLinkFromText("Comic https://www.mangacopy.com/comic/abcdefg"))
+            assertNotNull(registry.resolveLinkFromText("Comic https://www.hotmangasd.com/comic/demo"))
             assertNotNull(registry.resolveLinkFromText("Comic https://www.guazimanhua.com/comic.php?id=18741"))
-            assertNotNull(registry.resolveLinkFromText("Comic https://www.mh160ba.com/kanmanhua/26001/"))
-            assertNotNull(registry.resolveLinkFromText("Comic https://mycomic.com/comics/1234"))
             assertNotNull(registry.resolveLinkFromText("Comic https://m.hipmh.com/works/demo-slug"))
+            assertNotNull(registry.resolveLinkFromText("Comic https://manwauu.cc/comic/999"))
+            assertNotNull(registry.resolveLinkFromText("Comic https://tw.webmota.com/comic/demo-slug"))
         } finally {
             koinApp.close()
         }

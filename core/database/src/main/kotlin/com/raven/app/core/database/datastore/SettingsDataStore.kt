@@ -27,6 +27,7 @@ import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.serialization.builtins.ListSerializer
+import kotlinx.serialization.builtins.MapSerializer
 import kotlinx.serialization.builtins.serializer
 
 /**
@@ -47,6 +48,47 @@ class SettingsDataStore(
     suspend fun setActiveSiteId(siteId: SiteId) {
         dataStore.edit { prefs ->
             prefs[Keys.ACTIVE_SITE_ID] = siteId.value
+        }
+    }
+
+    suspend fun recordSiteOpen(siteId: SiteId) {
+        dataStore.edit { prefs ->
+            incrementSiteOpenIfAllowed(prefs, siteId)
+        }
+    }
+
+    suspend fun selectActiveSiteAndRecordOpen(siteId: SiteId) {
+        dataStore.edit { prefs ->
+            prefs[Keys.ACTIVE_SITE_ID] = siteId.value
+            incrementSiteOpenIfAllowed(prefs, siteId)
+        }
+    }
+
+    suspend fun recordSectionOpen(siteId: SiteId, sectionId: String) {
+        val cleanSection = sectionId.trim()
+        if (cleanSection.isEmpty() || cleanSection.equals("chapters", ignoreCase = true)) return
+        dataStore.edit { prefs ->
+            incrementSectionOpenIfAllowed(prefs, siteId, cleanSection)
+        }
+    }
+
+    suspend fun setSiteExploreFilterAndRecordSection(
+        siteId: SiteId,
+        filter: ExploreFilterState?,
+        recordedSectionId: String?,
+    ) {
+        val cleanSection = recordedSectionId?.trim()
+            ?.takeIf { it.isNotEmpty() && !it.equals("chapters", ignoreCase = true) }
+        val key = Keys.siteExploreFilter(siteId)
+        dataStore.edit { prefs ->
+            if (filter == null || filter.isEmpty) {
+                prefs.remove(key)
+            } else {
+                prefs[key] = json.encodeToString(ExploreFilterState.serializer(), filter)
+            }
+            if (cleanSection != null) {
+                incrementSectionOpenIfAllowed(prefs, siteId, cleanSection)
+            }
         }
     }
 
@@ -465,7 +507,10 @@ class SettingsDataStore(
             ?.trim()
             ?.takeIf(String::isNotEmpty)
             ?.let(SiteId::of)
-            ?: SiteId.R34V
+            ?: AppSettings.DEFAULT_ACTIVE_SITE_ID
+
+        val siteOpenCounts = decodeSiteOpenCounts(prefs[Keys.SITE_OPEN_COUNTS])
+        val sectionOpenCounts = decodeSectionOpenCounts(prefs[Keys.SECTION_OPEN_COUNTS])
 
         val storage = parseStorageLocationOrNull(prefs[Keys.STORAGE_LOCATION])
             ?: StorageLocation.PRIVATE
@@ -482,6 +527,8 @@ class SettingsDataStore(
                 ?.let(SiteId::of),
             pinnedSiteIds = decodeSiteIdList(prefs[Keys.PINNED_SITE_IDS]).distinct(),
             crossSearchSiteIds = decodeSiteIdList(prefs[Keys.CROSS_SEARCH_SITE_IDS]).distinct(),
+            siteOpenCounts = siteOpenCounts,
+            sectionOpenCounts = sectionOpenCounts,
             siteLanguages = languages,
             siteExploreFilters = exploreFilters,
             translateTags = prefs[Keys.TRANSLATE_TAGS] ?: true,
@@ -531,6 +578,8 @@ class SettingsDataStore(
         val STARTUP_DEFAULT_SITE_ID = stringPreferencesKey(KEY_STARTUP_DEFAULT_SITE_ID)
         val PINNED_SITE_IDS = stringPreferencesKey(KEY_PINNED_SITE_IDS)
         val CROSS_SEARCH_SITE_IDS = stringPreferencesKey(KEY_CROSS_SEARCH_SITE_IDS)
+        val SITE_OPEN_COUNTS = stringPreferencesKey(KEY_SITE_OPEN_COUNTS)
+        val SECTION_OPEN_COUNTS = stringPreferencesKey(KEY_SECTION_OPEN_COUNTS)
         val TRANSLATE_TAGS = booleanPreferencesKey(KEY_TRANSLATE_TAGS)
         val AUTO_FULLSCREEN = booleanPreferencesKey(KEY_AUTO_FULLSCREEN)
         val PREFERRED_QUALITY = stringPreferencesKey(KEY_PREFERRED_QUALITY)
@@ -580,6 +629,8 @@ class SettingsDataStore(
         const val KEY_STARTUP_DEFAULT_SITE_ID: String = "startup_default_site_id"
         const val KEY_PINNED_SITE_IDS: String = "pinned_site_ids"
         const val KEY_CROSS_SEARCH_SITE_IDS: String = "cross_search_site_ids"
+        const val KEY_SITE_OPEN_COUNTS: String = "site_open_counts"
+        const val KEY_SECTION_OPEN_COUNTS: String = "section_open_counts"
         const val SITE_LANGUAGE_PREFIX: String = "site_language_"
         const val SITE_EXPLORE_FILTER_PREFIX: String = "site_explore_filter_"
         const val KEY_TRANSLATE_TAGS: String = "translate_tags"
@@ -639,6 +690,93 @@ class SettingsDataStore(
 
         private val json = RavenTypeConverters.json
         private val stringListSerializer = ListSerializer(String.serializer())
+        private val siteOpenCountsSerializer = MapSerializer(String.serializer(), Int.serializer())
+        private val sectionOpenCountsSerializer = MapSerializer(
+            String.serializer(),
+            MapSerializer(String.serializer(), Int.serializer()),
+        )
+
+        private fun incrementSiteOpenIfAllowed(prefs: MutablePreferences, siteId: SiteId) {
+            if (prefs[Keys.INCOGNITO_MODE] == true) return
+            val current = decodeSiteOpenCounts(prefs[Keys.SITE_OPEN_COUNTS]).toMutableMap()
+            val prev = current[siteId] ?: 0
+            current[siteId] = (prev + 1).coerceAtLeast(1)
+            prefs[Keys.SITE_OPEN_COUNTS] = encodeSiteOpenCounts(current)
+        }
+
+        private fun incrementSectionOpenIfAllowed(
+            prefs: MutablePreferences,
+            siteId: SiteId,
+            sectionId: String,
+        ) {
+            if (prefs[Keys.INCOGNITO_MODE] == true) return
+            val outer = decodeSectionOpenCounts(prefs[Keys.SECTION_OPEN_COUNTS])
+                .mapValues { (_, inner) -> inner.toMutableMap() }
+                .toMutableMap()
+            val inner = outer.getOrPut(siteId) { LinkedHashMap() }
+            val prev = inner[sectionId] ?: 0
+            inner[sectionId] = (prev + 1).coerceAtLeast(1)
+            prefs[Keys.SECTION_OPEN_COUNTS] = encodeSectionOpenCounts(outer)
+        }
+
+        internal fun encodeSiteOpenCounts(counts: Map<SiteId, Int>): String =
+            if (counts.isEmpty()) "{}"
+            else json.encodeToString(
+                siteOpenCountsSerializer,
+                counts.entries
+                    .filter { (_, v) -> v > 0 }
+                    .associate { (k, v) -> k.value to v },
+            )
+
+        internal fun decodeSiteOpenCounts(raw: String?): Map<SiteId, Int> {
+            if (raw.isNullOrBlank() || raw == "{}") return emptyMap()
+            return runCatching {
+                json.decodeFromString(siteOpenCountsSerializer, raw)
+                    .entries
+                    .mapNotNull { (k, v) ->
+                        val clean = k.trim()
+                        if (clean.isNotEmpty() && v > 0) SiteId.of(clean) to v else null
+                    }
+                    .toMap()
+            }.getOrDefault(emptyMap())
+        }
+
+        internal fun encodeSectionOpenCounts(counts: Map<SiteId, Map<String, Int>>): String =
+            if (counts.isEmpty()) "{}"
+            else json.encodeToString(
+                sectionOpenCountsSerializer,
+                counts.entries
+                    .mapNotNull { (siteId, inner) ->
+                        val filtered = inner.entries
+                            .mapNotNull { (sec, cnt) ->
+                                val cleanSec = sec.trim()
+                                if (cleanSec.isNotEmpty() && cnt > 0) cleanSec to cnt else null
+                            }
+                            .toMap()
+                        if (filtered.isNotEmpty()) siteId.value to filtered else null
+                    }
+                    .toMap(),
+            )
+
+        internal fun decodeSectionOpenCounts(raw: String?): Map<SiteId, Map<String, Int>> {
+            if (raw.isNullOrBlank() || raw == "{}") return emptyMap()
+            return runCatching {
+                json.decodeFromString(sectionOpenCountsSerializer, raw)
+                    .entries
+                    .mapNotNull { (rawSite, inner) ->
+                        val cleanSite = rawSite.trim()
+                        if (cleanSite.isEmpty()) return@mapNotNull null
+                        val cleanedInner = inner.entries
+                            .mapNotNull { (sec, cnt) ->
+                                val cleanSec = sec.trim()
+                                if (cleanSec.isNotEmpty() && cnt > 0) cleanSec to cnt else null
+                            }
+                            .toMap()
+                        if (cleanedInner.isNotEmpty()) SiteId.of(cleanSite) to cleanedInner else null
+                    }
+                    .toMap()
+            }.getOrDefault(emptyMap())
+        }
 
         fun createDataStore(context: Context): DataStore<Preferences> =
             PreferenceDataStoreFactory.create(

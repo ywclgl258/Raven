@@ -11,9 +11,11 @@ import com.raven.app.core.sitespi.SiteRequestKind
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.Interceptor
 import okhttp3.MediaType
+import okhttp3.MediaType.Companion.toMediaTypeOrNull
 import okhttp3.Request
 import okhttp3.RequestBody
 import okhttp3.Response
+import okhttp3.ResponseBody.Companion.toResponseBody
 import okio.BufferedSink
 
 /**
@@ -212,7 +214,7 @@ internal class SiteRequestHeaderInterceptor(
                 }
             }
 
-            if (effectiveKind == SiteRequestKind.MEDIA) {
+            if (effectiveKind == SiteRequestKind.MEDIA || effectiveKind == SiteRequestKind.IMAGE) {
                 val extraMediaHeaders = plugin.mediaTransportHook.extraMediaHeaders(original.url.toString())
                 for ((name, value) in extraMediaHeaders) {
                     val isCredentialHeader = name.equals("Authorization", ignoreCase = true) ||
@@ -284,5 +286,81 @@ internal class CrossHostCredentialGuardInterceptor(
             .removeHeader("Cookie")
             .build()
         return chain.proceed(sanitized)
+    }
+}
+
+/**
+ * Transparently unwraps encrypted image responses (e.g., Manwa2 AES-CBC CDN images)
+ * via [com.raven.app.core.sitespi.MediaTransportHook] for both Coil cover loads and
+ * gallery reader downloads, without hard-coding any site ID.
+ */
+internal class SiteImageTransportUnwrapInterceptor(
+    private val siteRegistryProvider: () -> SiteRegistry,
+) : Interceptor {
+
+    override fun intercept(chain: Interceptor.Chain): Response {
+        val request = chain.request()
+        val response = chain.proceed(request)
+        if (!request.method.equals("GET", ignoreCase = true) || !response.isSuccessful) {
+            return response
+        }
+
+        val urlString = request.url.toString()
+        val registry = siteRegistryProvider()
+        val tag = request.tag(SiteRequestTag::class.java)
+        val plugin = tag?.siteId?.let { registry.get(it) }
+            ?: registry.findForMediaHost(request.url.host)
+            ?: return response
+
+        val hook = plugin.mediaTransportHook
+        if (!hook.requiresFullResponseUnwrap(urlString)) {
+            return response
+        }
+
+        val body = response.body ?: return response
+        val contentLength = body.contentLength()
+        if (contentLength > MAX_IMAGE_UNWRAP_BYTES) {
+            return response
+        }
+        val originalContentType = body.contentType()
+        val rawBytes = readBoundedBytes(body, MAX_IMAGE_UNWRAP_BYTES)
+            ?: return response
+
+        val unwrapped = hook.unwrapMediaBytes(urlString, rawBytes)
+        return if (unwrapped != null) {
+            val resolvedType = unwrapped.contentType.toMediaTypeOrNull() ?: originalContentType
+            response.newBuilder()
+                .removeHeader("Content-Length")
+                .removeHeader("Content-Encoding")
+                .header("Content-Type", unwrapped.contentType)
+                .body(unwrapped.bytes.toResponseBody(resolvedType))
+                .build()
+        } else {
+            response.newBuilder()
+                .body(rawBytes.toResponseBody(originalContentType))
+                .build()
+        }
+    }
+
+    private fun readBoundedBytes(body: okhttp3.ResponseBody, maxBytes: Long): ByteArray? {
+        val out = java.io.ByteArrayOutputStream()
+        val buf = ByteArray(8_192)
+        var total = 0L
+        body.byteStream().use { stream ->
+            while (true) {
+                val n = stream.read(buf)
+                if (n < 0) break
+                total += n
+                if (total > maxBytes) {
+                    throw java.io.IOException("图片响应体超过解包上限 ($maxBytes bytes)")
+                }
+                out.write(buf, 0, n)
+            }
+        }
+        return out.toByteArray()
+    }
+
+    companion object {
+        private const val MAX_IMAGE_UNWRAP_BYTES: Long = 32L * 1024L * 1024L
     }
 }
