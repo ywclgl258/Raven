@@ -12,7 +12,6 @@ import com.raven.app.feature.settings.FeedbackDiagnosticSource
 import com.raven.app.feature.settings.RavenAppInfo
 import java.io.File
 import java.util.Locale
-import java.util.concurrent.TimeUnit
 
 /**
  * Android side of the diagnostic log: environment header, logcat mirror, and the upload snapshot.
@@ -143,7 +142,6 @@ object RavenDiagnostics : FeedbackDiagnosticSource {
             "threadtime",
         ).redirectErrorStream(true).start()
         val text = process.inputStream.bufferedReader().use { it.readText() }
-        process.waitFor(4, TimeUnit.SECONDS)
         text
     }.getOrDefault("")
 
