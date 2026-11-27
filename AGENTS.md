@@ -75,6 +75,26 @@ apksigner verify --verbose --print-certs --min-sdk-version 23 --max-sdk-version 
 2. 两次验签的证书 SHA-256 摘要均精确等于 `1F9407377D2D3AB5C04527CF6E587F0B789BA8B971D60AD8F99360D05CA52F3A`（不区分大小写）。
 3. APK 包名为 `com.raven.app`，且 `versionCode` 严格大于上一已发布版本、`versionName` 与本次发布说明一致。
 
+### 2.7 发布后必须同步官网与 VPS 更新通道
+- 任何正式版本在创建 GitHub Release 后，**必须同时更新官网**并发布 VPS 备用更新通道；只发 GitHub、不改官网视为发布未完成。
+- 官网源码唯一入口：仓库内 [`deploy/website/index.html`](deploy/website/index.html)，线上根目录 `/var/www/raven-site/public`。
+- VPS 更新通道：`/var/www/raven-update/public/raven/releases`，客户端读取的清单为 `latest`；官网 APK 镜像目录为 `/var/www/raven-site/public/download`。
+- 一键上传命令（Windows PowerShell，默认 SSH 主机别名 `shizun-vps2`，可在开发者本机 SSH config 中配置）：
+  ```powershell
+  .\deploy\release-to-vps.ps1 -Build -Notes "本次更新说明"
+  ```
+  脚本会依次校验 APK 包名/版本/v1+v2+v3 签名与证书指纹、上传 APK 与 `release.properties`、运行 VPS `publish.py`、复制官网 APK 镜像、上传官网页面，并回读 `latest` 与官网校验版本。
+- 只上传已构建 APK、跳过 Gradle 构建时：
+  ```powershell
+  .\deploy\release-to-vps.ps1 -Apk .\app\build\outputs\apk\release\app-release.apk -Notes "本次更新说明"
+  ```
+- 发布前可先演练：
+  ```powershell
+  .\deploy\release-to-vps.ps1 -Apk .\app\build\outputs\apk\release\app-release.apk -DryRun
+  ```
+- 官网 `index.html` 中的版本号、下载链接、SHA-256、更新日志必须与本次 `release.properties` 和 APK 摘要一致；`-Build` 前先更新，或发布后立即更新再上传。
+- 脚本不读取、不打印、不上传签名密码；VPS 上仅保存 APK 与公开清单，不得放置 `signing.properties`、`.jks` 或任何凭据。
+
 ---
 
 ## 3. 文档导航

@@ -99,6 +99,34 @@ python3 deploy/update-server/publish.py --apk <旧版 APK> --release-properties 
 `release.properties` 里把 `versionCode`/`versionName` 提到一个**新号**（例如线上是 14，回滚包发 15 带旧代码），
 再走正常发布。禁止手工编辑 `latest` 绕过校验。
 
+## 5.1 一键上传官网与 VPS（推荐）
+
+正式版必须同时更新 GitHub Release、VPS 更新通道和官网。仓库提供 Windows 一键脚本：
+
+```powershell
+# 构建并上传（会先执行 validateReleaseSigning + assembleRelease）
+.\deploy\release-to-vps.ps1 -Build -Notes "本次更新说明"
+
+# 只上传已构建 APK
+.\deploy\release-to-vps.ps1 -Apk .\app\build\outputs\apk\release\app-release.apk -Notes "本次更新说明"
+
+# 演练：只校验并打印上传命令，不改 VPS
+.\deploy\release-to-vps.ps1 -Apk .\app\build\outputs\apk\release\app-release.apk -DryRun
+```
+
+脚本默认 SSH 主机别名 `shizun-vps2`（可用 `-VpsHost` 覆盖），会完成：
+
+1. `aapt2` 校验包名、`versionCode`、`versionName`；
+2. `apksigner` 校验 v1/v2/v3 与 `releaseCertificate` 指纹；
+3. 上传 APK 与 `release.properties` 到 `/root/raven-update-deploy`；
+4. 运行远程 `publish.py` 更新 `/var/www/raven-update/public` 的 `latest` 清单；
+5. 复制 APK 到官网 `/var/www/raven-site/public/download/Raven-v<version>-release.apk`；
+6. 上传 `deploy/website/index.html` 到官网根目录；
+7. 回读 `latest` 与官网，校验版本号和 SHA-256。
+
+发布前必须先让 `deploy/website/index.html` 的版本号、下载链接、SHA-256 与更新日志和本次
+`release.properties`/APK 一致。脚本不会读取或上传任何签名密码。
+
 ## 6. 本地自测
 
 ```bash
