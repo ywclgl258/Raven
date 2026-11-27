@@ -1,0 +1,2 @@
+reference/copymanga-3.1.1/original/copymanga.release_20261110_3.1.1.apk filter=lfs diff=lfs merge=lfs -text
+reference/copymanga-3.1.1/unpacked/** -text

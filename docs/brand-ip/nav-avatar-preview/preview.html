@@ -1,0 +1,137 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Raven 导航头像 · 预览稿</title>
+  <style>
+    :root { color-scheme: dark; --bg:#09090b; --surface:#141419; --line:#29292f; --text:#f1f1f3; --muted:#9999a3; --red:#ff4d58; }
+    * { box-sizing:border-box; }
+    body { margin:0; min-width:960px; background:var(--bg); color:var(--text); font-family:"Microsoft YaHei",sans-serif; }
+    main { width:1080px; margin:auto; padding:44px 0 56px; }
+    header { display:flex; align-items:end; justify-content:space-between; margin-bottom:24px; }
+    h1 { margin:0 0 8px; font-size:28px; font-weight:600; }
+    p { margin:0; color:var(--muted); font-size:13px; line-height:1.7; }
+    .preview-note { padding:8px 12px; border:1px solid var(--line); border-radius:6px; color:var(--red); font-size:12px; }
+    section { margin-top:24px; padding:26px; border:1px solid var(--line); border-radius:16px; background:var(--surface); }
+    h2 { margin:0 0 8px; font-size:17px; font-weight:500; }
+    .avatars { display:grid; grid-template-columns:repeat(5,1fr); gap:14px; margin-top:22px; }
+    .character { padding:16px 12px 14px; border:1px solid var(--line); border-radius:12px; background:#0e0e12; text-align:center; cursor:pointer; transition:border-color .22s,transform .22s; }
+    .character:hover { transform:translateY(-3px); }
+    .character.selected { border-color:#ff4d5866; }
+    .portrait { display:block; width:158px; height:158px; margin:auto; }
+    .character h3 { margin:8px 0 4px; font-size:18px; font-weight:500; }
+    .character p { font-size:11px; }
+    .original { display:block; margin:10px auto 0; color:#757580; font-size:10px; }
+    .state { display:flex; align-items:center; gap:6px; margin-top:24px; }
+    button { border:1px solid var(--line); border-radius:6px; padding:8px 12px; background:#1a1a20; color:var(--text); cursor:pointer; font:inherit; font-size:12px; }
+    button[aria-pressed="true"] { border-color:var(--red); background:#ff4d5812; color:var(--red); }
+    .state span { margin-left:auto; color:var(--muted); font-size:12px; }
+    .phone { width:390px; margin:20px auto 0; overflow:hidden; border:1px solid #38383f; border-radius:24px; background:#0d0d11; box-shadow:0 20px 40px #0005; }
+    .screen { height:188px; padding:24px; background:radial-gradient(ellipse at 70% 0,#ff4d5810,transparent 55%); }
+    .screen-title { margin:12px 0 4px; font-size:24px; }
+    .navbar { display:flex; justify-content:space-around; padding:12px 8px 15px; border-top:1px solid var(--line); }
+    .nav-item { display:flex; flex:1; flex-direction:column; align-items:center; gap:3px; padding:0; border:0; background:transparent; color:var(--muted); }
+    .nav-item[aria-pressed="true"] { border:0; color:var(--red); background:transparent; }
+    .nav-item svg { width:36px; height:36px; }
+    .nav-item span { font-size:11px; }
+    .icon-preview { display:flex; align-items:center; justify-content:center; gap:48px; margin:22px 0 8px; }
+    .app-icon { width:200px; height:200px; overflow:hidden; border-radius:44px; background:#131318; box-shadow:0 12px 35px #0006; }
+    .app-icon svg { display:block; width:100%; height:100%; }
+    .icon-copy { max-width:310px; }
+    .icon-copy h3 { margin:0 0 12px; font-size:20px; font-weight:500; }
+    .icon-copy p { font-size:13px; }
+    svg .hair-back { fill:#292a32; }
+    svg .hair { fill:#343540; }
+    svg .skin { fill:#f5e4de; }
+    svg .eye { fill:#0d0f14; transform-box:fill-box; transform-origin:center; transition:transform .3s cubic-bezier(.2,.8,.3,1); }
+    svg .blush { fill:#ff4d58; opacity:.22; transition:opacity .3s; }
+    svg .mouth { fill:#b44955; transition:transform .3s; transform-box:fill-box; transform-origin:center; }
+    svg .feather { fill:var(--muted); transition:fill .3s,transform .38s cubic-bezier(.2,.8,.3,1); transform-box:fill-box; transform-origin:bottom center; }
+    svg .head { transform-origin:50% 60%; transition:transform .38s cubic-bezier(.2,.8,.3,1); }
+    .off .eye { transform:scaleY(.16); }
+    .off .mouth { transform:scale(.7,.3); }
+    .off .blush { opacity:.08; }
+    .off .head { transform:translateY(3px) scale(.95); }
+    .selected .feather, .on .feather { fill:var(--red); transform:rotate(-7deg) scale(1.05); }
+    .selected .head, .on .head { animation:select-pop .38s cubic-bezier(.2,.8,.3,1); }
+    @keyframes select-pop { 50% { transform:translateY(-5px) scale(1.04); } }
+    @media (prefers-reduced-motion:reduce) { *,svg * { animation:none!important; transition:none!important; } }
+  </style>
+</head>
+<body>
+<main>
+  <header>
+    <div><h1>Raven · 五羽导航</h1><p>同一角色的五种形态。仅预览，尚未接入 Android。</p></div>
+    <div class="preview-note">方案 A · 极简绯羽</div>
+  </header>
+
+  <section>
+    <h2>点击头像，切换选中形态</h2>
+    <p>统一黑发、奶白脸、豆豆眼与腮红。通过五种发型轮廓表达不同功能。</p>
+    <div class="avatars" id="avatars"></div>
+    <div class="state"><button id="show-off" aria-pressed="false">全部未选中</button><button id="show-on" aria-pressed="false">全部选中</button><span>选中 · 睁眼 / 弹起 / 绯羽点亮　　未选中 · 闭眼 / 收拢 / 中性灰</span></div>
+  </section>
+
+  <section>
+    <h2>底部导航尺寸模拟</h2>
+    <p>点击菜单可查看切换动画与短名称的实际占用。</p>
+    <div class="phone"><div class="screen"><p>欢迎回到渡鸦</p><div class="screen-title" id="screen-title">归巢</div><p id="screen-caption">今天想看些什么？</p></div><nav class="navbar" id="navbar" aria-label="导航预览"></nav></div>
+  </section>
+
+  <section>
+    <h2>APP 图标简化方向</h2>
+    <div class="icon-preview">
+      <div class="app-icon" id="app-icon"></div>
+      <div class="icon-copy"><h3>一张脸，一枚绯羽</h3><p>保留贴脸构图和黑色短发，去掉发丝高光、发饰底座与细碎阴影。小尺寸只依靠大色块和绯红三羽识别。</p><p style="margin-top:12px">这是应用图标方向的独立预览，不影响已有 Android 图标资源。</p></div>
+    </div>
+  </section>
+</main>
+<script>
+const items = [
+  { id:'roost', name:'归巢', original:'首页', en:'ROOST', hair:'M46 252Q26 105 152 55Q263 7 370 60Q464 110 459 252Q453 361 391 416L352 363Q397 281 370 195Q319 106 239 124Q135 124 105 213Q78 305 125 391L81 419Q44 348 46 252Z', fringe:'M72 242Q64 105 193 67Q315 32 411 127Q330 93 278 137Q244 161 224 264Q197 200 151 194L119 287Z' },
+  { id:'trace', name:'寻迹', original:'发现', en:'TRACE', hair:'M37 260Q23 102 160 49Q302 2 413 88Q486 147 459 294Q448 399 354 458L318 418Q380 344 379 250Q360 133 263 123Q151 116 108 226Q77 312 120 414L73 447Q28 362 37 260Z', fringe:'M63 254Q47 111 184 62Q324 12 427 126Q334 98 283 129Q242 151 231 232Q191 185 139 205L108 291Z' },
+  { id:'seek', name:'索影', original:'搜索', en:'SEEK', hair:'M42 264Q19 122 138 60Q261 -3 391 58Q476 100 473 229L446 370L385 341Q405 263 382 188Q338 114 254 122Q140 120 103 236L104 364L47 371Z', fringe:'M66 261Q53 130 165 72Q287 8 406 93Q436 117 445 157Q377 116 307 135Q255 153 230 239Q198 198 148 205L109 295Z' },
+  { id:'plume', name:'藏羽', original:'片库', en:'PLUME', hair:'M43 266Q19 111 151 55Q267 7 389 62Q480 106 469 250Q464 347 419 404Q478 424 463 470Q404 474 368 431L335 394Q391 315 373 226Q338 119 239 123Q129 124 99 243Q79 321 128 407L75 441Q32 366 43 266Z', fringe:'M64 260Q54 129 174 69Q310 3 420 119Q342 95 284 130Q249 153 238 226Q200 196 154 203L110 295Z' },
+  { id:'nest', name:'落羽', original:'我的', en:'NEST', hair:'M43 268Q21 113 152 57Q268 7 387 62Q466 102 469 216Q484 252 480 309Q475 367 428 392L370 350Q405 281 373 204Q333 115 240 124Q130 123 101 237Q80 323 126 405L73 439Q32 366 43 268Z', fringe:'M65 259Q52 125 174 68Q303 8 415 114Q335 96 284 132Q251 157 236 236Q195 193 149 204L109 295Z' }
+];
+function avatar(item, index) {
+  return `<svg class="portrait off" viewBox="0 0 512 512" role="img" aria-label="${item.name}头像">
+    <g class="head"><path class="hair-back" d="${item.hair}"/>
+    <path class="skin" d="M99 259Q111 145 241 133Q368 124 410 221Q449 320 397 403Q345 475 251 466Q159 458 119 390Q90 339 99 259Z"/>
+    <ellipse class="blush" cx="159" cy="364" rx="42" ry="22"/><ellipse class="blush" cx="369" cy="359" rx="39" ry="21"/>
+    <ellipse class="eye" cx="190" cy="310" rx="24" ry="51"/><ellipse class="eye" cx="337" cy="304" rx="24" ry="51"/>
+    <path class="mouth" d="M239 393Q270 417 301 389Q295 440 265 441Q238 434 239 393Z"/>
+    <path class="hair" d="${item.fringe}"/>
+    <g class="feather"><path d="M112 183L137 86L160 135L151 185Z"/><path d="M151 180L172 109L194 164L176 200Z"/><path d="M117 188L173 173L164 215L118 220Z"/></g></g>
+  </svg>`;
+}
+let active = 0;
+const avatars = document.getElementById('avatars');
+avatars.innerHTML = items.map((item,index)=>`<article class="character ${index===0?'selected':''}" data-index="${index}" tabindex="0" role="button" aria-label="切换${item.name}">${avatar(item,index)}<h3>${item.name}</h3><p>${item.en} · ${item.original}</p><span class="original">${['黑色短发','轻卷中发','利落下颌发','后侧低马尾','侧束发'][index]}</span></article>`).join('');
+const navbar = document.getElementById('navbar');
+navbar.innerHTML = items.map((item,index)=>`<button class="nav-item" aria-pressed="${index===0}" data-index="${index}">${avatar(item,index)}<span>${item.name}</span></button>`).join('');
+function select(index) {
+  active = index;
+  document.querySelectorAll('[data-index]').forEach(element => {
+    const chosen = Number(element.dataset.index) === index;
+    element.classList.toggle('selected',chosen);
+    element.querySelector('svg')?.classList.toggle('off',!chosen);
+    if(element.classList.contains('nav-item')) element.setAttribute('aria-pressed',String(chosen));
+  });
+  document.getElementById('screen-title').textContent=items[index].name;
+}
+document.querySelectorAll('[data-index]').forEach(element => {
+  element.addEventListener('click',()=>select(Number(element.dataset.index)));
+  element.addEventListener('keydown',event=>{ if(event.key==='Enter'||event.key===' '){event.preventDefault();select(Number(element.dataset.index));} });
+});
+function setAll(on) {
+  document.querySelectorAll('.character').forEach(element=>{element.classList.toggle('selected',on);element.querySelector('svg').classList.toggle('off',!on);});
+}
+document.getElementById('show-off').onclick=()=>setAll(false);
+document.getElementById('show-on').onclick=()=>setAll(true);
+document.getElementById('app-icon').innerHTML=avatar(items[0],0).replace('portrait off','portrait on');
+select(0);
+</script>
+</body>
+</html>

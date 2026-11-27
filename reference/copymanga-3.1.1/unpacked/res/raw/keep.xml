@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources xmlns:tools="http://schemas.android.com/tools"
+    tools:keep="@layout/ap_*,@anim/ap_*,@drawable/ap_*,@string/ap_*,@style/ap_*,@dimen/ap_*,@color/ap_*,@bool/ap_*,@raw/apsdk_*,@xml/ap_*"
+    />

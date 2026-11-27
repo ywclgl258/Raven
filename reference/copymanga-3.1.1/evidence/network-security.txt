@@ -1,0 +1,11 @@
+N: android=http://schemas.android.com/apk/res/android
+  E: network-security-config (line=2)
+    E: base-config (line=4)
+      A: cleartextTrafficPermitted=(type 0x12)0xffffffff
+      E: trust-anchors (line=5)
+        E: certificates (line=6)
+          A: overridePins=(type 0x12)0xffffffff
+          A: src="system" (Raw: "system")
+        E: certificates (line=7)
+          A: overridePins=(type 0x12)0xffffffff
+          A: src="user" (Raw: "user")

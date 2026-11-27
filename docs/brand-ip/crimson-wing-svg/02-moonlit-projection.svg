@@ -1,0 +1,77 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512" role="img" aria-labelledby="title description">
+  <title id="title">Raven 月影：半眯眼黑发女孩头像</title>
+  <desc id="description">透明底的原创女性 Q 版头像，黑色长发带银色挑染，半眯眼和绯红三羽发饰。</desc>
+  <style>
+    .both-eyes-blink {
+      transform-box: view-box;
+      transform-origin: 271px 330px;
+      animation: raven-slow-blink 7.2s cubic-bezier(.45, 0, .55, 1) infinite;
+    }
+    #feather-clasp {
+      transform-box: view-box;
+      transform-origin: 367px 143px;
+      animation: raven-feather 5.1s ease-in-out infinite;
+    }
+    @keyframes raven-slow-blink {
+      0%, 92%, 96%, 100% { transform: scaleY(1); }
+      93.5%, 94.5% { transform: scaleY(.12); }
+    }
+    @keyframes raven-feather {
+      0%, 100% { transform: rotate(-1deg); }
+      50% { transform: rotate(1.6deg); }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .both-eyes-blink, #feather-clasp { animation: none; }
+    }
+  </style>
+  <g id="avatar">
+    <g id="hair-back">
+      <path fill="#15161B" d="M22 313C11 184 75 74 190 34c99-34 216-1 271 86 49 77 21 172-20 256-24 49-55 95-85 134-22 28-45 1-29-32 43-88 84-186 48-254-29-54-91-74-144-49-39 19-68 56-80 100-12 43-50 70-87 61-23-5-38-14-42-23Z"/>
+      <path fill="#272932" d="M65 124c39-57 108-91 181-93-53 23-99 60-131 105-27 37-34 79-23 120-35-36-49-82-27-132Z"/>
+      <path fill="#25262D" d="M448 96c38 42 55 97 39 151-11 37-29 74-49 111 10-60 12-116-7-165-12-32-22-60-9-92 7-17 17-24 26-5Z"/>
+      <path fill="#383A43" d="M48 192c31-40 76-63 120-70-45 30-77 67-91 109-10 30-8 60 3 89-35-36-52-82-32-128Z"/>
+    </g>
+    <g id="face">
+      <path fill="#F8E8DF" d="M85 280c11-67 59-111 128-132 76-23 158 2 205 62 38 48 45 115 13 172-36 64-107 106-181 98-68-7-127-45-153-102-17-37-19-70-12-98Z"/>
+      <path fill="#F2D8CF" d="M362 162c44 31 68 82 66 137-3 91-77 163-169 159-33-1-64-12-90-29 26 11 55 17 86 17 92 0 159-67 159-153 0-48-19-94-52-131Z"/>
+      <path fill="#F5DDD5" d="M102 321c-8 67 24 122 77 150-58-16-99-61-104-115-3-17 10-31 27-35Z"/>
+    </g>
+    <g id="blush">
+      <ellipse cx="134" cy="370" rx="47" ry="21" fill="#F5B1B0"/>
+      <ellipse cx="403" cy="357" rx="42" ry="20" fill="#F5B1B0"/>
+    </g>
+    <g id="eyes" class="both-eyes-blink">
+      <path fill="#0F1015" d="M151 299c25-17 59-8 68 18 6 20-4 40-22 45-20 6-41-9-47-31-4-13-4-24 1-32Z"/>
+      <path fill="#0F1015" d="M318 288c27-13 59-1 65 24 5 21-6 42-25 45-22 4-40-13-44-37-3-15 0-26 4-32Z"/>
+      <path fill="#454750" d="M164 307c9-5 19-3 27 3-10 0-18 4-25 11Z"/>
+      <path fill="#454750" d="M332 298c8-4 17-2 23 4-8 0-15 4-20 9Z"/>
+      <path fill="#121318" d="M130 283c34-18 76-12 102 10-30-10-62-12-89 4Z"/>
+      <path fill="#121318" d="M298 270c35-13 76-3 99 19-28-12-60-17-88-6Z"/>
+      <path fill="none" stroke="#101116" stroke-width="7" stroke-linecap="round" d="M164 272c14-8 34-9 50-1"/>
+      <path fill="none" stroke="#101116" stroke-width="7" stroke-linecap="round" d="M326 262c16-7 35-6 51 2"/>
+    </g>
+    <g id="face-detail">
+      <path fill="none" stroke="#D2A49F" stroke-width="6" stroke-linecap="round" d="M275 384c8 4 17 4 25 0"/>
+      <path fill="none" stroke="#7B343B" stroke-width="9" stroke-linecap="round" d="M221 422c23 23 63 25 91 3"/>
+      <path fill="#F8D9D4" d="M234 429c20 7 43 8 65 2-18 12-45 12-65-2Z"/>
+    </g>
+    <g id="hair-front">
+      <path fill="#18191E" d="M53 277C36 200 66 133 122 99c55-34 130-44 190-17 35 15 65 39 84 67-57-30-124-36-183-17-74 23-126 79-142 145Z"/>
+      <path fill="#24262D" d="M71 203c24-54 79-94 141-109-46 24-84 60-107 104-19 36-22 73-15 108-18-28-25-67-19-103Z"/>
+      <path fill="#353740" d="M83 208c35-60 98-96 169-99-68 25-120 65-158 119Z"/>
+      <path fill="#202126" d="M207 104c-45 30-77 80-84 136-5 35-28 68-57 85 1-59 16-111 49-153 21-27 51-54 92-68Z"/>
+      <path fill="#111217" d="M306 83c-34 30-54 72-54 119 0 34-16 65-41 85 2-54 15-97 41-136 16-25 36-49 54-68Z"/>
+      <path fill="#25262E" d="M385 96c-41 24-72 68-82 115-8 31-29 57-55 71 8-54 27-97 58-130 21-23 48-44 79-56Z"/>
+      <path fill="#D3D5DE" d="M102 265c24-54 65-99 117-130-52 43-87 96-103 159Z"/>
+      <path fill="#BEC1CC" d="M119 322c-54 42-68 102-54 170 7 35 39 33 43-2 4-37 22-77 51-111 19-21 17-64-40-57Z"/>
+      <path fill="#F1F1F3" d="M92 320c16 14 19 43 7 65-18 33-25 72-18 119-25-39-34-86-22-127 8-29 23-48 33-57Z"/>
+    </g>
+    <g id="feather-clasp">
+      <path fill="#C93744" d="M366 144 508 60c-29 58-80 101-145 128Z"/>
+      <path fill="#FF4D58" d="M366 144 493 120c-38 39-80 63-132 75Z"/>
+      <path fill="#C93744" d="M366 144 468 177c-39 10-76 3-105-5Z"/>
+      <path fill="#FF4D58" d="M366 144 468 177c-38 0-70-9-95-17Z"/>
+      <polygon fill="#E5E6EC" points="359,130 382,144 359,159 336,144"/>
+    </g>
+  </g>
+</svg>

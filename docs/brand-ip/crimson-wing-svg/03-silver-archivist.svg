@@ -1,0 +1,78 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512" role="img" aria-labelledby="title description">
+  <title id="title">Raven 银鸦：圆框眼镜女孩头像</title>
+  <desc id="description">透明底的原创女性 Q 版头像，银色短发、圆框眼镜和绯红三羽发饰。</desc>
+  <style>
+    .both-eyes-blink {
+      transform-box: view-box;
+      transform-origin: 273px 339px;
+      animation: raven-blink 6.4s cubic-bezier(.45, 0, .55, 1) infinite;
+    }
+    #feather-clasp {
+      transform-box: view-box;
+      transform-origin: 147px 155px;
+      animation: raven-feather 4.9s ease-in-out infinite;
+    }
+    @keyframes raven-blink {
+      0%, 92%, 96%, 100% { transform: scaleY(1); }
+      93.3%, 94.2% { transform: scaleY(.1); }
+    }
+    @keyframes raven-feather {
+      0%, 100% { transform: rotate(1deg); }
+      50% { transform: rotate(-1.4deg); }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .both-eyes-blink, #feather-clasp { animation: none; }
+    }
+  </style>
+  <g id="avatar">
+    <g id="hair-back">
+      <path fill="#C7CAD4" d="M27 276C38 150 121 54 243 30c119-24 219 45 244 157 23 103-38 194-107 248-50 39-96 42-130 17-27-20-13-54 15-63 47-15 79-55 81-103 2-39-22-76-60-91-45-18-96-2-122 38-16 25-21 56-14 85 9 36-18 68-52 62-41-7-76-58-71-104Z"/>
+      <path fill="#A8ABB6" d="M51 189c43-75 121-119 207-119-83 28-152 76-191 145-16 29-22 58-18 85-17-35-17-76 2-111Z"/>
+      <path fill="#ECEEF2" d="M70 179c34-52 88-88 151-98-58 27-104 65-137 115-15 23-20 48-16 72-10-31-10-62 2-89Z"/>
+      <path fill="#A8ABB6" d="M427 103c41 47 54 108 35 164-15 43-45 77-83 99 34-50 50-108 44-163-3-30-9-60 4-100Z"/>
+    </g>
+    <g id="face">
+      <path fill="#F8E8DF" d="M83 282c9-65 54-108 123-130 76-24 157 1 206 61 41 50 47 118 14 176-35 62-103 103-177 96-72-7-132-46-158-105-15-34-17-66-8-98Z"/>
+      <path fill="#F2D8CF" d="M362 164c44 32 68 81 65 136-3 91-75 162-167 159-38-2-73-14-102-34 27 11 57 18 89 18 92 0 159-67 159-153 0-49-18-93-44-126Z"/>
+      <path fill="#F5DDD5" d="M95 325c-6 64 23 115 74 147-55-16-94-59-100-112-2-17 10-31 26-35Z"/>
+    </g>
+    <g id="blush">
+      <ellipse cx="142" cy="389" rx="48" ry="21" fill="#F4AEAD"/>
+      <ellipse cx="403" cy="377" rx="44" ry="20" fill="#F4AEAD"/>
+    </g>
+    <g id="eyes" class="both-eyes-blink">
+      <path fill="#111217" d="M173 306c14-15 37-13 47 6 9 18 5 42-9 51-15 9-32-3-38-25-5-17-5-28 0-32Z"/>
+      <path fill="#111217" d="M341 300c14-13 36-9 45 10 8 18 3 41-11 49-15 8-31-5-36-27-4-17-2-28 2-32Z"/>
+      <path fill="#50525B" d="M184 318c6-5 14-4 20 2-7 0-13 4-17 10Z"/>
+      <path fill="#50525B" d="M351 312c6-4 13-2 18 3-7 0-12 3-16 8Z"/>
+    </g>
+    <g id="glasses">
+      <circle cx="196" cy="337" r="70" fill="none" stroke="#24262D" stroke-width="10"/>
+      <circle cx="365" cy="337" r="70" fill="none" stroke="#24262D" stroke-width="10"/>
+      <path fill="none" stroke="#24262D" stroke-width="10" stroke-linecap="round" d="M266 333c15-13 33-13 48 0M127 327l-32-12M435 326l31-12"/>
+    </g>
+    <g id="face-detail">
+      <path fill="none" stroke="#D2A49F" stroke-width="6" stroke-linecap="round" d="M277 395c8 5 17 5 25 0"/>
+      <path fill="none" stroke="#A74A55" stroke-width="8" stroke-linecap="round" d="M237 432c17 17 45 19 66 3"/>
+    </g>
+    <g id="hair-front">
+      <path fill="#D2D4DC" d="M47 270C47 178 94 109 173 77c67-27 149-22 205 20 30 22 53 50 67 80-66-54-145-75-224-55-62 16-116 50-145 105-9 17-12 32-11 43Z"/>
+      <path fill="#ECEEF2" d="M105 119c49-43 118-60 185-49 47 8 89 29 121 59-49-24-104-34-158-24-62 12-116 45-157 93 0-31 2-56 9-79Z"/>
+      <path fill="#A9ACB7" d="M159 91c-54 26-97 70-117 125-11 30-8 60 2 85-26-46-23-101 5-147 25-41 65-63 110-63Z"/>
+      <path fill="#F3F4F7" d="M157 101c-38 41-57 92-57 146-27-21-39-51-30-82 10-35 43-56 87-64Z"/>
+      <path fill="#B6B8C2" d="M194 92c-50 27-85 77-91 132-3 31-17 58-41 75 1-57 15-105 47-143 22-24 50-46 85-64Z"/>
+      <path fill="#E5E7EC" d="M247 79c-44 30-73 79-78 134-3 34-19 63-44 81 2-59 18-108 47-147 18-24 43-47 75-68Z"/>
+      <path fill="#A4A7B2" d="M336 85c-54 20-95 65-110 121-8 30-28 55-54 68 11-53 35-95 70-126 25-22 58-44 94-63Z"/>
+      <path fill="#C9CBD4" d="M420 126c-55 7-102 42-127 88-14 27-38 47-66 54 24-51 56-89 98-110 28-14 61-25 95-32Z"/>
+      <path fill="#8E929E" d="M441 141c15 38 12 76-7 110-9 17-23 27-40 28 7-37 3-72-13-105-8-18-4-36 12-45 19-11 36-3 48 12Z"/>
+      <path fill="#ECEEF2" d="M445 153c9 23 8 48-3 70-8 16-20 28-35 34 1-21-1-41-8-61 17 14 34 12 46-43Z"/>
+    </g>
+    <g id="feather-clasp">
+      <path fill="#C93744" d="M151 154 24 67c50 8 95 37 129 80Z"/>
+      <path fill="#FF4D58" d="M151 154 38 113c46 3 81 17 116 36Z"/>
+      <path fill="#C93744" d="M151 154 46 191c40-2 73-14 103-32Z"/>
+      <path fill="#FF4D58" d="M151 154 46 191c32-20 63-34 96-41Z"/>
+      <polygon fill="#FFFFFF" points="156,139 178,153 156,169 134,153"/>
+    </g>
+  </g>
+</svg>

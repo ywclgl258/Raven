@@ -1,0 +1,257 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Raven 绯红疾翼 · SVG 头像</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --obsidian: #09090b;
+      --surface: #151519;
+      --surface-raised: #1b1b21;
+      --hairline: #2a2a31;
+      --text: #f1f1f3;
+      --muted: #a5a5af;
+      --crimson: #ff4d58;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      min-width: 1040px;
+      background: var(--obsidian);
+      color: var(--text);
+      font-family: "Microsoft YaHei", "PingFang SC", sans-serif;
+    }
+
+    .page {
+      width: 1040px;
+      margin: 0 auto;
+      padding: 48px 0 54px;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      margin-bottom: 30px;
+    }
+
+    .brand-mark {
+      width: 46px;
+      height: 46px;
+    }
+
+    h1 {
+      margin: 0;
+      font-size: 30px;
+      letter-spacing: -.4px;
+    }
+
+    .lead {
+      margin: 6px 0 0;
+      color: var(--muted);
+      font-size: 14px;
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 16px;
+    }
+
+    .card {
+      overflow: hidden;
+      border: 1px solid var(--hairline);
+      border-radius: 20px;
+      background: var(--surface);
+    }
+
+    .portrait {
+      display: grid;
+      place-items: center;
+      height: 248px;
+      background: #111116;
+      border-bottom: 1px solid var(--hairline);
+    }
+
+    .portrait img {
+      width: 222px;
+      height: 222px;
+      object-fit: contain;
+    }
+
+    .card-body {
+      padding: 16px;
+    }
+
+    .name-row {
+      display: flex;
+      align-items: baseline;
+      gap: 8px;
+    }
+
+    .number {
+      color: var(--crimson);
+      font: 700 13px/1 "Segoe UI", sans-serif;
+    }
+
+    .name {
+      margin: 0;
+      font-size: 16px;
+    }
+
+    .note {
+      min-height: 36px;
+      margin: 10px 0 14px;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.5;
+    }
+
+    .sizes {
+      display: flex;
+      align-items: center;
+      gap: 13px;
+    }
+
+    .circle {
+      overflow: hidden;
+      border: 1px solid #393942;
+      border-radius: 50%;
+      background: #29292f;
+    }
+
+    .circle img {
+      display: block;
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+    }
+
+    .size-72 { width: 72px; height: 72px; }
+    .size-48 { width: 48px; height: 48px; }
+
+    .size-label {
+      color: var(--muted);
+      font-size: 11px;
+      line-height: 1.45;
+    }
+
+    .menu-demo {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      width: max-content;
+      margin-top: 26px;
+      padding: 8px 11px;
+      border: 1px solid var(--hairline);
+      border-radius: 15px;
+      background: var(--surface-raised);
+    }
+
+    .menu-label {
+      margin-right: 4px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .menu-avatar {
+      width: 36px;
+      height: 36px;
+      padding: 1px;
+      overflow: hidden;
+      border: 1px solid transparent;
+      border-radius: 50%;
+    }
+
+    .menu-avatar.active {
+      border-color: var(--crimson);
+    }
+
+    .menu-avatar img {
+      display: block;
+      width: 100%;
+      height: 100%;
+      border-radius: 50%;
+      background: #29292f;
+      object-fit: cover;
+    }
+  </style>
+</head>
+<body>
+  <main class="page">
+    <header class="brand">
+      <img class="brand-mark" src="../../icon-concepts/02-crimson-wing-android/source/adaptive-foreground-432.png" alt="">
+      <div>
+        <h1>Raven 绯红疾翼 · SVG 女性头像</h1>
+        <p class="lead">512 × 512 透明画布，可独立控制眼、嘴、头发和绯红羽饰。</p>
+      </div>
+    </header>
+
+    <section class="grid">
+      <article class="card">
+        <div class="portrait"><img src="01-crimson-flight.svg" alt="疾翼领航员头像"></div>
+        <div class="card-body">
+          <div class="name-row"><span class="number">01</span><h2 class="name">疾翼领航员</h2></div>
+          <p class="note">短发与单眼眨眼，适合默认头像。</p>
+          <div class="sizes">
+            <div class="circle size-72"><img src="01-crimson-flight.svg" alt=""></div>
+            <div class="circle size-48"><img src="01-crimson-flight.svg" alt=""></div>
+            <span class="size-label">72 px<br>48 px</span>
+          </div>
+        </div>
+      </article>
+
+      <article class="card">
+        <div class="portrait"><img src="02-moonlit-projection.svg" alt="夜幕放映师头像"></div>
+        <div class="card-body">
+          <div class="name-row"><span class="number">02</span><h2 class="name">夜幕放映师</h2></div>
+          <p class="note">半眯眼与银色挑染，适合影院首页。</p>
+          <div class="sizes">
+            <div class="circle size-72"><img src="02-moonlit-projection.svg" alt=""></div>
+            <div class="circle size-48"><img src="02-moonlit-projection.svg" alt=""></div>
+            <span class="size-label">72 px<br>48 px</span>
+          </div>
+        </div>
+      </article>
+
+      <article class="card">
+        <div class="portrait"><img src="03-silver-archivist.svg" alt="黑羽档案员头像"></div>
+        <div class="card-body">
+          <div class="name-row"><span class="number">03</span><h2 class="name">黑羽档案员</h2></div>
+          <p class="note">银发与圆框眼镜，适合片库和收藏。</p>
+          <div class="sizes">
+            <div class="circle size-72"><img src="03-silver-archivist.svg" alt=""></div>
+            <div class="circle size-48"><img src="03-silver-archivist.svg" alt=""></div>
+            <span class="size-label">72 px<br>48 px</span>
+          </div>
+        </div>
+      </article>
+
+      <article class="card">
+        <div class="portrait"><img src="04-night-side-tail.svg" alt="小渡鸦头像"></div>
+        <div class="card-body">
+          <div class="name-row"><span class="number">04</span><h2 class="name">小渡鸦</h2></div>
+          <p class="note">侧马尾与大笑脸，适合状态和提示。</p>
+          <div class="sizes">
+            <div class="circle size-72"><img src="04-night-side-tail.svg" alt=""></div>
+            <div class="circle size-48"><img src="04-night-side-tail.svg" alt=""></div>
+            <span class="size-label">72 px<br>48 px</span>
+          </div>
+        </div>
+      </article>
+    </section>
+
+    <div class="menu-demo" aria-label="菜单栏头像尺寸预览">
+      <span class="menu-label">菜单栏 · 36 px</span>
+      <span class="menu-avatar active"><img src="01-crimson-flight.svg" alt=""></span>
+      <span class="menu-avatar"><img src="02-moonlit-projection.svg" alt=""></span>
+      <span class="menu-avatar"><img src="03-silver-archivist.svg" alt=""></span>
+      <span class="menu-avatar"><img src="04-night-side-tail.svg" alt=""></span>
+    </div>
+  </main>
+</body>
+</html>

@@ -1,0 +1,46 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512" role="img" aria-labelledby="title description">
+  <title id="title">Raven 银鸦：极简女性头像</title>
+  <desc id="description">透明底银灰发女性头像，圆形眼镜和绯红三羽发饰。</desc>
+  <style>
+    #eyes { transform-box: view-box; transform-origin: 280px 355px; animation: silver-blink 6.1s ease-in-out infinite; }
+    @keyframes silver-blink {
+      0%, 92%, 96%, 100% { transform: scaleY(1); }
+      94%, 95% { transform: scaleY(.1); }
+    }
+    @media (prefers-reduced-motion: reduce) { #eyes { animation: none; } }
+  </style>
+  <g id="avatar">
+    <path id="hair-back" fill="#BEC1CC" d="M20 284C21 139 115 44 264 30c134-14 210 73 214 185 5 130-79 232-178 284-59 31-98-7-68-41 52-59 59-135 24-184-35-49-100-59-162-30-44 21-59 70-52 111Z"/>
+    <path fill="#DDE0E7" d="M51 246c18-114 95-173 211-183-90 29-150 84-168 174-6 8-17 17-24 25Z"/>
+    <path fill="#9C9FAC" d="M53 219C86 95 180 50 314 52c73 1 132 31 174 85-77-50-153-61-231-42-82 20-151 70-197 141Z"/>
+    <path fill="#AEB1BC" d="M51 276c0-91 53-159 131-191 72-29 152-30 209 1-129 12-211 68-253 169Z"/>
+    <g id="face">
+      <path fill="#F8E7DE" d="M101 299c10-67 62-112 138-129 76-16 148 11 184 66 32 49 39 115 7 167-36 59-104 96-170 88-64-7-117-45-143-101-19-37-23-66-16-91Z"/>
+      <path fill="#F0D6CE" d="M372 185c32 32 47 78 40 128-9 78-78 133-157 128 54-8 96-54 108-119 6-35 4-85 9-137Z"/>
+    </g>
+    <ellipse fill="#F4B1B2" cx="157" cy="408" rx="49" ry="22"/>
+    <ellipse fill="#F4B1B2" cx="420" cy="390" rx="42" ry="20"/>
+    <g id="eyes">
+      <ellipse fill="#0D0F14" cx="209" cy="350" rx="21" ry="50"/>
+      <ellipse fill="#0D0F14" cx="366" cy="342" rx="21" ry="49"/>
+      <circle cx="207" cy="353" r="68" fill="none" stroke="#20222A" stroke-width="9"/>
+      <circle cx="368" cy="353" r="68" fill="none" stroke="#20222A" stroke-width="9"/>
+      <path fill="none" stroke="#20222A" stroke-width="9" stroke-linecap="round" d="M275 346c15-11 30-11 45 0M139 345l-25-8M436 344l26-10"/>
+    </g>
+    <path id="face-detail" fill="none" stroke="#9D424C" stroke-width="7" stroke-linecap="round" d="M259 447c18 12 40 13 60 0"/>
+    <path id="hair-front" fill="#D0D2DA" d="M54 288C52 212 91 150 154 116c59-32 141-37 195 1 32 22 56 46 70 75-52-39-117-49-178-25-57 23-90 68-96 121-19 22-38 34-56 44Z"/>
+    <path fill="#ECEEF3" d="M106 155c47-49 134-68 198-51 45 12 84 33 110 58-69-32-142-38-216-13Z"/>
+    <path fill="#B3B6C1" d="M136 278c29-55 93-79 140-53 32 18 56 39 72 60-47-29-111-34-159 24Z"/>
+    <path fill="#F3F4F7" d="M173 91c-54 28-91 78-99 141-1 15-3 29-5 42-25-28-25-81 4-122 22-25 56-44 100-61Z"/>
+    <path fill="#B0B3BE" d="M233 99c-53 36-78 91-72 154-23-22-35-59-31-97 7-49 43-80 91-92Z"/>
+    <path fill="#E7E9ED" d="M243 114c-41 43-50 100-32 151-28-27-38-70-27-106 12-38 34-51 66-57 35 8 60 30 74 68-27-29-52-51-81-56Z"/>
+    <path fill="#989CA8" d="M395 127c-47 33-66 83-59 146-20-35-22-74-9-109 18-44 44-63 77-78 34 12 55 33 66 63-24-29-52-39-75-22Z"/>
+    <g id="feather-clasp">
+      <path fill="#FF4D58" d="M154 149 45 62 30 121 104 146Z"/>
+      <path fill="#E33D49" d="M154 149 91 116 45 62 32 143Z"/>
+      <path fill="#FF4D58" d="M184 161 119 195 117 256Z"/>
+      <path fill="#D93643" d="M154 154 117 256 188 205Z"/>
+      <polygon fill="#F1F1F3" points="155,208 181,219 170,247 145,236"/>
+    </g>
+  </g>
+</svg>
