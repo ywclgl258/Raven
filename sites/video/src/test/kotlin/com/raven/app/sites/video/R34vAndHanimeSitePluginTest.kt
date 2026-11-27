@@ -721,4 +721,43 @@ class R34vAndHanimeSitePluginTest {
         </div>
         </body></html>
     """.trimIndent()
+
+    @Test
+    fun `hanime1 exposes webview login with a credential fallback and imports verified cookies`() = runTest {
+        val fakeHttp = FakeHttpClientAdapter()
+        val store = InMemorySiteSessionStore()
+
+        fakeHttp.onGetDynamic("https://hanime1.me/") {
+            SiteHttpResponse(code = 200, finalUrl = "https://hanime1.me/", body = "<html>ok</html>".toByteArray())
+        }
+        val plugin = HanimeSitePlugin(fakeHttp, store, rateLimitBackoffMs = 0L)
+
+        // Primary path is the site's own browser flow; credential POST stays available as fallback.
+        val mode = plugin.authProvider.mode
+        assertTrue(mode is AuthMode.WebViewCookie)
+        mode as AuthMode.WebViewCookie
+        assertEquals("https://hanime1.me/login", mode.loginUrl)
+        assertTrue(mode.requiredCookies.isNotEmpty())
+        assertTrue(plugin.authProvider.supportsCredentialFallback)
+
+        // WebView import persists the verified session and reports signed in.
+        val imported = plugin.authProvider.importCookies(
+            mapOf("PHPSESSID" to "php-sess-1", "cf_clearance" to "cf-clear-1"),
+        )
+        assertTrue(imported.isAuthenticated)
+        assertEquals("php-sess-1", store.getCookies(SiteId.HANIME1)["PHPSESSID"])
+        assertTrue(plugin.authProvider.currentAuthState().isAuthenticated)
+
+        // Cookies without a recognisable session are rejected before touching the store.
+        store.clearSite(SiteId.HANIME1)
+        var rejected: Throwable? = null
+        try {
+            plugin.authProvider.importCookies(mapOf("unrelated" to "value"))
+        } catch (e: Throwable) {
+            rejected = e
+        }
+        assertTrue(rejected is SiteException.AuthRequired)
+        assertFalse(plugin.authProvider.currentAuthState().isAuthenticated)
+        assertTrue(store.getCookies(SiteId.HANIME1).isEmpty())
+    }
 }

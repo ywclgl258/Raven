@@ -330,6 +330,65 @@ fun SiteAccountScreenContent(
                                 )
                             }
                         }
+
+                        // WebView-first sites (e.g. Hanime1) may also accept a direct credential POST.
+                        // Offer it as a fallback entry without removing the browser flow.
+                        if (uiState.supportsCredentialForm) {
+                            item(key = "account_credential_fallback_form") {
+                                RavenGroupedSection(
+                                    title = "账号密码登录（备用）",
+                                    footer = "网页登录是首选方式；若站点当前允许，也可直接使用账号密码。密码仅用于当次换取会话，绝不明文保存。",
+                                ) {
+                                    Column(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(16.dp),
+                                        verticalArrangement = Arrangement.spacedBy(12.dp),
+                                    ) {
+                                        SettingsTextField(
+                                            value = uiState.usernameInput,
+                                            onValueChange = onUsernameChange,
+                                            label = "用户名或邮箱",
+                                            placeholder = "输入站点账号",
+                                            enabled = !uiState.isSubmitting,
+                                            keyboardOptions = KeyboardOptions(
+                                                keyboardType = KeyboardType.Email,
+                                                imeAction = ImeAction.Next,
+                                            ),
+                                            modifier = Modifier.testTag("site_account_username_field"),
+                                        )
+
+                                        SettingsTextField(
+                                            value = uiState.passwordInput,
+                                            onValueChange = onPasswordChange,
+                                            label = "密码",
+                                            placeholder = "输入账号密码",
+                                            enabled = !uiState.isSubmitting,
+                                            isPassword = true,
+                                            passwordVisible = passwordVisible,
+                                            onTogglePasswordVisibility = { passwordVisible = !passwordVisible },
+                                            keyboardOptions = KeyboardOptions(
+                                                keyboardType = KeyboardType.Password,
+                                                imeAction = ImeAction.Done,
+                                            ),
+                                            keyboardActions = KeyboardActions(onDone = { onLogin() }),
+                                            modifier = Modifier.testTag("site_account_password_field"),
+                                        )
+
+                                        SettingsPrimaryButton(
+                                            text = if (uiState.authState.isAuthenticated) "重新登录并刷新会话" else "登录",
+                                            icon = Icons.AutoMirrored.Rounded.Login,
+                                            loading = uiState.isSubmitting,
+                                            enabled = uiState.usernameInput.isNotBlank() && uiState.passwordInput.isNotEmpty(),
+                                            onClick = onLogin,
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .testTag("site_account_login_button"),
+                                        )
+                                    }
+                                }
+                            }
+                        }
                     }
 
                     AuthMode.None -> Unit

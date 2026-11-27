@@ -489,4 +489,39 @@ class EhSitesPluginTest {
         }
         assertTrue(runCatching { eh.searchSource!!.search(FeedRequest(SiteId.EHENTAI, query = "ban")) }.exceptionOrNull() is SiteException.RateLimited)
     }
+
+    @Test
+    fun `e-hentai and exhentai expose native discovery sections and build their URLs`() {
+        val sections = EhSharedEngine.buildSections()
+        val ids = sections.map { it.id }.toSet()
+        assertTrue("latest" in ids)
+        assertTrue("popular" in ids)
+        assertTrue("toplist" in ids)
+        assertTrue("watched" in ids)
+        assertTrue("mytags" in ids)
+
+        // Both hostnames share the same native surfaces.
+        val eh = EhentaiSitePlugin(FakeHttpClientAdapter(), InMemorySiteSessionStore())
+        val ex = ExhentaiSitePlugin(FakeHttpClientAdapter(), InMemorySiteSessionStore())
+        assertEquals(ids, eh.descriptor.sections.map { it.id }.toSet())
+        assertEquals(ids, ex.descriptor.sections.map { it.id }.toSet())
+
+        // Native sections resolve to the site's own endpoints rather than the default gallery list.
+        val engine = EhSharedEngine(
+            descriptor = eh.descriptor,
+            httpClient = FakeHttpClientAdapter(),
+            sessionStore = InMemorySiteSessionStore(),
+            requiresAuthGate = false,
+        )
+        // The engine appends its inline-view parameter, so assert on path + native params.
+        val toplist = engine.resolveFeedUrl(FeedRequest(SiteId.EHENTAI, section = "toplist"))
+        assertTrue(toplist.startsWith("https://e-hentai.org/toplist.php?"))
+        assertTrue(toplist.contains("tl=1"))
+        assertTrue(engine.resolveFeedUrl(FeedRequest(SiteId.EHENTAI, section = "watched"))
+            .startsWith("https://e-hentai.org/watched"))
+        assertTrue(engine.resolveFeedUrl(FeedRequest(SiteId.EHENTAI, section = "mytags"))
+            .startsWith("https://e-hentai.org/mytags"))
+        assertTrue(engine.resolveFeedUrl(FeedRequest(SiteId.EHENTAI, section = "popular"))
+            .startsWith("https://e-hentai.org/popular"))
+    }
 }

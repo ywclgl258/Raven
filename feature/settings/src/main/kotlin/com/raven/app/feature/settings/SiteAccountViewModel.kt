@@ -25,6 +25,8 @@ data class SiteAccountUiState(
     val site: SiteDescriptor? = null,
     val authMode: AuthMode = AuthMode.None,
     val requiresAuthGate: Boolean = false,
+    /** Plugin implements credential POST even though its primary mode is WebView-based. */
+    val credentialFallbackSupported: Boolean = false,
     val authState: AuthState = AuthState(isAuthenticated = false),
     val usernameInput: String = "",
     val passwordInput: String = "",
@@ -35,7 +37,10 @@ data class SiteAccountUiState(
     val successMessage: String? = null,
 ) {
     val supportsCredentialForm: Boolean
-        get() = authMode is AuthMode.FormCredentials || authMode is AuthMode.JwtBearer
+        get() = authMode is AuthMode.FormCredentials ||
+            authMode is AuthMode.JwtBearer ||
+            // WebView-first sites may still expose a working credential fast path (e.g. Hanime1).
+            credentialFallbackSupported
 
     val supportsWebViewLogin: Boolean
         get() = authMode is AuthMode.WebViewCookie
@@ -77,6 +82,7 @@ class SiteAccountViewModel(
             site = plugin?.descriptor,
             authMode = plugin?.authProvider?.mode ?: AuthMode.None,
             requiresAuthGate = plugin?.authProvider?.requiresAuthGate == true,
+            credentialFallbackSupported = plugin?.authProvider?.supportsCredentialFallback == true,
         ),
     )
     val uiState: StateFlow<SiteAccountUiState> = _uiState.asStateFlow()

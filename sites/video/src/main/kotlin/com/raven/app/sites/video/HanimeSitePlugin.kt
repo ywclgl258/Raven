@@ -146,7 +146,25 @@ class HanimeSitePlugin(
     }
 
     override val authProvider: AuthProvider = object : AuthProvider {
-        override val mode: AuthMode = AuthMode.FormCredentials
+        /**
+         * Hanime1 guards its login form with per-session Cloudflare / Laravel challenge tokens, so a
+         * plain POST frequently fails with "站点可能要求浏览器验证". WebViewCookie mirrors the
+         * site's own browser flow and is the primary path; `loginWithCredentials` stays available as
+         * a fast path, and both write into the same session bucket below.
+         */
+        override val mode: AuthMode = AuthMode.WebViewCookie(
+            loginUrl = "$BASE_URL/login",
+            targetUrl = "$BASE_URL/",
+            allowedHosts = setOf(
+                "hanime1.me",
+                "www.hanime1.me",
+                "challenges.cloudflare.com",
+            ),
+            requiredCookies = setOf("cf_clearance"),
+            optionalCookies = setOf("PHPSESSID", "__cf_bm", "laravel_session"),
+        )
+
+        override val supportsCredentialFallback: Boolean = true
 
         override suspend fun loginWithCredentials(username: String, password: String): AuthState {
             val trimmedEmail = username.trim()
@@ -229,14 +247,55 @@ class HanimeSitePlugin(
             sessionStore.clearSite(SiteId.HANIME1)
         }
 
+        /**
+         * WebView / manual cookie import path. Verifies the imported session against the site
+         * before persisting so an expired or invalid cookie set cannot masquerade as signed in.
+         */
+        override suspend fun importCookies(cookies: Map<String, String>): AuthState {
+            if (cookies.isEmpty() || !hasHanimeSessionCookie(cookies)) {
+                throw SiteException.AuthRequired(
+                    "未获取到有效的 Hanime1 会话 Cookie，请重新登录",
+                    siteId = SiteId.HANIME1,
+                )
+            }
+            val verifyResp = http.getText(
+                url = "$BASE_URL/",
+                siteId = SiteId.HANIME1,
+                headers = mapOf("Cookie" to VideoSiteSupport.formatCookieHeader(cookies)),
+                allowCache = false,
+            )
+            if (verifyResp.code == 403 || verifyResp.code == 429 || verifyResp.code >= 500) {
+                throw VideoSiteSupport.toSiteException(verifyResp, SiteId.HANIME1)
+            }
+            if (verifyResp.code != 200) {
+                throw SiteException.AuthRequired("Hanime1 会话验证失败（HTTP ${verifyResp.code}）", siteId = SiteId.HANIME1)
+            }
+            sessionStore.replaceCookies(SiteId.HANIME1, cookies)
+            sessionStore.saveSecret(SiteId.HANIME1, SESSION_MARKER_KEY, "1")
+            return AuthState(
+                isAuthenticated = true,
+                username = sessionStore.getUsername(SiteId.HANIME1),
+                epoch = sessionStore.authEpoch(SiteId.HANIME1),
+            )
+        }
+
         override suspend fun currentAuthState(): AuthState {
-            val isAuthenticated = sessionStore.getSecret(SiteId.HANIME1, SESSION_MARKER_KEY) == "1"
+            // WebView login writes cookies only (no marker), credential login writes the marker.
+            // Either path counts as signed in so both entry points stay consistent.
+            val hasMarker = sessionStore.getSecret(SiteId.HANIME1, SESSION_MARKER_KEY) == "1"
+            val hasSessionCookie = hasHanimeSessionCookie(sessionStore.getCookies(SiteId.HANIME1))
+            val isAuthenticated = hasMarker || hasSessionCookie
             return AuthState(
                 isAuthenticated = isAuthenticated,
                 username = if (isAuthenticated) sessionStore.getUsername(SiteId.HANIME1) else null,
                 epoch = sessionStore.authEpoch(SiteId.HANIME1),
             )
         }
+
+        private fun hasHanimeSessionCookie(cookies: Map<String, String>): Boolean =
+            cookies["PHPSESSID"]?.isNotBlank() == true ||
+                cookies["laravel_session"]?.isNotBlank() == true ||
+                cookies["cf_clearance"]?.isNotBlank() == true
     }
 
     override val linkResolver: LinkResolver = object : LinkResolver {

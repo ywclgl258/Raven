@@ -240,8 +240,14 @@ class EhSharedEngine(
         }
 
         var builder = ComicUrl.requireParse(descriptor.baseUrl, siteId)
-        if (isPopularRequest(request)) {
-            builder = builder.addPathSegment("popular")
+        when (request.section) {
+            // Native pages that share the standard gallery-list markup.
+            "toplist" -> builder = builder.addPathSegment("toplist.php").setQueryParameter("tl", "1")
+            "watched" -> builder = builder.addPathSegment("watched")
+            "mytags" -> builder = builder.addPathSegment("mytags")
+            else -> if (isPopularRequest(request)) {
+                builder = builder.addPathSegment("popular")
+            }
         }
 
         val categoryKey = resolveCategoryKey(request.category)
@@ -982,6 +988,9 @@ class EhSharedEngine(
         val query = request.query
         return when {
             isPopularRequest(request) -> "热门画廊"
+            section == "toplist" -> "排行榜"
+            section == "watched" -> "我的关注"
+            section == "mytags" -> "我的标签"
             !category.isNullOrBlank() -> CATEGORIES[resolveCategoryKey(category)] ?: category
             section != null && section in CATEGORIES -> CATEGORIES[section] ?: "画廊分类"
             !query.isNullOrBlank() -> query
@@ -1096,7 +1105,11 @@ class EhSharedEngine(
             "misc" to "1",
         )
 
-        private val VALID_CURSOR_PATHS: Set<String> = setOf("/", "/popular", "/popular/")
+        private val VALID_CURSOR_PATHS: Set<String> = setOf(
+            "/", "/popular", "/popular/",
+            // Native discovery surfaces whose pagination links (e.g. `/toplist.php?...&p=2`) are valid.
+            "/toplist.php", "/watched", "/watched/", "/mytags", "/mytags/",
+        )
         private val GALLERY_PATH_REGEX = Regex("^/g/(\\d+)/([a-fA-F0-9]+)/?$")
         private val IMAGE_PATH_REGEX = Regex("^/s/([a-fA-F0-9]+)/(\\d+)-(\\d+)/?$")
         private val PASS_HASH_REGEX = Regex("^[A-Za-z0-9_-]{16,128}$")
@@ -1156,8 +1169,12 @@ class EhSharedEngine(
             value.isNotEmpty() && value.all { it.code in 33..126 && it != ';' }
 
         fun buildSections(): List<SiteSectionSpec> = buildList {
+            // Native site surfaces, mirroring EhViewer's discovery entries.
             add(SiteSectionSpec(id = "latest", title = "最新画廊", defaultSort = FeedSort.NEWEST))
             add(SiteSectionSpec(id = "popular", title = "热门画廊", defaultSort = FeedSort.POPULAR))
+            add(SiteSectionSpec(id = "toplist", title = "排行榜", subtitle = "站内评分与浏览榜"))
+            add(SiteSectionSpec(id = "watched", title = "我的关注", subtitle = "已关注的画廊更新"))
+            add(SiteSectionSpec(id = "mytags", title = "我的标签", subtitle = "已收藏的标签组合"))
             CATEGORIES.forEach { (key, title) ->
                 add(SiteSectionSpec(id = key, title = title, category = key, defaultSort = FeedSort.NEWEST))
             }

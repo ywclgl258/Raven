@@ -105,6 +105,12 @@ interface AuthProvider {
     val mode: AuthMode
     val requiresAuthGate: Boolean get() = false
 
+    /**
+     * True when this provider implements a working credential POST even though its primary
+     * [mode] is WebView-based. Lets the account screen offer both paths without site-ID branching.
+     */
+    val supportsCredentialFallback: Boolean get() = false
+
     suspend fun loginWithCredentials(username: String, password: String): AuthState =
         throw SiteException.Unsupported("Credential login is not supported for this site")
 
