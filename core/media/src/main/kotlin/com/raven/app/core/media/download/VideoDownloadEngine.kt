@@ -47,6 +47,7 @@ import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
@@ -159,6 +160,8 @@ class VideoDownloadEngine(
     private val projectionMutex = Mutex()
     private val mutationMutex = Mutex()
     private var progressPollJob: Job? = null
+    private val releasingIds = mutableSetOf<String>()
+    private val importingIds = mutableSetOf<String>()
 
     private val _changes = MutableStateFlow(0L)
     val changes: StateFlow<Long> = _changes.asStateFlow()
@@ -188,22 +191,47 @@ class VideoDownloadEngine(
             minRetryCount = MIN_RETRY_COUNT
             addListener(object : DownloadManager.Listener {
                 override fun onInitialized(downloadManager: DownloadManager) {
+                    // Adopt pre-upgrade waiting transfers before resuming. Existing active transfers
+                    // and explicit user stop reasons remain owned by Media3.
+                    downloadManager.currentDownloads.filter { it.state == Download.STATE_QUEUED }.forEach {
+                        importingIds.add(it.request.id)
+                        downloadManager.setStopReason(it.request.id, STOP_REASON_WAITING_TURN)
+                    }
+                    if (storageRootManager.canWriteDownloads) downloadManager.resumeDownloads()
                     _changes.update { it + 1 }
-                    applicationScope.launch(dispatchers.io) { projectAllToRepository() }
+                    applicationScope.launch(dispatchers.io) {
+                        projectAllToRepository()
+                        requestQueueSchedule()
+                    }
                     if (downloadManager.currentDownloads.isNotEmpty()) {
                         applicationScope.launch(dispatchers.main) { ensureProgressPolling() }
                     }
+                }
+
+                override fun onDownloadsPausedChanged(downloadManager: DownloadManager, downloadsPaused: Boolean) {
+                    if (!downloadsPaused) requestQueueSchedule()
+                }
+
+                override fun onRequirementsStateChanged(
+                    downloadManager: DownloadManager,
+                    requirements: Requirements,
+                    notMetRequirements: Int,
+                ) {
+                    if (notMetRequirements == 0) requestQueueSchedule()
                 }
 
                 override fun onDownloadRemoved(downloadManager: DownloadManager, download: Download) {
                     val id = download.request.id
                     submittedIds.remove(id)
                     lastProjectedSnapshots.remove(id)
+                    releasingIds.remove(id)
+                    importingIds.remove(id)
                     val removal = generationGuard.removalDeferred(id) ?: generationGuard.beginRemoval(id)
                     if (removal != null) {
                         cleanupRemoved(id, removal)
                     }
                     _changes.update { it + 1 }
+                    requestQueueSchedule()
                 }
 
                 override fun onDownloadChanged(
@@ -213,6 +241,8 @@ class VideoDownloadEngine(
                 ) {
                     val id = download.request.id
                     submittedIds.remove(id)
+                    if (!download.isWaitingForTurn()) releasingIds.remove(id)
+                    if (download.state != Download.STATE_QUEUED) importingIds.remove(id)
                     val meta = decodeMeta(download)
                     val failureDetail = finalException?.let {
                         DownloadErrorClassifier.classify(it, DownloadStage.DOWNLOADING_PAGE, clockMs()).message
@@ -290,13 +320,11 @@ class VideoDownloadEngine(
 
                     applicationScope.launch(dispatchers.io) {
                         projectDownloadToRepository(download, finalException)
+                        requestQueueSchedule()
                     }
                     _changes.update { it + 1 }
                 }
             })
-            if (storageRootManager.canWriteDownloads) {
-                resumeDownloads()
-            }
         }
     }
 
@@ -438,10 +466,16 @@ class VideoDownloadEngine(
         }
         val request = requestBuilder.build()
 
-        submittedIds.add(id)
+        if (!submittedIds.add(id)) return id
         try {
-            DownloadService.sendResumeDownloads(appContext, VideoDownloadService::class.java, false)
-            DownloadService.sendAddDownload(appContext, VideoDownloadService::class.java, request, false)
+            val existing = manager.downloadIndex.getDownload(id)
+            if (existing?.state in setOf(Download.STATE_QUEUED, Download.STATE_STOPPED, Download.STATE_DOWNLOADING, Download.STATE_RESTARTING)) {
+                submittedIds.remove(id)
+                return id
+            }
+            DownloadService.sendAddDownload(
+                appContext, VideoDownloadService::class.java, request, STOP_REASON_WAITING_TURN, false,
+            )
             applicationScope.launch(dispatchers.io) {
                 projectionMutex.withLock {
                     if (generationGuard.isRemoving(id) || generationGuard.isStale(id, expectedGeneration)) {
@@ -468,11 +502,11 @@ class VideoDownloadEngine(
                             kind = DownloadKind.VIDEO,
                             status = DownloadStatus.QUEUED,
                             quality = meta.quality,
-                            groupName = meta.groupName,
-                            priority = meta.priority,
+                            groupName = existing?.groupName ?: meta.groupName,
+                            priority = existing?.priority ?: meta.priority,
                             storageLocation = storageRootManager.activeLocation(),
                             localPath = storageRootManager.layout().root.absolutePath,
-                            createdAt = meta.createdAt.takeIf { it > 0L } ?: clockMs(),
+                            createdAt = existing?.createdAt ?: meta.createdAt.takeIf { it > 0L } ?: clockMs(),
                             updatedAt = clockMs(),
                         ),
                     )
@@ -485,18 +519,11 @@ class VideoDownloadEngine(
         return id
     }
 
-    fun setPaused(id: String, paused: Boolean) {
-        if (!paused) {
-            storageRootManager.checkDownloadsAllowed()
-            DownloadService.sendResumeDownloads(appContext, VideoDownloadService::class.java, false)
-        }
-        DownloadService.sendSetStopReason(
-            appContext,
-            VideoDownloadService::class.java,
-            id,
-            if (paused) STOP_REASON_MANUAL_PAUSE else Download.STOP_REASON_NONE,
-            false,
-        )
+    suspend fun setPaused(id: String, paused: Boolean) = withContext(dispatchers.main) {
+        if (!paused) storageRootManager.checkDownloadsAllowed()
+        val stopReason = if (paused) STOP_REASON_MANUAL_PAUSE else STOP_REASON_WAITING_TURN
+        DownloadService.sendSetStopReason(appContext, VideoDownloadService::class.java, id, stopReason, false)
+        if (!paused) DownloadService.sendResumeDownloads(appContext, VideoDownloadService::class.java, false)
     }
 
     suspend fun retryFailed(id: String): Boolean = withContext(dispatchers.io) {
@@ -580,6 +607,61 @@ class VideoDownloadEngine(
             throw error
         }
     }
+
+    suspend fun movePriority(id: String, delta: Int) = reorderWaiting(id) { it - delta }
+
+    suspend fun prioritize(id: String) = reorderWaiting(id) { 0 }
+
+    private suspend fun reorderWaiting(id: String, destination: (Int) -> Int) = withContext(dispatchers.main) {
+        projectionMutex.withLock {
+            val queue = orderedWaitingDownloads().toMutableList()
+            val from = queue.indexOfFirst { it.request.id == id }
+            check(from >= 0) { "该视频已离开等待队列，无法调整顺序" }
+            val to = destination(from).coerceIn(queue.indices)
+            if (to != from) {
+                queue.add(to, queue.removeAt(from))
+                val priorities = queue.mapIndexed { index, download -> download.request.id to queue.size - index }.toMap()
+                withContext(dispatchers.io) { downloadStateRepository.updatePriorities(priorities) }
+            }
+        }
+        requestQueueSchedule()
+    }
+
+    private suspend fun orderedWaitingDownloads(): List<Download> {
+        val rows = withContext(dispatchers.io) {
+            downloadStateRepository.observeByStatus(DownloadStatus.QUEUED).first().associateBy { it.id }
+        }
+        return manager.currentDownloads
+            .filter { it.isWaitingForTurn() && it.request.id !in releasingIds && !generationGuard.isRemoving(it.request.id) }
+            .sortedWith(
+                compareByDescending<Download> { rows[it.request.id]?.priority ?: decodeMeta(it)?.priority ?: 0 }
+                    .thenBy { rows[it.request.id]?.createdAt ?: it.startTimeMs }
+                    .thenBy { it.request.id },
+            )
+    }
+
+    private fun requestQueueSchedule() {
+        applicationScope.launch(dispatchers.main) {
+            projectionMutex.withLock {
+                if (!canDispatch()) return@withLock
+                val waiting = orderedWaitingDownloads()
+                if (!canDispatch()) return@withLock
+                val occupied = manager.currentDownloads.count { download ->
+                    download.state == Download.STATE_DOWNLOADING || download.state == Download.STATE_QUEUED ||
+                        download.state == Download.STATE_RESTARTING
+                } + releasingIds.size
+                waiting.take((MAX_PARALLEL_DOWNLOADS - occupied).coerceAtLeast(0)).forEach { download ->
+                    val id = download.request.id
+                    // Reserve the slot until Media3 acknowledges the asynchronous stop-reason change.
+                    releasingIds.add(id)
+                    manager.setStopReason(id, Download.STOP_REASON_NONE)
+                }
+            }
+        }
+    }
+
+    private fun canDispatch(): Boolean = manager.isInitialized && !manager.downloadsPaused &&
+        importingIds.isEmpty() && manager.notMetRequirements == 0 && storageRootManager.canWriteDownloads
 
     fun listDownloads(): List<Download> = buildList {
         manager.downloadIndex.getDownloads().use { cursor ->
@@ -758,13 +840,17 @@ class VideoDownloadEngine(
         const val MAX_PARALLEL_DOWNLOADS: Int = 2
         const val MIN_RETRY_COUNT: Int = 3
         const val STOP_REASON_MANUAL_PAUSE: Int = 1
+        internal const val STOP_REASON_WAITING_TURN: Int = 2
+
+        private fun Download.isWaitingForTurn(): Boolean =
+            state == Download.STATE_STOPPED && stopReason == STOP_REASON_WAITING_TURN
         const val PROGRESS_POLL_INTERVAL_MS: Long = 500L
 
         fun mapMedia3State(download: Download): DownloadStatus = when (download.state) {
             Download.STATE_COMPLETED -> DownloadStatus.COMPLETED
             Download.STATE_DOWNLOADING -> DownloadStatus.DOWNLOADING
             Download.STATE_FAILED -> DownloadStatus.FAILED
-            Download.STATE_STOPPED -> DownloadStatus.PAUSED
+            Download.STATE_STOPPED -> if (download.isWaitingForTurn()) DownloadStatus.QUEUED else DownloadStatus.PAUSED
             Download.STATE_REMOVING -> DownloadStatus.CANCELLED
             Download.STATE_QUEUED,
             Download.STATE_RESTARTING,

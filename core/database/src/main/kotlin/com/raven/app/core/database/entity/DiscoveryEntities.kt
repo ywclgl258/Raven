@@ -95,3 +95,21 @@ data class SearchHistoryEntity(
     @ColumnInfo(name = "scope") val scope: SearchScope,
     @ColumnInfo(name = "searched_at") val searchedAt: Long,
 )
+
+@Entity(
+    tableName = "series_follows",
+    primaryKeys = ["site_id", "series_id"],
+    indices = [
+        Index(value = ["site_id"]),
+    ],
+)
+data class SeriesFollowEntity(
+    @ColumnInfo(name = "site_id") val siteId: String,
+    @ColumnInfo(name = "series_id") val seriesId: String,
+    @ColumnInfo(name = "title") val title: String,
+    @ColumnInfo(name = "url") val url: String,
+    @ColumnInfo(name = "cover_url") val coverUrl: String = "",
+    @ColumnInfo(name = "created_at") val createdAt: Long,
+    @ColumnInfo(name = "last_checked_at") val lastCheckedAt: Long? = null,
+    @ColumnInfo(name = "seen_chapter_ids") val seenChapterIds: List<String> = emptyList(),
+)

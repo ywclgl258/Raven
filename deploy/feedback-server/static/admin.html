@@ -1,0 +1,165 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex, nofollow">
+  <title>Raven 反馈后台</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --canvas: #09090b;
+      --surface: #121216;
+      --raised: #1b1b22;
+      --ink: #f5f5f7;
+      --muted: #9e9ea8;
+      --line: #2a2a33;
+      --accent: #ff4d58;
+      --ok: #30d158;
+      --warn: #ffd60a;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: var(--canvas); color: var(--ink); font: 15px/1.55 system-ui, "Segoe UI", sans-serif; }
+    header, main { width: min(1180px, calc(100% - 32px)); margin: 0 auto; }
+    header { display: flex; justify-content: space-between; align-items: center; min-height: 72px; }
+    h1 { font-size: 1.35rem; margin: 0; }
+    h1 span { color: var(--accent); }
+    button, input, select, textarea { font: inherit; color: inherit; }
+    button, .linkish { border: 0; border-radius: 12px; min-height: 40px; padding: 8px 14px; background: var(--accent); color: #13090a; font-weight: 700; cursor: pointer; }
+    button.ghost { background: var(--raised); color: var(--ink); border: 1px solid var(--line); }
+    input, select, textarea { width: 100%; border: 1px solid var(--line); border-radius: 12px; background: var(--raised); padding: 10px 12px; }
+    textarea { min-height: 92px; resize: vertical; }
+    .login, .panel, .card { background: var(--surface); border: 1px solid var(--line); border-radius: 18px; }
+    .login { width: min(420px, calc(100% - 32px)); margin: 10vh auto; padding: 28px; display: grid; gap: 12px; }
+    .toolbar, .stats { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+    .stats span, .pill { border: 1px solid var(--line); border-radius: 999px; padding: 4px 10px; color: var(--muted); font-variant-numeric: tabular-nums; }
+    .layout { display: grid; grid-template-columns: 340px 1fr; gap: 16px; padding-bottom: 40px; }
+    .list { display: grid; gap: 8px; align-content: start; max-height: calc(100vh - 150px); overflow: auto; }
+    .card { padding: 12px 14px; text-align: left; background: var(--surface); color: inherit; }
+    .card.active { border-color: var(--accent); }
+    .card small, .muted { color: var(--muted); }
+    .detail { padding: 18px; display: grid; gap: 12px; }
+    pre { white-space: pre-wrap; background: #070709; border-radius: 12px; padding: 12px; max-height: 280px; overflow: auto; }
+    .hidden { display: none; }
+    .error { color: #ff8a84; }
+    @media (max-width: 860px) { .layout { grid-template-columns: 1fr; } .list { max-height: 320px; } }
+  </style>
+</head>
+<body>
+  <form id="login" class="login hidden">
+    <h1>Raven <span>反馈后台</span></h1>
+    <p class="muted">口令只保存在这台 VPS 的环境文件里，不会写入仓库。</p>
+    <input id="password" type="password" autocomplete="current-password" placeholder="管理口令" required minlength="12">
+    <button type="submit">登录</button>
+    <p id="loginError" class="error"></p>
+  </form>
+  <div id="app" class="hidden">
+    <header>
+      <h1>Raven <span>反馈</span></h1>
+      <div class="toolbar">
+        <button class="ghost" id="exportHint" type="button">本地整理：pull-feedback.ps1</button>
+        <button class="ghost" id="logout" type="button">退出</button>
+      </div>
+    </header>
+    <main>
+      <div class="stats" id="stats"></div>
+      <div class="toolbar" style="margin: 14px 0;">
+        <select id="status" style="max-width: 160px;">
+          <option value="all">全部状态</option>
+          <option value="new">新反馈</option>
+          <option value="triaged">已分拣</option>
+          <option value="in_progress">处理中</option>
+          <option value="resolved">已解决</option>
+          <option value="wontfix">不修复</option>
+          <option value="duplicate">重复</option>
+        </select>
+        <select id="source" style="max-width: 140px;">
+          <option value="all">全部来源</option>
+          <option value="app">应用</option>
+          <option value="website">官网</option>
+        </select>
+        <input id="query" placeholder="搜索编号、标题、设备" style="max-width: 280px;">
+      </div>
+      <div class="layout">
+        <div class="list" id="list"></div>
+        <section class="panel detail" id="detail"><p class="muted">选择一条反馈。</p></section>
+      </div>
+    </main>
+  </div>
+  <script>
+    const $ = (id) => document.getElementById(id);
+    let selected = null;
+    async function api(path, options = {}) {
+      const response = await fetch(path, { credentials: "same-origin", headers: { "Content-Type": "application/json" }, ...options });
+      if (response.status === 401) { showLogin(); throw new Error("unauthorized"); }
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.error || "请求失败");
+      return data;
+    }
+    function showLogin() { $("login").classList.remove("hidden"); $("app").classList.add("hidden"); }
+    function showApp() { $("login").classList.add("hidden"); $("app").classList.remove("hidden"); }
+    async function boot() {
+      try { await api("/api/admin/session"); showApp(); await refresh(); }
+      catch { showLogin(); }
+    }
+    $("login").addEventListener("submit", async (event) => {
+      event.preventDefault();
+      $("loginError").textContent = "";
+      try {
+        await api("/api/admin/login", { method: "POST", body: JSON.stringify({ password: $("password").value }) });
+        $("password").value = "";
+        showApp();
+        await refresh();
+      } catch (error) { $("loginError").textContent = error.message === "unauthorized" ? "口令不正确" : error.message; }
+    });
+    $("logout").addEventListener("click", async () => { await api("/api/admin/logout", { method: "POST", body: "{}" }); showLogin(); });
+    $("exportHint").addEventListener("click", () => navigator.clipboard.writeText(".\\deploy\\pull-feedback.ps1"));
+    for (const id of ["status", "source", "query"]) $(id).addEventListener("input", refresh);
+    async function refresh() {
+      const params = new URLSearchParams({ status: $("status").value, source: $("source").value, q: $("query").value });
+      const data = await api("/api/admin/tickets?" + params);
+      const counts = data.counts || {};
+      $("stats").innerHTML = Object.entries(counts).map(([name, count]) => `<span>${name} ${count}</span>`).join("");
+      $("list").innerHTML = "";
+      for (const item of data.items) {
+        const button = document.createElement("button");
+        button.className = "card" + (item.id === selected ? " active" : "");
+        button.innerHTML = `<strong>${escapeHtml(item.id)}</strong><br>${escapeHtml(item.title)}<br><small>${item.source} · ${item.status} · ${item.app_version || "无版本"}</small>`;
+        button.onclick = () => openTicket(item.id);
+        $("list").append(button);
+      }
+      if (!data.items.length) $("list").innerHTML = "<p class='muted'>没有匹配的反馈。</p>";
+    }
+    async function openTicket(id) {
+      selected = id;
+      const data = await api("/api/admin/tickets/" + id);
+      const item = data.ticket;
+      $("detail").innerHTML = `
+        <div class="toolbar"><strong>${escapeHtml(item.id)}</strong><span class="pill">${escapeHtml(item.source)}</span><span class="pill">${escapeHtml(item.category)}</span></div>
+        <h2>${escapeHtml(item.title)}</h2>
+        <p>${escapeHtml(item.body).replaceAll("\n", "<br>")}</p>
+        <p class="muted">${escapeHtml(item.app_version)} · ${escapeHtml(item.device_model)} · Android ${escapeHtml(item.android_release)} · ${escapeHtml(item.contact || "未留联系方式")}</p>
+        <label>状态<select id="editStatus">${options(["new","triaged","in_progress","resolved","wontfix","duplicate"], item.status)}</select></label>
+        <label>优先级<select id="editPriority">${options(["low","normal","high"], item.priority)}</select></label>
+        <label>维护备注<textarea id="editNote">${escapeHtml(item.admin_note || "")}</textarea></label>
+        <div class="toolbar">
+          <button id="save" type="button">保存</button>
+          ${item.hasLog ? `<a class="linkish" href="/api/admin/tickets/${item.id}/log">下载日志</a>` : "<span class='muted'>无日志</span>"}
+        </div>
+        <pre>${escapeHtml((data.events || []).map((event) => event.kind + " · " + event.detail).join("\n") || "无事件")}</pre>`;
+      $("save").onclick = saveTicket;
+      await refresh();
+    }
+    async function saveTicket() {
+      await api("/api/admin/tickets/" + selected, {
+        method: "POST",
+        body: JSON.stringify({ status: $("editStatus").value, priority: $("editPriority").value, adminNote: $("editNote").value }),
+      });
+      await openTicket(selected);
+    }
+    function options(values, current) { return values.map((value) => `<option ${value === current ? "selected" : ""}>${value}</option>`).join(""); }
+    function escapeHtml(value) { return String(value ?? "").replace(/[&<>"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[char])); }
+    boot();
+  </script>
+</body>
+</html>

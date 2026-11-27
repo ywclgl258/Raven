@@ -20,6 +20,7 @@ import com.raven.app.core.database.dao.ShelfDao
 import com.raven.app.core.database.dao.ShelfItemDao
 import com.raven.app.core.database.dao.SmartShelfDao
 import com.raven.app.core.database.dao.TagSubscriptionDao
+import com.raven.app.core.database.dao.SeriesFollowDao
 import com.raven.app.core.database.dao.TagTranslationDao
 import com.raven.app.core.database.dao.TimeBookmarkDao
 import com.raven.app.core.database.dao.UpdateInboxDao
@@ -41,6 +42,7 @@ import com.raven.app.core.database.entity.ShelfEntity
 import com.raven.app.core.database.entity.ShelfItemEntity
 import com.raven.app.core.database.entity.SmartShelfEntity
 import com.raven.app.core.database.entity.TagSubscriptionEntity
+import com.raven.app.core.database.entity.SeriesFollowEntity
 import com.raven.app.core.database.entity.TagTranslationEntity
 import com.raven.app.core.database.entity.TimeBookmarkEntity
 import com.raven.app.core.database.entity.UpdateInboxEntity
@@ -94,6 +96,8 @@ internal class FakeRavenDb {
     val timeBookmarks = FakeTimeBookmarkDao()
     val imageFavorites = FakeImageFavoriteDao()
     val tagSubscriptions = FakeTagSubscriptionDao()
+    val seriesFollows = FakeSeriesFollowDao()
+    val seriesFollowDao = seriesFollows
     val savedSearches = FakeSavedSearchDao()
     val updateInbox = FakeUpdateInboxDao()
     val blockedTerms = FakeBlockedTermDao()
@@ -118,6 +122,7 @@ internal class FakeRavenDb {
             val snapTime = timeBookmarks.rows.value
             val snapImg = imageFavorites.rows.value
             val snapSub = tagSubscriptions.rows.value
+            val snapSeries = seriesFollows.rows.value
             val snapSaved = savedSearches.rows.value
             val snapInbox = updateInbox.rows.value
             val snapBlocked = blockedTerms.rows.value
@@ -142,6 +147,7 @@ internal class FakeRavenDb {
                 timeBookmarks.rows.value = snapTime
                 imageFavorites.rows.value = snapImg
                 tagSubscriptions.rows.value = snapSub
+                seriesFollows.rows.value = snapSeries
                 savedSearches.rows.value = snapSaved
                 updateInbox.rows.value = snapInbox
                 blockedTerms.rows.value = snapBlocked
@@ -1233,5 +1239,51 @@ internal class FakeBackupRestoreJournalDao : BackupRestoreJournalDao {
 
     override suspend fun clear() {
         rows.value = null
+    }
+}
+
+internal class FakeSeriesFollowDao : SeriesFollowDao {
+    val rows = MutableStateFlow<Map<Pair<String, String>, SeriesFollowEntity>>(emptyMap())
+
+    override fun observeAll(): Flow<List<SeriesFollowEntity>> =
+        rows.map { it.values.toList() }
+
+    override fun observeBySite(siteId: String): Flow<List<SeriesFollowEntity>> =
+        rows.map { it.values.filter { e -> e.siteId == siteId } }
+
+    override suspend fun getOne(siteId: String, seriesId: String): SeriesFollowEntity? =
+        rows.value[siteId to seriesId]
+
+    override suspend fun getAll(): List<SeriesFollowEntity> =
+        rows.value.values.toList()
+
+    override suspend fun upsert(entity: SeriesFollowEntity) {
+        rows.value = rows.value + ((entity.siteId to entity.seriesId) to entity)
+    }
+
+    override suspend fun upsertAll(entities: List<SeriesFollowEntity>) {
+        rows.value = rows.value + entities.associateBy { it.siteId to it.seriesId }
+    }
+
+    override suspend fun updateSeen(siteId: String, seriesId: String, seenChapterIds: List<String>) {
+        val cur = rows.value[siteId to seriesId] ?: return
+        rows.value = rows.value + ((siteId to seriesId) to cur.copy(seenChapterIds = seenChapterIds))
+    }
+
+    override suspend fun updateLastChecked(siteId: String, seriesId: String, lastCheckedAt: Long) {
+        val cur = rows.value[siteId to seriesId] ?: return
+        rows.value = rows.value + ((siteId to seriesId) to cur.copy(lastCheckedAt = lastCheckedAt))
+    }
+
+    override suspend fun delete(siteId: String, seriesId: String) {
+        rows.value = rows.value - (siteId to seriesId)
+    }
+
+    override suspend fun deleteBySite(siteId: String) {
+        rows.value = rows.value.filterKeys { it.first != siteId }
+    }
+
+    override suspend fun deleteAll() {
+        rows.value = emptyMap()
     }
 }

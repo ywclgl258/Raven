@@ -20,6 +20,7 @@ import com.raven.app.core.database.dao.PlaybackPreferencesDao
 import com.raven.app.core.database.dao.ReaderPreferencesDao
 import com.raven.app.core.database.dao.ReadingProgressDao
 import com.raven.app.core.database.dao.SavedSearchDao
+import com.raven.app.core.database.dao.SeriesFollowDao
 import com.raven.app.core.database.dao.SearchHistoryDao
 import com.raven.app.core.database.dao.ShelfDao
 import com.raven.app.core.database.dao.ShelfItemDao
@@ -44,6 +45,7 @@ import com.raven.app.core.database.entity.ReaderPreferencesEntity
 import com.raven.app.core.database.entity.ReadingProgressEntity
 import com.raven.app.core.database.entity.SavedSearchEntity
 import com.raven.app.core.database.entity.SearchHistoryEntity
+import com.raven.app.core.database.entity.SeriesFollowEntity
 import com.raven.app.core.database.entity.ShelfEntity
 import com.raven.app.core.database.entity.ShelfItemEntity
 import com.raven.app.core.database.entity.SmartShelfEntity
@@ -78,6 +80,7 @@ import com.raven.app.core.model.Shelf
         MediaTagCacheEntity::class,
         MediaLikeEntity::class,
         BackupRestoreJournalEntity::class,
+        SeriesFollowEntity::class,
     ],
     version = RavenDatabase.SCHEMA_VERSION,
     exportSchema = true,
@@ -106,10 +109,11 @@ abstract class RavenDatabase : RoomDatabase() {
     abstract fun mediaTagCacheDao(): MediaTagCacheDao
     abstract fun mediaLikeDao(): MediaLikeDao
     abstract fun backupRestoreJournalDao(): BackupRestoreJournalDao
+    abstract fun seriesFollowDao(): SeriesFollowDao
 
     companion object {
         const val DATABASE_NAME: String = "raven.db"
-        const val SCHEMA_VERSION: Int = 5
+        const val SCHEMA_VERSION: Int = 7
         const val DEFAULT_WATCH_LATER_NAME: String = "稍后看"
 
         val MIGRATION_1_2: Migration = object : Migration(1, 2) {
@@ -208,6 +212,27 @@ abstract class RavenDatabase : RoomDatabase() {
             }
         }
 
+        val MIGRATION_5_6: Migration = object : Migration(5, 6) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS `series_follows` (
+                        `site_id` TEXT NOT NULL,
+                        `series_id` TEXT NOT NULL,
+                        `title` TEXT NOT NULL,
+                        `url` TEXT NOT NULL,
+                        `cover_url` TEXT NOT NULL,
+                        `created_at` INTEGER NOT NULL,
+                        `last_checked_at` INTEGER,
+                        `seen_chapter_ids` TEXT NOT NULL,
+                        PRIMARY KEY(`site_id`, `series_id`)
+                    )
+                    """.trimIndent(),
+                )
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_series_follows_site_id` ON `series_follows` (`site_id`)")
+            }
+        }
+
         val MIGRATION_6_7: Migration = object : Migration(6, 7) {
             override fun migrate(db: SupportSQLiteDatabase) {
                 db.execSQL("ALTER TABLE `reading_progress` ADD COLUMN `series_id` TEXT")
@@ -248,7 +273,14 @@ abstract class RavenDatabase : RoomDatabase() {
                 RavenDatabase::class.java,
                 DATABASE_NAME,
             )
-                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5)
+                .addMigrations(
+                    MIGRATION_1_2,
+                    MIGRATION_2_3,
+                    MIGRATION_3_4,
+                    MIGRATION_4_5,
+                    MIGRATION_5_6,
+                    MIGRATION_6_7,
+                )
                 .addCallback(watchLaterSeedCallback)
                 .build()
     }

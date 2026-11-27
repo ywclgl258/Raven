@@ -16,6 +16,7 @@ import com.raven.app.core.database.dao.PlaybackPreferencesDao
 import com.raven.app.core.database.dao.ReaderPreferencesDao
 import com.raven.app.core.database.dao.ReadingProgressDao
 import com.raven.app.core.database.dao.SavedSearchDao
+import com.raven.app.core.database.dao.SeriesFollowDao
 import com.raven.app.core.database.dao.ShelfDao
 import com.raven.app.core.database.dao.ShelfItemDao
 import com.raven.app.core.database.dao.SmartShelfDao
@@ -34,6 +35,7 @@ import com.raven.app.core.database.entity.PlaybackPreferencesEntity
 import com.raven.app.core.database.entity.ReaderPreferencesEntity
 import com.raven.app.core.database.entity.ReadingProgressEntity
 import com.raven.app.core.database.entity.SavedSearchEntity
+import com.raven.app.core.database.entity.SeriesFollowEntity
 import com.raven.app.core.database.entity.ShelfEntity
 import com.raven.app.core.database.entity.ShelfItemEntity
 import com.raven.app.core.database.entity.SmartShelfEntity
@@ -298,6 +300,7 @@ internal class FakeLibrarySitePlugin(
     private val searchHandler: (suspend (FeedRequest) -> FeedPage)? = null,
     private val linkHandler: ((String) -> ResolvedLink?)? = null,
     authMode: AuthMode = AuthMode.None,
+    override val seriesSource: com.raven.app.core.sitespi.SeriesSource? = null,
 ) : SitePlugin {
     override val authProvider: AuthProvider = object : AuthProvider {
         override val mode: AuthMode = authMode
@@ -398,6 +401,7 @@ internal class LibraryTestHarness(
         tagSubscriptionDao = tagSubscriptionDao,
         savedSearchDao = savedSearchDao,
         updateInboxDao = updateInboxDao,
+        seriesFollowDao = InMemorySeriesFollowDao(),
         transactionRunner = transactionRunner,
         clock = clock,
     )
@@ -929,6 +933,39 @@ internal class InMemorySavedSearchDao : SavedSearchDao {
     }
     override suspend fun deleteById(id: String) { rows.update { list -> list.filterNot { it.id == id } } }
     override suspend fun deleteAll() { rows.value = emptyList() }
+}
+
+private class InMemorySeriesFollowDao : SeriesFollowDao {
+    private val rows = MutableStateFlow<Map<Pair<String, String>, SeriesFollowEntity>>(emptyMap())
+
+    override fun observeAll() = rows.map { it.values.toList() }
+    override fun observeBySite(siteId: String) = observeAll().map { list -> list.filter { it.siteId == siteId } }
+    override suspend fun getOne(siteId: String, seriesId: String) = rows.value[siteId to seriesId]
+    override suspend fun getAll() = rows.value.values.toList()
+    override suspend fun upsert(entity: SeriesFollowEntity) = upsertAll(listOf(entity))
+    override suspend fun upsertAll(entities: List<SeriesFollowEntity>) {
+        rows.update { it + entities.associateBy { entity -> entity.siteId to entity.seriesId } }
+    }
+
+    override suspend fun updateSeen(siteId: String, seriesId: String, seenChapterIds: List<String>) {
+        getOne(siteId, seriesId)?.let { upsert(it.copy(seenChapterIds = seenChapterIds)) }
+    }
+
+    override suspend fun updateLastChecked(siteId: String, seriesId: String, lastCheckedAt: Long) {
+        getOne(siteId, seriesId)?.let { upsert(it.copy(lastCheckedAt = lastCheckedAt)) }
+    }
+
+    override suspend fun delete(siteId: String, seriesId: String) {
+        rows.update { it - (siteId to seriesId) }
+    }
+
+    override suspend fun deleteBySite(siteId: String) {
+        rows.update { it.filterKeys { key -> key.first != siteId } }
+    }
+
+    override suspend fun deleteAll() {
+        rows.value = emptyMap()
+    }
 }
 
 internal class InMemoryUpdateInboxDao : UpdateInboxDao {

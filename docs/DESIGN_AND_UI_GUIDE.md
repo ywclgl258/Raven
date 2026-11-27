@@ -292,7 +292,7 @@ flowchart LR
 
     subgraph MAIN["MainActivity (singleTop · Edge-to-Edge)"]
         SHELL["RavenAppShell<br/>RavenAdaptiveScaffold (<600dp BottomBar / >=600dp Rail)"]
-        NAV["Type-Safe NavHost (27 条 RavenRoute)<br/>Browse · Library · GalleryDetail · Reader · Settings"]
+        NAV["Type-Safe NavHost (28 条 RavenRoute)<br/>Browse · Library · GalleryDetail · Reader · Settings"]
         SHEET["SharedLinkConfirmationSheet<br/>(SiteRegistry.resolveLinkFromText)"]
         SHELL --> NAV
     end
@@ -316,7 +316,7 @@ flowchart LR
 
 1. **`MainActivity`**（`app/src/main/kotlin/com/raven/app/MainActivity.kt`，`launchMode="singleTop"`、`windowSoftInputMode="adjustResize"`）：
    - `onCreate` 首行启用 `enableEdgeToEdge` 透明暗色状态栏与导航栏，根部挂载 `RavenTheme(reduceTransparency)` + `LocalRavenImageRequestDecorator provides ::ravenImageRequestDecorator`。
-   - 托管 `RavenAppShell`（27 条 Type-Safe `NavHost`）与实现 `MainActivityHostActions`：启动 `PlayerActivity` / `SiteAuthActivity`、SAF 文件创建/打开/目录授权（`ACTION_CREATE_DOCUMENT` / `OpenDocument` / `OpenDocumentTree`）、`FileProvider` 分享、`RavenUpdateInstaller` 未知来源权限与 APK 安装、以及阅读器窗口控制（沉浸系统栏、独立屏幕亮度、`FLAG_KEEP_SCREEN_ON`、硬件音量键短按/长按翻页）。
+   - 托管 `RavenAppShell`（28 条 Type-Safe `NavHost`）与实现 `MainActivityHostActions`：启动 `PlayerActivity` / `SiteAuthActivity`、SAF 文件创建/打开/目录授权（`ACTION_CREATE_DOCUMENT` / `OpenDocument` / `OpenDocumentTree`）、`FileProvider` 分享、`RavenUpdateInstaller` 未知来源权限与 APK 安装、以及阅读器窗口控制（沉浸系统栏、独立屏幕亮度、`FLAG_KEEP_SCREEN_ON`、硬件音量键短按/长按翻页）。
    - `onNewIntent` 按优先级消费：（1）来自 `PlayerActivity` 的 `EXTRA_NAVIGATE_ROUTE`（经 `MainActivityIntentContract` JSON 反序列化后导航至标签/作者/图集/账号）；（2）外部 `ACTION_SEND` `text/plain`，调用 `siteRegistry.resolveLinkFromText` 弹出 `SharedLinkConfirmationSheet` 确认后跳转，绝不堆叠重复 `MainActivity`。
 
 2. **`PlayerActivity`**（`app/src/main/kotlin/com/raven/app/PlayerActivity.kt`，`launchMode="singleTop"`、`supportsPictureInPicture="true"`、`resizeableActivity="true"`、`configChanges="screenSize|smallestScreenSize|screenLayout|orientation|keyboardHidden"`）：
@@ -331,9 +331,9 @@ flowchart LR
    - 仅服务声明 `AuthMode.WebViewCookie` 的站点（E-Hentai / ExHentai），由 7 状态有限状态机 `SiteAuthPhase`（`RESETTING` → `FORUM` → `COPYING_IDENTITY` → `LOADING_TARGET` → `TARGET_READY` / `TARGET_FAILED` → `VERIFYING`）驱动。
    - 严格安全隔离：零 JS 桥接、`allowFileAccess = false`、`allowContentAccess = false`、`acceptThirdPartyCookies = false`、`MIXED_CONTENT_NEVER_ALLOW`、`LOAD_NO_CACHE`、`allowedHosts` HTTPS 白名单、所有 `onReceivedSslError` 无条件 `handler.cancel()`；退出时彻底清除 `WebStorage`、全部 WebView `CookieManager` 缓存、历史与表单数据。
 
-### 4.2 全部 27 条 Type-Safe `RavenRoute` 清单（`RavenRoute.kt`）
+### 4.2 全部 28 条 Type-Safe `RavenRoute` 清单（`RavenRoute.kt`）
 
-所有路由定义于 `:core:model` 的 `@Serializable sealed interface RavenRoute`，由 `RavenNavHost.kt` 统一注册，并在 `AppDiGraphTest` 中验证全部 27 条路由的 `kotlinx.serialization` 双向编解码：
+所有路由定义于 `:core:model` 的 `@Serializable sealed interface RavenRoute`，由 `RavenNavHost.kt` 统一注册，并在 `AppDiGraphTest` 中验证全部 28 条路由的 `kotlinx.serialization` 双向编解码：
 
 | 组别 | # | 路由类型 (`RavenRoute.*`) | 参数签名 | 目标 Screen（所属模块） | 显示主导航壳 |
 |---|---:|---|---|---|---|
@@ -357,13 +357,14 @@ flowchart LR
 | | 18 | `GlobalInbox` | `data object` | `GlobalInboxScreen` (`:feature:library`) | 否 |
 | | 19 | `LocalLibrary` | `data object` | `LocalLibraryScreen` (`:feature:library`) | 否 |
 | | 20 | `Stats` | `data object` | `StatsScreen` (`:feature:library`) | 否 |
-| **7 设置子页** | 21 | `Settings` | `data object` | `SettingsScreen` (`:feature:settings`) | 否 |
+| **8 设置子页** | 21 | `Settings` | `data object` | `SettingsScreen` (`:feature:settings`) | 否 |
 | | 22 | `SiteAccount` | `siteId: String` | `SiteAccountScreen` (`:feature:settings`) | 否 |
 | | 23 | `BlockedTerms` | `siteId: String` | `BlockedTermsScreen` (`:feature:settings`) | 否 |
 | | 24 | `TagDictionary` | `data object` | `TagDictionaryScreen` (`:feature:settings`) | 否 |
 | | 25 | `BackupRestore` | `data object` | `BackupRestoreScreen` (`:feature:settings`) | 否 |
-| | 26 | `StorageMigration` | `data object` | `StorageMigrationScreen` (`:feature:settings`) | 否 |
-| | 27 | `DuplicateScanner` | `data object` | `DuplicateScannerScreen` (`:feature:settings`) | 否 |
+| | 26 | `Feedback` | `data object` | `FeedbackScreen` (`:feature:settings`) | 否 |
+| | 27 | `StorageMigration` | `data object` | `StorageMigrationScreen` (`:feature:settings`) | 否 |
+| | 28 | `DuplicateScanner` | `data object` | `DuplicateScannerScreen` (`:feature:settings`) | 否 |
 
 > **主导航壳自适应与状态保留（`RavenNavHost.kt`）**：
 > - `RavenAdaptiveScaffold` 根据 `currentWindowAdaptiveInfo().windowSizeClass.isWidthAtLeastBreakpoint(WindowSizeClass.WIDTH_DP_MEDIUM_LOWER_BOUND)`（即 **`600dp`**）在底部导航栏与左侧持久 `NavigationRail` 之间自动切换。

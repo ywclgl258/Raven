@@ -9,6 +9,7 @@ import android.provider.Settings
 import androidx.core.content.FileProvider
 import androidx.core.net.toUri
 import com.raven.app.core.common.AppDispatchers
+import com.raven.app.core.common.log.RavenLog
 import com.raven.app.core.common.DefaultAppDispatchers
 import java.io.File
 import java.io.IOException
@@ -444,6 +445,7 @@ class RavenUpdater(
                     } catch (ce: CancellationException) {
                         throw ce
                     } catch (e: Exception) {
+                        RavenLog.w(TAG, "update channel ${endpoint.label} failed", e)
                         failures += "${endpoint.label}：${e.message ?: "连接失败"}"
                     }
                 }
@@ -490,6 +492,7 @@ class RavenUpdater(
         } catch (ce: CancellationException) {
             throw ce
         } catch (e: Exception) {
+            RavenLog.w(TAG, "update check failed", e)
             UpdateCheckOutcome.Error(
                 message = e.message ?: "更新检查失败，请检查网络连接",
                 cause = e,
@@ -627,8 +630,14 @@ class RavenUpdater(
                     ),
                 )
                 pruneStaleApks(keepFile = verifiedFile)
+                RavenLog.i(TAG, "update asset verified ${release.tagName} ${asset.assetId}")
                 verifiedFile
             }
+        } catch (ce: CancellationException) {
+            throw ce
+        } catch (e: Exception) {
+            RavenLog.e(TAG, "update download/verify failed ${release.tagName}", e)
+            throw e
         } finally {
             operationMutex.unlock()
         }
@@ -696,6 +705,7 @@ class RavenUpdater(
         }
 
     companion object {
+        private const val TAG: String = "RavenUpdater"
         const val AUTO_CHECK_INTERVAL_MS: Long = 12L * 60L * 60L * 1_000L
         internal const val MAX_METADATA_BYTES = 1024L * 1024L
         private const val MAX_RELEASE_NOTES_CHARS: Int = 2_000

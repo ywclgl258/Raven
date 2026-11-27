@@ -5,6 +5,7 @@ import android.util.Log
 
 import com.raven.app.core.common.AppDispatchers
 import com.raven.app.core.common.DefaultAppDispatchers
+import com.raven.app.core.common.log.RavenLog
 import com.raven.app.core.model.SiteException
 import com.raven.app.core.model.SiteId
 import com.raven.app.core.sitespi.HttpClientAdapter
@@ -283,6 +284,7 @@ class SiteHttpClient(
                 if (logging) {
                     Log.w(NET_LOG_TAG, "✗ ${SystemClock.elapsedRealtime() - startedAt}ms ${request.url} :: ${e.javaClass.simpleName}: ${e.message}")
                 }
+                RavenLog.w(NET_LOG_TAG, "✗ ${request.kind} ${request.method} ${request.url} :: ${e.javaClass.simpleName}", e)
                 throw SiteHttpErrorMapper.fromThrowable(e, effectiveSiteId)
             }
         }
@@ -301,6 +303,7 @@ class SiteHttpClient(
             if (logging) {
                 Log.w(NET_LOG_TAG, "Host ${httpUrl.host} cooling down for ${cooldownMs}ms after HTTP 429")
             }
+            RavenLog.w(NET_LOG_TAG, "HTTP 429 host=${httpUrl.host} cooldown=${cooldownMs}ms Retry-After=$retryLabel")
         }
 
         return response

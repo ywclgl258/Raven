@@ -308,8 +308,27 @@ fun GalleryDetailScreen(
                             detail = activeDetail,
                             onRefreshChapters = viewModel::refreshChapters,
                             onOpenChapter = { chapter ->
+                                // 连载里一话就是一页内容：点章节直接开读，不再先跳到该话的详情页。
+                                val saved = uiState.readingProgressByMediaId[chapter.id]
+                                val startPage = if (saved != null && !saved.completed && saved.currentPage > 0) {
+                                    saved.currentPage.coerceAtLeast(1)
+                                } else {
+                                    1
+                                }
+                                navigator.openReader(
+                                    siteId = chapter.siteId,
+                                    mediaId = chapter.id,
+                                    url = chapter.url,
+                                    startPage = startPage,
+                                    offlineOnly = chapter.siteId.isLocal,
+                                    queueToken = null,
+                                    parent = resolveReaderParent(activeDetail, parent),
+                                )
+                            },
+                            onOpenChapterDetail = { chapter ->
+                                // 长按仍可查看单话详情（评论区、单话标签等）。
                                 navigator.openGallery(
-                                    siteId = uiState.siteId,
+                                    siteId = chapter.siteId,
                                     mediaId = chapter.id,
                                     url = chapter.url,
                                     parent = resolveReaderParent(activeDetail, parent),
@@ -326,6 +345,17 @@ fun GalleryDetailScreen(
                                     url = activeDetail.item.url,
                                     startPage = startPage,
                                     offlineOnly = offline,
+                                    queueToken = null,
+                                    parent = resolveReaderParent(activeDetail, parent),
+                                )
+                            },
+                            onOpenResumeTarget = { target ->
+                                navigator.openReader(
+                                    siteId = target.item.siteId,
+                                    mediaId = target.item.id,
+                                    url = target.item.url,
+                                    startPage = target.startPage,
+                                    offlineOnly = target.item.siteId.isLocal,
                                     queueToken = null,
                                     parent = resolveReaderParent(activeDetail, parent),
                                 )
@@ -349,6 +379,7 @@ fun GalleryDetailScreen(
                             onLongPressTag = viewModel::openTagActions,
                             onToggleWatchLater = viewModel::toggleWatchLater,
                             onToggleFavorite = viewModel::toggleFavorite,
+                            onToggleSeriesFollow = viewModel::toggleSeriesFollow,
                             onToggleLike = viewModel::toggleLike,
                             onOpenDownloadSheet = viewModel::openDownloadSheet,
                             onExportCbz = { viewModel.exportCbz() },
@@ -496,8 +527,8 @@ fun GalleryDetailScreen(
             steps = listOf(
                 RavenTutorialStep(
                     badge = "核心操作",
-                    title = "稍后看 · 收藏 · 本地点赞",
-                    description = "「稍后看」直通鸦巢的稍后观看队列；「收藏」仅保存作品本身；「点赞」在本地记录该作品的标签权重，专门用于驱动鸦巢的智能推荐。",
+                    title = "收藏 · 追更 · 本地点赞",
+                    description = "「收藏」保存作品本身；「追更」在有连载来源的站点直接订阅后续章节；「点赞」在本地记录该作品的标签权重，专门用于驱动鸦巢的智能推荐。",
                     icon = Icons.Rounded.ThumbUp,
                 ),
                 RavenTutorialStep(
@@ -520,11 +551,15 @@ private fun GalleryDetailContent(
     detail: GalleryDetail,
     onRefreshChapters: () -> Unit,
     onOpenChapter: (MediaItem) -> Unit,
+    /** Long-press on a chapter tile opens that chapter's own detail page. */
+    onOpenChapterDetail: (MediaItem) -> Unit = {},
     showAllPreviewPages: Boolean,
     onExpandAllPages: () -> Unit,
     formatTagLabel: (TagRef) -> String,
     isTagBlocked: (TagRef) -> Boolean,
     onOpenReader: (startPage: Int, offlineOnly: Boolean) -> Unit,
+    /** Opens the work's newest reading position, which may live in another chapter. */
+    onOpenResumeTarget: (GalleryResumeTarget) -> Unit,
     onOpenVideo: (com.raven.app.core.model.MediaItem) -> Unit,
     onOpenAuthor: (AuthorRef) -> Unit,
     onLongPressAuthor: (AuthorRef) -> Unit,
@@ -533,6 +568,7 @@ private fun GalleryDetailContent(
     onToggleWatchLater: () -> Unit,
     onToggleFavorite: () -> Unit,
     onToggleLike: () -> Unit,
+    onToggleSeriesFollow: () -> Unit = {},
     onOpenDownloadSheet: () -> Unit,
     onExportCbz: () -> Unit,
     onDeleteBookmark: (String) -> Unit,
@@ -572,11 +608,13 @@ private fun GalleryDetailContent(
                     uiState = uiState,
                     detail = detail,
                     onOpenReader = onOpenReader,
+                    onOpenResumeTarget = onOpenResumeTarget,
                     onOpenAuthor = onOpenAuthor,
                     onLongPressAuthor = onLongPressAuthor,
                     onToggleWatchLater = onToggleWatchLater,
                     onToggleFavorite = onToggleFavorite,
                     onToggleLike = onToggleLike,
+                    onToggleSeriesFollow = onToggleSeriesFollow,
                     onOpenDownloadSheet = onOpenDownloadSheet,
                     onExportCbz = onExportCbz,
                 )
@@ -695,9 +733,11 @@ private fun GalleryDetailContent(
                             detail.item.extra["chapterHid"],
                         ),
                         onSelect = onOpenChapter,
+                        onLongSelect = onOpenChapterDetail,
                         onRefresh = onRefreshChapters,
                         readState = uiState.chapterPickerReadState,
                         onOpenNextUnread = onOpenChapter,
+                        selectHint = "点击直接阅读，长按看单话详情",
                     )
                 }
             }
@@ -857,11 +897,13 @@ private fun GalleryHeroHeader(
     uiState: GalleryDetailUiState,
     detail: GalleryDetail,
     onOpenReader: (startPage: Int, offlineOnly: Boolean) -> Unit,
+    onOpenResumeTarget: (GalleryResumeTarget) -> Unit,
     onOpenAuthor: (AuthorRef) -> Unit,
     onLongPressAuthor: (AuthorRef) -> Unit,
     onToggleWatchLater: () -> Unit,
     onToggleFavorite: () -> Unit,
     onToggleLike: () -> Unit,
+    onToggleSeriesFollow: () -> Unit = {},
     onOpenDownloadSheet: () -> Unit,
     onExportCbz: () -> Unit,
 ) {
@@ -902,7 +944,12 @@ private fun GalleryHeroHeader(
                     .let { base ->
                         if (canReadImages) {
                             base.clickable(role = Role.Button) {
-                                onOpenReader(uiState.resumeStartPage, uiState.isLocal)
+                                val resume = uiState.resumeTarget
+                                if (resume != null) {
+                                    onOpenResumeTarget(resume)
+                                } else {
+                                    onOpenReader(uiState.resumeStartPage, uiState.isLocal)
+                                }
                             }
                         } else {
                             base
@@ -1056,7 +1103,12 @@ private fun GalleryHeroHeader(
                 Button(
                     onClick = {
                         feedback.perform(RavenFeedbackEffect.TAP)
-                        onOpenReader(uiState.resumeStartPage, uiState.isLocal)
+                        val target = uiState.resumeTarget
+                        if (target != null) {
+                            onOpenResumeTarget(target)
+                        } else {
+                            onOpenReader(uiState.resumeStartPage, uiState.isLocal)
+                        }
                     },
                     shape = RavenShapes.PillShape,
                     contentPadding = PaddingValues(horizontal = 20.dp, vertical = 13.dp),
@@ -1126,23 +1178,26 @@ private fun GalleryHeroHeader(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            FrostedHeroActionButton(
-                label = if (uiState.isInWatchLater) "已稍后看" else "稍后看",
-                active = uiState.isInWatchLater,
-                feedbackEffect = if (uiState.isInWatchLater) RavenFeedbackEffect.TOGGLE_OFF else RavenFeedbackEffect.TOGGLE_ON,
-                onClick = onToggleWatchLater,
-                modifier = Modifier
-                    .weight(1f)
-                    .ravenBurstFeedback(trigger = uiState.isInWatchLater),
-            ) { tint, iconModifier ->
-                RavenMorphIcon(
-                    glyph = if (uiState.isInWatchLater) RavenMorphIcons.Check else RavenMorphIcons.Plus,
-                    contentDescription = if (uiState.isInWatchLater) "已稍后看" else "稍后看",
-                    tint = tint,
-                    size = 20.dp,
-                    springPreset = MorphSpringPreset.SNAPPY,
-                    modifier = iconModifier,
-                )
+            // 稍后看只对视频成立：漫画/写真有阅读进度与追更，再加一个稍后看只会重复。
+            if (item.kind.isVideo) {
+                FrostedHeroActionButton(
+                    label = if (uiState.isInWatchLater) "已稍后看" else "稍后看",
+                    active = uiState.isInWatchLater,
+                    feedbackEffect = if (uiState.isInWatchLater) RavenFeedbackEffect.TOGGLE_OFF else RavenFeedbackEffect.TOGGLE_ON,
+                    onClick = onToggleWatchLater,
+                    modifier = Modifier
+                        .weight(1f)
+                        .ravenBurstFeedback(trigger = uiState.isInWatchLater),
+                ) { tint, iconModifier ->
+                    RavenMorphIcon(
+                        glyph = if (uiState.isInWatchLater) RavenMorphIcons.Check else RavenMorphIcons.Plus,
+                        contentDescription = if (uiState.isInWatchLater) "已稍后看" else "稍后看",
+                        tint = tint,
+                        size = 20.dp,
+                        springPreset = MorphSpringPreset.SNAPPY,
+                        modifier = iconModifier,
+                    )
+                }
             }
             FrostedHeroActionButton(
                 label = if (uiState.isFavorite) "已收藏" else "收藏",
@@ -1161,6 +1216,30 @@ private fun GalleryHeroHeader(
                     springPreset = MorphSpringPreset.BOUNCY,
                     modifier = iconModifier,
                 )
+            }
+            if (uiState.seriesFollowSupported) {
+                FrostedHeroActionButton(
+                    label = when {
+                        uiState.seriesFollowInProgress -> "处理中"
+                        uiState.isSeriesFollowed -> "已追更"
+                        else -> "追更"
+                    },
+                    active = uiState.isSeriesFollowed,
+                    onClick = onToggleSeriesFollow,
+                    enabled = !uiState.seriesFollowInProgress,
+                    modifier = Modifier
+                        .weight(1f)
+                        .ravenBurstFeedback(trigger = uiState.isSeriesFollowed),
+                ) { tint, iconModifier ->
+                    RavenMorphIcon(
+                        glyph = if (uiState.isSeriesFollowed) RavenMorphIcons.Check else RavenMorphIcons.Plus,
+                        contentDescription = if (uiState.isSeriesFollowed) "已追更" else "追更",
+                        tint = tint,
+                        size = 20.dp,
+                        springPreset = MorphSpringPreset.SNAPPY,
+                        modifier = iconModifier,
+                    )
+                }
             }
             FrostedHeroActionButton(
                 icon = if (uiState.isLiked) Icons.Rounded.ThumbUp else Icons.Outlined.ThumbUp,
@@ -2069,7 +2148,10 @@ internal fun GalleryChapterPickerSection(
     title: String = "选集",
     fillAvailableHeight: Boolean = false,
     readState: ChapterPickerReadState = ChapterPickerReadState(),
+    onLongSelect: ((MediaItem) -> Unit)? = null,
     onOpenNextUnread: ((MediaItem) -> Unit)? = null,
+    /** Subtitle suffix for the tap gesture; the detail page reads directly, the reader switches. */
+    selectHint: String = "点击切换",
 ) {
     val colors = LocalRavenColors.current
     var ascending by rememberSaveable { mutableStateOf(true) }
@@ -2112,7 +2194,7 @@ internal fun GalleryChapterPickerSection(
                         loading -> "章节载入中…"
                         chapters.isEmpty() -> "暂无章节"
                         completedCount > 0 -> "共 ${chapters.size} 章 · 已读 $completedCount 章"
-                        else -> "共 ${chapters.size} 章 · 点击切换"
+                        else -> "共 ${chapters.size} 章 · $selectHint"
                     },
                     style = MaterialTheme.typography.labelMedium.tabular(),
                     color = colors.inkSecondary,
@@ -2217,6 +2299,7 @@ internal fun GalleryChapterPickerSection(
                         selected = selected,
                         progress = readState.progressByMediaId[chapter.id],
                         onClick = { onSelect(chapter) },
+                        onLongClick = onLongSelect?.let { open -> { open(chapter) } },
                     )
                 }
             }
@@ -2231,6 +2314,7 @@ private fun GalleryChapterTile(
     selected: Boolean,
     progress: ReadingProgress?,
     onClick: () -> Unit,
+    onLongClick: (() -> Unit)? = null,
 ) {
     val colors = LocalRavenColors.current
     val container = if (selected) colors.crimson.copy(alpha = 0.16f) else colors.surface1
@@ -2249,7 +2333,7 @@ private fun GalleryChapterTile(
             .clip(RavenShapes.SmallShape)
             .background(container)
             .border(if (selected) 1.dp else 0.5.dp, borderColor, RavenShapes.SmallShape)
-            .clickable(role = Role.Button, onClick = onClick)
+            .combinedClickable(role = Role.Button, onClick = onClick, onLongClick = onLongClick)
             .padding(horizontal = 8.dp, vertical = 10.dp),
         contentAlignment = Alignment.Center,
     ) {

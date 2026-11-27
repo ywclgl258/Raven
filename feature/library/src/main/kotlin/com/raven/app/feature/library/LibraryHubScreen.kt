@@ -348,7 +348,7 @@ fun LibraryHubScreenContent(
                         item(key = "watch_later_empty") {
                             RavenEmptyState(
                                 title = "稍后观看列表为空",
-                                message = "在任意视频、漫画或写真详情页轻点「稍后看」，即可直接加入这里随时继续。",
+                                message = "在视频详情页轻点「稍后看」，即可加入这里随时续看；漫画与写真用收藏或追更管理。",
                                 icon = Icons.Outlined.WatchLater,
                             )
                         }
@@ -839,7 +839,7 @@ fun LibraryHubScreenContent(
                 RavenTutorialStep(
                     badge = "稍后观看",
                     title = "直达你的待看清单",
-                    description = "在任意详情页点选「稍后看」的作品都会直接汇总在「稍后观看」栏中，一键续看或移出。",
+                    description = "在视频详情页点选「稍后看」的作品会汇总到「稍后观看」栏，一键续看或移出；漫画与写真走收藏与追更。",
                     icon = Icons.Outlined.WatchLater,
                 ),
                 RavenTutorialStep(

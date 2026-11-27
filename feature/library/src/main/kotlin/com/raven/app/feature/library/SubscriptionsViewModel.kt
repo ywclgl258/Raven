@@ -62,6 +62,7 @@ enum class InboxSourceFilter(val label: String, val kind: InboxSourceKind?) {
     ALL("全部来源", null),
     TAG_SUBSCRIPTION("标签订阅", InboxSourceKind.TAG_SUBSCRIPTION),
     SAVED_SEARCH("保存的搜索", InboxSourceKind.SAVED_SEARCH),
+    SERIES_FOLLOW("作品追更", InboxSourceKind.SERIES_FOLLOW),
 }
 
 data class InboxRefreshProgress(
@@ -90,6 +91,7 @@ data class SubscriptionsUiState(
     val unreadCount: Int = 0,
     val unreadTagCount: Int = 0,
     val unreadSavedSearchCount: Int = 0,
+    val unreadSeriesCount: Int = 0,
     val subscriptionSiteOptions: List<SiteFilterOption> = emptyList(),
     val inboxSiteOptions: List<SiteFilterOption> = emptyList(),
     val siteLabels: Map<SiteId, String> = emptyMap(),
@@ -247,6 +249,7 @@ class SubscriptionsViewModel(
             unreadCount = sortedInbox.count { !it.isRead },
             unreadTagCount = sortedInbox.count { !it.isRead && it.sourceKind == InboxSourceKind.TAG_SUBSCRIPTION },
             unreadSavedSearchCount = sortedInbox.count { !it.isRead && it.sourceKind == InboxSourceKind.SAVED_SEARCH },
+            unreadSeriesCount = sortedInbox.count { !it.isRead && it.sourceKind == InboxSourceKind.SERIES_FOLLOW },
             subscriptionSiteOptions = siteRegistry.buildSiteFilterOptions(allSubs.map { it.siteId }),
             inboxSiteOptions = siteRegistry.buildSiteFilterOptions(allInbox.map { it.item.siteId }),
             siteLabels = allPresentSites.distinct().associateWith { siteRegistry.displayNameFor(it) },
@@ -498,12 +501,14 @@ class SubscriptionsViewModel(
     fun refreshTagUpdates() = refreshAllUpdates(
         includeTags = true,
         includeSavedSearches = false,
+        includeSeries = false,
         siteFilter = controls.value.selectedSiteId,
     )
 
     fun refreshAllUpdates(
         includeTags: Boolean = true,
         includeSavedSearches: Boolean = true,
+        includeSeries: Boolean = true,
         siteFilter: SiteId? = null,
     ) {
         if (controls.value.refreshProgress.isRefreshing) return
@@ -522,9 +527,14 @@ class SubscriptionsViewModel(
                 emptyList()
             }
 
-            val totalSources = allSubs.size + allSaved.size
+            val seriesCount = if (includeSeries) {
+                subscriptionRepository.observeSeriesFollows().first().count { siteFilter == null || it.siteId == siteFilter }
+            } else {
+                0
+            }
+            val totalSources = allSubs.size + allSaved.size + seriesCount
             if (totalSources == 0) {
-                controls.update { it.copy(message = "暂无可检查的标签订阅或保存的搜索") }
+                controls.update { it.copy(message = "暂无可检查的订阅或追更作品") }
                 return@launch
             }
 
@@ -542,6 +552,7 @@ class SubscriptionsViewModel(
                 val summary = syncRunner.syncAll(
                     includeTags = includeTags,
                     includeSavedSearches = includeSavedSearches,
+                    includeSeries = includeSeries,
                     siteFilter = siteFilter,
                     onSourceStarted = { sourceId ->
                         controls.update { it.copy(checkingSourceIds = it.checkingSourceIds + sourceId) }

@@ -12,6 +12,7 @@ import com.raven.app.core.model.HomeFeed
 import com.raven.app.core.model.SearchScope
 import com.raven.app.core.model.SiteException
 import com.raven.app.core.model.SiteId
+import com.raven.app.core.model.MediaItem
 import com.raven.app.core.model.SiteSectionSpec
 import com.raven.app.core.model.VideoDetail
 import com.raven.app.core.model.VideoStream
@@ -247,4 +248,9 @@ interface ImageUnscrambler {
         override fun computeSlicePlan(imageHeight: Int, stripCount: Int): List<StripSlice> =
             if (imageHeight <= 0) emptyList() else listOf(StripSlice(0, 0, imageHeight))
     }
+}
+
+
+interface SeriesSource {
+    suspend fun loadChapters(seriesId: String): List<MediaItem>
 }

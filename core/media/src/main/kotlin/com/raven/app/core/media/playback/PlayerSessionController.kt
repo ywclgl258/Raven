@@ -7,6 +7,7 @@ import android.content.Context
 import android.net.Uri
 import android.util.Rational
 import androidx.core.net.toUri
+import com.raven.app.core.common.log.RavenLog
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
@@ -230,6 +231,12 @@ class PlayerSessionController(
         }
 
         override fun onPlayerError(error: PlaybackException) {
+            RavenLog.e(
+                "Player",
+                "playback error code=${error.errorCodeName} (${error.errorCode}) " +
+                    "state=${_state.value.siteId?.value}/${_state.value.mediaId}",
+                error,
+            )
             stallTracker.onBufferingChanged(false, clockMs())
             _state.update {
                 it.copy(

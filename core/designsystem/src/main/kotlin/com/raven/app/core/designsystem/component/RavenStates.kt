@@ -347,44 +347,6 @@ fun rememberRavenShimmerProgress(): State<Float> {
 }
 
 /**
- * Animated dark obsidian shimmer brush (degrades to static [RavenColors.ShimmerBase] when reduced
- * motion is active).
- */
-@Deprecated(
-    message = "Use rememberRavenShimmerProgress() with RavenSkeletonBox(progress = ...) for zero-recomposition 120Hz shimmer.",
-    replaceWith = ReplaceWith("rememberRavenShimmerProgress()"),
-)
-@Composable
-fun rememberRavenShimmerBrush(): Brush {
-    val colors = LocalRavenColors.current
-    val motionReduced = LocalMotionReduced.current
-    if (motionReduced) {
-        return SolidColor(colors.shimmerBase)
-    }
-
-    val transition = rememberInfiniteTransition(label = "ravenShimmer")
-    val translate by transition.animateFloat(
-        initialValue = -300f,
-        targetValue = 900f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(durationMillis = 1_250, easing = LinearEasing),
-            repeatMode = RepeatMode.Restart,
-        ),
-        label = "ravenShimmerOffset",
-    )
-
-    return Brush.linearGradient(
-        colors = listOf(
-            colors.shimmerBase,
-            colors.shimmerHighlight,
-            colors.shimmerBase,
-        ),
-        start = Offset(x = translate, y = 0f),
-        end = Offset(x = translate + 280f, y = 160f),
-    )
-}
-
-/**
  * Single shimmer placeholder block with customizable [shape], powered by `drawWithCache` to avoid
  * per-frame gradient allocations and skipped recompositions.
  */

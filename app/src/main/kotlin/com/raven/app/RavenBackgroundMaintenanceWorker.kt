@@ -1,12 +1,12 @@
 package com.raven.app
 
 import android.content.Context
-import android.util.Log
 import androidx.work.CoroutineWorker
 import androidx.work.ExistingPeriodicWorkPolicy
 import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
+import com.raven.app.core.common.log.RavenLog
 import com.raven.app.core.database.dao.UpdateInboxDao
 import com.raven.app.core.database.repository.PreferencesRepository
 import com.raven.app.feature.library.SubscriptionSyncRunner
@@ -33,12 +33,12 @@ class RavenBackgroundMaintenanceWorker(
         val settings = runCatching { preferencesRepository.currentSettings() }.getOrNull()
         if (settings?.backgroundSubscriptionSync == true) {
             runCatching { subscriptionSyncRunner.syncAll() }
-                .onFailure { Log.w(TAG, "Background subscription sync failed", it) }
+                .onFailure { RavenLog.w(TAG, "Background subscription sync failed", it) }
         }
         runCatching { updateInboxDao.prune(UpdateInboxDao.MAX_INBOX_ITEMS) }
-            .onFailure { Log.w(TAG, "UpdateInbox prune failed", it) }
+            .onFailure { RavenLog.w(TAG, "UpdateInbox prune failed", it) }
         runCatching { pruneAppTempCaches(applicationContext) }
-            .onFailure { Log.w(TAG, "Temp cache trim failed", it) }
+            .onFailure { RavenLog.w(TAG, "Temp cache trim failed", it) }
         return Result.success()
     }
 

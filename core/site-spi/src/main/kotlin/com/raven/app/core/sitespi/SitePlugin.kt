@@ -16,6 +16,7 @@ interface SitePlugin {
     val gallerySource: GallerySource? get() = null
     val searchSource: SearchSource? get() = null
     val directorySource: DirectorySource? get() = null
+    val seriesSource: SeriesSource? get() = null
     val authProvider: AuthProvider get() = AuthProvider.None
     val linkResolver: LinkResolver? get() = null
     val hostRouter: HostRouter get() = HostRouter.Standard(descriptor.allHosts)

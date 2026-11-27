@@ -6,6 +6,8 @@ import com.raven.app.core.model.InboxSourceKind
 import com.raven.app.core.model.MediaItem
 import com.raven.app.core.model.MediaKind
 import com.raven.app.core.model.SavedSearch
+import com.raven.app.core.model.SeriesFollow
+import com.raven.app.core.sitespi.SeriesSource
 import com.raven.app.core.model.SearchScope
 import com.raven.app.core.model.SiteDescriptor
 import com.raven.app.core.model.SiteId
@@ -34,6 +36,58 @@ class SubscriptionsViewModelTest {
 
     @get:Rule
     val tempFolder = TemporaryFolder()
+
+    @Test
+    fun `manual inbox refresh delivers unseen chapters once and keeps the baseline on catalog failure`() = runTest {
+        val site = SiteId.MANGACOPY
+        val oldChapter = sampleMedia(site, "series:1", MediaKind.SERIAL_COMIC)
+        val newChapter = sampleMedia(site, "series:2", MediaKind.SERIAL_COMIC)
+        var chapters = listOf(oldChapter)
+        var fail = false
+        val source = object : SeriesSource {
+            override suspend fun loadChapters(seriesId: String): List<MediaItem> {
+                assertEquals("series", seriesId)
+                check(!fail) { "Incomplete catalog" }
+                return chapters
+            }
+        }
+        val plugin = FakeLibrarySitePlugin(
+            descriptor = SiteDescriptor(site, "Test Comic", defaultHost = "mangacopy.example", primaryKind = MediaKind.SERIAL_COMIC),
+            seriesSource = source,
+        )
+        val harness = LibraryTestHarness(mainRule.dispatcher, tempFolder.newFolder(), plugins = listOf(plugin))
+        val repository = harness.subscriptionRepository
+        repository.followSeries(SeriesFollow(site, "series", "Series", "https://mangacopy.example/comic/series"), chapters)
+        val vm = createViewModel(harness)
+
+        vm.uiState.test {
+            advanceUntilIdle()
+            vm.refreshAllUpdates()
+            advanceUntilIdle()
+            assertEquals(0, expectMostRecentItem().unreadSeriesCount)
+
+            fail = true
+            chapters = listOf(newChapter)
+            vm.refreshAllUpdates()
+            advanceUntilIdle()
+            assertEquals(1, expectMostRecentItem().refreshProgress.failedSourceCount)
+
+            fail = false
+            chapters = listOf(oldChapter.copy(title = "Renamed"), newChapter)
+            vm.refreshAllUpdates()
+            advanceUntilIdle()
+            val entry = expectMostRecentItem().inboxItems.single()
+            assertEquals(InboxSourceKind.SERIES_FOLLOW, entry.sourceKind)
+            assertEquals(newChapter.id, entry.item.id)
+            assertFalse(entry.isRead)
+
+            repository.deleteInboxItem(entry.id)
+            vm.refreshAllUpdates()
+            advanceUntilIdle()
+            assertTrue(expectMostRecentItem().inboxItems.isEmpty())
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
 
     @Test
     fun `first check establishes baseline with zero unread and second check surfaces new items for tags and saved searches`() = runTest {

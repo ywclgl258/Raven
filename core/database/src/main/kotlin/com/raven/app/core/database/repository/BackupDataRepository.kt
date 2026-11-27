@@ -17,6 +17,7 @@ import com.raven.app.core.database.dao.ShelfDao
 import com.raven.app.core.database.dao.ShelfItemDao
 import com.raven.app.core.database.dao.SmartShelfDao
 import com.raven.app.core.database.dao.TagSubscriptionDao
+import com.raven.app.core.database.dao.SeriesFollowDao
 import com.raven.app.core.database.dao.TagTranslationDao
 import com.raven.app.core.database.dao.TimeBookmarkDao
 import com.raven.app.core.database.dao.UpdateInboxDao
@@ -76,6 +77,7 @@ class BackupDataRepository(
     private val timeBookmarkDao: TimeBookmarkDao,
     private val imageFavoriteDao: ImageFavoriteDao,
     private val tagSubscriptionDao: TagSubscriptionDao,
+    private val seriesFollowDao: SeriesFollowDao? = null,
     private val savedSearchDao: SavedSearchDao,
     private val updateInboxDao: UpdateInboxDao,
     private val blockedTermDao: BlockedTermDao,
@@ -285,6 +287,7 @@ class BackupDataRepository(
             timeBookmarks = timeBookmarkDao.getAll().map { it.toDomain() },
             imageFavorites = imageFavorites,
             tagSubscriptions = tagSubscriptionDao.getAll().map { it.toDomain() },
+            seriesFollows = seriesFollowDao?.getAll()?.map { it.toDomain() }.orEmpty(),
             savedSearches = savedSearchDao.getAll().map { it.toDomain() },
             updateInbox = updateInboxDao.getAll().map { it.toDomain() },
             blockedTerms = blockedTermDao.getAll().map { it.toDomain() },
@@ -349,6 +352,11 @@ class BackupDataRepository(
         tagSubscriptionDao.deleteAll()
         if (payload.tagSubscriptions.isNotEmpty()) {
             tagSubscriptionDao.upsertAll(payload.tagSubscriptions.map { it.toEntity() })
+        }
+
+        seriesFollowDao?.deleteAll()
+        if (seriesFollowDao != null && payload.seriesFollows.isNotEmpty()) {
+            seriesFollowDao.upsertAll(payload.seriesFollows.map { it.toEntity() })
         }
 
         savedSearchDao.deleteAll()

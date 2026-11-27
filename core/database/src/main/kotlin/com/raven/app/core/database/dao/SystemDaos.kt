@@ -96,6 +96,11 @@ interface DownloadItemDao {
     @Query("UPDATE download_items SET priority = :priority, updated_at = :updatedAt WHERE id = :id")
     suspend fun updatePriority(id: String, priority: Int, updatedAt: Long)
 
+    @Transaction
+    suspend fun updatePriorities(priorities: Map<String, Int>, updatedAt: Long) {
+        priorities.forEach { (id, priority) -> updatePriority(id, priority, updatedAt) }
+    }
+
     @Query("UPDATE download_items SET group_name = :groupName, updated_at = :updatedAt WHERE id = :id")
     suspend fun updateGroupName(id: String, groupName: String, updatedAt: Long)
 

@@ -4,6 +4,7 @@ import com.raven.app.core.model.DirectoryEntry
 import com.raven.app.core.model.FeedRequest
 import com.raven.app.core.model.FeedSort
 import com.raven.app.core.model.MediaItem
+import com.raven.app.core.model.isSerialChapter
 import com.raven.app.core.model.RavenRoute
 import com.raven.app.core.model.SearchScope
 import com.raven.app.core.model.SiteId
@@ -78,6 +79,14 @@ interface BrowseNavigator {
                 url = item.url,
                 title = item.title,
                 coverUrl = item.coverUrl,
+            )
+        } else if (item.isSerialChapter()) {
+            // 连载的一话本身就是可读内容，列表点击直接开读，不再多一层单话详情。
+            openReader(
+                siteId = item.siteId,
+                mediaId = item.id,
+                url = item.url,
+                startPage = 1,
             )
         } else {
             openGallery(
@@ -202,3 +211,4 @@ fun BrowseNavigator.openSearchResultItem(
 
 fun MediaItem.isDirectoryEntryItem(): Boolean =
     extra["isDirectoryEntry"].equals("true", ignoreCase = true)
+

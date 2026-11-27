@@ -18,6 +18,7 @@ import com.raven.app.core.database.entity.ShelfEntity
 import com.raven.app.core.database.entity.ShelfItemEntity
 import com.raven.app.core.database.entity.SmartShelfEntity
 import com.raven.app.core.database.entity.TagSubscriptionEntity
+import com.raven.app.core.database.entity.SeriesFollowEntity
 import com.raven.app.core.database.entity.TagTranslationEntity
 import com.raven.app.core.database.entity.TimeBookmarkEntity
 import com.raven.app.core.database.entity.UpdateInboxEntity
@@ -39,6 +40,7 @@ import com.raven.app.core.model.ShelfItem
 import com.raven.app.core.model.SiteId
 import com.raven.app.core.model.SmartShelf
 import com.raven.app.core.model.TagSubscription
+import com.raven.app.core.model.SeriesFollow
 import com.raven.app.core.model.TagTranslationEntry
 import com.raven.app.core.model.TimeBookmark
 import com.raven.app.core.model.UpdateInboxItem
@@ -321,6 +323,28 @@ fun TagSubscriptionEntity.toDomain(): TagSubscription = TagSubscription(
     scope = scope,
     sortOrder = sortOrder,
     createdAt = createdAt,
+)
+
+fun SeriesFollow.toEntity(): SeriesFollowEntity = SeriesFollowEntity(
+    siteId = siteId.value,
+    seriesId = seriesId,
+    title = title,
+    url = url,
+    coverUrl = coverUrl,
+    createdAt = createdAt.takeIf { it > 0L } ?: 0L,
+    lastCheckedAt = lastCheckedAt,
+    seenChapterIds = seenChapterIds,
+)
+
+fun SeriesFollowEntity.toDomain(): SeriesFollow = SeriesFollow(
+    siteId = SiteId(siteId),
+    seriesId = seriesId,
+    title = title,
+    url = url,
+    coverUrl = coverUrl,
+    createdAt = createdAt,
+    lastCheckedAt = lastCheckedAt,
+    seenChapterIds = seenChapterIds,
 )
 
 fun SavedSearch.toEntity(): SavedSearchEntity = SavedSearchEntity(

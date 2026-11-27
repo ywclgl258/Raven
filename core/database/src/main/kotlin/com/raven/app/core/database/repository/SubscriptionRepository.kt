@@ -3,6 +3,7 @@ package com.raven.app.core.database.repository
 import com.raven.app.core.database.DatabaseTransactionRunner
 import com.raven.app.core.database.dao.SavedSearchDao
 import com.raven.app.core.database.dao.TagSubscriptionDao
+import com.raven.app.core.database.dao.SeriesFollowDao
 import com.raven.app.core.database.dao.UpdateInboxDao
 import com.raven.app.core.database.mapper.toDomain
 import com.raven.app.core.database.mapper.toEntity
@@ -11,6 +12,7 @@ import com.raven.app.core.model.SavedSearch
 import com.raven.app.core.model.SearchScope
 import com.raven.app.core.model.SiteId
 import com.raven.app.core.model.TagSubscription
+import com.raven.app.core.model.SeriesFollow
 import com.raven.app.core.model.UpdateInboxItem
 import java.util.UUID
 import kotlinx.coroutines.flow.Flow
@@ -26,6 +28,7 @@ class SubscriptionRepository(
     private val updateInboxDao: UpdateInboxDao,
     private val transactionRunner: DatabaseTransactionRunner,
     private val clock: () -> Long = System::currentTimeMillis,
+    private val seriesFollowDao: SeriesFollowDao? = null,
 ) {
     // ---- Tag subscriptions ----
 
@@ -304,6 +307,80 @@ class SubscriptionRepository(
 
     suspend fun clearInboxBySource(sourceKind: InboxSourceKind, sourceId: String) {
         updateInboxDao.deleteBySource(sourceKind, sourceId)
+    }
+
+    // ---- Series follows (按作品追更) ----
+
+    fun observeSeriesFollows(): Flow<List<SeriesFollow>> {
+        val dao = seriesFollowDao ?: return kotlinx.coroutines.flow.flowOf(emptyList())
+        return dao.observeAll().map { rows -> rows.map { it.toDomain() } }
+    }
+
+    fun observeSeriesFollows(siteId: com.raven.app.core.model.SiteId): Flow<List<SeriesFollow>> {
+        val dao = seriesFollowDao ?: return kotlinx.coroutines.flow.flowOf(emptyList())
+        return dao.observeBySite(siteId.value).map { rows -> rows.map { it.toDomain() } }
+    }
+
+    suspend fun followSeries(follow: SeriesFollow, chapters: List<com.raven.app.core.model.MediaItem>) {
+        validateSeriesCatalog(follow, chapters)
+        val dao = requireNotNull(seriesFollowDao) { "seriesFollowDao is required" }
+        transactionRunner {
+            if (dao.getOne(follow.siteId.value, follow.seriesId) != null) return@transactionRunner
+            val checkedAt = clock()
+            val prepared = follow.copy(
+                title = follow.title.trim().ifBlank { follow.seriesId },
+                createdAt = checkedAt,
+                lastCheckedAt = checkedAt,
+                seenChapterIds = chapters.map { it.id }.distinct(),
+            )
+            dao.upsert(prepared.toEntity())
+        }
+    }
+
+    suspend fun syncSeries(follow: SeriesFollow, chapters: List<com.raven.app.core.model.MediaItem>): Int {
+        validateSeriesCatalog(follow, chapters)
+        val dao = requireNotNull(seriesFollowDao) { "seriesFollowDao is required" }
+        return transactionRunner {
+            val existing = dao.getOne(follow.siteId.value, follow.seriesId) ?: return@transactionRunner 0
+            if (existing.createdAt != follow.createdAt) return@transactionRunner 0
+            val seen = existing.seenChapterIds.toSet()
+            val newChapters = chapters.filter { it.id !in seen }.distinctBy { it.id }
+            if (newChapters.isNotEmpty()) {
+                val sourceId = "${follow.siteId.value}:${follow.seriesId}"
+                val items = newChapters.map { ch ->
+                    com.raven.app.core.model.UpdateInboxItem(
+                        id = "SERIES_FOLLOW:$sourceId:${ch.compositeKey}",
+                        sourceKind = com.raven.app.core.model.InboxSourceKind.SERIES_FOLLOW,
+                        sourceId = sourceId,
+                        sourceLabel = follow.title.ifBlank { existing.title },
+                        item = ch,
+                        discoveredAt = clock(),
+                        isRead = false,
+                    )
+                }
+                upsertInboxItems(items)
+                dao.updateSeen(
+                    follow.siteId.value,
+                    follow.seriesId,
+                    (existing.seenChapterIds + newChapters.map { it.id }).distinct(),
+                )
+            }
+            dao.updateLastChecked(follow.siteId.value, follow.seriesId, clock())
+            newChapters.size
+        }
+    }
+
+    private fun validateSeriesCatalog(follow: SeriesFollow, chapters: List<com.raven.app.core.model.MediaItem>) {
+        require(follow.seriesId.isNotBlank() && chapters.isNotEmpty()) { "章节目录为空，请稍后重试" }
+        require(chapters.all { it.siteId == follow.siteId && it.kind.isGallery && it.id.isNotBlank() }) { "章节目录无效，请稍后重试" }
+    }
+
+    suspend fun unfollowSeries(siteId: com.raven.app.core.model.SiteId, seriesId: String) {
+        val dao = seriesFollowDao ?: return
+        transactionRunner {
+            dao.delete(siteId.value, seriesId)
+            updateInboxDao.deleteBySource(com.raven.app.core.model.InboxSourceKind.SERIES_FOLLOW, "${siteId.value}:$seriesId")
+        }
     }
 
     companion object {

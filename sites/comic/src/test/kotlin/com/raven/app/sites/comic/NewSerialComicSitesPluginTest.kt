@@ -252,6 +252,7 @@ class NewSerialComicSitesPluginTest {
         // ---- CopyManga ----
         val http = FakeHttpClientAdapter()
         var failNextPage = true
+        var chapterCount = 200
         http.onMatch({ req -> req.url.contains("/api/v3/comic2/trunc-work") }) { req ->
             jsonResp(
                 req,
@@ -263,7 +264,7 @@ class NewSerialComicSitesPluginTest {
             if (offset == 100 && failNextPage) {
                 SiteHttpResponse(code = 500, finalUrl = req.url, body = "boom".toByteArray())
             } else {
-                jsonResp(req, chapterPageJson(offset, 100))
+                jsonResp(req, chapterPageJson(offset, (chapterCount - offset).coerceIn(0, 100), chapterCount))
             }
         }
         val mangacopy = MangacopySitePlugin(http)
@@ -283,6 +284,13 @@ class NewSerialComicSitesPluginTest {
         )
         assertEquals(200, recovered.items.size)
         assertEquals("c199", recovered.items.last().extra["chapterUuid"])
+
+        chapterCount = 201
+        val refreshed = mangacopy.seriesSource.loadChapters("trunc-work")
+        assertEquals(201, refreshed.size)
+        assertEquals("trunc-work:c200", refreshed.last().id)
+        failNextPage = true
+        assertNotNull(runCatching { mangacopy.seriesSource.loadChapters("trunc-work") }.exceptionOrNull())
 
         // ---- HotManga (relamanhua) ----
         val hot = FakeHttpClientAdapter()

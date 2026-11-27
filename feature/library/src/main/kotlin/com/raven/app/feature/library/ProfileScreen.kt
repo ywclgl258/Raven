@@ -313,7 +313,7 @@ fun ProfileScreenContent(
                     item(key = "profile_empty") {
                         RavenEmptyState(
                             title = "还没有观看或阅读记录",
-                            message = "浏览视频、漫画或写真后，未看完的作品和稍后看片单会自动汇集到这里。",
+                            message = "浏览视频、漫画或写真后，未看完的作品、收藏与订阅更新会自动汇集到这里。",
                             icon = Icons.Outlined.BookmarkBorder,
                             actionLabel = "前往搜索发现",
                             onActionClick = { navigator.openSearch() },

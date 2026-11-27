@@ -556,6 +556,7 @@ class DownloadsViewModel(
     fun movePriority(id: String, delta: Int) {
         viewModelScope.launch(dispatchers.io) {
             runCatching { downloadGateway.movePriority(id, delta) }
+                .onSuccess { showVideoQueueOrder(id) }
                 .onFailure { e -> controls.update { it.copy(message = e.message ?: "调整优先级失败") } }
         }
     }
@@ -563,8 +564,17 @@ class DownloadsViewModel(
     fun prioritize(id: String) {
         viewModelScope.launch(dispatchers.io) {
             runCatching { downloadGateway.prioritize(id) }
-                .onSuccess { controls.update { it.copy(message = "已将任务置顶优先下载") } }
+                .onSuccess {
+                    showVideoQueueOrder(id)
+                    controls.update { it.copy(message = "已将任务置顶优先下载") }
+                }
                 .onFailure { e -> controls.update { it.copy(message = e.message ?: "置顶失败") } }
+        }
+    }
+
+    private fun showVideoQueueOrder(id: String) {
+        if (uiState.value.allItems.any { it.id == id && it.kind == DownloadKind.VIDEO }) {
+            controls.update { it.copy(sort = DownloadSort.QUEUE) }
         }
     }
 
@@ -926,8 +936,7 @@ private fun sortDownloads(items: List<DownloadItem>, sort: DownloadSort): List<D
         )
         DownloadSort.QUEUE -> items.sortedWith(
             compareByDescending<DownloadItem> { it.priority }
-                .thenByDescending { it.updatedAt }
-                .then(byTitle)
+                .thenBy { it.createdAt }
                 .thenBy { it.id },
         )
     }

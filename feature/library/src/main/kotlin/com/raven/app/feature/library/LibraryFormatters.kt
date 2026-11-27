@@ -114,6 +114,7 @@ fun SmartShelfRule.description(): String = when (this) {
 fun InboxSourceKind.displayLabel(): String = when (this) {
     InboxSourceKind.TAG_SUBSCRIPTION -> "标签订阅"
     InboxSourceKind.SAVED_SEARCH -> "保存的搜索"
+    InboxSourceKind.SERIES_FOLLOW -> "作品追更"
 }
 
 fun SearchScope.displayLabel(): String = when (this) {

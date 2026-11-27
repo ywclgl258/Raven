@@ -656,30 +656,33 @@ internal fun MediaCardActionSheet(
                     onOpen()
                 },
             )
-            RavenGroupedDivider(insetWithIcon = true)
-            BrowseMorphGroupedRow(
-                title = if (isInWatchLater) "移出稍后看" else "加入稍后看",
-                subtitle = if (isInWatchLater) "当前已在稍后看书架中" else "保存到内置稍后看书架",
-                iconBadgeModifier = Modifier.ravenBurstFeedback(
-                    trigger = isInWatchLater,
-                    burstColor = colors.crimson,
-                ),
-                leadingIcon = {
-                    RavenMorphToggleIcon(
-                        active = isInWatchLater,
-                        activeGlyph = RavenMorphIcons.BookmarkFilled,
-                        inactiveGlyph = RavenMorphIcons.BookmarkOutline,
-                        activeTint = colors.crimson,
-                        inactiveTint = colors.inkPrimary,
-                        size = 18.dp,
-                        springPreset = MorphSpringPreset.BOUNCY,
-                    )
-                },
-                onClick = {
-                    onToggleWatchLater()
-                    onDismiss()
-                },
-            )
+            // 稍后看只服务于视频追剧；漫画/写真用收藏与追更，重复入口只会让操作变糊。
+            if (item.kind.isVideo) {
+                RavenGroupedDivider(insetWithIcon = true)
+                BrowseMorphGroupedRow(
+                    title = if (isInWatchLater) "移出稍后看" else "加入稍后看",
+                    subtitle = if (isInWatchLater) "当前已在稍后看书架中" else "保存到内置稍后看书架",
+                    iconBadgeModifier = Modifier.ravenBurstFeedback(
+                        trigger = isInWatchLater,
+                        burstColor = colors.crimson,
+                    ),
+                    leadingIcon = {
+                        RavenMorphToggleIcon(
+                            active = isInWatchLater,
+                            activeGlyph = RavenMorphIcons.BookmarkFilled,
+                            inactiveGlyph = RavenMorphIcons.BookmarkOutline,
+                            activeTint = colors.crimson,
+                            inactiveTint = colors.inkPrimary,
+                            size = 18.dp,
+                            springPreset = MorphSpringPreset.BOUNCY,
+                        )
+                    },
+                    onClick = {
+                        onToggleWatchLater()
+                        onDismiss()
+                    },
+                )
+            }
             if (onToggleFavorite != null) {
                 RavenGroupedDivider(insetWithIcon = true)
                 BrowseMorphGroupedRow(

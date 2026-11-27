@@ -10,6 +10,8 @@ local.properties
 *.keystore
 *.jks
 signing.properties
+.env
+deploy/qqbot-bridge/.env
 
 # IDE & OS files
 .idea/
@@ -24,3 +26,9 @@ Thumbs.db
 # Third-party APK analysis payload (kept local, never tracked)
 reference/copymanga-3.1.1/original/
 reference/copymanga-3.1.1/unpacked/
+
+# Python helpers (bridge / feedback service local runs)
+__pycache__/
+*.pyc
+deploy/qqbot-bridge/botpy.log
+deploy/feedback-server/.venv/

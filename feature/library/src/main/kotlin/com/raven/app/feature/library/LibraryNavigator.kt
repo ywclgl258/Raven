@@ -3,7 +3,10 @@ package com.raven.app.feature.library
 import com.raven.app.core.model.FavoriteItem
 import com.raven.app.core.model.FavoriteKind
 import com.raven.app.core.model.FeedRequest
+import com.raven.app.core.model.InboxSourceKind
+import com.raven.app.core.model.UpdateInboxItem
 import com.raven.app.core.model.MediaItem
+import com.raven.app.core.model.isSerialChapter
 import com.raven.app.core.model.RavenRoute
 import com.raven.app.core.model.ReadingProgress
 import com.raven.app.core.model.SearchScope
@@ -76,6 +79,15 @@ interface LibraryNavigator {
 
     fun openGlobalInbox()
 
+    fun openInboxItem(entry: UpdateInboxItem) {
+        val item = entry.item
+        if (entry.sourceKind == InboxSourceKind.SERIES_FOLLOW && item.kind.isGallery) {
+            openReader(siteId = item.siteId, mediaId = item.id, url = item.url)
+        } else {
+            openMedia(item)
+        }
+    }
+
     fun openLocalLibrary()
 
     fun openSettings()
@@ -110,6 +122,15 @@ interface LibraryNavigator {
                 startPage = startPage.coerceAtLeast(1),
                 offlineOnly = offlineOnly || item.siteId.isLocal,
                 queueToken = queueToken,
+            )
+        } else if (item.isSerialChapter()) {
+            // 连载的一话本身就是可读内容，列表点击直接开读，不再多一层单话详情。
+            openReader(
+                siteId = item.siteId,
+                mediaId = item.id,
+                url = item.url,
+                startPage = 1,
+                offlineOnly = item.siteId.isLocal,
             )
         } else {
             openGallery(
@@ -278,3 +299,4 @@ fun LibraryNavigator.openReadingProgress(progress: ReadingProgress) {
         offlineOnly = progress.siteId.isLocal,
     )
 }
+

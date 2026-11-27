@@ -26,6 +26,7 @@ import com.raven.app.core.model.Shelf
 import com.raven.app.core.model.ShelfItem
 import com.raven.app.core.model.SmartShelf
 import com.raven.app.core.model.TagSubscription
+import com.raven.app.core.model.SeriesFollow
 import com.raven.app.core.model.TagTranslationEntry
 import com.raven.app.core.model.TagTranslationSource
 import com.raven.app.core.model.TimeBookmark
@@ -59,6 +60,7 @@ object BackupMerger {
         timeBookmarksCount = payload.timeBookmarks.size,
         imageFavoritesCount = payload.imageFavorites.size,
         tagSubscriptionsCount = payload.tagSubscriptions.size,
+        seriesFollowsCount = payload.seriesFollows.size,
         savedSearchesCount = payload.savedSearches.size,
         updateInboxCount = payload.updateInbox.size,
         blockedTermsCount = payload.blockedTerms.size,
@@ -90,6 +92,7 @@ object BackupMerger {
         val mergedTimeBookmarks = mergeTimeBookmarks(local.timeBookmarks, incoming.timeBookmarks)
         val mergedImageFavorites = mergeImageFavorites(local.imageFavorites, incoming.imageFavorites)
         val mergedSubscriptions = mergeTagSubscriptions(local.tagSubscriptions, incoming.tagSubscriptions)
+        val mergedSeriesFollows = mergeSeriesFollows(local.seriesFollows, incoming.seriesFollows)
         val mergedSavedSearches = mergeSavedSearches(local.savedSearches, incoming.savedSearches)
         val mergedInbox = mergeUpdateInbox(local.updateInbox, incoming.updateInbox)
         val mergedBlocked = mergeBlockedTerms(local.blockedTerms, incoming.blockedTerms)
@@ -145,6 +148,7 @@ object BackupMerger {
             timeBookmarks = boundedTimeBookmarks,
             imageFavorites = mergedImageFavorites,
             tagSubscriptions = mergedSubscriptions,
+            seriesFollows = mergedSeriesFollows,
             savedSearches = boundedSavedSearches,
             updateInbox = boundedInbox,
             blockedTerms = mergedBlocked,
@@ -672,6 +676,36 @@ object BackupMerger {
                 .take(MAX_SUBSCRIPTIONS_PER_SITE)
                 .mapIndexed { index, sub -> sub.copy(sortOrder = index) }
         }
+    }
+
+    private fun mergeSeriesFollows(
+        local: List<SeriesFollow>,
+        incoming: List<SeriesFollow>,
+    ): List<SeriesFollow> {
+        val byKey = linkedMapOf<String, SeriesFollow>()
+        for (follow in local) {
+            if (follow.seriesId.isBlank()) continue
+            val key = "${follow.siteId.value}:${follow.seriesId}"
+            byKey[key] = follow
+        }
+        for (follow in incoming) {
+            if (follow.seriesId.isBlank()) continue
+            val key = "${follow.siteId.value}:${follow.seriesId}"
+            val existing = byKey[key]
+            if (existing == null) {
+                byKey[key] = follow
+            } else {
+                byKey[key] = existing.copy(
+                    title = existing.title.ifBlank { follow.title },
+                    url = existing.url.ifBlank { follow.url },
+                    coverUrl = existing.coverUrl.ifBlank { follow.coverUrl },
+                    createdAt = minPositive(existing.createdAt, follow.createdAt),
+                    lastCheckedAt = maxOf(existing.lastCheckedAt ?: 0L, follow.lastCheckedAt ?: 0L).takeIf { it > 0L },
+                    seenChapterIds = (existing.seenChapterIds + follow.seenChapterIds).distinct(),
+                )
+            }
+        }
+        return byKey.values.toList()
     }
 
     private fun mergeSavedSearches(

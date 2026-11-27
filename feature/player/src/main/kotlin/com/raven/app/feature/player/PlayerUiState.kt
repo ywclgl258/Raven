@@ -29,10 +29,7 @@ data class PlayerTagDisplay(
     val translatedLabel: String? = null,
     val isSubscribed: Boolean = false,
     val isBlocked: Boolean = false,
-) {
-    @Deprecated("Tags use subscription instead of favorite", replaceWith = ReplaceWith("isSubscribed"))
-    val isFavorited: Boolean get() = isSubscribed
-}
+)
 
 /**
  * Active sequential queue presentation for the currently playing video.

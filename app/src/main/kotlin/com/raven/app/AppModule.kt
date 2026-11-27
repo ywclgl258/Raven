@@ -13,6 +13,7 @@ import com.raven.app.feature.library.libraryFeatureModule
 import com.raven.app.feature.player.playerFeatureModule
 import com.raven.app.feature.reader.readerFeatureModule
 import com.raven.app.feature.settings.AppLockSessionCoordinator
+import com.raven.app.feature.settings.FeedbackDiagnosticSource
 import com.raven.app.feature.settings.RavenAppInfo
 import com.raven.app.feature.settings.settingsFeatureModule
 import com.raven.app.sites.comic.comicSitesModule
@@ -62,10 +63,13 @@ val appModule: Module = module {
         )
     }
 
+    single<FeedbackDiagnosticSource> {
+        RavenDiagnostics
+    }
+
     single<SiteRegistry> {
         createOrderedSiteRegistry(getAll<SitePlugin>())
     }
-
     single {
         AppLockSessionCoordinator(
             privacyLockStore = get(),

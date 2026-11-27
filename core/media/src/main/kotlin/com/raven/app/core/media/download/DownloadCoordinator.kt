@@ -2,6 +2,7 @@ package com.raven.app.core.media.download
 
 import com.raven.app.core.common.AppDispatchers
 import com.raven.app.core.common.DefaultAppDispatchers
+import com.raven.app.core.common.log.RavenLog
 import com.raven.app.core.database.datastore.SettingsDataStore
 import com.raven.app.core.database.repository.DownloadStateRepository
 import com.raven.app.core.media.playback.DownloadCaches
@@ -289,6 +290,7 @@ class DownloadCoordinator(
                     } catch (error: Exception) {
                         val siteName = siteRegistryProvider().get(item.siteId)?.descriptor?.displayName
                             ?: item.siteId.value
+                        RavenLog.w("DownloadBatch", "batch enqueue failed site=$siteName kind=${item.kind}", error)
                         _batchProgress.value = _batchProgress.value.let {
                             it.copy(
                                 processed = it.processed + 1,
@@ -385,11 +387,21 @@ class DownloadCoordinator(
     }
 
     suspend fun movePriority(id: String, delta: Int) = withContext(dispatchers.io) {
-        galleryDownloadEngine.movePriority(id, delta)
+        val item = downloadStateRepository.getById(id)
+        if (item?.kind == DownloadKind.VIDEO) {
+            videoDownloadEngine.movePriority(id, delta)
+        } else {
+            galleryDownloadEngine.movePriority(id, delta)
+        }
     }
 
     suspend fun prioritize(id: String) = withContext(dispatchers.io) {
-        galleryDownloadEngine.prioritize(id)
+        val item = downloadStateRepository.getById(id)
+        if (item?.kind == DownloadKind.VIDEO) {
+            videoDownloadEngine.prioritize(id)
+        } else {
+            galleryDownloadEngine.prioritize(id)
+        }
     }
 
     suspend fun setGroup(id: String, groupName: String) = withContext(dispatchers.io) {

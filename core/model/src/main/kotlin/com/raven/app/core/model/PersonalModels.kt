@@ -54,6 +54,18 @@ val ReadingProgress.workId: String
         return if (separator > 0 && kind.isSerialComic) mediaId.substring(0, separator) else mediaId
     }
 
+/**
+ * True when this item is one chapter of a serial comic rather than the work itself. Chapter entries
+ * are readable content, so list taps should open the reader instead of a chapter-scoped detail page.
+ */
+fun MediaItem.isSerialChapter(): Boolean {
+    if (!kind.isSerialComic) return false
+    val workId = extra["comicId"]?.trim()?.takeIf(String::isNotBlank)
+        ?: extra["seriesId"]?.trim()?.takeIf(String::isNotBlank)
+        ?: return false
+    return workId != id
+}
+
 @Serializable
 enum class FavoriteKind {
     VIDEO,
@@ -234,6 +246,18 @@ data class TagSubscription(
 )
 
 @Serializable
+data class SeriesFollow(
+    val siteId: SiteId,
+    val seriesId: String,
+    val title: String,
+    val url: String,
+    val coverUrl: String = "",
+    val createdAt: Long = 0L,
+    val lastCheckedAt: Long? = null,
+    val seenChapterIds: List<String> = emptyList(),
+)
+
+@Serializable
 data class SavedSearch(
     val id: String,
     val name: String,
@@ -252,6 +276,7 @@ data class SavedSearch(
 enum class InboxSourceKind {
     TAG_SUBSCRIPTION,
     SAVED_SEARCH,
+    SERIES_FOLLOW,
 }
 
 @Serializable
@@ -431,6 +456,7 @@ data class RavenBackupPayload(
     val timeBookmarks: List<TimeBookmark> = emptyList(),
     val imageFavorites: List<ImageFavorite> = emptyList(),
     val tagSubscriptions: List<TagSubscription> = emptyList(),
+    val seriesFollows: List<SeriesFollow> = emptyList(),
     val savedSearches: List<SavedSearch> = emptyList(),
     val updateInbox: List<UpdateInboxItem> = emptyList(),
     val blockedTerms: List<BlockedTerm> = emptyList(),

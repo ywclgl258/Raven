@@ -7,6 +7,7 @@ import com.raven.app.core.media.storage.LocalLibraryImporter
 import com.raven.app.core.model.RavenRoute
 import com.raven.app.core.network.RavenOkHttpPool
 import java.io.File
+import android.os.Build
 import org.koin.android.ext.koin.androidContext
 import org.koin.core.module.Module
 import org.koin.core.module.dsl.viewModel
@@ -55,6 +56,15 @@ val settingsFeatureModule: Module = module {
     }
 
     single {
+        val info = getOrNull<RavenAppInfo>() ?: RavenAppInfo.fromContext(androidContext())
+        FeedbackClient(
+            httpClient = FeedbackClient.diagnosticClient(get<RavenOkHttpPool>().externalApiClient),
+            appInfo = info,
+            dispatchers = get(),
+        )
+    }
+
+    single {
         val appContext = androidContext()
         val info = getOrNull<RavenAppInfo>() ?: RavenAppInfo.fromContext(appContext)
         EhTagTranslationSyncer(
@@ -96,6 +106,23 @@ val settingsFeatureModule: Module = module {
                 DuplicateSource.LOCAL -> localImporter.removeBook(copy.mediaId)
             }
         }
+    }
+
+    viewModel {
+        val appContext = androidContext()
+        val info = getOrNull<RavenAppInfo>() ?: RavenAppInfo.fromContext(appContext)
+        FeedbackViewModel(
+            feedbackClient = get(),
+            appInfo = info,
+            diagnostics = getOrNull<FeedbackDiagnosticSource>() ?: EmptyFeedbackDiagnosticSource(),
+            deviceSnapshot = FeedbackDeviceSnapshot(
+                model = Build.MODEL ?: "unknown",
+                androidRelease = Build.VERSION.RELEASE ?: "unknown",
+                sdkInt = Build.VERSION.SDK_INT,
+                locale = java.util.Locale.getDefault().toLanguageTag(),
+            ),
+            dispatchers = get(),
+        )
     }
 
     viewModel {

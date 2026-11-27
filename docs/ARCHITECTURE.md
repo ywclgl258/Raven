@@ -306,6 +306,7 @@ sealed interface RavenRoute {
     @Serializable data class BlockedTerms(val siteId: String) : RavenRoute
     @Serializable data object TagDictionary : RavenRoute
     @Serializable data object BackupRestore : RavenRoute
+    @Serializable data object Feedback : RavenRoute
     @Serializable data object StorageMigration : RavenRoute
     @Serializable data object DuplicateScanner : RavenRoute
 }

@@ -193,6 +193,13 @@
       .brand img { width: 27px; height: 27px; }
       .nav { gap: 7px; }
     }
+    .feedback-form { display: grid; gap: 14px; max-width: 720px; }
+    .feedback-form label { display: grid; gap: 6px; color: var(--muted); font-size: .86rem; }
+    .feedback-form input, .feedback-form select, .feedback-form textarea { width: 100%; min-height: 48px; border: 1px solid var(--line); border-radius: 12px; background: var(--raised); color: var(--ink); padding: 10px 12px; font: inherit; }
+    .feedback-form textarea { min-height: 140px; resize: vertical; }
+    .feedback-form .check { display: flex; align-items: center; gap: 10px; }
+    .feedback-form .check input { width: auto; min-height: 0; }
+    #feedback-status { min-height: 1.6em; }
     .hero-art::before {
       border-color: var(--orbit-edge);
       background: radial-gradient(circle at 43% 33%, var(--wash), transparent 67%);
@@ -263,6 +270,7 @@
         <a href="#features">功能</a>
         <a href="#screenshots">截图</a>
         <a href="#changelog">更新日志</a>
+        <a href="#feedback">反馈</a>
         <a href="#download">下载</a>
       </nav>
     </div>
@@ -270,7 +278,7 @@
   <main id="main" class="wrap" tabindex="-1">
     <section class="hero" aria-labelledby="title" data-od-id="hero">
       <div class="hero-copy">
-        <div class="version">ANDROID&nbsp; / &nbsp;v0.9.2</div>
+        <div class="version">ANDROID&nbsp; / &nbsp;v0.9.3</div>
         <h1 id="title">Raven<span>渡鸦</span></h1>
         <p class="hero-line">一个 App，浏览视频、漫画与图集</p>
         <p class="lede">跨站搜索想看的作品，接着上次的进度播放或阅读。把喜欢的内容收进鸦巢，也能下载到设备，留到离线时慢慢看。</p>
@@ -360,6 +368,19 @@
       </div>
       <div>
         <details class="release" open>
+          <summary><span class="version release-version">v0.9.3</span><span class="label">反馈入口与连载续读修正</span><time datetime="2026-11-27">2026-11-27</time></summary>
+          <div class="release-content">
+            <ul>
+              <li>设置新增「反馈问题」，可附带诊断日志；日志在设备端先打码，仅含本应用事件与崩溃栈。</li>
+              <li>官网同步提供反馈入口与后台，未关闭的反馈可一键整理成文档供本地排查。</li>
+              <li>连载续读改为按作品定位：从继续阅读进入时直接回到最后阅读的那一话与页码。</li>
+              <li>连载作品详情页点击章节直接开始阅读，长按仍可查看单话详情。</li>
+              <li>漫画与写真移除多余的「稍后看」，只保留收藏与追更。</li>
+            </ul>
+            <a href="https://github.com/ywclgl258/Raven/releases/tag/v0.9.3">查看 v0.9.3 发布详情</a>
+          </div>
+        </details>
+        <details class="release">
           <summary><span class="version release-version">v0.9.2</span><span class="label">连载历史按作品追踪</span><time datetime="2026-11-27">2026-11-27</time></summary>
           <div class="release-content">
             <ul>
@@ -412,13 +433,13 @@
     <section id="download" class="section" aria-labelledby="download-title" data-od-id="download">
       <div class="download-panel">
         <div>
-          <div class="version">v0.9.2 · 正式版</div>
+          <div class="version">v0.9.3 · 正式版</div>
           <h2 id="download-title">下载 Raven</h2>
-          <p>Android 7.0+ · APK 7.47 MiB · <code>com.raven.app</code></p>
+          <p>Android 7.0+ · APK 7.57 MiB · <code>com.raven.app</code></p>
         </div>
         <div class="actions">
-          <a class="btn btn-primary" href="https://github.com/ywclgl258/Raven/releases/download/v0.9.1/Raven-v0.9.2-release.apk">GitHub 下载</a>
-          <a class="btn" href="https://ywclgl258.us.ci/download/Raven-v0.9.2-release.apk" download>VPS 镜像下载</a>
+          <a class="btn btn-primary" href="https://github.com/ywclgl258/Raven/releases/download/v0.9.3/Raven-v0.9.3-release.apk">GitHub 下载</a>
+          <a class="btn" href="https://ywclgl258.us.ci/download/Raven-v0.9.3-release.apk" download>VPS 镜像下载</a>
         </div>
         <div class="install-guide">
           <details>
@@ -432,11 +453,35 @@
           <details>
             <summary>查看 APK 文件 SHA-256</summary>
             <p>两个下载渠道的安装包摘要相同，可用下方数值核对下载文件。</p>
-            <code class="hash">3db5c5a06c46cbb4a440d571d81deeaabc8773726aaf83326827bb2ddc4a71dd</code>
-            <p><a href="https://github.com/ywclgl258/Raven/releases/download/v0.9.1/SHA256SUMS.txt">下载 SHA256SUMS.txt</a></p>
+            <code class="hash">9b41d473bbe3fad7354e9ac17aa0ac027cd24e3f73232012196a626038695fd1</code>
+            <p><a href="https://github.com/ywclgl258/Raven/releases/download/v0.9.3/SHA256SUMS.txt">下载 SHA256SUMS.txt</a></p>
           </details>
         </div>
       </div>
+    </section>
+    <section id="feedback" class="section" aria-labelledby="feedback-title" data-od-id="feedback">
+      <div class="section-head">
+        <h2 id="feedback-title">反馈问题</h2>
+        <p>应用内可在「设置 → 反馈问题」附带诊断日志。这里也可以直接提交，内容进入同一后台。</p>
+      </div>
+      <form id="feedback-form" class="feedback-form">
+        <label>类型
+          <select name="category">
+            <option value="bug">缺陷</option>
+            <option value="playback">播放</option>
+            <option value="download">下载</option>
+            <option value="account">账号</option>
+            <option value="suggestion">建议</option>
+            <option value="other">其他</option>
+          </select>
+        </label>
+        <label>标题<input name="title" required minlength="4" maxlength="120" placeholder="一句话说明问题"></label>
+        <label>描述<textarea name="body" required minlength="8" maxlength="8000" placeholder="复现步骤、预期结果和实际结果"></textarea></label>
+        <label>联系方式（可选）<input name="contact" maxlength="160" placeholder="邮箱或其他回复方式"></label>
+        <label class="check"><input name="log" type="file" accept=".txt,.log,text/plain"> 可选日志，最大 1.5 MB</label>
+        <button class="btn btn-primary" type="submit">发送反馈</button>
+        <p id="feedback-status" role="status"></p>
+      </form>
     </section>
     <footer class="footer">
       <a class="brand" href="#top" aria-label="返回 Raven 官网页首">
@@ -445,7 +490,8 @@
       <nav class="footer-links" aria-label="项目链接">
         <a href="https://github.com/ywclgl258/Raven">源代码</a>
         <a href="https://github.com/ywclgl258/Raven/releases">全部版本</a>
-        <a href="https://github.com/ywclgl258/Raven/issues">反馈问题</a>
+        <a href="#feedback">反馈问题</a>
+        <a href="https://github.com/ywclgl258/Raven/issues">GitHub Issues</a>
       </nav>
     </footer>
   </main>
@@ -482,6 +528,35 @@
       card.addEventListener('pointercancel', hideSpotlight);
       spotlightPreference.addEventListener('change', hideSpotlight);
     }
+
+    const feedbackForm = document.getElementById("feedback-form");
+    const feedbackStatus = document.getElementById("feedback-status");
+    feedbackForm?.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const data = new FormData(feedbackForm);
+      const file = data.get("log");
+      const payload = {
+        source: "website",
+        category: String(data.get("category") || "bug"),
+        title: String(data.get("title") || "").trim(),
+        body: String(data.get("body") || "").trim(),
+        contact: String(data.get("contact") || "").trim(),
+        appVersion: "website",
+      };
+      const upload = new FormData();
+      upload.append("payload", JSON.stringify(payload));
+      if (file instanceof File && file.size > 0) upload.append("log", file, file.name);
+      if (feedbackStatus) feedbackStatus.textContent = "正在发送…";
+      try {
+        const response = await fetch("/api/feedback", { method: "POST", body: upload });
+        const result = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(result.error || "提交失败");
+        if (feedbackStatus) feedbackStatus.textContent = "已收到，编号 " + result.id;
+        feedbackForm.reset();
+      } catch (error) {
+        if (feedbackStatus) feedbackStatus.textContent = error.message || "提交失败，请稍后再试";
+      }
+    });
   </script>
 </body>
 </html>

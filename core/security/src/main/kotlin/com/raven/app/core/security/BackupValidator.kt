@@ -35,6 +35,7 @@ data class BackupSummary(
     val timeBookmarksCount: Int,
     val imageFavoritesCount: Int,
     val tagSubscriptionsCount: Int,
+    val seriesFollowsCount: Int = 0,
     val savedSearchesCount: Int,
     val updateInboxCount: Int,
     val blockedTermsCount: Int,
@@ -292,7 +293,22 @@ class BackupValidator(
             validateSiteUrl(sub.url, sub.siteId, allowBlank = true, allowRelative = true)
         }
 
-        // 10. Saved searches
+        // 9b. Series follows
+        val seriesFollowCountBySite = HashMap<SiteId, Int>()
+        for (follow in payload.seriesFollows) {
+            validateSite(follow.siteId)
+            val count = (seriesFollowCountBySite[follow.siteId] ?: 0) + 1
+            checkRule(count <= MAX_SUBSCRIPTIONS_PER_SITE) { "站点 ${follow.siteId.value} 追更超过上限 ($MAX_SUBSCRIPTIONS_PER_SITE)" }
+            seriesFollowCountBySite[follow.siteId] = count
+            checkRule(follow.seriesId.isNotBlank() && follow.seriesId.length <= MAX_ID_LENGTH) { "追更作品 ID 无效" }
+            checkRule(follow.title.length <= MAX_TEXT_LENGTH) { "追更标题过长" }
+            validateSiteUrl(follow.url, follow.siteId, allowBlank = true, allowRelative = true)
+            checkRule(follow.seenChapterIds.size <= MAX_INBOX_ITEMS) { "已见章节列表超过上限" }
+            for (chapterId in follow.seenChapterIds) {
+                checkRule(chapterId.isNotBlank() && chapterId.length <= MAX_ID_LENGTH) { "已见章节 ID 无效" }
+            }
+        }
+
         checkRule(payload.savedSearches.size <= MAX_SAVED_SEARCHES) { "保存的搜索超过上限 ($MAX_SAVED_SEARCHES)" }
         val savedSearchIds = HashSet<String>(payload.savedSearches.size)
         for (search in payload.savedSearches) {
@@ -411,6 +427,7 @@ class BackupValidator(
             timeBookmarksCount = payload.timeBookmarks.size,
             imageFavoritesCount = payload.imageFavorites.size,
             tagSubscriptionsCount = payload.tagSubscriptions.size,
+            seriesFollowsCount = payload.seriesFollows.size,
             savedSearchesCount = payload.savedSearches.size,
             updateInboxCount = payload.updateInbox.size,
             blockedTermsCount = payload.blockedTerms.size,

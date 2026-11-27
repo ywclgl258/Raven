@@ -333,7 +333,7 @@ data class LibraryStats(
     val siteId: String? = null, // 显式传 SiteId.value，严禁读全局状态
 ) : RavenRoute
 ```
-> 同步在 `app/src/test/kotlin/com/raven/app/AppDiGraphTest.kt` 的 `allCurrentRavenRoutesRoundTripThroughSerializationAndIntentContract` 中补充新路由的 JSON 往返测试并更新总数断言（当前为 27 条路由）。
+> 同步在 `app/src/test/kotlin/com/raven/app/AppDiGraphTest.kt` 的 `allCurrentRavenRoutesRoundTripThroughSerializationAndIntentContract` 中补充新路由的 JSON 往返测试并更新总数断言（当前为 28 条路由）。
 
 #### Step 2：编写响应式 ViewModel 与不可变 UiState
 在目标 Feature 模块内新建 `LibraryStatsViewModel.kt`（不依赖 Android `Context`/`Activity`）：

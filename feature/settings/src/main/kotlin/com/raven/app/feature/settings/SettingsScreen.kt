@@ -34,6 +34,7 @@ import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.outlined.AutoStories
 import androidx.compose.material.icons.outlined.Backup
 import androidx.compose.material.icons.outlined.Block
+import androidx.compose.material.icons.outlined.BugReport
 import androidx.compose.material.icons.outlined.Cached
 import androidx.compose.material.icons.outlined.CleaningServices
 import androidx.compose.material.icons.outlined.CloudDownload
@@ -881,6 +882,15 @@ fun SettingsScreenContent(
                         showChevron = true,
                         onClick = navigator::openBackupRestore,
                         modifier = Modifier.testTag("settings_backup_restore_row"),
+                    )
+                    RavenGroupedDivider(insetWithIcon = true)
+                    RavenGroupedRow(
+                        title = "反馈问题",
+                        subtitle = "描述问题并上传诊断日志到官网后台",
+                        icon = Icons.Outlined.BugReport,
+                        showChevron = true,
+                        onClick = navigator::openFeedback,
+                        modifier = Modifier.testTag("settings_feedback_row"),
                     )
                 }
             }

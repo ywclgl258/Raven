@@ -106,6 +106,7 @@ import com.raven.app.feature.reader.ReaderNavigator
 import com.raven.app.feature.reader.ReaderScreen
 import com.raven.app.feature.reader.ReaderViewModel
 import com.raven.app.feature.settings.BackupRestoreScreen
+import com.raven.app.feature.settings.FeedbackScreen
 import com.raven.app.feature.settings.BlockedTermsScreen
 import com.raven.app.feature.settings.DuplicateScannerScreen
 import com.raven.app.feature.settings.SettingsNavigator
@@ -778,6 +779,10 @@ fun RavenAppShell(
                 navController.navigate(RavenRoute.BackupRestore) { launchSingleTop = true }
             }
 
+            override fun openFeedback() {
+                navController.navigate(RavenRoute.Feedback) { launchSingleTop = true }
+            }
+
             override fun openStorageMigration() {
                 navController.navigate(RavenRoute.StorageMigration) { launchSingleTop = true }
             }
@@ -1010,6 +1015,9 @@ fun RavenAppShell(
             }
             composable<RavenRoute.BackupRestore> {
                 BackupRestoreScreen(navigator = settingsNavigator)
+            }
+            composable<RavenRoute.Feedback> {
+                FeedbackScreen(navigator = settingsNavigator)
             }
             composable<RavenRoute.StorageMigration> {
                 StorageMigrationScreen(navigator = settingsNavigator)

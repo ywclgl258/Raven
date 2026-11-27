@@ -22,6 +22,8 @@ interface SettingsNavigator {
 
     fun openBackupRestore()
 
+    fun openFeedback()
+
     fun openStorageMigration()
 
     fun openDuplicateScanner()

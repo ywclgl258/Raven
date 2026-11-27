@@ -113,6 +113,10 @@ class DownloadStateRepository(
         downloadItemDao.updatePriority(id = id, priority = priority, updatedAt = clock())
     }
 
+    suspend fun updatePriorities(priorities: Map<String, Int>) {
+        if (priorities.isNotEmpty()) downloadItemDao.updatePriorities(priorities, clock())
+    }
+
     suspend fun updateGroupName(id: String, groupName: String) {
         downloadItemDao.updateGroupName(id = id, groupName = groupName.trim(), updatedAt = clock())
     }

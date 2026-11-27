@@ -231,6 +231,7 @@ data class BackupSummary(
     val timeBookmarksCount: Int,
     val imageFavoritesCount: Int,
     val tagSubscriptionsCount: Int,
+    val seriesFollowsCount: Int = 0,
     val savedSearchesCount: Int,
     val updateInboxCount: Int,
     val blockedTermsCount: Int,

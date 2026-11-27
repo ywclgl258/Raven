@@ -37,10 +37,12 @@ import com.raven.app.core.model.GalleryDetail
 import com.raven.app.core.model.LikedMedia
 import com.raven.app.core.model.LikedTagWeight
 import com.raven.app.core.model.MediaItem
+import com.raven.app.core.model.SeriesFollow
 import com.raven.app.core.model.MediaKind
 import com.raven.app.core.model.PageBookmark
 import com.raven.app.core.model.RavenRoute
 import com.raven.app.core.model.ReadingProgress
+import com.raven.app.core.model.workId
 import com.raven.app.core.model.SearchScope
 import com.raven.app.core.model.Shelf
 import com.raven.app.core.model.ShelfItem
@@ -64,6 +66,7 @@ import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
@@ -91,6 +94,15 @@ data class TagActionState(
     val isBlocked: Boolean,
 )
 
+/** Concrete resume destination: which chapter to open, at which page. */
+data class GalleryResumeTarget(
+    val item: MediaItem,
+    val startPage: Int,
+    val completed: Boolean,
+    /** True when the target chapter differs from the page currently on screen. */
+    val isOtherChapter: Boolean,
+)
+
 /**
  * Immutable UI state for [GalleryDetailScreen].
  */
@@ -110,6 +122,8 @@ data class GalleryDetailUiState(
     val readingProgress: ReadingProgress? = null,
     /** Reactive site-wide reading history keyed by media/chapter id (one row per work). */
     val readingProgressByMediaId: Map<String, ReadingProgress> = emptyMap(),
+    /** Work-level id for serial comics (`comicId`); null for one-shot works. */
+    val workSeriesId: String? = null,
     val isFavorite: Boolean = false,
     val isLiked: Boolean = false,
     val isInWatchLater: Boolean = false,
@@ -128,6 +142,9 @@ data class GalleryDetailUiState(
     val chaptersError: String? = null,
     val favoritedTagSlugs: Set<String> = emptySet(),
     val subscribedTagSlugs: Set<String> = emptySet(),
+    val isSeriesFollowed: Boolean = false,
+    val seriesFollowSupported: Boolean = false,
+    val seriesFollowInProgress: Boolean = false,
     val blockedTerms: Set<String> = emptySet(),
     val downloadSheet: DownloadSheetState = DownloadSheetState(),
     val tagAction: TagActionState? = null,
@@ -141,29 +158,94 @@ data class GalleryDetailUiState(
     val snackbarMessage: String? = null,
 ) {
     val hasResumeProgress: Boolean
+        get() = resumeTarget?.completed == false
+
+    /**
+     * Where "继续阅读" must land. Inside one serial work the reader can hop chapters, so the newest
+     * position of the whole work wins — resuming the chapter this page belongs to would rewind to
+     * wherever that chapter was left before the jump.
+     */
+    val resumeTarget: GalleryResumeTarget?
         get() {
-            val progress = readingProgress ?: return false
-            val total = detail?.pageCount ?: progress.totalPages
-            return progress.currentPage > 0 && (total <= 0 || progress.currentPage <= total)
+            val currentDetail = detail ?: return null
+            val seriesId = workSeriesId?.takeIf(String::isNotBlank)
+            if (seriesId == null) {
+                val progress = readingProgress ?: return null
+                val total = (currentDetail.pageCount.takeIf { it > 0 } ?: progress.totalPages).coerceAtLeast(1)
+                if (progress.currentPage <= 0) return null
+                return GalleryResumeTarget(
+                    item = currentDetail.item,
+                    startPage = if (progress.completed) 1 else progress.currentPage.coerceIn(1, total),
+                    completed = progress.completed,
+                    isOtherChapter = false,
+                )
+            }
+            val latest = workResumeProgress ?: return null
+            if (!latest.completed && latest.currentPage > 0) {
+                val item = chapterItemFor(latest, currentDetail)
+                val total = latest.totalPages.coerceAtLeast(latest.currentPage).coerceAtLeast(1)
+                return GalleryResumeTarget(
+                    item = item,
+                    startPage = latest.currentPage.coerceIn(1, total),
+                    completed = false,
+                    isOtherChapter = item.id != currentDetail.item.id,
+                )
+            }
+            nextUnreadChapter?.let { chapter ->
+                return GalleryResumeTarget(
+                    item = chapter,
+                    startPage = 1,
+                    completed = false,
+                    isOtherChapter = chapter.id != currentDetail.item.id,
+                )
+            }
+            val item = chapterItemFor(latest, currentDetail)
+            return GalleryResumeTarget(
+                item = item,
+                startPage = 1,
+                completed = true,
+                isOtherChapter = item.id != currentDetail.item.id,
+            )
+        }
+
+    /** Newest reading row across every chapter of this work (chapter rows share the work id). */
+    val workResumeProgress: ReadingProgress?
+        get() {
+            val seriesId = workSeriesId?.takeIf(String::isNotBlank) ?: return readingProgress
+            return readingProgressByMediaId.values
+                .filter { it.seriesId == seriesId || it.workId == seriesId }
+                .plus(listOfNotNull(readingProgress))
+                .maxByOrNull { it.updatedAt }
         }
 
     val resumeStartPage: Int
-        get() {
-            val progress = readingProgress ?: return 1
-            val total = (detail?.pageCount ?: progress.totalPages).coerceAtLeast(1)
-            return if (progress.completed) 1 else progress.currentPage.coerceIn(1, total)
-        }
+        get() = resumeTarget?.startPage ?: 1
 
     val primaryCtaLabel: String
         get() {
-            val progress = readingProgress
-            return if (progress != null && progress.currentPage > 1 && !progress.completed) {
-                "继续阅读 (第 ${progress.currentPage} 页)"
-            } else if (progress != null && progress.completed) {
-                "重新阅读"
-            } else {
-                "开始阅读"
+            val target = resumeTarget
+            return when {
+                target == null -> "开始阅读"
+                target.completed -> "重新阅读"
+                target.startPage > 1 -> "继续阅读 (第 ${target.startPage} 页)"
+                target.isOtherChapter -> "继续阅读"
+                else -> "开始阅读"
             }
+        }
+
+    private fun chapterItemFor(progress: ReadingProgress, currentDetail: GalleryDetail): MediaItem =
+        if (progress.mediaId == currentDetail.item.id) {
+            currentDetail.item
+        } else {
+            MediaItem(
+                siteId = progress.siteId,
+                id = progress.mediaId,
+                url = progress.url,
+                kind = progress.kind,
+                title = progress.title,
+                coverUrl = progress.coverUrl,
+                pageCount = progress.totalPages.takeIf { it > 0 },
+            )
         }
 
     val canOpenOffline: Boolean
@@ -427,6 +509,23 @@ class GalleryDetailViewModel(
             }
         }
 
+        _uiState.update { it.copy(seriesFollowSupported = plugin?.seriesSource != null) }
+
+        viewModelScope.launch(dispatchers.main) {
+            combine(
+                subscriptionRepository.observeSeriesFollows(),
+                _uiState.map { it.detail },
+            ) { follows, detail -> follows to detail }
+                .collectLatest { (follows, detail) ->
+                    val sid = detail?.item?.extra?.get("comicId")?.takeIf { it.isNotBlank() }
+                        ?: detail?.item?.id?.substringBefore(':')?.takeIf { it.isNotBlank() }
+                        ?: return@collectLatest
+                    _uiState.update { state ->
+                        state.copy(isSeriesFollowed = follows.any { it.siteId == siteId && it.seriesId == sid })
+                    }
+                }
+        }
+
         // Combine site favorites, tag subscriptions, effective blocked terms, cached tags, and dictionary revision.
         val cachedTagsFlow = mediaTagCacheRepository?.observeTagsBySite(siteId) ?: flowOf(emptyMap())
         val dictRevisionFlow = tagDictionaryRepository?.observeRevision() ?: flowOf(0L)
@@ -569,6 +668,7 @@ class GalleryDetailViewModel(
                     it.copy(
                         isLoading = false,
                         detail = snapshot.detail,
+                        workSeriesId = resolveWorkSeriesId(snapshot.detail),
                         filteredRelated = rankAndFilterSimilar(
                             detail = snapshot.detail,
                             candidates = snapshot.detail.related,
@@ -834,9 +934,11 @@ class GalleryDetailViewModel(
             val history = runCatching {
                 historyRepository.observeReadingProgressBySite(siteId).first()
             }.getOrElse { emptyList() }
-            val resume = history.firstOrNull {
+            val candidates = history.filter {
                 (it.mediaId == detail.item.id || it.mediaId in chapterIds) && it.currentPage > 0
-            } ?: return@launch
+            }
+            // Prefer the newest unfinished chapter; a finished chapter is only a fallback.
+            val resume = candidates.firstOrNull { !it.completed } ?: candidates.firstOrNull() ?: return@launch
             val chapter = chapters.firstOrNull { it.id == resume.mediaId } ?: return@launch
             if (chapter.id == detail.item.id) return@launch
             val snapshot = try {
@@ -861,6 +963,7 @@ class GalleryDetailViewModel(
                     isOfflineComplete = snapshot.isComplete,
                     sourceRoot = snapshot.sourceRoot,
                     isFavorite = resumedFav,
+                    workSeriesId = resolveWorkSeriesId(snapshot.detail),
                     readingProgress = it.readingProgressByMediaId[chapter.id],
                     localSizeLabel = snapshot.detail.fileSizeLabel,
                     filteredRelated = filterRelatedItems(
@@ -873,6 +976,18 @@ class GalleryDetailViewModel(
         }
     }
 
+    /** Work identity shared by every chapter row of the same serial comic. */
+    private fun resolveWorkSeriesId(detail: GalleryDetail): String? {
+        val extras = detail.item.extra
+        // Only serial comics group chapters; photo sets and one-shot comics keep their own id.
+        val isSerialWork = detail.item.kind.isSerialComic || extras["comicId"]?.isNotBlank() == true
+        if (!isSerialWork) return null
+        val explicit = listOf("comicId", "seriesId", "albumId")
+            .firstNotNullOfOrNull { key -> extras[key]?.trim()?.takeIf(String::isNotBlank) }
+        if (explicit != null) return explicit
+        return detail.item.id.substringBefore(':').takeIf { detail.item.id.contains(':') && it.isNotBlank() }
+    }
+
     private fun isSeriesRootEntry(detail: GalleryDetail): Boolean {
         val comicId = detail.item.extra["comicId"]?.takeIf { it.isNotBlank() }
         if (comicId != null) {
@@ -883,6 +998,50 @@ class GalleryDetailViewModel(
             ?.trimEnd('/')
             ?: return false
         return mediaId == detail.item.id && chaptersBaseUrl == detail.item.url.trimEnd('/')
+    }
+
+    fun toggleSeriesFollow() {
+        if (_uiState.value.seriesFollowInProgress) return
+        val detail = _uiState.value.detail ?: return
+        val seriesSource = plugin?.seriesSource ?: return
+        val siteId = this.siteId ?: return
+        val seriesId = detail.item.extra["comicId"]?.takeIf { it.isNotBlank() }
+            ?: detail.item.id.substringBefore(':').takeIf { it.isNotBlank() }
+            ?: return
+        val seriesUrl = detail.chaptersUrl?.substringBefore('#')?.takeIf { it.isNotBlank() }
+            ?: detail.item.url.substringBefore("/chapter/").trimEnd('/')
+        val seriesTitle = detail.item.title.substringBefore(" · ").ifBlank { detail.item.title }
+        val currentlyFollowed = _uiState.value.isSeriesFollowed
+        _uiState.update { it.copy(seriesFollowInProgress = true) }
+        viewModelScope.launch(dispatchers.io) {
+            try {
+                if (currentlyFollowed) {
+                    subscriptionRepository.unfollowSeries(siteId, seriesId)
+                } else {
+                    val chapters = seriesSource.loadChapters(seriesId)
+                    subscriptionRepository.followSeries(
+                        SeriesFollow(
+                            siteId = siteId,
+                            seriesId = seriesId,
+                            title = seriesTitle,
+                            url = seriesUrl,
+                        ),
+                        chapters,
+                    )
+                }
+                _uiState.update { it.copy(isSeriesFollowed = !currentlyFollowed, seriesFollowInProgress = false) }
+            } catch (ce: CancellationException) {
+                _uiState.update { it.copy(seriesFollowInProgress = false) }
+                throw ce
+            } catch (error: Throwable) {
+                _uiState.update {
+                    it.copy(
+                        seriesFollowInProgress = false,
+                        snackbarMessage = error.message?.takeIf(String::isNotBlank) ?: "作品追更失败",
+                    )
+                }
+            }
+        }
     }
 
     fun formatTagLabel(tag: TagRef): String =
@@ -922,6 +1081,8 @@ class GalleryDetailViewModel(
     fun toggleWatchLater() {
         val detail = _uiState.value.detail ?: return
         val item = detail.item
+        // 漫画/写真靠阅读进度续读，稍后看只对视频有意义；旧入口也不能再写入。
+        if (!item.kind.isVideo) return
         viewModelScope.launch(dispatchers.io) {
             val added = shelfRepository.toggleItem(
                 shelfId = Shelf.WATCH_LATER_ID,

@@ -42,6 +42,94 @@ class GalleryDetailViewModelTest {
     val tempFolder = TemporaryFolder()
 
     @Test
+    fun `serial work resume follows the newest chapter instead of the chapter on screen`() = runTest(mainDispatcherRule.dispatcher) {
+        val harness = ReaderTestHarness(mainDispatcherRule.dispatcher, tempFolder.newFolder())
+        val workId = "work-7"
+        val chapterA = sampleGalleryDetail(
+            siteId = SiteId.NHENTAI,
+            mediaId = "$workId:c1",
+            pageCount = 10,
+            kind = MediaKind.SERIAL_COMIC,
+        ).let { detail ->
+            detail.copy(
+                item = detail.item.copy(
+                    title = "Sample Gallery $workId · 第 1 话",
+                    extra = mapOf("comicId" to workId),
+                ),
+                chaptersUrl = "https://nhentai.example/g/$workId",
+            )
+        }
+
+        // Chapter 1 was abandoned halfway; chapter 2 was read afterwards and must win.
+        harness.historyRepository.saveReadingProgress(
+            ReadingProgress(
+                siteId = SiteId.NHENTAI,
+                mediaId = "$workId:c1",
+                url = chapterA.item.url,
+                title = "第 1 话",
+                kind = MediaKind.SERIAL_COMIC,
+                currentPage = 6,
+                totalPages = 10,
+                updatedAt = harness.nowMs - 60_000L,
+                seriesId = workId,
+            ),
+        )
+        harness.historyRepository.saveReadingProgress(
+            ReadingProgress(
+                siteId = SiteId.NHENTAI,
+                mediaId = "$workId:c2",
+                url = "https://nhentai.example/g/$workId/c2",
+                title = "第 2 话",
+                kind = MediaKind.SERIAL_COMIC,
+                currentPage = 3,
+                totalPages = 8,
+                updatedAt = harness.nowMs,
+                seriesId = workId,
+            ),
+        )
+
+        val plugin = FakeGallerySitePlugin(
+            descriptor = sampleSiteDescriptor(SiteId.NHENTAI, displayName = "nHentai"),
+            detailHandler = { chapterA },
+        )
+        val viewModel = GalleryDetailViewModel(
+            route = RavenRoute.GalleryDetail(SiteId.NHENTAI.value, chapterA.item.id, chapterA.item.url),
+            siteRegistry = SiteRegistry(listOf(plugin)),
+            pageLoader = FakeReaderPageLoader(
+                detailLoader = { _, _, _, _ ->
+                    OfflineGallerySnapshot(chapterA, emptyList(), emptyList(), "", false)
+                },
+            ),
+            localLibraryImporter = harness.localLibraryImporter,
+            downloadGateway = FakeGalleryDownloadGateway(),
+            exportGateway = harness.exportGateway,
+            historyRepository = harness.historyRepository,
+            favoriteRepository = harness.favoriteRepository,
+            shelfRepository = harness.shelfRepository,
+            bookmarkRepository = harness.bookmarkRepository,
+            blockedTermsRepository = harness.blockedTermsRepository,
+            subscriptionRepository = harness.subscriptionRepository,
+            preferencesRepository = harness.preferencesRepository,
+            dispatchers = harness.dispatchers,
+            tagDictionary = TagDictionary(emptyMap()),
+            clock = harness.clock,
+        )
+
+        advanceUntilIdle()
+
+        val state = viewModel.uiState.value
+        assertEquals("$workId", state.workSeriesId)
+        assertEquals("$workId:c2", state.workResumeProgress?.mediaId)
+        val target = state.resumeTarget
+        assertNotNull(target)
+        assertEquals("$workId:c2", target!!.item.id)
+        assertTrue(target.isOtherChapter)
+        assertEquals(3, target.startPage)
+        assertEquals(3, state.resumeStartPage)
+        assertEquals("继续阅读 (第 3 页)", state.primaryCtaLabel)
+    }
+
+    @Test
     fun `online gallery load surfaces resume CTA, translated tags, bookmarks, and reactive toggles`() = runTest(mainDispatcherRule.dispatcher) {
         val harness = ReaderTestHarness(mainDispatcherRule.dispatcher, tempFolder.newFolder())
         val tag = TagRef(slug = "solo-female", label = "solo female", namespace = "female")
@@ -119,11 +207,11 @@ class GalleryDetailViewModelTest {
         assertEquals(1, state.pageBookmarks.size)
         assertEquals(7, state.pageBookmarks.first().page)
 
-        // Watch Later & Favorite toggles update state reactively
+        // Favorite stays reactive; Watch Later is video-only, so a comic toggle must be a no-op.
         viewModel.toggleWatchLater()
         viewModel.toggleFavorite()
         advanceUntilIdle()
-        assertTrue(viewModel.uiState.value.isInWatchLater)
+        assertFalse(viewModel.uiState.value.isInWatchLater)
         assertTrue(viewModel.uiState.value.isFavorite)
 
         // Tag long-press actions: favorite & block

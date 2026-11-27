@@ -29,6 +29,7 @@ import com.raven.app.core.sitespi.LruCache
 import com.raven.app.core.sitespi.MirrorLeaseRouter
 import com.raven.app.core.sitespi.ResolvedLink
 import com.raven.app.core.sitespi.SearchSource
+import com.raven.app.core.sitespi.SeriesSource
 import com.raven.app.core.sitespi.SiteHttpRequest
 import com.raven.app.core.sitespi.SitePlugin
 import com.raven.app.core.sitespi.SiteRequestKind
@@ -339,6 +340,12 @@ class MangacopySitePlugin(
             } else {
                 listOf(FeedSort.NEWEST, FeedSort.POPULAR)
             }
+    }
+
+    override val seriesSource: SeriesSource = object : SeriesSource {
+        override suspend fun loadChapters(seriesId: String): List<MediaItem> {
+            return loadChapterFeed(seriesId.trim(), forceRefresh = true).items
+        }
     }
 
     override val searchSource: SearchSource = object : SearchSource {
@@ -658,8 +665,11 @@ class MangacopySitePlugin(
         pathWord: String,
         groups: JsonObject?,
         throwIfAllFailed: Boolean = true,
+        forceRefresh: Boolean = false,
     ): List<CopyHotApiSupport.ChapterEntry> {
-        chapterListCache.get(pathWord)?.let { return it }
+        if (!forceRefresh) {
+            chapterListCache.get(pathWord)?.let { return it }
+        }
         val groupPairs = groups?.values?.mapNotNull { element ->
             val obj = element as? JsonObject ?: return@mapNotNull null
             val gPath = obj.safeString("path_word").takeIf { it.isNotBlank() } ?: return@mapNotNull null
@@ -744,9 +754,9 @@ class MangacopySitePlugin(
         return chapters
     }
 
-    private suspend fun loadChapterFeed(pathWord: String): FeedPage {
+    private suspend fun loadChapterFeed(pathWord: String, forceRefresh: Boolean = false): FeedPage {
         val results = fetchComicDetailResults(pathWord)
-        val chapters = loadChapters(pathWord, results.safeObject("groups"), throwIfAllFailed = true)
+        val chapters = loadChapters(pathWord, results.safeObject("groups"), throwIfAllFailed = true, forceRefresh = forceRefresh)
         val items = chapters.map { chapter ->
             MediaItem(
                 siteId = SiteId.MANGACOPY,

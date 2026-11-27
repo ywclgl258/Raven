@@ -270,7 +270,13 @@ fun DownloadsScreen(
     }
 
     // Per-Item Action Bottom Sheet
-    activeMenuTarget?.let { item ->
+    val liveMenuTarget = activeMenuTarget?.let { target -> uiState.allItems.firstOrNull { it.id == target.id } }
+    liveMenuTarget?.let { item ->
+        val canReorder = if (item.kind == DownloadKind.VIDEO) {
+            item.status == DownloadStatus.QUEUED
+        } else {
+            item.status.isInProgressBucket()
+        }
         DownloadItemActionSheet(
             item = item,
             siteLabel = uiState.siteLabels[item.siteId] ?: item.siteId.value,
@@ -294,17 +300,17 @@ fun DownloadsScreen(
             } else {
                 null
             },
-            onPrioritize = if (item.kind != DownloadKind.VIDEO && item.status.isInProgressBucket()) {
+            onPrioritize = if (canReorder) {
                 { viewModel.prioritize(item.id) }
             } else {
                 null
             },
-            onMoveUp = if (item.kind != DownloadKind.VIDEO && item.status.isInProgressBucket()) {
+            onMoveUp = if (canReorder) {
                 { viewModel.movePriority(item.id, +1) }
             } else {
                 null
             },
-            onMoveDown = if (item.kind != DownloadKind.VIDEO && item.status.isInProgressBucket()) {
+            onMoveDown = if (canReorder) {
                 { viewModel.movePriority(item.id, -1) }
             } else {
                 null
@@ -1521,7 +1527,7 @@ private fun DownloadItemActionSheet(
                     if (addedRow) RavenGroupedDivider(insetWithIcon = true)
                     addedRow = true
                     RavenGroupedRow(
-                        title = "提高队列优先级",
+                        title = if (item.kind == DownloadKind.VIDEO) "上移一位" else "提高队列优先级",
                         icon = Icons.Outlined.KeyboardArrowUp,
                         onClick = {
                             onDismiss()
@@ -1533,7 +1539,7 @@ private fun DownloadItemActionSheet(
                     if (addedRow) RavenGroupedDivider(insetWithIcon = true)
                     addedRow = true
                     RavenGroupedRow(
-                        title = "降低队列优先级",
+                        title = if (item.kind == DownloadKind.VIDEO) "下移一位" else "降低队列优先级",
                         icon = Icons.Outlined.KeyboardArrowDown,
                         onClick = {
                             onDismiss()

@@ -28,6 +28,8 @@ class RavenDatabaseMigrationTest {
     @Test fun migrateFrom2() = verifyUpgrade(2)
     @Test fun migrateFrom3() = verifyUpgrade(3)
     @Test fun migrateFrom4() = verifyUpgrade(4)
+    @Test fun migrateFrom5() = verifyUpgrade(5)
+    @Test fun migrateFrom6() = verifyUpgrade(6)
 
     private fun verifyUpgrade(oldVersion: Int) {
         val name = "raven-upgrade-from-$oldVersion.db"
@@ -54,7 +56,7 @@ class RavenDatabaseMigrationTest {
             helper.runMigrationsAndValidate(
                 name, RavenDatabase.SCHEMA_VERSION, true,
                 RavenDatabase.MIGRATION_1_2, RavenDatabase.MIGRATION_2_3,
-                RavenDatabase.MIGRATION_3_4, RavenDatabase.MIGRATION_4_5,
+                RavenDatabase.MIGRATION_3_4, RavenDatabase.MIGRATION_4_5, RavenDatabase.MIGRATION_5_6, RavenDatabase.MIGRATION_6_7,
             ).close()
             val room = Room.databaseBuilder(context, RavenDatabase::class.java, name).build()
             try {
@@ -70,6 +72,9 @@ class RavenDatabaseMigrationTest {
                 db.query("SELECT liked_at FROM media_likes").use {
                     assertEquals(oldVersion >= 4, it.moveToFirst())
                     if (oldVersion >= 4) assertEquals(1234L, it.getLong(0))
+                }
+                db.query("SELECT name FROM sqlite_master WHERE type='table' AND name='series_follows'").use {
+                    assertTrue(it.moveToFirst())
                 }
                 if (oldVersion >= 6) {
                     db.query("SELECT series_id FROM reading_progress WHERE media_id = 'series-1:chapter-2'").use {

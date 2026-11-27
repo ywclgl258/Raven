@@ -131,12 +131,6 @@ object RavenMotion {
     /** HarmonyOS Design standard optical easing curve `(0.2, 0.0, 0.0, 1.0)` for micro-emphasis fades and highlights. */
     val HarmonyStandardEasing: CubicBezierEasing = CubicBezierEasing(0.20f, 0f, 0f, 1f)
 
-    /** Legacy deceleration alias preserved temporarily for source compatibility; delegates to [HarmonyDecelerationEasing]. */
-    @Deprecated(
-        message = "Use RavenMotion.HarmonyDecelerationEasing instead",
-        replaceWith = ReplaceWith("RavenMotion.HarmonyDecelerationEasing"),
-    )
-    val AppleDecelerationEasing: CubicBezierEasing = HarmonyDecelerationEasing
 
     /** Finger-tracking / instant press-down gravity spring (`damping = 0.92`, `stiffness = 620`). */
     fun <T> responsiveSpringSpec(): SpringSpec<T> = spring(

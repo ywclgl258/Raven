@@ -59,6 +59,8 @@ internal class BrowseShelfController(
     }
 
     fun toggleWatchLater(item: MediaItem) {
+        // 漫画与写真没有"稍后看"语义（阅读进度本身就会续读），只在视频上生效。
+        if (!item.kind.isVideo) return
         scope.launch {
             withContext(ioDispatcher) {
                 shelfRepository.toggleItem(Shelf.WATCH_LATER_ID, item.toShelfItem())

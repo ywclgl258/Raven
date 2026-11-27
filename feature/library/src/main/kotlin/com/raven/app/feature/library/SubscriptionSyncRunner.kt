@@ -14,6 +14,7 @@ import com.raven.app.core.model.FeedSort
 import com.raven.app.core.model.InboxSourceKind
 import com.raven.app.core.model.MediaItem
 import com.raven.app.core.model.SavedSearch
+import com.raven.app.core.model.SeriesFollow
 import com.raven.app.core.model.SiteId
 import com.raven.app.core.model.TagRef
 import com.raven.app.core.model.TagSubscription
@@ -52,7 +53,8 @@ data class SubscriptionSyncSummary(
 ) {
     fun toStatusMessage(): String = buildString {
         when {
-            totalSources == 0 -> return "暂无可检查的标签订阅或保存的搜索"
+            totalSources == 0 -> return "暂无可检查的订阅或追更作品"
+            failedSourceCount == totalSources -> return "检查失败，$failedSourceCount 个来源均未更新，请稍后重试"
             newlyDiscoveredCount > 0 -> append("发现 $newlyDiscoveredCount 条新内容")
             baselinedSourceCount > 0 -> append("已为 $baselinedSourceCount 个来源建立首次基线")
             else -> append("检查完成，暂无新内容")
@@ -90,6 +92,7 @@ class SubscriptionSyncRunner(
     suspend fun syncAll(
         includeTags: Boolean = true,
         includeSavedSearches: Boolean = true,
+        includeSeries: Boolean = false,
         siteFilter: SiteId? = null,
         onSourceStarted: (String) -> Unit = {},
         onSourceFinished: (String, SourceCheckOutcome) -> Unit = { _, _ -> },
@@ -107,7 +110,13 @@ class SubscriptionSyncRunner(
             emptyList()
         }
 
-        val totalSources = allSubs.size + allSaved.size
+        val allSeries = if (includeSeries) {
+            subscriptionRepository.observeSeriesFollows().first()
+                .filter { siteFilter == null || it.siteId == siteFilter }
+        } else {
+            emptyList()
+        }
+        val totalSources = allSubs.size + allSaved.size + allSeries.size
         if (totalSources == 0) {
             return@withContext SubscriptionSyncSummary()
         }
@@ -140,7 +149,18 @@ class SubscriptionSyncRunner(
                     }
                 }
             }
-            (tagJobs + savedJobs).awaitAll()
+            val seriesJobs = allSeries.map { follow ->
+                val sourceId = "series:${follow.siteId.value}:${follow.seriesId}"
+                async(dispatchers.io) {
+                    semaphore.withPermit {
+                        onSourceStarted(sourceId)
+                        val outcome = refreshSeries(follow, sourceId)
+                        onSourceFinished(sourceId, outcome)
+                        outcome
+                    }
+                }
+            }
+            (tagJobs + savedJobs + seriesJobs).awaitAll()
         }
 
         SubscriptionSyncSummary(
@@ -194,6 +214,20 @@ class SubscriptionSyncRunner(
             baselinedSourceCount = outcomes.count { it.establishedBaseline },
             failedSourceCount = outcomes.count { it.failed },
         )
+    }
+
+    private suspend fun refreshSeries(follow: SeriesFollow, sourceId: String): SourceCheckOutcome {
+        val source = siteRegistry.get(follow.siteId)?.seriesSource
+            ?: return SourceCheckOutcome(sourceId = sourceId, failed = true)
+        return try {
+            val chapters = source.loadChapters(follow.seriesId)
+            val discovered = subscriptionRepository.syncSeries(follow, chapters)
+            SourceCheckOutcome(sourceId = sourceId, newlyDiscovered = discovered)
+        } catch (ce: CancellationException) {
+            throw ce
+        } catch (_: Exception) {
+            SourceCheckOutcome(sourceId = sourceId, failed = true)
+        }
     }
 
     private suspend fun refreshTagSubscription(

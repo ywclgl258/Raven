@@ -67,7 +67,6 @@ import com.raven.app.core.designsystem.motion.RavenMorphIcons
 import com.raven.app.core.designsystem.theme.LocalRavenColors
 import com.raven.app.core.designsystem.theme.RavenShapes
 import com.raven.app.core.designsystem.theme.tabular
-import com.raven.app.core.model.InboxSourceKind
 import com.raven.app.core.model.SiteId
 import com.raven.app.core.model.UpdateInboxItem
 import org.koin.androidx.compose.koinViewModel
@@ -180,7 +179,7 @@ fun GlobalInboxScreen(
                 onSelectSiteFilter = viewModel::selectInboxSiteFilter,
                 onItemClick = { entry ->
                     if (!entry.isRead) viewModel.markRead(entry.id)
-                    navigator.openMedia(entry.item)
+                    navigator.openInboxItem(entry)
                 },
                 onItemMenuClick = { actionTarget = it },
             )
@@ -195,7 +194,7 @@ fun GlobalInboxScreen(
                 onSelectSiteFilter = viewModel::selectInboxSiteFilter,
                 onItemClick = { entry ->
                     if (!entry.isRead) viewModel.markRead(entry.id)
-                    navigator.openMedia(entry.item)
+                    navigator.openInboxItem(entry)
                 },
                 onItemMenuClick = { actionTarget = it },
             )
@@ -204,7 +203,7 @@ fun GlobalInboxScreen(
 
     actionTarget?.let { target ->
         val siteLabel = uiState.siteLabels[target.item.siteId] ?: target.item.siteId.value
-        val sourcePrefix = if (target.sourceKind == InboxSourceKind.TAG_SUBSCRIPTION) "标签" else "搜索"
+        val sourcePrefix = target.sourceKind.displayLabel()
         RavenBottomSheet(
             onDismissRequest = { actionTarget = null },
             title = "更新操作",
@@ -218,7 +217,7 @@ fun GlobalInboxScreen(
                 onClick = {
                     if (!target.isRead) viewModel.markRead(target.id)
                     actionTarget = null
-                    navigator.openMedia(target.item)
+                    navigator.openInboxItem(target)
                 },
             )
             RavenGroupedDivider(insetWithIcon = true)
@@ -300,7 +299,7 @@ private fun SubscriptionUpdatesWaterfall(
                     key = { it.id },
                 ) { entry ->
                     val siteLabel = uiState.siteLabels[entry.item.siteId] ?: entry.item.siteId.value
-                    val sourcePrefix = if (entry.sourceKind == InboxSourceKind.TAG_SUBSCRIPTION) "标签" else "搜索"
+                    val sourcePrefix = entry.sourceKind.displayLabel()
                     SubscriptionUpdateCard(
                         entry = entry,
                         siteLabel = siteLabel,
@@ -371,7 +370,7 @@ private fun SubscriptionUpdatesList(
             ) { index ->
                 val entry = uiState.inboxItems[index]
                 val siteLabel = uiState.siteLabels[entry.item.siteId] ?: entry.item.siteId.value
-                val sourcePrefix = if (entry.sourceKind == InboxSourceKind.TAG_SUBSCRIPTION) "标签" else "搜索"
+                val sourcePrefix = entry.sourceKind.displayLabel()
                 SubscriptionUpdateListRow(
                     entry = entry,
                     siteLabel = siteLabel,
@@ -473,6 +472,8 @@ private fun SubscriptionUpdatesHeader(
                             if (uiState.unreadTagCount > 0) "${filter.label} (${uiState.unreadTagCount})" else filter.label
                         InboxSourceFilter.SAVED_SEARCH ->
                             if (uiState.unreadSavedSearchCount > 0) "${filter.label} (${uiState.unreadSavedSearchCount})" else filter.label
+                        InboxSourceFilter.SERIES_FOLLOW ->
+                            if (uiState.unreadSeriesCount > 0) "${filter.label} (${uiState.unreadSeriesCount})" else filter.label
                     }
                 },
                 onItemSelected = onSelectSourceFilter,
