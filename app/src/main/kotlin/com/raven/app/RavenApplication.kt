@@ -15,6 +15,7 @@ import com.raven.app.core.network.ApplicationScope
 import com.raven.app.core.network.NetworkMonitor
 import com.raven.app.core.sitespi.SiteRegistry
 import com.raven.app.feature.settings.AppLockSessionCoordinator
+import com.raven.app.core.network.SessionCacheInvalidationBinding
 import com.raven.app.feature.settings.EhTagTranslationSyncer
 import com.raven.app.feature.settings.RavenAppInfo
 import com.raven.app.feature.settings.RavenUpdater
@@ -79,44 +80,44 @@ class RavenApplication : Application(), SingletonImageLoader.Factory {
         val preferencesRepository = koin.get<PreferencesRepository>()
         val siteRegistry = koin.get<SiteRegistry>()
         val updater = koin.get<RavenUpdater>()
-
-        applicationScope.launch(dispatchers.main) {
-            preferencesRepository.settings.collect(lockCoordinator::onSettingsLoaded)
-        }
-
-        applicationScope.launch(dispatchers.io) {
-            runCatching {
-                applyStartupDefaultSiteOnColdStart(preferencesRepository, siteRegistry)
-            }.onFailure { RavenLog.w(TAG, "Failed to apply startup default site", it) }
-        }
-
-        applicationScope.launch(dispatchers.io) {
-            runCatching {
-                runStartupUpdateCheck(updater, preferencesRepository)
-            }.onFailure { RavenLog.w(TAG, "Startup update check failed", it) }
-        }
-
-        applicationScope.launch(dispatchers.io) {
-            runCatching { storageRootManager.applyPendingOnColdStart() }
-                .onFailure { RavenLog.w(TAG, "Failed to apply pending storage location on cold start", it) }
-            runCatching { downloadCoordinator.start() }
-                .onFailure { RavenLog.w(TAG, "Failed to start DownloadCoordinator", it) }
-            runCatching { RavenBackgroundMaintenanceWorker.schedulePeriodic(this@RavenApplication) }
-                .onFailure { RavenLog.w(TAG, "Failed to schedule periodic background maintenance", it) }
-        }
+        // Constructing this binding attaches the Vault account-change listener. It is resolved
+        // explicitly because Koin eager singletons require AndroidContext in JVM graph tests.
+        runCatching { koin.get<SessionCacheInvalidationBinding>() }
+            .onFailure { RavenLog.w(TAG, "Failed to attach session cache invalidation", it) }
 
         applicationScope.launch(dispatchers.io) {
             // Finish a restore interrupted between its Room commit and its settings write before
             // anything reads AppSettings, so the app never boots with restored data + stale settings.
             runCatching { koin.get<BackupDataRepository>().recoverPendingSettings() }
                 .onFailure { RavenLog.w(TAG, "Failed to recover pending backup restore settings", it) }
-        }
 
-        applicationScope.launch(dispatchers.io) {
-            runCatching { tagDictionaryRepository.hydrateRuntimeDictionary() }
-                .onFailure { RavenLog.w(TAG, "Failed to hydrate TagDictionary on startup", it) }
-            runCatching { ehTagTranslationSyncer.syncIfDue() }
-                .onFailure { RavenLog.w(TAG, "Failed to auto-sync EhTagTranslation dictionary", it) }
+            launch(dispatchers.main) {
+                preferencesRepository.settings.collect(lockCoordinator::onSettingsLoaded)
+            }
+            launch {
+                runCatching {
+                    applyStartupDefaultSiteOnColdStart(preferencesRepository, siteRegistry)
+                }.onFailure { RavenLog.w(TAG, "Failed to apply startup default site", it) }
+            }
+            launch {
+                runCatching {
+                    runStartupUpdateCheck(updater, preferencesRepository)
+                }.onFailure { RavenLog.w(TAG, "Startup update check failed", it) }
+            }
+            launch {
+                runCatching { storageRootManager.applyPendingOnColdStart() }
+                    .onFailure { RavenLog.w(TAG, "Failed to apply pending storage location on cold start", it) }
+                runCatching { downloadCoordinator.start() }
+                    .onFailure { RavenLog.w(TAG, "Failed to start DownloadCoordinator", it) }
+                runCatching { RavenBackgroundMaintenanceWorker.schedulePeriodic(this@RavenApplication) }
+                    .onFailure { RavenLog.w(TAG, "Failed to schedule periodic background maintenance", it) }
+            }
+            launch {
+                runCatching { tagDictionaryRepository.hydrateRuntimeDictionary() }
+                    .onFailure { RavenLog.w(TAG, "Failed to hydrate TagDictionary on startup", it) }
+                runCatching { ehTagTranslationSyncer.syncIfDue() }
+                    .onFailure { RavenLog.w(TAG, "Failed to auto-sync EhTagTranslation dictionary", it) }
+            }
         }
     }
 

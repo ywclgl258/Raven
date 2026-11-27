@@ -112,7 +112,19 @@ interface ReadingProgressDao {
     )
     suspend fun pruneSite(siteId: String, limit: Int = MAX_PER_SITE)
 
-    @Query("DELETE FROM reading_progress WHERE site_id = :siteId AND COALESCE(series_id, media_id) = :workId")
+    @Query(
+        """
+        DELETE FROM reading_progress
+        WHERE site_id = :siteId
+          AND (
+            series_id = :workId
+            OR (
+              series_id IS NULL
+              AND (media_id = :workId OR substr(media_id, 1, length(:workId) + 1) = :workId || ':')
+            )
+          )
+        """,
+    )
     suspend fun deleteWork(siteId: String, workId: String)
 
     @Query(

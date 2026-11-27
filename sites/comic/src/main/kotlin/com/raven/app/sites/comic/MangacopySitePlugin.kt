@@ -205,6 +205,10 @@ class MangacopySitePlugin(
         }
 
         override fun decorateRequestHeaders(request: SiteHttpRequest, host: String): Map<String, String> {
+            val expectedEpoch = request.authEpoch
+            if (expectedEpoch != null && sessionStore != null && expectedEpoch != sessionStore.authEpoch(SiteId.MANGACOPY)) {
+                throw SiteException.Cancelled("拷贝漫画会话已切换", siteId = SiteId.MANGACOPY)
+            }
             // Token confinement: only the pinned, statically known CopyManga API hosts may ever see
             // the bearer token. Runtime-discovered hosts (network2), HotManga fallback hosts, image
             // CDNs and the web mirrors all stay credential-free.
@@ -913,7 +917,7 @@ class MangacopySitePlugin(
             candidates.forEach { if (it !in this) add(it) }
         }.take(MAX_COPY_HOST_ATTEMPTS)
 
-        val token = sessionStore?.getBearerToken(SiteId.MANGACOPY)
+        val token = sessionStore?.getBearerToken(SiteId.MANGACOPY)?.takeIf { it.isNotBlank() }
         var lastError: Throwable? = null
 
         for (host in ordered) {
@@ -921,21 +925,26 @@ class MangacopySitePlugin(
             // Runtime-discovered hosts still get the app signature headers (they need those), but
             // never the account credential.
             val headers = buildCopyHeaders(token.takeIf { isCredentialHost(host) })
+            // `buildCopyHeaders` may persist the stable device identity on first use; capture the
+            // epoch after that write so it cannot look like an account switch.
+            val requestEpoch = if (token != null) sessionStore?.authEpoch(SiteId.MANGACOPY) else null
             try {
                 val results = executeApiOnHost(
                     host = host,
                     path = path,
                     query = query,
                     headers = headers,
+                    authEpoch = requestEpoch,
                 )
                 copyRouter.reportHostSuccess(host, routeKey)
                 if (allowDynamicRefresh) {
-                    maybeRefreshDynamicConfig(host, headers)
+                    maybeRefreshDynamicConfig(host, headers, requestEpoch)
                 }
                 return results
             } catch (ce: CancellationException) {
                 throw ce
             } catch (error: Throwable) {
+                if (error is SiteException.Cancelled) throw error
                 copyRouter.reportHostFailure(host, routeKey, error)
                 lastError = preferHigherPriorityError(lastError, error)
             }
@@ -997,16 +1006,22 @@ class MangacopySitePlugin(
         path: String,
         query: List<Pair<String, String>>,
         headers: Map<String, String>,
+        authEpoch: Long? = null,
     ): JsonObject {
         val builder = ComicUrl.parse("https://$host/api/v3")?.addPathSegments(path)
             ?: throw SiteException.ParseError("拷贝漫画接口地址无效", siteId = SiteId.MANGACOPY)
         val url = query.fold(builder) { acc, (k, v) -> acc.addQueryParameter(k, v) }.toString()
+        if (authEpoch != null && sessionStore?.authEpoch(SiteId.MANGACOPY) != authEpoch) {
+            throw SiteException.Cancelled("拷贝漫画会话已切换", siteId = SiteId.MANGACOPY)
+        }
         val response = try {
             httpClient.getText(
                 url = url,
                 siteId = SiteId.MANGACOPY,
                 kind = SiteRequestKind.API,
                 headers = headers,
+                allowCache = authEpoch == null,
+                authEpoch = authEpoch,
             )
         } catch (ce: CancellationException) {
             throw ce
@@ -1019,6 +1034,9 @@ class MangacopySitePlugin(
                 cause = e,
             )
         }
+        if (authEpoch != null && sessionStore?.authEpoch(SiteId.MANGACOPY) != authEpoch) {
+            throw SiteException.Cancelled("拷贝漫画会话已切换", siteId = SiteId.MANGACOPY)
+        }
         response.throwIfNotSuccessful(SiteId.MANGACOPY, descriptor.displayName)
         val root = runCatching { json.parseToJsonElement(response.bodyText()).jsonObject }.getOrNull()
             ?: throw SiteException.ParseError("拷贝漫画接口数据格式异常", siteId = SiteId.MANGACOPY)
@@ -1030,7 +1048,11 @@ class MangacopySitePlugin(
         return root.safeObject("results") ?: JsonObject(emptyMap())
     }
 
-    private suspend fun maybeRefreshDynamicConfig(activeHost: String, headers: Map<String, String>) {
+    private suspend fun maybeRefreshDynamicConfig(
+        activeHost: String,
+        headers: Map<String, String>,
+        authEpoch: Long? = null,
+    ) {
         val now = clockMs()
         if (now - lastConfigRefreshAtMs < CONFIG_REFRESH_COOLDOWN_MS) return
         if (!configMutex.tryLock()) return
@@ -1045,6 +1067,8 @@ class MangacopySitePlugin(
                         siteId = SiteId.MANGACOPY,
                         kind = SiteRequestKind.API,
                         headers = headers,
+                        allowCache = authEpoch == null,
+                        authEpoch = authEpoch,
                         timeoutMs = CONFIG_PROBE_TIMEOUT_MS,
                     ),
                 )
@@ -1076,6 +1100,8 @@ class MangacopySitePlugin(
                         siteId = SiteId.MANGACOPY,
                         kind = SiteRequestKind.API,
                         headers = headers,
+                        allowCache = authEpoch == null,
+                        authEpoch = authEpoch,
                         timeoutMs = CONFIG_PROBE_TIMEOUT_MS,
                     ),
                 )

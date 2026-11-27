@@ -225,8 +225,20 @@ class DownloadCoordinator(
         applicationScope.launch(dispatchers.io) {
             // Imports killed mid-copy leave `incoming-*` staging folders that never become books.
             runCatching { localLibraryImporter.reclaimOrphanedImportStaging() }
+            runCatching { localLibraryImporter.refreshBooksSnapshot() }
             runCatching { syncFromDisk() }
-            runCatching { galleryDownloadEngine.resumePending() }
+            // The controller's initial snapshot is conservative and can predate the persisted
+            // "unmetered only" setting. Wait for the first real emission before resuming.
+            val policy = try {
+                downloadPolicyController.awaitInitialPolicy()
+            } catch (ce: CancellationException) {
+                throw ce
+            } catch (_: Exception) {
+                null
+            }
+            if (policy?.isAllowed == true) {
+                runCatching { galleryDownloadEngine.resumePending() }
+            }
         }
     }
 

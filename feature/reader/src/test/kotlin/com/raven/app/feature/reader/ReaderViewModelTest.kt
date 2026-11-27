@@ -517,6 +517,80 @@ class ReaderViewModelTest {
     }
 
     @Test
+    fun `reaching the last downloaded page of a partial offline book does not complete the work`() =
+        runTest(mainDispatcherRule.dispatcher) {
+            val harness = ReaderTestHarness(mainDispatcherRule.dispatcher, tempFolder.newFolder())
+            val detail = sampleGalleryDetail(SiteId.NHENTAI, mediaId = "partial-1", pageCount = 4)
+            val nextItem = MediaItem(
+                siteId = SiteId.NHENTAI,
+                id = "partial-next",
+                url = "https://nhentai.example/g/partial-next",
+                kind = MediaKind.COMIC,
+                title = "Next In Queue",
+                pageCount = 10,
+            )
+            harness.shelfRepository.ensureWatchLaterShelf()
+            harness.shelfRepository.addItem(
+                Shelf.WATCH_LATER_ID,
+                ShelfItem(
+                    shelfId = Shelf.WATCH_LATER_ID,
+                    siteId = SiteId.NHENTAI,
+                    mediaId = detail.item.id,
+                    url = detail.item.url,
+                    kind = MediaKind.COMIC,
+                    title = detail.item.title,
+                ),
+            )
+            val session = harness.playbackQueueStore.start(
+                title = "稍后看",
+                shelfId = Shelf.WATCH_LATER_ID,
+                items = listOf(detail.item, nextItem),
+            )
+            val loader = FakeReaderPageLoader(
+                detailLoader = { _, _, _, _ ->
+                    OfflineGallerySnapshot(
+                        detail = detail,
+                        downloadedPages = listOf(1, 2),
+                        requestedPages = listOf(1, 2),
+                        sourceRoot = "",
+                        isComplete = false,
+                    )
+                },
+            )
+            val viewModel = ReaderViewModel(
+                route = RavenRoute.Reader(
+                    siteId = SiteId.NHENTAI.value,
+                    mediaId = detail.item.id,
+                    url = detail.item.url,
+                    startPage = 1,
+                    offlineOnly = true,
+                    queueToken = session.token,
+                ),
+                siteRegistry = SiteRegistry(emptyList()),
+                pageLoader = loader,
+                exportGateway = harness.exportGateway,
+                historyRepository = harness.historyRepository,
+                bookmarkRepository = harness.bookmarkRepository,
+                preferencesRepository = harness.preferencesRepository,
+                shelfRepository = harness.shelfRepository,
+                playbackQueueStore = harness.playbackQueueStore,
+                dispatchers = harness.dispatchers,
+                persistenceScope = backgroundScope,
+                clock = harness.clock,
+            )
+            advanceUntilIdle()
+            assertEquals(listOf(1, 2), viewModel.uiState.value.pageNumbers)
+
+            viewModel.onVisiblePagesChanged(anchorPage = 2, visiblePages = setOf(2))
+            advanceUntilIdle()
+
+            val shelfItem = harness.shelfItemDao.getOne(Shelf.WATCH_LATER_ID, SiteId.NHENTAI.value, detail.item.id)
+            assertFalse(shelfItem?.completed == true)
+            // Advancing the queue stays available even though the work itself is not complete.
+            assertTrue(viewModel.uiState.value.showQueueNextCard)
+        }
+
+    @Test
     fun `invalid siteId, incognito skip, settings sync and auto-page lifecycle pause work cleanly`() = runTest(mainDispatcherRule.dispatcher) {
         val harness = ReaderTestHarness(mainDispatcherRule.dispatcher, tempFolder.newFolder())
         val registry = SiteRegistry(emptyList())

@@ -540,6 +540,12 @@ fun RavenAppShell(
                 navController.navigate(route)
             }
 
+            override fun openSiteDirectory(siteId: SiteId, section: String) {
+                navController.navigate(
+                    RavenRoute.SiteDirectory(siteId = siteId.value, section = section),
+                )
+            }
+
             override fun openSiteFunctions(siteId: SiteId) {
                 navController.navigate(RavenRoute.SiteFunctions(siteId = siteId.value)) {
                     launchSingleTop = true

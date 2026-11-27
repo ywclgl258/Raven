@@ -21,6 +21,7 @@ import com.raven.app.core.database.repository.ShelfRepository
 import com.raven.app.core.database.repository.SubscriptionRepository
 import com.raven.app.core.media.storage.LocalBook
 import com.raven.app.core.media.storage.LocalLibraryImporter
+import com.raven.app.core.media.storage.deleteLocalBookCompletely
 import com.raven.app.core.model.DownloadStatus
 import com.raven.app.core.model.FeatureTutorialIds
 import com.raven.app.core.model.FeedRequest

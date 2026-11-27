@@ -1146,17 +1146,33 @@ class ReaderViewModel(
 
     fun openChapter(chapter: MediaItem) {
         val detail = _uiState.value.detail ?: return
-        val hints = listOfNotNull(
-            detail.item.id,
-            detail.item.extra["chapterId"],
-            detail.item.extra["chapterUuid"],
-            detail.item.extra["chapterHid"],
-        )
+        val state = _uiState.value
+        // In continuous STRIP mode the viewport may already be inside an appended chapter, so the
+        // current-chapter identity must come from that chapter rather than the primary detail.
+        val activeChapter = if (state.preferences.mode == ReaderMode.STRIP) {
+            state.appendedChapters.firstOrNull { it.mediaId == state.displayMediaId }
+        } else {
+            null
+        }
+        val hints = if (activeChapter != null) {
+            listOfNotNull(
+                activeChapter.detail.item.id,
+                activeChapter.detail.item.extra["chapterId"],
+                activeChapter.detail.item.extra["chapterUuid"],
+                activeChapter.detail.item.extra["chapterHid"],
+            )
+        } else {
+            listOfNotNull(
+                detail.item.id,
+                detail.item.extra["chapterId"],
+                detail.item.extra["chapterUuid"],
+                detail.item.extra["chapterHid"],
+            )
+        }
         val isCurrent = isMatchingSerialChapter(
             chapter = chapter,
-            // 连读时视口可能已经在追加的下一话里，判断需以可见章节为准。
-            currentChapterId = _uiState.value.displayMediaId,
-            currentChapterUrl = detail.item.extra["chapterUrl"].orEmpty(),
+            currentChapterId = activeChapter?.mediaId ?: state.displayMediaId,
+            currentChapterUrl = activeChapter?.url ?: detail.item.extra["chapterUrl"].orEmpty(),
             hints = hints,
         )
         dismissSheet()
@@ -2062,8 +2078,14 @@ class ReaderViewModel(
         val onFinalSheet = lastPage in state.currentSheetPages || currentPage >= lastPage
         if (!onFinalSheet) return
 
-        val session = state.queueSession
-        if (session != null) {
+        val session = state.queueSession ?: return
+        // A partial offline download only exposes the pages that exist on disk. Reaching the last
+        // of those must never mark the whole work completed in the library.
+        val hasFullBookRange = state.totalPages > 0 &&
+            state.pageNumbers.size >= state.totalPages &&
+            state.pageNumbers.firstOrNull() == 1 &&
+            state.pageNumbers.lastOrNull() == state.totalPages
+        if (hasFullBookRange) {
             viewModelScope.launch(dispatchers.io) {
                 runCatching {
                     shelfRepository.setItemCompleted(
@@ -2074,10 +2096,10 @@ class ReaderViewModel(
                     )
                 }
             }
-            if (session.hasNext && !hasPromptedQueueForCurrentBook) {
-                hasPromptedQueueForCurrentBook = true
-                _uiState.update { it.copy(showQueueNextCard = true) }
-            }
+        }
+        if (session.hasNext && !hasPromptedQueueForCurrentBook) {
+            hasPromptedQueueForCurrentBook = true
+            _uiState.update { it.copy(showQueueNextCard = true) }
         }
     }
 

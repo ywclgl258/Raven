@@ -277,7 +277,7 @@ fun ReaderScreen(
                             startPage = 1,
                             offlineOnly = false,
                             queueToken = null,
-                            parent = parent,
+                            parent = event.parent ?: parent,
                         )
                     }.onFailure {
                         viewModel.onChapterNavigationFailed()

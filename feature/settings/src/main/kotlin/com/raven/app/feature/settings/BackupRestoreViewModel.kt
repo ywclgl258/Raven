@@ -19,6 +19,7 @@ import com.raven.app.core.security.WebDavConfig
 import com.raven.app.core.security.WebDavCredentialStore
 import java.io.ByteArrayOutputStream
 import java.io.IOException
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -225,6 +226,8 @@ class BackupRestoreViewModel(
     private var stagedImportUri: String? = null
     private var stagedImportBytes: ByteArray? = null
     private var stagedDecodedBackup: DecodedBackup? = null
+    private var importGeneration: Long = 0L
+    private var decryptJob: Job? = null
 
     /**
      * Decrypted cloud snapshot awaiting explicit confirmation. Held in memory only (never written
@@ -326,8 +329,11 @@ class BackupRestoreViewModel(
     }
 
     fun selectImportDocument(documentUri: String?) {
-        if (documentUri.isNullOrBlank()) return
+        if (documentUri.isNullOrBlank() || _uiState.value.isRestoring) return
+        decryptJob?.cancel()
+        decryptJob = null
         releaseStagedImport()
+        val generation = importGeneration
         viewModelScope.launch {
             _uiState.update {
                 it.copy(
@@ -341,6 +347,11 @@ class BackupRestoreViewModel(
             try {
                 val rawBytes = withContext(dispatchers.io) {
                     safBridge.readBytes(documentUri, MAX_BACKUP_WIRE_BYTES)
+                }
+                if (generation != importGeneration) {
+                    rawBytes.fill(0)
+                    safBridge.releaseUriGrant(documentUri)
+                    return@launch
                 }
                 val detected = backupCodec.detectFormat(rawBytes)
                 if (detected == null) {
@@ -377,14 +388,16 @@ class BackupRestoreViewModel(
                 throw ce
             } catch (e: Exception) {
                 safBridge.releaseUriGrant(documentUri)
-                _uiState.update {
-                    it.copy(
-                        hasSelectedImportFile = false,
-                        detectedImportFormat = null,
-                        importFileSizeBytes = 0,
-                        isDecrypting = false,
-                        importError = e.message ?: "读取备份文件失败",
-                    )
+                if (generation == importGeneration) {
+                    _uiState.update {
+                        it.copy(
+                            hasSelectedImportFile = false,
+                            detectedImportFormat = null,
+                            importFileSizeBytes = 0,
+                            isDecrypting = false,
+                            importError = e.message ?: "读取备份文件失败",
+                        )
+                    }
                 }
             }
         }
@@ -404,13 +417,18 @@ class BackupRestoreViewModel(
         }
 
         val passwordChars = current.importPassword.toCharArray()
-        viewModelScope.launch {
+        val generation = importGeneration
+        decryptJob = viewModelScope.launch {
+            if (generation != importGeneration) return@launch
             _uiState.update { it.copy(isDecrypting = true, importError = null) }
             try {
                 val (decoded, validatedSummary) = withContext(dispatchers.default) {
                     val result = backupCodec.decode(wireBytes, passwordChars)
                     val verifiedSummary = backupValidator.validate(result.payload)
                     result to verifiedSummary
+                }
+                if (generation != importGeneration || stagedImportBytes !== wireBytes) {
+                    return@launch
                 }
                 stagedDecodedBackup = decoded
                 val warnings = buildImportWarnings(decoded.format, validatedSummary)
@@ -429,11 +447,13 @@ class BackupRestoreViewModel(
             } catch (ce: CancellationException) {
                 throw ce
             } catch (e: Exception) {
-                _uiState.update {
-                    it.copy(
-                        isDecrypting = false,
-                        importError = e.message ?: "解密或校验失败，请确认密码是否正确",
-                    )
+                if (generation == importGeneration) {
+                    _uiState.update {
+                        it.copy(
+                            isDecrypting = false,
+                            importError = e.message ?: "解密或校验失败，请确认密码是否正确",
+                        )
+                    }
                 }
             } finally {
                 passwordChars.fill('\u0000')
@@ -782,6 +802,9 @@ class BackupRestoreViewModel(
     }
 
     private fun releaseStagedImport() {
+        importGeneration += 1L
+        decryptJob?.cancel()
+        decryptJob = null
         stagedImportBytes?.fill(0)
         stagedImportBytes = null
         stagedDecodedBackup = null

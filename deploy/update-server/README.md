@@ -42,9 +42,10 @@ export ANDROID_HOME=/opt/android-sdk    # 写入发布机的 profile，供 syste
 2. `public/raven/releases/latest` —— GitHub Release 兼容清单，客户端只读这一个指针；
 3. `<web_root>/../.raven-update-state/publish-history.json` —— 保留窗口账本，用于决定哪些旧资产还能删。
 
-`publish.py` 的顺序是 **锁 → 落资产 → fsync → 原子改名资产 → 写历史 → 原子改名清单 → 清理超窗资产**。
+`publish.py` 的顺序是 **锁 → 落资产 → fsync → 原子改名资产 → 原子改名清单 → 写历史 → 清理超窗资产**。
 清单永远最后替换，因此任何中途失败（进程被杀、磁盘满、清单写入抛错）都只留下一个**无人引用的孤儿资产**，
-线上仍在服务的旧清单与旧资产完好。
+线上仍在服务的旧清单与旧资产完好。历史账本只在清单替换成功后写入，失败发布不会占用保留窗口，
+并且当前清单引用的资产始终被显式保留。
 
 ## 3. 发布命令
 
@@ -118,14 +119,16 @@ python3 deploy/update-server/publish.py --apk <旧版 APK> --release-properties 
 
 1. `aapt2` 校验包名、`versionCode`、`versionName`；
 2. `apksigner` 校验 v1/v2/v3 与 `releaseCertificate` 指纹；
-3. 上传 APK 与 `release.properties` 到 `/root/raven-update-deploy`；
+3. 上传 APK、`release.properties`、`publish.py` 与 `publish_with_notes.py` 到 `/root/raven-update-deploy`；
 4. 运行远程 `publish.py` 更新 `/var/www/raven-update/public` 的 `latest` 清单；
-5. 复制 APK 到官网 `/var/www/raven-site/public/download/Raven-v<version>-release.apk`；
-6. 上传 `deploy/website/index.html` 到官网根目录；
-7. 回读 `latest` 与官网，校验版本号和 SHA-256。
+5. 复制 APK 到官网 `/var/www/raven-site/public/download/Raven-v<version>-release.apk`，并回读远端 `sha256sum`；
+6. 上传 LF 归一化后的 `deploy/website/index.html` 到官网根目录；
+7. 回读 `latest`、远端镜像哈希与官网，校验版本号、下载链接、页面展示的 SHA-256 与 APK 一致。
 
 发布前必须先让 `deploy/website/index.html` 的版本号、下载链接、SHA-256 与更新日志和本次
-`release.properties`/APK 一致。脚本不会读取或上传任何签名密码。
+`release.properties`/APK 一致。脚本还会计算内联脚本的 CSP `sha256-...`，并与
+`deploy/website/nginx-raven-website.conf` 的 `script-src` 比对；不一致直接拒绝发布，避免上线后
+所有官网 JS 被浏览器拦截。脚本不会读取或上传任何签名密码。
 
 ## 6. 本地自测
 

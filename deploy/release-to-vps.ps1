@@ -67,6 +67,33 @@ function Find-BuildTool([string]$Name, [string]$SdkDir) {
     return $tool
 }
 
+function Get-InlineScriptHash([string]$Html) {
+    $scripts = [regex]::Matches($Html, '(?s)<script(?<attrs>[^>]*)>(?<body>.*?)</script>')
+    $inline = @($scripts | Where-Object { $_.Groups['attrs'].Value -notmatch '\bsrc\s*=' })
+    if ($inline.Count -ne 1) {
+        Fail "index.html must contain exactly one inline <script> block; found $($inline.Count)"
+    }
+    $bytes = [Text.Encoding]::UTF8.GetBytes($inline[0].Groups['body'].Value)
+    $digest = [Security.Cryptography.SHA256]::Create().ComputeHash($bytes)
+    return "sha256-" + [Convert]::ToBase64String($digest)
+}
+
+function Assert-WebPage([string]$Html, [string]$Label) {
+    $href = "https://ywclgl258.us.ci/download/Raven-v$versionName-release.apk"
+    if ($Html -notmatch [regex]::Escape($href)) {
+        Fail "$Label is missing the current VPS download link: $href"
+    }
+    if ($Html -notmatch [regex]::Escape("v$versionName")) {
+        Fail "$Label does not display v$versionName"
+    }
+    if ($Html -notmatch '(?s)<code class="hash">\s*(?<hash>[0-9a-fA-F]{64})\s*</code>') {
+        Fail "$Label is missing the displayed SHA-256 block"
+    }
+    if ($Matches['hash'].ToLowerInvariant() -ne $sha256) {
+        Fail "$Label displays SHA-256 $($Matches['hash']) but the built APK is $sha256"
+    }
+}
+
 $repoRoot = Split-Path -Parent $PSScriptRoot
 Set-Location -LiteralPath $repoRoot
 
@@ -126,7 +153,6 @@ $size = (Get-Item -LiteralPath $apkPath).Length
 $remoteApk = "app-release-$versionName.apk"
 $remoteUrl = "https://ywclgl258.us.ci:8443/raven/releases"
 if (-not $Notes) { $Notes = "Raven v$versionName 正式版更新。" }
-$notesB64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($Notes))
 
 Write-Host "APK: $apkPath"
 Write-Host "Version: $versionName ($versionCode)"
@@ -139,6 +165,25 @@ Write-Host "VPS: $VpsHost"
 $notesPath = Join-Path ([IO.Path]::GetTempPath()) "raven-notes-$versionName.txt"
 [IO.File]::WriteAllText($notesPath, $Notes, [Text.UTF8Encoding]::new($false))
 
+# The page is uploaded with LF endings so the served bytes (and therefore the CSP script hash)
+# are reproducible regardless of the developer checkout's core.autocrlf setting.
+$pagePath = Join-Path $repoRoot "deploy/website/index.html"
+$pageHtml = [IO.File]::ReadAllText($pagePath, [Text.UTF8Encoding]::new($false))
+$pageHtml = $pageHtml -replace "`r`n", "`n" -replace "`r", "`n"
+Assert-WebPage $pageHtml "deploy/website/index.html"
+$inlineHash = Get-InlineScriptHash $pageHtml
+$nginxPath = Join-Path $repoRoot "deploy/website/nginx-raven-website.conf"
+$nginxConf = [IO.File]::ReadAllText($nginxPath, [Text.UTF8Encoding]::new($false))
+if ($nginxConf -notmatch "script-src\s+'sha256-(?<hash>[A-Za-z0-9+/=]+)'") {
+    Fail "deploy/website/nginx-raven-website.conf has no script-src sha256 hash"
+}
+$configHash = "sha256-" + $Matches['hash']
+if ($inlineHash -ne $configHash) {
+    Fail "CSP hash mismatch: index.html inline script is $inlineHash but nginx config allows $configHash; update deploy/website/nginx-raven-website.conf and deploy it"
+}
+$pageUploadPath = Join-Path ([IO.Path]::GetTempPath()) "raven-index-$versionName.html"
+[IO.File]::WriteAllText($pageUploadPath, $pageHtml, [Text.UTF8Encoding]::new($false))
+
 $publishCommand = "cd /root/raven-update-deploy; " +
     "python3 publish_with_notes.py --notes-file /root/raven-notes.txt " +
     "--apk $remoteApk --release-properties release.properties " +
@@ -149,7 +194,9 @@ if ($DryRun) {
     Write-Host "[DryRun] scp release.properties ${VpsHost}:/root/raven-update-deploy/release.properties"
     Write-Host "[DryRun] ssh $VpsHost `"$publishCommand`""
     Write-Host "[DryRun] ssh $VpsHost `"install -m 0644 /root/raven-update-deploy/$remoteApk /var/www/raven-site/public/download/Raven-v$versionName-release.apk`""
-    Write-Host "[DryRun] scp deploy/website/index.html ${VpsHost}:/var/www/raven-site/public/index.html"
+    Write-Host "[DryRun] scp $pageUploadPath ${VpsHost}:/var/www/raven-site/public/index.html"
+    Write-Host "[DryRun] scp deploy/update-server/publish.py ${VpsHost}:/root/raven-update-deploy/publish.py"
+    Remove-Item -LiteralPath $pageUploadPath, $notesPath -Force -ErrorAction SilentlyContinue
     exit 0
 }
 
@@ -162,6 +209,8 @@ if ($LASTEXITCODE -ne 0) { Fail "scp release.properties failed" }
 if ($LASTEXITCODE -ne 0) { Fail "scp release notes failed" }
 & scp (Join-Path $repoRoot "deploy/update-server/publish_with_notes.py") "${VpsHost}:/root/raven-update-deploy/publish_with_notes.py"
 if ($LASTEXITCODE -ne 0) { Fail "scp publish wrapper failed" }
+& scp (Join-Path $repoRoot "deploy/update-server/publish.py") "${VpsHost}:/root/raven-update-deploy/publish.py"
+if ($LASTEXITCODE -ne 0) { Fail "scp publish.py failed" }
 
 Write-Host "Publishing update-channel manifest..."
 & ssh $VpsHost $publishCommand
@@ -172,8 +221,15 @@ Write-Host "Mirroring APK on the official website..."
 & ssh $VpsHost "install -m 0644 /root/raven-update-deploy/$remoteApk /var/www/raven-site/public/download/Raven-v$versionName-release.apk"
 if ($LASTEXITCODE -ne 0) { Fail "Website APK mirror failed" }
 
+$remoteHash = (& ssh $VpsHost "sha256sum /var/www/raven-site/public/download/Raven-v$versionName-release.apk" 2>&1 | Out-String)
+if ($LASTEXITCODE -ne 0) { Fail "Cannot hash the mirrored APK:`n$remoteHash" }
+if ($remoteHash -notmatch '(?m)^([0-9a-fA-F]{64})\s') { Fail "Unexpected sha256sum output: $remoteHash" }
+if ($Matches[1].ToLowerInvariant() -ne $sha256) {
+    Fail "Mirrored APK SHA-256 $($Matches[1]) does not match built APK $sha256"
+}
+
 Write-Host "Uploading website page..."
-& scp (Join-Path $repoRoot "deploy/website/index.html") "${VpsHost}:/var/www/raven-site/public/index.html"
+& scp $pageUploadPath "${VpsHost}:/var/www/raven-site/public/index.html"
 if ($LASTEXITCODE -ne 0) { Fail "Website upload failed" }
 
 Write-Host "Verifying public endpoints..."
@@ -184,10 +240,18 @@ if ($manifest -notmatch "`"tag_name`":\s*`"v$([regex]::Escape($versionName))`"")
 if ($manifest -notmatch [regex]::Escape($sha256)) {
     Fail "Published manifest digest does not match the APK"
 }
-$website = (Invoke-WebRequest -Uri "https://ywclgl258.us.ci/" -UseBasicParsing).Content
-if ($website -notmatch "v$([regex]::Escape($versionName))") {
-    Fail "Official website does not show v$versionName"
+$websiteResponse = Invoke-WebRequest -Uri "https://ywclgl258.us.ci/" -UseBasicParsing
+$liveCsp = ($websiteResponse.Headers["Content-Security-Policy"] | Out-String)
+if ($liveCsp -notmatch "script-src\s+'sha256-(?<hash>[A-Za-z0-9+/=]+)'") {
+    Fail "Live nginx response has no script-src sha256 hash"
 }
+$liveHash = "sha256-" + $Matches['hash']
+if ($liveHash -ne $inlineHash) {
+    Fail "Live nginx CSP allows $liveHash but the uploaded page script hashes to $inlineHash; deploy the updated nginx-raven-website.conf"
+}
+Assert-WebPage $websiteResponse.Content "Official website"
+
+Remove-Item -LiteralPath $pageUploadPath, $notesPath -Force -ErrorAction SilentlyContinue
 
 Write-Host "`nRelease v$versionName published to the update channel and official website."
 Write-Host "Manifest: $remoteUrl/latest"

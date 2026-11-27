@@ -74,6 +74,7 @@ class GalleryDownloadEngine(
     private val networkAllowedProvider: () -> Boolean = { true },
     private val preferOriginalProvider: suspend (MediaItem) -> Boolean = { false },
     private val serviceStarter: (() -> Unit)? = null,
+    private val notificationPrivacyProvider: () -> Boolean = { false },
     private val clockMs: () -> Long = System::currentTimeMillis,
     private val concurrencyProvider: suspend (SiteId) -> Int = { siteId ->
         galleryPageRepository.recommendedImageConcurrency(siteId)
@@ -286,32 +287,67 @@ class GalleryDownloadEngine(
             check(activeJobs[id]?.isActive != true) { "请先暂停当前任务再修复" }
             val layout = galleryPageRepository.downloadLayout()
             val item = task.toMediaItem()
+            val selectedPages = task.selectedPages.distinct().sorted()
             val audit = galleryPageRepository.auditWriteTarget(task.siteId, task.mediaId, layout)
-                ?: return@withLock enqueue(item, recheckSavedPages = true)
+                ?: return@withLock enqueue(
+                    item,
+                    selectedPages = selectedPages.takeIf { it.isNotEmpty() },
+                    recheckSavedPages = true,
+                )
             val damaged = (audit.missingPages + audit.corruptPages).distinct().sorted()
-            if (!audit.isComplete && damaged.isNotEmpty()) {
-                return@withLock enqueue(item, selectedPages = damaged, recheckSavedPages = true)
+            if (selectedPages.isEmpty()) {
+                if (!audit.isComplete && damaged.isNotEmpty()) {
+                    return@withLock enqueue(item, selectedPages = damaged, recheckSavedPages = true)
+                }
+                return@withLock markRepairedComplete(task, audit, layout, emptyList(), audit.validPages.size)
             }
-            galleryPageRepository.commitDownload(task.siteId, task.mediaId, layout, audit.validPages.toSet())
-            writeCompletedSidecar(task, audit, layout)
-            val repaired = task.copy(
-                status = DownloadStatus.COMPLETED,
-                progressFraction = 1f,
-                completedUnits = audit.totalPages,
-                totalUnits = audit.totalPages,
-                downloadedBytes = audit.totalBytes,
-                selectedPages = emptyList(),
-                errorCategory = null,
-                errorMessage = null,
-                retryAtEpochMs = null,
-                storageLocation = layout.location,
-                localPath = layout.root.absolutePath,
-                updatedAt = clockMs(),
-            )
-            downloadStateRepository.upsert(repaired)
-            _changes.update { it + 1 }
-            repaired
+
+            // A selective task must never widen to the whole book: only pages the user picked are
+            // eligible for repair, and a fully valid selection is complete without the book marker.
+            val selectedSet = selectedPages.toSet()
+            val damagedSelection = damaged.filter { it in selectedSet }
+            if (damagedSelection.isNotEmpty()) {
+                return@withLock enqueue(item, selectedPages = damagedSelection, recheckSavedPages = true)
+            }
+            val validSet = audit.validPages.toSet()
+            if (!selectedPages.all { it in validSet }) {
+                return@withLock enqueue(item, selectedPages = selectedPages, recheckSavedPages = true)
+            }
+            markRepairedComplete(task, audit, layout, selectedPages, selectedPages.size)
         }
+    }
+
+    private suspend fun markRepairedComplete(
+        task: DownloadItem,
+        audit: GalleryAudit,
+        layout: StorageLayout,
+        selection: List<Int>,
+        completedUnits: Int,
+    ): DownloadItem {
+        galleryPageRepository.commitDownload(
+            siteId = task.siteId,
+            mediaId = task.mediaId,
+            layout = layout,
+            requestedPages = if (selection.isEmpty()) audit.validPages.toSet() else selection.toSet(),
+        )
+        writeCompletedSidecar(task, audit, layout, completedPages = completedUnits)
+        val repaired = task.copy(
+            status = DownloadStatus.COMPLETED,
+            progressFraction = 1f,
+            completedUnits = completedUnits,
+            totalUnits = if (selection.isEmpty()) audit.totalPages else selection.size,
+            downloadedBytes = audit.totalBytes,
+            selectedPages = selection,
+            errorCategory = null,
+            errorMessage = null,
+            retryAtEpochMs = null,
+            storageLocation = layout.location,
+            localPath = layout.root.absolutePath,
+            updatedAt = clockMs(),
+        )
+        downloadStateRepository.upsert(repaired)
+        _changes.update { it + 1 }
+        return repaired
     }
 
     suspend fun waitForNetwork() = withContext(dispatchers.io) {
@@ -320,11 +356,13 @@ class GalleryDownloadEngine(
         }
     }
 
-    suspend fun resumePending() = withContext(dispatchers.io) {
+    suspend fun resumePending(): Boolean = withContext(dispatchers.io) {
         val tasks = allTasks()
         tasks.filter { it.status == DownloadStatus.RETRY_WAIT }.forEach(::scheduleRetryTimer)
         if (canRun && tasks.any { it.status == DownloadStatus.QUEUED || it.status == DownloadStatus.DOWNLOADING }) {
-            runCatching { startForegroundWorker(keepQueuedOnFailure = true) }
+            runCatching { startForegroundWorker(keepQueuedOnFailure = true) }.getOrDefault(false)
+        } else {
+            true
         }
     }
 
@@ -423,7 +461,7 @@ class GalleryDownloadEngine(
 
             updateIf(task.id, predicate = { it.status == DownloadStatus.DOWNLOADING }) { current ->
                 current.copy(
-                    totalUnits = detail.pageCount,
+                    totalUnits = totalRequested,
                     updatedAt = clockMs(),
                 )
             }
@@ -461,7 +499,7 @@ class GalleryDownloadEngine(
                                 updateIf(task.id, predicate = { it.status == DownloadStatus.DOWNLOADING }) { current ->
                                     current.copy(
                                         completedUnits = maxOf(current.completedUnits, completedCount),
-                                        totalUnits = detail.pageCount,
+                                        totalUnits = totalRequested,
                                         progressFraction = maxOf(current.progressFraction, fraction),
                                         downloadedBytes = maxOf(current.downloadedBytes, totalBytes),
                                         errorCategory = null,
@@ -486,14 +524,25 @@ class GalleryDownloadEngine(
             if (audit.isComplete) {
                 runCatching { writeCompletedSidecar(task, audit, layout) }
             }
+            // A selective task reports its picked subset; a whole-book repair that fills the last
+            // gaps must keep reporting the full book even though it was enqueued as a subset.
+            val selective = task.selectedPages.isNotEmpty() && !audit.isComplete
+            val completedUnitsForTask = if (selective) {
+                requestedPages.count { it in audit.validPages }
+            } else {
+                audit.validPages.size
+            }
+            val totalUnitsForTask = if (selective) totalRequested else audit.totalPages
             val didComplete = updateIf(task.id, predicate = { it.status == DownloadStatus.DOWNLOADING }) { current ->
                 current.copy(
                     status = DownloadStatus.COMPLETED,
-                    progressFraction = if (audit.isComplete) 1f else {
-                        (audit.validPages.size.toFloat() / audit.totalPages.coerceAtLeast(1)).coerceIn(0f, 1f)
+                    progressFraction = if (totalUnitsForTask > 0) {
+                        (completedUnitsForTask.toFloat() / totalUnitsForTask.toFloat()).coerceIn(0f, 1f)
+                    } else {
+                        1f
                     },
-                    completedUnits = audit.validPages.size,
-                    totalUnits = audit.totalPages,
+                    completedUnits = completedUnitsForTask,
+                    totalUnits = totalUnitsForTask,
                     downloadedBytes = audit.totalBytes,
                     selectedPages = if (audit.isComplete) emptyList() else requestedPages,
                     errorCategory = null,
@@ -503,7 +552,8 @@ class GalleryDownloadEngine(
                 )
             }
             if (didComplete) {
-                val pageSummary = "${audit.validPages.size.coerceAtLeast(audit.totalPages)} 页"
+                val notificationPages = if (selective) completedUnitsForTask else audit.validPages.size
+                val pageSummary = "$notificationPages 页"
                 val detail = if (audit.totalBytes > 0L) {
                     "$pageSummary · ${DownloadNotifications.formatBytes(audit.totalBytes)}"
                 } else {
@@ -515,6 +565,7 @@ class GalleryDownloadEngine(
                     title = task.title,
                     isVideo = false,
                     detail = detail,
+                    privacySensitive = notificationPrivacyProvider(),
                 )
             }
         } catch (waitSignal: RetryWaitSignal) {
@@ -555,6 +606,7 @@ class GalleryDownloadEngine(
                     title = task.title,
                     isVideo = false,
                     errorDetail = classified.message,
+                    privacySensitive = notificationPrivacyProvider(),
                 )
             }
         }
@@ -645,7 +697,12 @@ class GalleryDownloadEngine(
         true
     }
 
-    private fun writeCompletedSidecar(task: DownloadItem, audit: GalleryAudit, layout: StorageLayout) {
+    private fun writeCompletedSidecar(
+        task: DownloadItem,
+        audit: GalleryAudit,
+        layout: StorageLayout,
+        completedPages: Int = audit.validPages.size,
+    ) {
         storageRootManager.writeComicSidecar(
             DiskSidecarRecord(
                 kind = task.kind,
@@ -655,7 +712,7 @@ class GalleryDownloadEngine(
                 url = task.url,
                 coverUrl = task.coverUrl,
                 totalPages = audit.totalPages,
-                completedPages = audit.validPages.size,
+                completedPages = completedPages,
                 bytes = audit.totalBytes,
                 updatedAt = clockMs(),
                 status = DownloadStatus.COMPLETED,
@@ -665,17 +722,18 @@ class GalleryDownloadEngine(
         )
     }
 
-    private fun startForegroundWorker(keepQueuedOnFailure: Boolean = false) {
+    private fun startForegroundWorker(keepQueuedOnFailure: Boolean = false): Boolean {
         serviceStarter?.let {
             it.invoke()
-            return
+            return true
         }
-        val appContext = context?.applicationContext ?: return
-        try {
+        val appContext = context?.applicationContext ?: return false
+        return try {
             ContextCompat.startForegroundService(
                 appContext,
                 Intent(appContext, GalleryDownloadService::class.java),
             )
+            true
         } catch (e: Exception) {
             if (!keepQueuedOnFailure) {
                 applicationScope.launch(dispatchers.io) {
@@ -690,6 +748,7 @@ class GalleryDownloadEngine(
                     }
                 }
             }
+            false
         }
     }
 

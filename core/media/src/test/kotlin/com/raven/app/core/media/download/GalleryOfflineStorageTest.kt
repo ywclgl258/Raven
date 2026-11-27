@@ -410,6 +410,62 @@ class GalleryOfflineStorageTest {
         }
     }
 
+    @Test
+    fun `repair of a completed selective task never widens to unselected pages`() = runBlocking {
+        val server = MockWebServer()
+        var served = 0
+        val png = TestMediaFixtures.validPng("repair-selective")
+        server.dispatcher = object : okhttp3.mockwebserver.Dispatcher() {
+            override fun dispatch(request: okhttp3.mockwebserver.RecordedRequest): MockResponse {
+                served += 1
+                return MockResponse().setBody(Buffer().write(png))
+            }
+        }
+        server.start()
+        val engineScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+        try {
+            val item = MediaItem(
+                siteId = SiteId.NHENTAI,
+                id = "repair-selective",
+                url = "https://example.test/gallery/repair-selective/",
+                kind = MediaKind.COMIC,
+                title = "Repair selective",
+                pageCount = 4,
+            )
+            val urls = (1..4).associateWith { idx -> server.url("/img/repair-selective/$idx.png").toString() }
+            val env = createEnv(item, 4, urls, "repair-selective")
+            val engine = GalleryDownloadEngine(
+                context = null,
+                galleryPageRepository = env.repo,
+                storageRootManager = env.storage,
+                downloadStateRepository = env.stateRepo,
+                applicationScope = engineScope,
+                dispatchers = DefaultAppDispatchers(),
+                serviceStarter = {},
+            )
+
+            val queued = engine.enqueue(item, selectedPages = listOf(1, 2))
+            engine.launchNext(engineScope)!!.join()
+            assertEquals(2, served)
+            val completed = engine.getTask(queued.id)!!
+            assertEquals(DownloadStatus.COMPLETED, completed.status)
+            assertEquals(listOf(1, 2), completed.selectedPages)
+            assertEquals(2, completed.completedUnits)
+            assertEquals(2, completed.totalUnits)
+
+            // Pages 3/4 were never selected. Repair must not treat them as damaged work.
+            val repaired = engine.repair(queued.id)
+            assertEquals(DownloadStatus.COMPLETED, repaired.status)
+            assertEquals(listOf(1, 2), repaired.selectedPages)
+            assertEquals(2, repaired.completedUnits)
+            assertEquals(2, repaired.totalUnits)
+            assertEquals(2, served)
+        } finally {
+            engineScope.cancel()
+            server.shutdown()
+        }
+    }
+
     // ---- 3. Delete versus scan ----
 
     @Test

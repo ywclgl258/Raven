@@ -751,4 +751,58 @@ class NewSerialComicSitesPluginTest {
         val swappedPage = plugin.gallerySource.resolvePageImage(swappedPageUrl!!, preferOriginal = false, forceReload = true)
         assertEquals("https://hip-cf-1.s3imgs.top/p/1.jpg", swappedPage.imageUrl)
     }
+
+    @Test
+    fun `mangacopy and relamanhua bind authEpoch to API requests and cancel on mid-flight logout`() = runTest {
+        val mcHttp = FakeHttpClientAdapter()
+        val mcStore = InMemorySiteSessionStore()
+        mcStore.saveBearerToken(SiteId.MANGACOPY, "copy-token-a", "alice")
+        val expectedMcEpoch = mcStore.authEpoch(SiteId.MANGACOPY)
+        val mcPlugin = MangacopySitePlugin(mcHttp, mcStore)
+
+        mcHttp.onMatch({ req -> req.url.contains("/api/v3/comics") }) { req ->
+            assertNotNull("Mangacopy API request must carry the session epoch", req.authEpoch)
+            // Simulate logout occurring while the request is in flight.
+            mcStore.clearSite(SiteId.MANGACOPY)
+            jsonResp(req, """{"code":200,"results":{"total":1,"offset":0,"list":[]}}""")
+        }
+        val mcError = runCatching {
+            mcPlugin.feedSource.loadFeed(FeedRequest(siteId = SiteId.MANGACOPY, section = "latest"))
+        }.exceptionOrNull()
+        assertTrue("Expected SiteException.Cancelled on Mangacopy epoch change, got $mcError", mcError is SiteException.Cancelled)
+        // Must abort immediately without falling back to HotManga hosts.
+        assertEquals(1, mcHttp.recordedRequests.size)
+        val mcDecorateErr = runCatching {
+            mcPlugin.authProvider.decorateRequestHeaders(
+                SiteHttpRequest(url = "https://api.copy202601.com/api/v3/comics", siteId = SiteId.MANGACOPY, authEpoch = expectedMcEpoch),
+                "api.copy202601.com",
+            )
+        }.exceptionOrNull()
+        assertTrue(mcDecorateErr is SiteException.Cancelled)
+
+        val relaHttp = FakeHttpClientAdapter()
+        val relaStore = InMemorySiteSessionStore()
+        relaStore.saveBearerToken(SiteId.RELAMANHUA, "rela-token-a", "bob")
+        val expectedRelaEpoch = relaStore.authEpoch(SiteId.RELAMANHUA)
+        val relaPlugin = RelamanhuaSitePlugin(relaHttp, relaStore)
+
+        relaHttp.onMatch({ req -> req.url.contains("/api/v3/comics") }) { req ->
+            assertNotNull("Relamanhua API request must carry the session epoch", req.authEpoch)
+            // Simulate logout occurring while the request is in flight.
+            relaStore.clearSite(SiteId.RELAMANHUA)
+            jsonResp(req, """{"code":200,"results":{"total":1,"offset":0,"list":[]}}""")
+        }
+        val relaError = runCatching {
+            relaPlugin.feedSource.loadFeed(FeedRequest(siteId = SiteId.RELAMANHUA, section = "latest"))
+        }.exceptionOrNull()
+        assertTrue("Expected SiteException.Cancelled on Relamanhua epoch change, got $relaError", relaError is SiteException.Cancelled)
+        assertEquals(1, relaHttp.recordedRequests.size)
+        val relaDecorateErr = runCatching {
+            relaPlugin.authProvider.decorateRequestHeaders(
+                SiteHttpRequest(url = "https://mapi.hotmangasg.com/api/v3/comics", siteId = SiteId.RELAMANHUA, authEpoch = expectedRelaEpoch),
+                "mapi.hotmangasg.com",
+            )
+        }.exceptionOrNull()
+        assertTrue(relaDecorateErr is SiteException.Cancelled)
+    }
 }

@@ -172,6 +172,10 @@ class RelamanhuaSitePlugin(
         }
 
         override fun decorateRequestHeaders(request: SiteHttpRequest, host: String): Map<String, String> {
+            val expectedEpoch = request.authEpoch
+            if (expectedEpoch != null && sessionStore != null && expectedEpoch != sessionStore.authEpoch(SiteId.RELAMANHUA)) {
+                throw SiteException.Cancelled("热辣漫画会话已切换", siteId = SiteId.RELAMANHUA)
+            }
             // Token confinement: only the pinned HotManga API hosts ever receive the bearer token.
             // Image CDNs, web mirrors and any other host stay credential-free.
             val normalized = host.trim().lowercase()
@@ -663,7 +667,9 @@ class RelamanhuaSitePlugin(
             CopyHotApiSupport.HOTMANGA_API_HOSTS.forEach { if (it !in this) add(it) }
         }.take(MAX_HOST_ATTEMPTS)
 
-        val token = sessionStore?.getBearerToken(SiteId.RELAMANHUA)
+        val epoch = sessionStore?.authEpoch(SiteId.RELAMANHUA)
+        val token = sessionStore?.getBearerToken(SiteId.RELAMANHUA)?.takeIf { it.isNotBlank() }
+        val authEpoch = if (token != null) epoch else null
         val headers = CopyHotApiSupport.buildHotmangaHeaders(token)
         var lastError: Throwable? = null
 
@@ -672,12 +678,20 @@ class RelamanhuaSitePlugin(
                 ?: throw SiteException.ParseError("热辣漫画接口地址无效", siteId = SiteId.RELAMANHUA)
             val url = query.fold(builder) { acc, (k, v) -> acc.addQueryParameter(k, v) }.toString()
             try {
+                if (authEpoch != null && sessionStore?.authEpoch(SiteId.RELAMANHUA) != authEpoch) {
+                    throw SiteException.Cancelled("热辣漫画会话已切换", siteId = SiteId.RELAMANHUA)
+                }
                 val response = httpClient.getText(
                     url = url,
                     siteId = SiteId.RELAMANHUA,
                     kind = SiteRequestKind.API,
                     headers = headers,
+                    allowCache = authEpoch == null,
+                    authEpoch = authEpoch,
                 )
+                if (authEpoch != null && sessionStore?.authEpoch(SiteId.RELAMANHUA) != authEpoch) {
+                    throw SiteException.Cancelled("热辣漫画会话已切换", siteId = SiteId.RELAMANHUA)
+                }
                 response.throwIfNotSuccessful(SiteId.RELAMANHUA, descriptor.displayName)
                 val root = runCatching { json.parseToJsonElement(response.bodyText()).jsonObject }.getOrNull()
                     ?: throw SiteException.ParseError("热辣漫画接口数据格式异常", siteId = SiteId.RELAMANHUA)
@@ -691,6 +705,7 @@ class RelamanhuaSitePlugin(
             } catch (ce: CancellationException) {
                 throw ce
             } catch (error: Throwable) {
+                if (error is SiteException.Cancelled) throw error
                 apiRouter.reportHostFailure(host, routeKey, error)
                 lastError = error
             }

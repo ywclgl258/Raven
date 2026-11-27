@@ -27,6 +27,7 @@ import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.lifecycleScope
 import com.raven.app.core.common.UrlSanitizer
 import com.raven.app.core.database.model.AppSettings
 import com.raven.app.core.database.repository.PreferencesRepository
@@ -45,6 +46,9 @@ import com.raven.app.feature.player.VideoPlayerScreen
 import com.raven.app.feature.settings.AppLockSessionCoordinator
 import com.raven.app.feature.settings.RavenPrivacyGate
 import kotlin.math.roundToInt
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import org.koin.android.ext.android.inject
 import org.koin.androidx.viewmodel.ext.android.viewModel
 import org.koin.core.parameter.parametersOf
@@ -78,6 +82,7 @@ class PlayerActivity : ComponentActivity() {
     private var suppressAutoPipOnce: Boolean = false
     private var latestVideoBounds: android.graphics.Rect? = null
     private var latestAppSettings: AppSettings = AppSettings()
+    private var pipLockTimerJob: Job? = null
 
     private val playerNavigator: PlayerNavigator = object : PlayerNavigator {
         override fun openTagFeed(siteId: SiteId, tag: TagRef) {
@@ -217,6 +222,11 @@ class PlayerActivity : ComponentActivity() {
                     playerViewModel.pause()
                     window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
                     updatePipParams()
+                    if (isInPipMode) {
+                        // PiP keeps the Activity started, so the lock gate never renders over it.
+                        // Close the floating video and let the normal lock screen take over.
+                        finish()
+                    }
                 }
             }
 
@@ -349,9 +359,36 @@ class PlayerActivity : ComponentActivity() {
     ) {
         super.onPictureInPictureModeChanged(isInPictureInPictureMode, newConfig)
         isInPipMode = isInPictureInPictureMode
+        if (isInPictureInPictureMode && appLockCoordinator.state.value.isLocked) {
+            finish()
+            return
+        }
+        if (isInPictureInPictureMode) {
+            // PiP activities stay started, so the process-wide lifecycle callback never sees a
+            // background transition. Arm the lock timeout explicitly while the video is floating.
+            appLockCoordinator.onAppBackgrounded()
+            armPipLockTimer()
+        } else {
+            pipLockTimerJob?.cancel()
+            pipLockTimerJob = null
+            appLockCoordinator.onAppForegrounded()
+        }
         updatePlayerRefreshRate()
         if (!isInPictureInPictureMode && isFullscreen) {
             applySystemBarsVisible(false)
+        }
+    }
+
+    private fun armPipLockTimer() {
+        pipLockTimerJob?.cancel()
+        pipLockTimerJob = lifecycleScope.launch {
+            val settings = runCatching { preferencesRepository.currentSettings() }
+                .getOrElse { latestAppSettings }
+            if (!settings.appLockEnabled) return@launch
+            delay(settings.appLockTimeoutSeconds.coerceAtLeast(0) * 1_000L)
+            // Equivalent to returning to the foreground: the coordinator decides whether the
+            // configured timeout elapsed and flips `isLocked`, which pauses/exit the PiP window.
+            appLockCoordinator.onAppForegrounded()
         }
     }
 

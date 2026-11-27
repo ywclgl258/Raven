@@ -27,8 +27,14 @@ class GalleryRetryWakeupWorker(
     override suspend fun doWork(): Result {
         return runCatching {
             downloadCoordinator.syncFromDisk()
-            galleryDownloadEngine.resumePending()
-            Result.success()
+            // resumePending reports false only when a runnable task exists but the foreground
+            // service could not be started (e.g. API 31+ background FGS denial). Never report
+            // success in that case or the retry timer is permanently lost.
+            if (galleryDownloadEngine.resumePending()) {
+                Result.success()
+            } else {
+                Result.retry()
+            }
         }.getOrElse {
             Result.retry()
         }

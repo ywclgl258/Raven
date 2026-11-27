@@ -5,6 +5,7 @@ package com.raven.app.core.media
 import com.raven.app.core.database.repository.PreferencesRepository
 import com.raven.app.core.media.cast.LanCastManager
 import com.raven.app.core.media.download.DownloadCoordinator
+import com.raven.app.core.media.download.DownloadNotificationPrivacy
 import com.raven.app.core.media.download.DownloadPolicyController
 import com.raven.app.core.media.download.GalleryDownloadEngine
 import com.raven.app.core.media.download.GalleryRetryWakeupWorker
@@ -87,6 +88,13 @@ val coreMediaModule: Module = module {
     }
 
     single {
+        DownloadNotificationPrivacy(
+            settingsDataStore = get(),
+            scope = get(NetworkQualifiers.APPLICATION_SCOPE),
+        )
+    }
+
+    single {
         PlayerSessionController(
             context = androidContext(),
             downloadCaches = get(),
@@ -140,6 +148,7 @@ val coreMediaModule: Module = module {
             siteRegistryProvider = { get<SiteRegistry>() },
             applicationScope = get(NetworkQualifiers.APPLICATION_SCOPE),
             dispatchers = get(),
+            notificationPrivacyProvider = get<DownloadNotificationPrivacy>()::isSensitive,
         )
     }
 
@@ -162,6 +171,7 @@ val coreMediaModule: Module = module {
                 val requested = get<PreferencesRepository>().currentSettings().imageLoadConcurrency
                 get<GalleryPageRepository>().recommendedImageConcurrency(siteId, requested)
             },
+            notificationPrivacyProvider = get<DownloadNotificationPrivacy>()::isSensitive,
         )
     }
 
@@ -207,7 +217,6 @@ val coreMediaModule: Module = module {
     single {
         LanCastManager(
             context = androidContext(),
-            okHttpClient = get(NetworkQualifiers.LAN),
             dispatchers = get(),
         )
     }

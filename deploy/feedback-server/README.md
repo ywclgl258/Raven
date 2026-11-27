@@ -24,14 +24,22 @@ sudo -E bash deploy/feedback-server/install.sh
 .\deploy\pull-feedback.ps1
 ```
 
-脚本会把未关闭反馈和日志摘录下载到 `docs/agent/FEEDBACK_INBOX.md`。把这个文件交给本地 Agent 即可按编号处理。
+脚本会把未关闭反馈和日志摘录下载到 `$HOME/.raven/feedback/FEEDBACK_INBOX.md`（仓库外）。
+把这个文件交给本地 Agent 即可按编号处理；不要提交到 Git，`docs/agent/FEEDBACK_INBOX.md` 已加入忽略列表。
+导出以 SQLite `mode=ro` 读取数据库，不会建表、切换 WAL 或留下 root 属主文件；`-MarkExported` 以服务用户身份
+（`runuser`/`sudo -u raven-feedback`）执行一次显式 `BEGIN IMMEDIATE` 事务。
 
 ## 安全边界
 
 - 公开接口只接受标题、描述、设备信息和可选日志，不接收账号、Cookie 或备份。
-- 客户端先在设备上打码，服务端再对日志里的 `password`、`cookie`、`authorization`、`token` 行打码一次。
-- 后台使用 HttpOnly + Strict Cookie，口令用 scrypt 保存。
-- 单条日志上限 1.5 MB。
+- 客户端先在设备上打码，服务端再对日志头（`Cookie`/`Set-Cookie`/`Authorization`）、键值凭据、
+  `Bearer`/`Basic`、URL 签名参数、Cookie 对与私钥整段打码一次。
+- 后台使用 HttpOnly + Strict Cookie，口令用 scrypt 保存；`/admin` 由 nginx 下发独立 CSP，
+  页面脚本是静态 `/admin/app.js`，不依赖内联脚本哈希。
+- 单条日志上限 1.5 MB；`versionCode` 与 `sdkInt` 在写入前按 Android 范围截断，超过 SQLite INTEGER 的溢出值直接返回 422。
+- 公开提交与后台登录按客户端 IP 做进程内限流（默认 30 次/60 秒、10 次/300 秒，超限返回 429）；
+  可用 `RAVEN_FEEDBACK_PUBLIC_RATE_LIMIT`、`RAVEN_FEEDBACK_PUBLIC_RATE_WINDOW`、
+  `RAVEN_FEEDBACK_LOGIN_RATE_LIMIT`、`RAVEN_FEEDBACK_LOGIN_RATE_WINDOW` 调整。
 
 ## 客户端日志采集
 

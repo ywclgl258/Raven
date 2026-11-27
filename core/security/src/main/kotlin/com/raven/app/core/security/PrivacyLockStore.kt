@@ -9,6 +9,12 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 
+/** Persisted PIN failure state so force-stopping the process cannot reset the lockout. */
+data class PinAttemptState(
+    val failedAttempts: Int = 0,
+    val lockoutUntilEpochMs: Long = 0L,
+)
+
 /**
  * Encrypted local PIN lock credential store backed by [VaultCipher] (AndroidKeyStore AES-256-GCM).
  *
@@ -35,6 +41,12 @@ class PrivacyLockStore(
         val saltBase64: String,
         val hashBase64: String,
         val updatedAt: Long,
+    )
+
+    @Serializable
+    private data class AttemptRecord(
+        val failedAttempts: Int,
+        val lockoutUntilEpochMs: Long,
     )
 
     private val lock = Any()
@@ -67,6 +79,7 @@ class PrivacyLockStore(
             salt.fill(0)
             digest.fill(0)
         }
+        clearAttempts()
     }
 
     fun verifyPin(pin: String): Boolean {
@@ -97,6 +110,69 @@ class PrivacyLockStore(
         synchronized(lock) {
             storage.remove(KEY_PIN_RECORD)
         }
+        clearAttempts()
+    }
+
+    /**
+     * Reads the persisted failure state. An expired lockout is cleared so the next attempt starts
+     * from zero, matching [AppLockSessionCoordinator.onLockoutExpired].
+     */
+    fun attemptState(nowMs: Long = System.currentTimeMillis()): PinAttemptState {
+        val encoded = synchronized(lock) { storage.getString(KEY_ATTEMPT_RECORD) } ?: return PinAttemptState()
+        val record = runCatching {
+            val sealed = Base64Codec.decode(encoded)
+            val plain = cipher.decrypt(sealed, ATTEMPT_AAD_BYTES)
+            try {
+                json.decodeFromString<AttemptRecord>(String(plain, Charsets.UTF_8))
+            } finally {
+                plain.fill(0)
+            }
+        }.getOrElse {
+            clearAttempts()
+            return PinAttemptState()
+        }
+        if (record.lockoutUntilEpochMs in 1..nowMs) {
+            clearAttempts()
+            return PinAttemptState()
+        }
+        return PinAttemptState(
+            failedAttempts = record.failedAttempts.coerceAtLeast(0),
+            lockoutUntilEpochMs = record.lockoutUntilEpochMs.coerceAtLeast(0L),
+        )
+    }
+
+    fun registerFailedAttempt(
+        nowMs: Long = System.currentTimeMillis(),
+        maxAttempts: Int,
+        lockoutDurationMs: Long,
+    ): PinAttemptState {
+        val current = attemptState(nowMs)
+        val nextAttempts = current.failedAttempts + 1
+        val lockoutUntil = if (nextAttempts >= maxAttempts) {
+            nowMs + lockoutDurationMs.coerceAtLeast(0L)
+        } else {
+            0L
+        }
+        val record = AttemptRecord(
+            failedAttempts = nextAttempts,
+            lockoutUntilEpochMs = lockoutUntil,
+        )
+        val plain = json.encodeToString(AttemptRecord.serializer(), record).toByteArray(Charsets.UTF_8)
+        try {
+            val sealed = cipher.encrypt(plain, ATTEMPT_AAD_BYTES)
+            synchronized(lock) {
+                storage.putString(KEY_ATTEMPT_RECORD, Base64Codec.encode(sealed))
+            }
+        } finally {
+            plain.fill(0)
+        }
+        return PinAttemptState(nextAttempts, lockoutUntil)
+    }
+
+    fun clearAttempts() {
+        synchronized(lock) {
+            storage.remove(KEY_ATTEMPT_RECORD)
+        }
     }
 
     private fun deriveHash(pin: String, salt: ByteArray): ByteArray {
@@ -114,6 +190,8 @@ class PrivacyLockStore(
         const val DEFAULT_PREFS_NAME: String = "raven_privacy_lock_v1"
         private const val KEY_PIN_RECORD: String = "privacy_pin:v1"
         private val AAD_BYTES: ByteArray = "raven-privacy-lock:v1".toByteArray(Charsets.UTF_8)
+        private const val KEY_ATTEMPT_RECORD: String = "privacy_attempts:v1"
+        private val ATTEMPT_AAD_BYTES: ByteArray = "raven-privacy-lock-attempts:v1".toByteArray(Charsets.UTF_8)
         private const val KDF_ALGORITHM: String = "PBKDF2WithHmacSHA1"
         private const val PBKDF2_ITERATIONS: Int = 100_000
         private const val SALT_BYTES: Int = 16

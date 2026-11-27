@@ -1,5 +1,9 @@
 package com.raven.app.core.common.log
 
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
+
 /**
  * Pure-JVM diagnostic log facade shared by every module.
  *
@@ -202,7 +206,10 @@ object LogClock {
         override = clock
     }
 
-    fun iso(timestampMs: Long): String = java.time.Instant.ofEpochMilli(timestampMs)
-        .atZone(java.time.ZoneId.systemDefault())
-        .format(java.time.format.DateTimeFormatter.ofPattern("MM-dd HH:mm:ss.SSS"))
+    private val formatter = object : ThreadLocal<SimpleDateFormat>() {
+        override fun initialValue(): SimpleDateFormat =
+            SimpleDateFormat("MM-dd HH:mm:ss.SSS", Locale.ROOT)
+    }
+
+    fun iso(timestampMs: Long): String = formatter.get().format(Date(timestampMs))
 }

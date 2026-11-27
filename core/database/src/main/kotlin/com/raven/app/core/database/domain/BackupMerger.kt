@@ -123,6 +123,17 @@ object BackupMerger {
                     .take(RavenBackupPayload.MAX_ITEMS_PER_SHELF)
                     .mapIndexed { index, item -> if (item.position == index) item else item.copy(position = index) }
             }
+        val retainedItemKeys = boundedShelfItems
+            .groupBy { it.shelfId }
+            .mapValues { (_, items) -> items.mapTo(HashSet(items.size)) { it.compositeKey } }
+        val boundedShelvesWithCover = boundedShelves.map { shelf ->
+            val cover = shelf.coverCompositeKey
+            if (cover.isNullOrBlank() || cover in retainedItemKeys[shelf.id].orEmpty()) {
+                shelf
+            } else {
+                shelf.copy(coverCompositeKey = null)
+            }
+        }
         val boundedSmartShelves = keepLocalFirst(mergedSmartShelves, local.smartShelves, RavenBackupPayload.MAX_SMART_SHELVES) { it.id }
         val boundedPageBookmarks = keepLocalFirst(mergedPageBookmarks, local.pageBookmarks, RavenBackupPayload.MAX_PAGE_BOOKMARKS) { it.id }
         val boundedTimeBookmarks = keepLocalFirst(mergedTimeBookmarks, local.timeBookmarks, RavenBackupPayload.MAX_TIME_BOOKMARKS) { it.id }
@@ -141,9 +152,9 @@ object BackupMerger {
             watchProgress = mergedWatch,
             readingProgress = mergedReading,
             favorites = mergedFavorites,
-            shelves = boundedShelves,
             shelfItems = boundedShelfItems,
             smartShelves = boundedSmartShelves,
+            shelves = boundedShelvesWithCover,
             pageBookmarks = boundedPageBookmarks,
             timeBookmarks = boundedTimeBookmarks,
             imageFavorites = mergedImageFavorites,
@@ -705,7 +716,10 @@ object BackupMerger {
                 )
             }
         }
-        return byKey.values.toList()
+        return byKey.values
+            .groupBy { it.siteId.value }
+            .values
+            .flatMap { follows -> follows.take(MAX_SUBSCRIPTIONS_PER_SITE) }
     }
 
     private fun mergeSavedSearches(

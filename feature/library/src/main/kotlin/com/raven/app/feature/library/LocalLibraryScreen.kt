@@ -70,6 +70,7 @@ import com.raven.app.core.media.storage.LocalBook
 import com.raven.app.core.media.storage.LocalLibraryImporter
 import com.raven.app.core.model.MediaItem
 import com.raven.app.core.model.MediaKind
+import com.raven.app.core.media.storage.deleteLocalBookCompletely
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -131,6 +132,9 @@ class LocalLibraryViewModel(
 
     init {
         refreshStorageInfo()
+        viewModelScope.launch(dispatchers.io) {
+            runCatching { localLibraryImporter.refreshBooksSnapshot() }
+        }
     }
 
     val uiState: StateFlow<LocalLibraryUiState> = combine(

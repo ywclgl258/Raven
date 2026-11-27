@@ -35,6 +35,7 @@ class AppLockSessionCoordinator(
     private val privacyLockStore: PrivacyLockStore,
     private val dispatchers: AppDispatchers,
     private val elapsedRealtimeMs: () -> Long = SystemClock::elapsedRealtime,
+    private val wallClockMs: () -> Long = System::currentTimeMillis,
 ) {
     private val _state = MutableStateFlow(AppLockSessionState())
     val state: StateFlow<AppLockSessionState> = _state.asStateFlow()
@@ -77,22 +78,41 @@ class AppLockSessionCoordinator(
     fun onSettingsLoaded(settings: AppSettings) {
         latestSettings = settings
         val hasPin = privacyLockStore.hasPin()
-        _state.update { current ->
-            if (!current.lockInitialized) {
+        if (!settings.appLockEnabled || !hasPin) {
+            val current = _state.value
+            if (!current.lockInitialized || current.failedAttempts > 0 || current.lockoutUntilElapsedMs > 0L) {
+                privacyLockStore.clearAttempts()
+            }
+            _state.update { current ->
                 current.copy(
                     lockInitialized = true,
-                    isLocked = settings.appLockEnabled && hasPin,
-                    errorMessage = null,
-                )
-            } else if (!settings.appLockEnabled || !hasPin) {
-                current.copy(
                     isLocked = false,
                     failedAttempts = 0,
                     lockoutUntilElapsedMs = 0L,
                     errorMessage = null,
                 )
-            } else {
+            }
+            return
+        }
+
+        val wallNow = wallClockMs()
+        val persisted = privacyLockStore.attemptState(wallNow)
+        val lockoutUntilElapsed = toElapsedLockout(
+            lockoutUntilEpochMs = persisted.lockoutUntilEpochMs,
+            wallNowMs = wallNow,
+            nowElapsedMs = elapsedRealtimeMs(),
+        )
+        _state.update { current ->
+            if (current.lockInitialized) {
                 current
+            } else {
+                current.copy(
+                    lockInitialized = true,
+                    isLocked = true,
+                    failedAttempts = persisted.failedAttempts,
+                    lockoutUntilElapsedMs = lockoutUntilElapsed,
+                    errorMessage = null,
+                )
             }
         }
     }
@@ -117,7 +137,11 @@ class AppLockSessionCoordinator(
     suspend fun verifyPin(candidate: String, nowElapsedMs: Long = elapsedRealtimeMs()): Boolean {
         return verifyMutex.withLock {
             val snapshot = _state.value
-            if (snapshot.lockoutUntilElapsedMs > nowElapsedMs) {
+            if (snapshot.lockoutUntilElapsedMs in 1..nowElapsedMs) {
+                withContext(dispatchers.default) { privacyLockStore.clearAttempts() }
+                _state.update { it.copy(failedAttempts = 0, lockoutUntilElapsedMs = 0L) }
+            }
+            if (_state.value.lockoutUntilElapsedMs > nowElapsedMs) {
                 return@withLock false
             }
             _state.update { it.copy(isVerifying = true, errorMessage = null) }
@@ -126,6 +150,7 @@ class AppLockSessionCoordinator(
                     privacyLockStore.verifyPin(candidate)
                 }
                 if (ok) {
+                    withContext(dispatchers.default) { privacyLockStore.clearAttempts() }
                     _state.update {
                         it.copy(
                             isLocked = false,
@@ -136,16 +161,23 @@ class AppLockSessionCoordinator(
                         )
                     }
                 } else {
+                    val wallNow = wallClockMs()
+                    val persisted = withContext(dispatchers.default) {
+                        privacyLockStore.registerFailedAttempt(
+                            nowMs = wallNow,
+                            maxAttempts = MAX_PIN_ATTEMPTS,
+                            lockoutDurationMs = LOCKOUT_DURATION_MS,
+                        )
+                    }
+                    val lockoutUntilElapsed = toElapsedLockout(
+                        lockoutUntilEpochMs = persisted.lockoutUntilEpochMs,
+                        wallNowMs = wallNow,
+                        nowElapsedMs = nowElapsedMs,
+                    )
                     _state.update { current ->
-                        val nextAttempts = current.failedAttempts + 1
-                        val nextLockoutUntil = if (nextAttempts >= MAX_PIN_ATTEMPTS) {
-                            nowElapsedMs + LOCKOUT_DURATION_MS
-                        } else {
-                            current.lockoutUntilElapsedMs
-                        }
                         current.copy(
-                            failedAttempts = nextAttempts,
-                            lockoutUntilElapsedMs = nextLockoutUntil,
+                            failedAttempts = persisted.failedAttempts,
+                            lockoutUntilElapsedMs = lockoutUntilElapsed,
                             isVerifying = false,
                         )
                     }
@@ -169,6 +201,7 @@ class AppLockSessionCoordinator(
                 )
             }
         }
+        privacyLockStore.clearAttempts()
     }
 
     fun onBiometricUnlocked() {
@@ -181,11 +214,21 @@ class AppLockSessionCoordinator(
                 isVerifying = false,
             )
         }
+        privacyLockStore.clearAttempts()
     }
 
     fun onBiometricError(message: String?) {
         val clean = message?.trim()?.takeIf { it.isNotEmpty() } ?: return
         _state.update { it.copy(errorMessage = clean) }
+    }
+
+    private fun toElapsedLockout(
+        lockoutUntilEpochMs: Long,
+        wallNowMs: Long,
+        nowElapsedMs: Long,
+    ): Long {
+        val remainingMs = lockoutUntilEpochMs - wallNowMs
+        return if (remainingMs <= 0L) 0L else nowElapsedMs + remainingMs
     }
 
     companion object {

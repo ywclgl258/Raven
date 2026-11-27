@@ -137,6 +137,33 @@ class StructureTests(unittest.TestCase):
         referenced = str(self.ws.manifest()["assets"][0]["id"])
         self.assertNotEqual("9000011", referenced)
 
+    def test_failed_publish_does_not_consume_retention_window(self) -> None:
+        self.publish(self.ws.apk(seed=1), self.ws.properties(version_name="8.1.0", version_code=510))
+        failed = self.ws.apk(seed=2)
+
+        def failing_writer(path: Path, value: object) -> None:
+            raise OSError("injected manifest write failure")
+
+        failed_args = make_args(
+            failed, self.ws.web_root, self.ws.properties(version_name="8.1.1", version_code=511)
+        )
+        with self.assertRaises(OSError):
+            support.publisher.publish(
+                failed_args, apk_checker=self.checker, write_manifest=failing_writer
+            )
+
+        # keep_previous=1: the live manifest's asset must survive, and the failed publication
+        # must neither claim that slot nor keep its own orphan asset alive.
+        self.publish(
+            self.ws.apk(seed=3),
+            self.ws.properties(version_name="8.1.2", version_code=512),
+            keep_previous=1,
+        )
+        assets = self.ws.assets()
+        self.assertIn("9000510", assets, "asset referenced by the live previous manifest")
+        self.assertIn("9000512", assets)
+        self.assertNotIn("9000511", assets, "failed publication is an inert orphan")
+
     def test_previous_asset_retained_after_successful_swap(self) -> None:
         first = self.ws.apk(seed=1)
         self.publish(first, self.ws.properties(version_name="1.0.0", version_code=10))
@@ -315,8 +342,21 @@ class RealApkValidationTests(unittest.TestCase):
     def setUpClass(cls) -> None:
         cls.apksigner = BUILD_TOOLS / ("apksigner.bat" if os.name == "nt" else "apksigner")
         cls.aapt2 = BUILD_TOOLS / ("aapt2.exe" if os.name == "nt" else "aapt2")
-        if not RELEASE_APK.is_file() or not DEBUG_APK.is_file():
-            raise unittest.SkipTest("Gradle APK outputs are missing; run :app:assembleRelease first")
+        # Real-APK tests are opt-in by artifact presence: a fresh checkout without Gradle output
+        # skips them instead of failing.
+        if not RELEASE_PROPERTIES.is_file():
+            raise unittest.SkipTest("release.properties is missing")
+        if not RELEASE_APK.is_file():
+            raise unittest.SkipTest("Gradle release APK missing; run :app:assembleRelease first")
+        properties = support.publisher.release_properties(RELEASE_PROPERTIES)
+        try:
+            cls.version_code = int(properties["versionCode"])
+        except (KeyError, ValueError):
+            raise unittest.SkipTest("release.properties has no usable versionCode")
+        cls.version_name = properties.get("versionName", "").strip()
+        cls.cert_sha256 = properties.get("releaseCertificate", "").strip().replace(":", "").upper()
+        if not cls.version_name or len(cls.cert_sha256) != 64:
+            raise unittest.SkipTest("release.properties versionName/releaseCertificate is incomplete")
         try:
             cls.toolchain = support.publisher.resolve_toolchain(
                 apksigner=str(cls.apksigner) if cls.apksigner.is_file() else None,
@@ -331,52 +371,63 @@ class RealApkValidationTests(unittest.TestCase):
     def test_genuine_release_apk_is_accepted_with_all_three_schemes(self) -> None:
         identity = self.verify(
             RELEASE_APK,
-            expected_version_code=14,
-            expected_version_name="0.9.1",
-            expected_cert_sha256="1F9407377D2D3AB5C04527CF6E587F0B789BA8B971D60AD8F99360D05CA52F3A",
+            expected_version_code=self.version_code,
+            expected_version_name=self.version_name,
+            expected_cert_sha256=self.cert_sha256,
         )
         self.assertEqual("com.raven.app", identity.package_name)
         self.assertEqual(24, identity.min_sdk)
         self.assertEqual(("v1", "v2", "v3"), identity.schemes)
-        self.assertEqual(
-            "1F9407377D2D3AB5C04527CF6E587F0B789BA8B971D60AD8F99360D05CA52F3A",
-            identity.cert_sha256,
-        )
+        self.assertEqual(self.cert_sha256, identity.cert_sha256)
 
     def test_plain_zip_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             fake = Path(directory) / "not-an-apk.apk"
             support.make_zip_apk(fake, seed=7, size=512)
             with self.assertRaises(support.SignatureError):
-                self.verify(fake, expected_version_code=14, expected_version_name="0.9.1")
+                self.verify(
+                    fake,
+                    expected_version_code=self.version_code,
+                    expected_version_name=self.version_name,
+                )
 
     def test_debug_build_is_rejected(self) -> None:
+        if not DEBUG_APK.is_file():
+            self.skipTest("Gradle debug APK missing; run :app:assembleDebug first")
         with self.assertRaises(support.SignatureError) as caught:
             self.verify(
                 DEBUG_APK,
-                expected_version_code=14,
-                expected_version_name="0.9.1",
-                expected_cert_sha256="1F9407377D2D3AB5C04527CF6E587F0B789BA8B971D60AD8F99360D05CA52F3A",
+                expected_version_code=self.version_code,
+                expected_version_name=self.version_name,
+                expected_cert_sha256=self.cert_sha256,
             )
         message = str(caught.exception)
         self.assertTrue("包名不符" in message or "证书指纹不符" in message, message)
 
     def test_version_mismatch_is_rejected(self) -> None:
         with self.assertRaises(support.SignatureError) as caught:
-            self.verify(RELEASE_APK, expected_version_code=13, expected_version_name="0.9.0")
+            self.verify(
+                RELEASE_APK,
+                expected_version_code=self.version_code - 1,
+                expected_version_name=self.version_name,
+            )
         self.assertIn("versionCode", str(caught.exception))
 
     def test_version_name_mismatch_is_rejected(self) -> None:
         with self.assertRaises(support.SignatureError) as caught:
-            self.verify(RELEASE_APK, expected_version_code=14, expected_version_name="0.9.0")
+            self.verify(
+                RELEASE_APK,
+                expected_version_code=self.version_code,
+                expected_version_name=f"{self.version_name}-mismatch",
+            )
         self.assertIn("versionName", str(caught.exception))
 
     def test_foreign_certificate_pin_is_rejected(self) -> None:
         with self.assertRaises(support.SignatureError) as caught:
             self.verify(
                 RELEASE_APK,
-                expected_version_code=14,
-                expected_version_name="0.9.1",
+                expected_version_code=self.version_code,
+                expected_version_name=self.version_name,
                 expected_cert_sha256="B" * 64,
             )
         self.assertIn("证书指纹不符", str(caught.exception))
@@ -421,11 +472,12 @@ class RealApkValidationTests(unittest.TestCase):
             args = make_args(RELEASE_APK, web_root, RELEASE_PROPERTIES)
             result = support.publisher.publish(args, toolchain=self.toolchain)
             manifest = support.read_manifest(web_root)
-            self.assertEqual(9000014, manifest["id"])
-            self.assertEqual("v0.9.1", manifest["tag_name"])
+            release_id = support.publisher.MIRROR_RELEASE_ID_BASE + self.version_code
+            self.assertEqual(release_id, manifest["id"])
+            self.assertEqual(f"v{self.version_name}", manifest["tag_name"])
             asset = manifest["assets"][0]
             self.assertEqual("sha256:" + result["sha256"], asset["digest"])
-            self.assertTrue((web_root / "raven/releases/assets/9000014").is_file())
+            self.assertTrue((web_root / "raven/releases/assets" / str(release_id)).is_file())
 
 
 if __name__ == "__main__":

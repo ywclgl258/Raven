@@ -20,6 +20,11 @@ SCHEMA_VERSION = 1
 STATUSES = ("new", "triaged", "in_progress", "resolved", "wontfix", "duplicate")
 CATEGORIES = ("bug", "suggestion", "playback", "download", "account", "other")
 SOURCES = ("app", "website")
+# Client-supplied integers are bound as SQLite INTEGER values; keep them inside the real Android
+# ranges so a crafted payload cannot overflow the column and turn into a 500.
+MAX_VERSION_CODE = 2_100_000_000
+MAX_SDK_INT = 999
+MAX_SAFE_INT = 2**63 - 1
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS meta (
     key TEXT PRIMARY KEY,
@@ -106,10 +111,25 @@ def verify_password(password: str, stored: str) -> bool:
 
 
 class FeedbackStore:
-    def __init__(self, db_path: Path, admin_password: str | None = None) -> None:
+    def __init__(self, db_path: Path, admin_password: str | None = None, read_only: bool = False) -> None:
         self.db_path = Path(db_path)
-        self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        self.read_only = read_only
         self._lock = threading.Lock()
+        if read_only:
+            # URI mode=ro guarantees this handle cannot create the schema, change the journal
+            # mode, or checkpoint WAL: exporting is a pure read even when run by another user.
+            if not self.db_path.is_file():
+                raise FileNotFoundError(f"反馈数据库不存在：{self.db_path}")
+            self._conn = sqlite3.connect(
+                self.db_path.resolve().as_uri() + "?mode=ro",
+                uri=True,
+                check_same_thread=False,
+            )
+            self._conn.row_factory = sqlite3.Row
+            self._conn.execute("PRAGMA query_only=ON")
+            self._conn.execute("PRAGMA busy_timeout=5000")
+            return
+        self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._conn = sqlite3.connect(self.db_path, check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
         self._conn.execute("PRAGMA journal_mode=WAL")
@@ -193,11 +213,11 @@ class FeedbackStore:
             "status": "new",
             "priority": "normal",
             "app_version": _clip(fields.get("appVersion") or fields.get("app_version"), 40),
-            "version_code": _int(fields.get("versionCode") or fields.get("version_code")),
+            "version_code": _int(fields.get("versionCode") or fields.get("version_code"), MAX_VERSION_CODE, "versionCode"),
             "package_name": _clip(fields.get("packageName") or fields.get("package_name"), 80),
             "device_model": _clip(fields.get("deviceModel") or fields.get("device_model"), 80),
             "android_release": _clip(fields.get("androidRelease") or fields.get("android_release"), 40),
-            "sdk_int": _int(fields.get("sdkInt") or fields.get("sdk_int")),
+            "sdk_int": _int(fields.get("sdkInt") or fields.get("sdk_int"), MAX_SDK_INT, "sdkInt"),
             "locale": _clip(fields.get("locale"), 40),
             "install_id": _clip(fields.get("installId") or fields.get("install_id"), 64),
             "client_ip": _clip(fields.get("client_ip"), 64),
@@ -317,17 +337,6 @@ class FeedbackStore:
             ).fetchall()
         return [dict(row) for row in rows]
 
-    def mark_exported(self, ticket_ids: list[str]) -> None:
-        if not ticket_ids:
-            return
-        exported = now_ms()
-        with self._lock:
-            self._conn.executemany(
-                "UPDATE tickets SET exported_at = ? WHERE id = ?",
-                [(exported, ticket_id) for ticket_id in ticket_ids],
-            )
-            self._conn.commit()
-
     def stats(self) -> dict[str, Any]:
         listing = self.list_tickets(limit=1)
         with self._lock:
@@ -353,6 +362,34 @@ class FeedbackStore:
         self._conn.execute("DELETE FROM sessions WHERE expires_at < ?", (now,))
 
 
+def mark_exported(db_path: Path, ticket_ids: list[str], timeout_seconds: float = 10.0) -> None:
+    """Mark tickets exported through a short, explicit write transaction.
+
+    Opened with ``mode=rw`` (never ``rwc``) so a mistyped path cannot create a new database. The
+    caller is expected to run as the service user; this helper only guarantees that the write is
+    atomic, bounded, and never leaves a partially updated batch behind.
+    """
+    if not ticket_ids:
+        return
+    path = Path(db_path)
+    if not path.is_file():
+        raise FileNotFoundError(f"反馈数据库不存在：{path}")
+    conn = sqlite3.connect(path.resolve().as_uri() + "?mode=rw", uri=True, timeout=timeout_seconds)
+    try:
+        conn.execute(f"PRAGMA busy_timeout={int(timeout_seconds * 1000)}")
+        conn.execute("BEGIN IMMEDIATE")
+        conn.executemany(
+            "UPDATE tickets SET exported_at = ? WHERE id = ?",
+            [(now_ms(), ticket_id) for ticket_id in ticket_ids],
+        )
+        conn.commit()
+    except BaseException:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
 def _public_ticket(row: sqlite3.Row) -> dict[str, Any]:
     item = dict(row)
     item["hasLog"] = int(item.get("log_bytes") or 0) > 0
@@ -365,11 +402,14 @@ def _clip(value: Any, limit: int) -> str:
     return text[:limit]
 
 
-def _int(value: Any) -> int:
+def _int(value: Any, maximum: int, label: str = "整数") -> int:
     try:
-        return max(0, int(value or 0))
-    except (TypeError, ValueError):
+        parsed = int(value or 0)
+    except (TypeError, ValueError, OverflowError):
         return 0
+    if parsed > MAX_SAFE_INT:
+        raise ValueError(f"{label} 超出允许范围")
+    return max(0, min(parsed, maximum))
 
 
 def _one_of(value: Any, allowed: tuple[str, ...], default: str) -> str:

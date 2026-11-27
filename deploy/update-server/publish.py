@@ -27,12 +27,14 @@ an explicit message — there is no cryptographic fallback path here.
 
 Publication ordering (why clients never see a dangling manifest):
 
-    lock -> stage asset -> fsync asset -> rename asset -> history ledger -> rename manifest -> prune
+    lock -> stage asset -> fsync asset -> rename asset -> rename manifest -> history ledger -> prune
 
 The manifest is the single pointer clients read, so it is replaced *last*. Dying at any earlier
 step leaves the previously published manifest and its asset untouched; the orphan asset is inert
-and is pruned by the next successful run. Previous assets are retained for a grace window so a
-client that already fetched an older manifest can still download.
+and is pruned by the next successful run. History is recorded only after the manifest swap, so a
+failed publication can never consume the keep-previous budget and evict the live manifest's asset.
+Previous assets are retained for a grace window so a client that already fetched an older manifest
+can still download.
 
 Republishing the same version with different bytes is refused: assets are served with
 ``Cache-Control: immutable``, so a silently swapped payload would never reach clients that already
@@ -598,15 +600,33 @@ def _dedupe_history(entries: list[dict]) -> list[dict]:
     return unique
 
 
-def _retention_ids(history: list[dict], published_id: int, keep_previous: int) -> set[str]:
+def _retention_ids(
+    history: list[dict],
+    published_id: int,
+    keep_previous: int,
+    *,
+    always_keep: tuple[int | None, ...] = (),
+) -> set[str]:
+    """Choose assets to retain.
+
+    The newly published asset and the asset referenced by the manifest that was live before this
+    run are always retained. Only entries that survived an actual manifest swap reach ``history``,
+    so failed/orphan publications cannot consume the keep-previous budget.
+    """
     keep = {str(published_id)}
+    always = {str(item) for item in always_keep if item is not None}
+    keep.update(always)
     kept_previous = 0
     for entry in history:
         if kept_previous >= max(1, keep_previous):
             break
-        if entry["id"] != published_id:
-            keep.add(str(entry["id"]))
-            kept_previous += 1
+        identifier = str(entry["id"])
+        if identifier == str(published_id):
+            continue
+        # The live previous manifest still consumes one grace-window slot when it is in history;
+        # `always` only guarantees it survives when history is missing or reordered.
+        keep.add(identifier)
+        kept_previous += 1
     return keep
 
 
@@ -782,9 +802,15 @@ def publish(
             # Only possible in the idempotent branch if the file was truncated behind our back.
             raise PublishError(f"资产文件大小 {size} 与发布声明 {identity.size} 不一致，拒绝发布")
 
-        # Retention bookkeeping is written *before* the manifest swap: if the swap fails, the new
-        # asset stays on disk and is already listed as publishable history, so the next run and the
-        # retention pass both keep it. A crash here leaves the old manifest authoritative.
+        # Record history only after the manifest swap succeeds. A failed publish therefore leaves
+        # no history entry to consume the keep-previous budget, and the asset referenced by the
+        # still-live manifest is retained explicitly below even if history is missing or stale.
+        previous_manifest_text = manifest_path.read_text(encoding="utf-8") if manifest_path.is_file() else None
+        new_manifest_text = json.dumps(manifest, ensure_ascii=False, indent=2) + "\n"
+        if previous_manifest_text != new_manifest_text:
+            # The manifest is the only pointer clients follow: replace it last, atomically.
+            writer(manifest_path, manifest)
+
         history = [entry for entry in _load_history(state_dir) if entry.get("id") != release_id]
         history.insert(0, {
             "id": release_id,
@@ -801,19 +827,15 @@ def publish(
                 "sha256": None,
                 "publishedAt": 0,
             })
-        atomic_json(
-            state_dir / "publish-history.json",
-            {"entries": _dedupe_history(history)[:MAX_HISTORY_ENTRIES]},
+        history = _dedupe_history(history)[:MAX_HISTORY_ENTRIES]
+        atomic_json(state_dir / "publish-history.json", {"entries": history})
+
+        keep_ids = _retention_ids(
+            history,
+            release_id,
+            keep_previous,
+            always_keep=(previous_id,),
         )
-
-        previous_manifest_text = manifest_path.read_text(encoding="utf-8") if manifest_path.is_file() else None
-        new_manifest_text = json.dumps(manifest, ensure_ascii=False, indent=2) + "\n"
-        if previous_manifest_text != new_manifest_text:
-            # The manifest is the only pointer clients follow: replace it last, atomically.
-            writer(manifest_path, manifest)
-
-        history = _load_history(state_dir)
-        keep_ids = _retention_ids(history, release_id, keep_previous)
         removed = _prune_assets(assets_dir, keep_ids)
 
     return {

@@ -83,7 +83,10 @@ class SiteCookieJar(
                         if (bucket.removeAll { existing -> sameCookieIdentity(existing, cookie) }) mutated = true
                         continue
                     }
-                    bucket.removeAll { existing -> sameCookieIdentity(existing, cookie) }
+                    bucket.removeAll { existing ->
+                        sameCookieIdentity(existing, cookie) ||
+                            (!descriptor.matchesHost(existing.domain) && existing.name == cookie.name)
+                    }
                     bucket.add(cookie)
                     mutated = true
                 }
@@ -103,19 +106,50 @@ class SiteCookieJar(
         val descriptor = plugin.descriptor
         val now = clockMs()
 
-        val stored = synchronized(lock) {
-            runCatching { loadSiteCookiesLocked(plugin, now) }.getOrDefault(emptyList())
-        }.filter { cookie ->
+        val (stored, accountDescriptors) = synchronized(lock) {
+            val cookies = runCatching { loadSiteCookiesLocked(plugin, now) }.getOrDefault(emptyList())
+            cookies to accountDescriptorsLocked(plugin)
+        }
+        val directMatches = stored.filter { cookie ->
             cookie.expiresAt > now &&
                 descriptor.matchesHost(cookie.domain) &&
                 cookie.matches(url)
         }
+        val directNames = directMatches.mapTo(HashSet()) { it.name }
+        val defaultBareHost = descriptor.defaultHost.trim().lowercase(Locale.ROOT).removePrefix("www.")
+        val aliasedMatches = if (defaultBareHost.isEmpty()) {
+            emptyList()
+        } else {
+            val seenAliasNames = HashSet<String>()
+            stored.mapNotNull { cookie ->
+                if (cookie.expiresAt <= now) return@mapNotNull null
+                if (cookie.name in directNames || cookie.name in seenAliasNames) return@mapNotNull null
+                // Same-descriptor cookies (e.g. apex host-only vs www subdomain) keep strict matching.
+                if (descriptor.matchesHost(cookie.domain)) return@mapNotNull null
+                // Only synthesize host-matched copies for alias descriptors of the same account.
+                if (accountDescriptors.none { it.matchesHost(cookie.domain) }) return@mapNotNull null
+                runCatching {
+                    Cookie.Builder()
+                        .name(cookie.name)
+                        .value(cookie.value)
+                        .domain(defaultBareHost)
+                        .path(cookie.path)
+                        .expiresAt(cookie.expiresAt)
+                        .apply {
+                            if (cookie.secure) secure()
+                            if (cookie.httpOnly) httpOnly()
+                        }
+                        .build()
+                }.getOrNull()?.takeIf { it.matches(url) }?.also { seenAliasNames.add(cookie.name) }
+            }
+        }
+        val effectiveStored = directMatches + aliasedMatches
 
         val defaults = plugin.authProvider.defaultCookies(url.host)
         if (defaults.isEmpty()) {
-            return stored
+            return effectiveStored
         }
-        val filtered = stored.filterNot { it.name in defaults.keys }
+        val filtered = effectiveStored.filterNot { it.name in defaults.keys }
         val injected = defaults.mapNotNull { (name, value) ->
             runCatching {
                 Cookie.Builder()

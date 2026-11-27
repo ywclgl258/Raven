@@ -98,7 +98,7 @@ class BackupDataRepository(
     suspend fun exportPayload(appVersion: String = ""): RavenBackupPayload = backupMutex.withLock {
         // A restore interrupted between its Room commit and its settings write must be finished
         // first, otherwise the exported payload would pair new data with stale settings.
-        recoverPendingSettings()
+        recoverPendingSettingsLocked()
         val now = clock()
         val appSettings = settingsDataStore.readPersistedSettings()
         val portableSettings = settingsDataStore.exportPortableSettings()
@@ -138,13 +138,13 @@ class BackupDataRepository(
         }
         return backupMutex.withLock {
             // Finish any restore interrupted on a previous run before merging on top of it.
-            recoverPendingSettings()
+            recoverPendingSettingsLocked()
 
             val now = clock()
             val appSettings = settingsDataStore.readPersistedSettings()
             val portableSettings = settingsDataStore.exportPortableSettings()
 
-            val merged = transactionRunner {
+            val (merged, restoreId) = transactionRunner {
                 val local = readLocalSnapshot(
                     appVersion = appVersion,
                     now = now,
@@ -153,11 +153,15 @@ class BackupDataRepository(
                 )
                 val combined = BackupMerger.merge(local = local, incoming = incoming, now = now)
                 writePayloadToDatabase(combined)
-                writeRestoreJournal(combined, now)
-                combined
+                combined to writeRestoreJournal(combined, now)
             }
 
-            commitJournaledSettings(merged.settings, merged.siteLanguages, journalMustSurviveOnFailure = true)
+            commitJournaledSettings(
+                settingsMap = merged.settings,
+                siteLanguages = merged.siteLanguages,
+                restoreId = restoreId,
+                journalMustSurviveOnFailure = true,
+            )
 
             // Custom tag entries were replaced inside the Room transaction; the in-memory
             // TagDictionary still holds the previous custom layer until it is rehydrated.
@@ -173,16 +177,25 @@ class BackupDataRepository(
      *
      * @return `true` when a pending journal was found and replayed.
      */
-    suspend fun recoverPendingSettings(): Boolean {
+    suspend fun recoverPendingSettings(): Boolean = backupMutex.withLock {
+        recoverPendingSettingsLocked()
+    }
+
+    private suspend fun recoverPendingSettingsLocked(): Boolean {
         val dao = backupRestoreJournalDao ?: return false
         val journal = runCatching { dao.get() }.getOrNull() ?: return false
         val decoded = runCatching { journal.toSettingsSnapshot() }.getOrNull()
         if (decoded == null) {
             // Corrupt journal: drop it rather than replay garbage on every start.
-            runCatching { dao.clear() }
+            clearRestoreJournal(journal.restoreId)
             return false
         }
-        commitJournaledSettings(decoded.first, decoded.second, journalMustSurviveOnFailure = false)
+        commitJournaledSettings(
+            settingsMap = decoded.first,
+            siteLanguages = decoded.second,
+            restoreId = journal.restoreId,
+            journalMustSurviveOnFailure = false,
+        )
         runCatching { tagDictionaryRepository?.hydrateCustomLayer() }
         return true
     }
@@ -190,6 +203,7 @@ class BackupDataRepository(
     private suspend fun commitJournaledSettings(
         settingsMap: Map<String, String>,
         siteLanguages: Map<SiteId, ComicLanguage>,
+        restoreId: String?,
         journalMustSurviveOnFailure: Boolean,
     ) {
         try {
@@ -207,18 +221,28 @@ class BackupDataRepository(
             }
             throw failure
         }
-        clearRestoreJournal()
+        clearRestoreJournal(restoreId)
     }
 
-    private suspend fun clearRestoreJournal() {
-        backupRestoreJournalDao?.clear()
-    }
-
-    private suspend fun writeRestoreJournal(payload: RavenBackupPayload, now: Long) {
+    /**
+     * Deletes the journal only when it still belongs to [restoreId]. A newer restore must never
+     * lose its settings journal to an older recovery finishing late.
+     */
+    private suspend fun clearRestoreJournal(restoreId: String?) {
         val dao = backupRestoreJournalDao ?: return
+        if (restoreId == null) return
+        val current = runCatching { dao.get() }.getOrNull() ?: return
+        if (current.restoreId == restoreId) {
+            dao.clear()
+        }
+    }
+
+    private suspend fun writeRestoreJournal(payload: RavenBackupPayload, now: Long): String? {
+        val dao = backupRestoreJournalDao ?: return null
+        val restoreId = java.util.UUID.randomUUID().toString()
         dao.put(
             BackupRestoreJournalEntity(
-                restoreId = java.util.UUID.randomUUID().toString(),
+                restoreId = restoreId,
                 createdAt = now,
                 settingsJson = JOURNAL_JSON_ENCODER.encodeToString(
                     MapSerializer(String.serializer(), String.serializer()),
@@ -230,7 +254,9 @@ class BackupDataRepository(
                 ),
             ),
         )
+        return restoreId
     }
+
 
     private fun BackupRestoreJournalEntity.toSettingsSnapshot(): Pair<Map<String, String>, Map<SiteId, ComicLanguage>> {
         val settings = JOURNAL_JSON_ENCODER.decodeFromString(

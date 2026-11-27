@@ -174,7 +174,7 @@ fun SettingsScreen(
         onTogglePrivacyScreenSecure = viewModel::setPrivacyScreenSecure,
         onToggleAppLock = viewModel::setAppLockEnabled,
         onSelectAppLockTimeout = viewModel::setAppLockTimeoutSeconds,
-        onConfigureAppPin = viewModel::configureAppPin,
+        onConfigureAppPin = { pin, onResult -> viewModel.configureAppPin(pin, onResult) },
         onClearAppPin = viewModel::clearAppPin,
         onOpenDiagnostics = viewModel::prepareDiagnosticsSnapshot,
         onRunLiveDiagnostics = viewModel::runLiveNetworkDiagnostics,
@@ -231,7 +231,7 @@ fun SettingsScreenContent(
     onTogglePrivacyScreenSecure: (Boolean) -> Unit = {},
     onToggleAppLock: (Boolean) -> Unit = {},
     onSelectAppLockTimeout: (Int) -> Unit = {},
-    onConfigureAppPin: (String) -> Boolean = { false },
+    onConfigureAppPin: (String, (Boolean) -> Unit) -> Unit = { _, onResult -> onResult(false) },
     onClearAppPin: () -> Unit = {},
     onResetMirrorLease: (SiteId) -> Unit = {},
     onToggleUiSoundEffects: (Boolean) -> Unit = {},
@@ -1092,9 +1092,10 @@ fun SettingsScreenContent(
         SettingsSheetKind.PIN_SETUP -> {
             PrivacyPinSetupSheet(
                 hasExistingPin = uiState.hasAppPin,
-                onSavePin = { pin ->
-                    if (onConfigureAppPin(pin)) {
-                        activeSheet = SettingsSheetKind.NONE
+                onSavePin = { pin, onResult ->
+                    onConfigureAppPin(pin) { saved ->
+                        if (saved) activeSheet = SettingsSheetKind.NONE
+                        onResult(saved)
                     }
                 },
                 onClearPin = {
@@ -1303,13 +1304,14 @@ private fun NetworkDiagnosticsSheet(
 @Composable
 private fun PrivacyPinSetupSheet(
     hasExistingPin: Boolean,
-    onSavePin: (String) -> Unit,
+    onSavePin: (String, (Boolean) -> Unit) -> Unit,
     onClearPin: () -> Unit,
     onDismiss: () -> Unit,
 ) {
     var pinInput by rememberSaveable { mutableStateOf("") }
     var pinConfirm by rememberSaveable { mutableStateOf("") }
     var localError by rememberSaveable { mutableStateOf<String?>(null) }
+    var isSaving by rememberSaveable { mutableStateOf(false) }
 
     SecureWindowEffect(enabled = true)
 
@@ -1382,13 +1384,23 @@ private fun PrivacyPinSetupSheet(
                 }
                 SettingsPrimaryButton(
                     text = "保存并启用",
+                    loading = isSaving,
+                    enabled = !isSaving,
                     onClick = {
-                        when {
-                            !PrivacyLockStore.isValidPinFormat(pinInput) ->
-                                localError = "PIN 必须为 4 到 8 位纯数字"
-                            pinInput != pinConfirm ->
-                                localError = "两次输入的 PIN 不一致"
-                            else -> onSavePin(pinInput)
+                        val validationError = when {
+                            !PrivacyLockStore.isValidPinFormat(pinInput) -> "PIN 必须为 4 到 8 位纯数字"
+                            pinInput != pinConfirm -> "两次输入的 PIN 不一致"
+                            else -> null
+                        }
+                        if (validationError != null) {
+                            localError = validationError
+                        } else {
+                            isSaving = true
+                            localError = null
+                            onSavePin(pinInput) { saved ->
+                                isSaving = false
+                                if (!saved) localError = "保存 PIN 失败，请重试"
+                            }
                         }
                     },
                     modifier = Modifier.weight(1f),

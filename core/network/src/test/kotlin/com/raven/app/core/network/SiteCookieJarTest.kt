@@ -443,4 +443,50 @@ class SiteCookieJarTest {
         assertEquals("live-session", vault.getCookies(SiteId.HANIME1)["PHPSESSID"])
         assertEquals(epochBefore, vault.authEpoch(SiteId.HANIME1))
     }
+
+    @Test
+    fun `EX-domain jar cookies are sent on EH requests and vice versa while unrelated sites receive none`() {
+        val (jar, _, _) = newJar()
+        val futureExpiry = System.currentTimeMillis() + 3_600_000L
+
+        jar.saveFromResponse(
+            "https://exhentai.org/".toHttpUrl(),
+            listOf(
+                Cookie.Builder().name("ipb_member_id").value("1001").domain("exhentai.org").path("/")
+                    .expiresAt(futureExpiry).secure().build(),
+                Cookie.Builder().name("ipb_pass_hash").value("hash-ex").hostOnlyDomain("exhentai.org").path("/")
+                    .expiresAt(futureExpiry).secure().httpOnly().build(),
+            ),
+        )
+
+        val ehCookies = jar.loadForRequest("https://e-hentai.org/g/1/abc/".toHttpUrl()).associate { it.name to it.value }
+        assertEquals("1001", ehCookies["ipb_member_id"])
+        assertEquals("hash-ex", ehCookies["ipb_pass_hash"])
+        assertEquals("1", ehCookies["nw"])
+
+        val exCookies = jar.loadForRequest("https://exhentai.org/g/1/abc/".toHttpUrl()).associate { it.name to it.value }
+        assertEquals("1001", exCookies["ipb_member_id"])
+        assertEquals("hash-ex", exCookies["ipb_pass_hash"])
+
+        assertTrue(jar.loadForRequest("https://rule34video.com/".toHttpUrl()).isEmpty())
+        assertTrue(jar.loadForRequest("https://hanime1.me/".toHttpUrl()).isEmpty())
+
+        // Reverse direction: EH-domain jar cookies flow to EX requests while unrelated sites stay empty.
+        jar.clearSite(SiteId.EXHENTAI)
+        jar.saveFromResponse(
+            "https://e-hentai.org/".toHttpUrl(),
+            listOf(
+                Cookie.Builder().name("ipb_member_id").value("2002").domain("e-hentai.org").path("/")
+                    .expiresAt(futureExpiry).secure().build(),
+                Cookie.Builder().name("ipb_pass_hash").value("hash-eh").hostOnlyDomain("e-hentai.org").path("/")
+                    .expiresAt(futureExpiry).secure().build(),
+            ),
+        )
+
+        val exFromEh = jar.loadForRequest("https://exhentai.org/g/2/def/".toHttpUrl()).associate { it.name to it.value }
+        assertEquals("2002", exFromEh["ipb_member_id"])
+        assertEquals("hash-eh", exFromEh["ipb_pass_hash"])
+        assertEquals("1", exFromEh["nw"])
+        assertTrue(jar.loadForRequest("https://rule34video.com/".toHttpUrl()).isEmpty())
+    }
 }

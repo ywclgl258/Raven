@@ -14,7 +14,7 @@
 | **English Name** | `Raven` | `Raven Debug` | `app/src/main/res/values/strings.xml` / `app/src/debug/res/values/strings.xml` |
 | **Chinese Name** | `渡鸦` | `渡鸦 开发版` | `app/src/main/res/values-zh/strings.xml` / `app/src/debug/res/values-zh/strings.xml` |
 | **Application ID** | `com.raven.app` | `com.raven.app.debug` | `app/build.gradle.kts` (`applicationIdSuffix = ".debug"`) |
-| **Current Version** | `0.6.0` / `versionCode = 10` | Same base version + `-debug` suffix | `release.properties` is the sole version metadata source |
+| **Current Version** | `release.properties` (`versionName` / `versionCode`) | Same base version + `-debug` suffix | `release.properties` is the sole version metadata source |
 | **Launcher Icon** | Adaptive Icon (API 26+) + legacy mipmaps | Same | **02 绯红疾翼** (`docs/icon-concepts/02-crimson-wing-android/`): `adaptive-background.svg`, `adaptive-foreground.svg`, `adaptive-monochrome.svg` |
 
 **Adaptive Icon Specification** (from `docs/icon-concepts/02-crimson-wing-android/source/`):

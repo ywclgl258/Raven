@@ -32,3 +32,6 @@ __pycache__/
 *.pyc
 deploy/qqbot-bridge/botpy.log
 deploy/feedback-server/.venv/
+
+# Exported feedback contains user-submitted text/PII; keep it out of the repo
+docs/agent/FEEDBACK_INBOX.md

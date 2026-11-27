@@ -6,6 +6,7 @@ import androidx.media3.exoplayer.scheduler.Requirements
 import com.raven.app.core.database.datastore.SettingsDataStore
 import com.raven.app.core.network.NetworkMonitor
 import java.util.concurrent.atomic.AtomicBoolean
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -43,6 +44,7 @@ class DownloadPolicyController(
 ) {
     private val started = AtomicBoolean(false)
     private var collectorJob: Job? = null
+    private val initialPolicy = CompletableDeferred<DownloadNetworkPolicy>()
 
     private val _policy = MutableStateFlow(
         evaluate(
@@ -71,6 +73,7 @@ class DownloadPolicyController(
             }
                 .distinctUntilChanged()
                 .collect { nextPolicy ->
+                    initialPolicy.complete(nextPolicy)
                     _policy.value = nextPolicy
                     runCatching { applyVideoRequirements(nextPolicy.toMedia3Requirements()) }
                     runCatching { onGalleryPolicyChanged(nextPolicy.isAllowed) }
@@ -83,6 +86,9 @@ class DownloadPolicyController(
         collectorJob?.cancel()
         collectorJob = null
     }
+
+    /** Suspends until the first real settings/network emission, never the conservative default. */
+    suspend fun awaitInitialPolicy(): DownloadNetworkPolicy = initialPolicy.await()
 
     suspend fun setUnmeteredOnly(enabled: Boolean) {
         settingsDataStore.setDownloadUnmeteredOnly(enabled)

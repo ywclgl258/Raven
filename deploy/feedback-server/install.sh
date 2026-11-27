@@ -22,7 +22,7 @@ install -d -o raven-feedback -g raven-feedback -m 0750 "$DATA_DIR" "$DATA_DIR/lo
 install -d -m 0755 "$APP_DIR"
 install -m 0644 "$SCRIPT_DIR/app.py" "$SCRIPT_DIR/store.py" "$SCRIPT_DIR/export_feedback.py" "$SCRIPT_DIR/requirements.txt" "$APP_DIR/"
 install -d -m 0755 "$APP_DIR/static"
-install -m 0644 "$SCRIPT_DIR/static/admin.html" "$APP_DIR/static/admin.html"
+install -m 0644 "$SCRIPT_DIR/static/admin.html" "$SCRIPT_DIR/static/admin.js" "$APP_DIR/static/"
 
 if [[ ! -x "$APP_DIR/.venv/bin/python" ]]; then
     python3 -m venv "$APP_DIR/.venv"
@@ -41,9 +41,36 @@ if [[ ! -s "$ENV_FILE" ]]; then
     chmod 0640 "$ENV_FILE"
 fi
 
+wait_for_health() {
+    for _ in $(seq 1 30); do
+        if "$APP_DIR/.venv/bin/python" - <<'PY' >/dev/null 2>&1
+import json, urllib.request
+with urllib.request.urlopen("http://127.0.0.1:8765/api/feedback/health", timeout=2) as response:
+    payload = json.load(response)
+if payload.get("status") != "ok":
+    raise SystemExit(1)
+PY
+        then
+            return 0
+        fi
+        sleep 1
+    done
+    return 1
+}
+
 install -m 0644 "$SCRIPT_DIR/raven-feedback.service" /etc/systemd/system/raven-feedback.service
 systemctl daemon-reload
-systemctl enable --now raven-feedback.service
+# Pick up new files and the environment file immediately; a failed restart must abort the install
+# instead of leaving a half-updated service behind.
+systemctl enable raven-feedback.service
+if ! systemctl restart raven-feedback.service || ! systemctl is-active --quiet raven-feedback.service; then
+    printf 'raven-feedback.service failed to start; see: journalctl -u raven-feedback -n 50\n' >&2
+    exit 1
+fi
+if ! wait_for_health; then
+    printf 'Feedback health check failed; see: journalctl -u raven-feedback -n 50\n' >&2
+    exit 1
+fi
 
 SNIPPET=/etc/nginx-ai/snippets/raven-feedback.conf
 install -d -m 0755 /etc/nginx-ai/snippets

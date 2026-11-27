@@ -1,8 +1,6 @@
 package com.raven.app.core.media.cast
 
 import kotlinx.coroutines.test.runTest
-import okhttp3.CookieJar
-import okhttp3.OkHttpClient
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
 import org.junit.Assert.assertEquals
@@ -88,14 +86,8 @@ class LanCastManagerTest {
         server.start()
         redirectTarget.start()
         try {
-            val lanClient = OkHttpClient.Builder()
-                .followRedirects(false)
-                .followSslRedirects(false)
-                .cookieJar(CookieJar.NO_COOKIES)
-                .build()
             val manager = LanCastManager(
                 context = null,
-                okHttpClient = lanClient,
                 lanUrlValidator = { true },
             )
 

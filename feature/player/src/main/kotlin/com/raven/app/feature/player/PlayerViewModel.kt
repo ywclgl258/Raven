@@ -2156,7 +2156,14 @@ class PlayerViewModel(
         if (snapshot != null) {
             (applicationScope ?: fallbackFlushScope).launch {
                 withContext(NonCancellable) {
-                    runCatching { historyRepository.saveWatchProgress(snapshot) }
+                    // The StateFlow default is `false`, so always confirm the persisted setting
+                    // before writing final progress for an incognito session.
+                    val incognito = latestAppSettings.value.incognitoMode ||
+                        runCatching { preferencesRepository.currentSettings().incognitoMode }
+                            .getOrDefault(false)
+                    if (!incognito) {
+                        runCatching { historyRepository.saveWatchProgress(snapshot) }
+                    }
                 }
             }
         }

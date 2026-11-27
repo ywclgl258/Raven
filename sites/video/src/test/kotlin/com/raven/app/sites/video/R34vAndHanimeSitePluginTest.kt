@@ -487,6 +487,8 @@ class R34vAndHanimeSitePluginTest {
         val auth = plugin.authProvider.loginWithCredentials("user@example.com", "pw123")
         assertTrue(auth.isAuthenticated)
         assertEquals("user@example.com", auth.username)
+        assertEquals("user@example.com", store.getUsername(SiteId.HANIME1))
+        assertEquals("user@example.com", plugin.authProvider.currentAuthState().username)
         assertEquals("h_sess_1", store.getCookies(SiteId.HANIME1)["hanime1_session"])
 
         val resolved = plugin.linkResolver.resolve("https://hanime1.me/watch?v=4242") as ResolvedLink.Video
@@ -783,6 +785,9 @@ class R34vAndHanimeSitePluginTest {
         assertEquals("php-sess-1", store.getCookies(SiteId.HANIME1)["PHPSESSID"])
         assertTrue(plugin.authProvider.currentAuthState().isAuthenticated)
         // Verified identity is what makes the native account sections addressable.
+        assertEquals("UID 4242", imported.username)
+        assertEquals("UID 4242", store.getUsername(SiteId.HANIME1))
+        assertEquals("UID 4242", plugin.authProvider.currentAuthState().username)
         assertEquals("4242", store.getSecret(SiteId.HANIME1, "hanime_user_id"))
         // Verification ran isolated: the site jar was never consulted for this probe.
         assertFalse(fakeHttp.requests.single().allowCookies)
@@ -855,6 +860,9 @@ class R34vAndHanimeSitePluginTest {
         assertTrue(imported.isAuthenticated)
         assertEquals("php-sess-2", store.getCookies(SiteId.HANIME1)["PHPSESSID"])
         assertEquals("2222", store.getSecret(SiteId.HANIME1, "hanime_user_id"))
+        assertEquals("UID 2222", imported.username)
+        assertEquals("UID 2222", store.getUsername(SiteId.HANIME1))
+        assertEquals("UID 2222", plugin.authProvider.currentAuthState().username)
         assertTrue(store.authEpoch(SiteId.HANIME1) > liveEpoch)
     }
 
@@ -906,5 +914,146 @@ class R34vAndHanimeSitePluginTest {
         val headerHtml = """<a id="user-modal-trigger" href="/user/4242">me</a>"""
         assertEquals("4242", HanimeSitePlugin.extractUserId(headerHtml))
         assertNull(HanimeSitePlugin.extractUserId("<html><body>anonymous</body></html>"))
+    }
+
+    @Test
+    fun `r34v account switch replaces old cookie bucket and failed login restores prior session`() = runTest {
+        val fakeHttp = FakeHttpClientAdapter()
+        val store = InMemorySiteSessionStore()
+        store.replaceCookies(
+            SiteId.R34V,
+            mapOf("PHPSESSID" to "sess_old_a", "legacy_pref" to "stale_a", "cf_clearance" to "cf_keep"),
+        )
+        store.saveUsername(SiteId.R34V, "alice")
+
+        fakeHttp.onGetDynamic("https://rule34video.com/login/") { req ->
+            val cookieHeader = req.headers["Cookie"].orEmpty()
+            assertFalse("Old PHPSESSID must not be sent to CSRF GET", cookieHeader.contains("sess_old_a"))
+            assertTrue(cookieHeader.contains("cf_clearance=cf_keep"))
+            SiteHttpResponse(
+                code = 200,
+                finalUrl = req.url,
+                headers = mapOf("Set-Cookie" to listOf("guest_tok=g1; Path=/")),
+                body = """<form><input name="remember_me_csrf_token" value="csrf_sw" /></form>""".toByteArray(),
+            )
+        }
+        fakeHttp.onPost("https://rule34video.com/login/") { req ->
+            val cookieHeader = req.headers["Cookie"].orEmpty()
+            assertFalse("Old PHPSESSID must not be sent to login POST", cookieHeader.contains("sess_old_a"))
+            assertTrue(cookieHeader.contains("guest_tok=g1"))
+            // Failed login without PHPSESSID must reject and restore old account bucket.
+            SiteHttpResponse(
+                code = 200,
+                finalUrl = "https://rule34video.com/",
+                body = """<html><body>Welcome guest</body></html>""".toByteArray(),
+            )
+        }
+
+        val plugin = R34vSitePlugin(fakeHttp, store, rateLimitBackoffMs = 0L)
+        try {
+            plugin.authProvider.loginWithCredentials("bob", "wrong")
+            fail("Expected SiteException.AuthRequired when PHPSESSID is absent")
+        } catch (_: SiteException.AuthRequired) {
+            // expected
+        }
+        assertEquals(
+            mapOf("PHPSESSID" to "sess_old_a", "legacy_pref" to "stale_a", "cf_clearance" to "cf_keep"),
+            store.getCookies(SiteId.R34V),
+        )
+        assertEquals("alice", store.getUsername(SiteId.R34V))
+
+        // Returning the unchanged PHPSESSID without a logout marker proving login must also reject.
+        fakeHttp.onPost("https://rule34video.com/login/") {
+            SiteHttpResponse(
+                code = 200,
+                finalUrl = "https://rule34video.com/",
+                headers = mapOf("Set-Cookie" to listOf("PHPSESSID=sess_old_a; Path=/")),
+                body = """<html><body>No logout proof</body></html>""".toByteArray(),
+            )
+        }
+        try {
+            plugin.authProvider.loginWithCredentials("bob", "wrong")
+            fail("Expected SiteException.AuthRequired when PHPSESSID is unchanged without logout proof")
+        } catch (_: SiteException.AuthRequired) {
+            // expected
+        }
+        assertEquals("sess_old_a", store.getCookies(SiteId.R34V)["PHPSESSID"])
+        assertEquals("alice", store.getUsername(SiteId.R34V))
+
+        // Successful switch replaces the old bucket cleanly without retaining legacy_pref.
+        fakeHttp.onPost("https://rule34video.com/login/") {
+            SiteHttpResponse(
+                code = 200,
+                finalUrl = "https://rule34video.com/",
+                headers = mapOf("Set-Cookie" to listOf("PHPSESSID=sess_new_b; Path=/")),
+                body = """<html><body><a href="/logout/">Logout</a></body></html>""".toByteArray(),
+            )
+        }
+        val bobState = plugin.authProvider.loginWithCredentials("bob", "right")
+        assertTrue(bobState.isAuthenticated)
+        assertEquals("bob", bobState.username)
+        assertEquals(mapOf("PHPSESSID" to "sess_new_b"), store.getCookies(SiteId.R34V))
+        assertEquals("bob", store.getUsername(SiteId.R34V))
+        assertEquals("bob", plugin.authProvider.currentAuthState().username)
+    }
+
+    @Test
+    fun `hanime1 preserves email on same-uid import and clears stale email on uid switch`() = runTest {
+        val fakeHttp = FakeHttpClientAdapter()
+        val store = InMemorySiteSessionStore()
+        var loggedIn = false
+        fakeHttp.onGetDynamic("https://hanime1.me/login") {
+            if (!loggedIn) {
+                SiteHttpResponse(
+                    code = 200,
+                    finalUrl = "https://hanime1.me/login",
+                    body = """<form><input name="_token" value="tok1" /></form>""".toByteArray(),
+                )
+            } else {
+                SiteHttpResponse(
+                    code = 404,
+                    finalUrl = "https://hanime1.me/login",
+                    body = """<html><a href="/user/7001">me</a></html>""".toByteArray(),
+                )
+            }
+        }
+        fakeHttp.onPost("https://hanime1.me/login") { req ->
+            loggedIn = true
+            SiteHttpResponse(
+                code = 200,
+                finalUrl = req.url,
+                headers = mapOf("Set-Cookie" to listOf("hanime1_session=s1; Path=/")),
+                body = "<html>ok</html>".toByteArray(),
+            )
+        }
+        val plugin = HanimeSitePlugin(fakeHttp, store, rateLimitBackoffMs = 0L)
+        val loginAuth = plugin.authProvider.loginWithCredentials("alice@example.com", "pw")
+        assertEquals("alice@example.com", loginAuth.username)
+        assertEquals("alice@example.com", plugin.authProvider.currentAuthState().username)
+
+        // Importing cookies for the same UID preserves alice's email as persisted username.
+        fakeHttp.onGetDynamic("https://hanime1.me/") {
+            SiteHttpResponse(
+                code = 200,
+                finalUrl = "https://hanime1.me/",
+                body = """<html><a href="/user/7001">me</a></html>""".toByteArray(),
+            )
+        }
+        val sameUidImport = plugin.authProvider.importCookies(mapOf("PHPSESSID" to "s2"))
+        assertEquals("alice@example.com", sameUidImport.username)
+        assertEquals("alice@example.com", plugin.authProvider.currentAuthState().username)
+
+        // Importing cookies for a different UID drops alice's email and persists the new UID label.
+        fakeHttp.onGetDynamic("https://hanime1.me/") {
+            SiteHttpResponse(
+                code = 200,
+                finalUrl = "https://hanime1.me/",
+                body = """<html><a href="/user/8002">me</a></html>""".toByteArray(),
+            )
+        }
+        val otherUidImport = plugin.authProvider.importCookies(mapOf("PHPSESSID" to "s3"))
+        assertEquals("UID 8002", otherUidImport.username)
+        assertEquals("UID 8002", store.getUsername(SiteId.HANIME1))
+        assertEquals("UID 8002", plugin.authProvider.currentAuthState().username)
     }
 }

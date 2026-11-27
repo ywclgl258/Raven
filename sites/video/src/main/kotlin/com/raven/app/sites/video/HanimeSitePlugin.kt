@@ -255,6 +255,7 @@ class HanimeSitePlugin(
                 },
                 bumpEpoch = true,
             )
+            sessionStore.saveUsername(SiteId.HANIME1, trimmedEmail)
             return AuthState(
                 isAuthenticated = true,
                 username = trimmedEmail,
@@ -330,20 +331,28 @@ class HanimeSitePlugin(
                     "Hanime1 返回的是匿名首页（HTTP 200），该 Cookie 未登录任何账号，请重新登录",
                     siteId = SiteId.HANIME1,
                 )
-            val previousEmail = sessionStore.getSecret(SiteId.HANIME1, HANIME_ACCOUNT_EMAIL_KEY)
+            val previousUserId = sessionStore.getSecret(SiteId.HANIME1, HANIME_USER_ID_KEY)
+            val sameAccount = previousUserId == null || previousUserId == accountUserId
+            val previousEmail = if (sameAccount) {
+                sessionStore.getSecret(SiteId.HANIME1, HANIME_ACCOUNT_EMAIL_KEY)?.takeIf { it.isNotBlank() }
+            } else {
+                null
+            }
+            val resolvedUsername = previousEmail ?: "UID $accountUserId"
             sessionStore.storeSessionSnapshot(
                 siteId = SiteId.HANIME1,
                 cookies = cookies,
                 secrets = buildMap<String, String?> {
                     put(SESSION_MARKER_KEY, "1")
                     put(HANIME_USER_ID_KEY, accountUserId)
-                    previousEmail?.takeIf { it.isNotBlank() }?.let { put(HANIME_ACCOUNT_EMAIL_KEY, it) }
+                    put(HANIME_ACCOUNT_EMAIL_KEY, previousEmail)
                 },
                 bumpEpoch = true,
             )
+            sessionStore.saveUsername(SiteId.HANIME1, resolvedUsername)
             return AuthState(
                 isAuthenticated = true,
-                username = sessionStore.getUsername(SiteId.HANIME1),
+                username = resolvedUsername,
                 epoch = sessionStore.authEpoch(SiteId.HANIME1),
             )
         }
@@ -352,19 +361,28 @@ class HanimeSitePlugin(
             // Signed-in state requires a verifiable account identity. Anonymous visitors also carry
             // PHPSESSID / cf_clearance, so the presence of a session cookie alone means nothing.
             val hasSessionCookie = hasHanimeSessionCookie(sessionStore.getCookies(SiteId.HANIME1))
-            val hasAccountIdentity = !sessionStore.getSecret(SiteId.HANIME1, HANIME_USER_ID_KEY).isNullOrBlank() ||
-                !sessionStore.getSecret(SiteId.HANIME1, HANIME_ACCOUNT_EMAIL_KEY).isNullOrBlank()
+            val userId = sessionStore.getSecret(SiteId.HANIME1, HANIME_USER_ID_KEY)?.takeIf { it.isNotBlank() }
+            val accountEmail = sessionStore.getSecret(SiteId.HANIME1, HANIME_ACCOUNT_EMAIL_KEY)?.takeIf { it.isNotBlank() }
+            val hasAccountIdentity = userId != null || accountEmail != null
             val hasMarker = sessionStore.getSecret(SiteId.HANIME1, SESSION_MARKER_KEY) == "1"
             val isAuthenticated = hasSessionCookie && hasAccountIdentity && hasMarker
+            val resolvedUsername = if (isAuthenticated) {
+                sessionStore.getUsername(SiteId.HANIME1)?.takeIf { it.isNotBlank() }
+                    ?: accountEmail
+                    ?: userId?.let { "UID $it" }
+            } else {
+                null
+            }
             return AuthState(
                 isAuthenticated = isAuthenticated,
-                username = if (isAuthenticated) sessionStore.getUsername(SiteId.HANIME1) else null,
+                username = resolvedUsername,
                 epoch = sessionStore.authEpoch(SiteId.HANIME1),
             )
         }
 
         private fun hasHanimeSessionCookie(cookies: Map<String, String>): Boolean =
-            cookies["PHPSESSID"]?.isNotBlank() == true ||
+            cookies["hanime1_session"]?.isNotBlank() == true ||
+                cookies["PHPSESSID"]?.isNotBlank() == true ||
                 cookies["laravel_session"]?.isNotBlank() == true ||
                 cookies["cf_clearance"]?.isNotBlank() == true
     }

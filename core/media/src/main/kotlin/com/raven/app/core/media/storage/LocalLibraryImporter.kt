@@ -80,9 +80,8 @@ class LocalLibraryImporter(
     private val _books = MutableStateFlow<List<LocalBook>>(emptyList())
     val books: StateFlow<List<LocalBook>> = _books.asStateFlow()
 
-    init {
-        refreshBooksSnapshot()
-    }
+    // The snapshot is populated asynchronously from DownloadCoordinator.start() on the IO
+    // dispatcher; constructing this singleton must never walk the local library on the main thread.
 
     /**
      * Drops `incoming-*` staging folders left by a process kill during an earlier import. They are

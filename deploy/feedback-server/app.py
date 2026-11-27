@@ -22,7 +22,9 @@ from __future__ import annotations
 import hashlib
 import os
 import re
+import threading
 import time
+from collections import deque
 from pathlib import Path
 
 from flask import Flask, abort, jsonify, request, send_file, send_from_directory
@@ -32,10 +34,83 @@ from store import CATEGORIES, SOURCES, STATUSES, FeedbackStore
 MAX_BODY_BYTES = 64 * 1024
 MAX_LOG_BYTES = 1_500_000
 
+
+def _env_int(name: str, default: int) -> int:
+    try:
+        return int(os.environ.get(name, default))
+    except (TypeError, ValueError):
+        return default
+
+
+PUBLIC_RATE_LIMIT = _env_int("RAVEN_FEEDBACK_PUBLIC_RATE_LIMIT", 30)
+PUBLIC_RATE_WINDOW = _env_int("RAVEN_FEEDBACK_PUBLIC_RATE_WINDOW", 60)
+LOGIN_RATE_LIMIT = _env_int("RAVEN_FEEDBACK_LOGIN_RATE_LIMIT", 10)
+LOGIN_RATE_WINDOW = _env_int("RAVEN_FEEDBACK_LOGIN_RATE_WINDOW", 300)
+RATE_LIMIT_MAX_CLIENTS = 4096
+
 TICKET_ID = re.compile(r"^RV-\d{8}-[0-9A-F]{6}$")
-SECRET_LINE = re.compile(
-    r"(?i)\b(?:password|passwd|cookie|set-cookie|authorization|token|secret|api[_-]?key)\b\s*[:=]\s*\S+(?:\s+\S+)?|\bbearer\s+\S+"
+SECRET_HEADER = re.compile(
+    r"(?im)\b((?:set-cookie|cookie|authorization|proxy-authorization)\s*[:=]\s*)[^\n]*"
 )
+SECRET_KEY_VALUE = re.compile(
+    r"(?i)\b(password|passwd|pwd|cookie|set-cookie|authorization|auth|token|access_token|refresh_token"
+    r"|secret|api[_-]?key|signature|sig)\b(\s*[:=]\s*)(\"?)([^\s\"&,;]+)"
+)
+BEARER_TOKEN = re.compile(r"(?i)\b(bearer|basic)\s+[A-Za-z0-9._~+/=-]{8,}")
+URL_SECRET_QUERY = re.compile(
+    r"(?i)([?&](?:token|key|sig|signature|password|passwd|pwd|auth|session|code)=)[^&#\s]+"
+)
+COOKIE_PAIR = re.compile(r"(?i)\b([A-Za-z0-9_-]{2,24})=(?:[A-Za-z0-9%._-]{20,})")
+PRIVATE_KEY_BLOCK = re.compile(
+    r"-----BEGIN [A-Z ]*PRIVATE KEY-----.*?-----END [A-Z ]*PRIVATE KEY-----", re.S
+)
+
+
+class RateLimiter:
+    """Bounded, thread-safe fixed-window limiter keyed by client address.
+
+    The service is one process behind nginx, so an in-process counter is enough. Memory is capped:
+    when the table is full, expired entries are dropped and then the oldest key is evicted.
+    """
+
+    def __init__(self, limit: int, window_seconds: int, max_clients: int = RATE_LIMIT_MAX_CLIENTS) -> None:
+        self.limit = max(1, limit)
+        self.window_seconds = max(1, window_seconds)
+        self.max_clients = max(1, max_clients)
+        self._lock = threading.Lock()
+        self._hits: dict[str, deque[float]] = {}
+
+    def allow(self, key: str) -> tuple[bool, int]:
+        now = time.monotonic()
+        cutoff = now - self.window_seconds
+        with self._lock:
+            if key not in self._hits and len(self._hits) >= self.max_clients:
+                self._prune_locked(cutoff)
+                while self._hits and len(self._hits) >= self.max_clients:
+                    self._hits.pop(next(iter(self._hits)))
+            bucket = self._hits.setdefault(key, deque())
+            while bucket and bucket[0] <= cutoff:
+                bucket.popleft()
+            if len(bucket) >= self.limit:
+                retry_after = max(1, int(self.window_seconds - (now - bucket[0])) + 1)
+                return False, retry_after
+            bucket.append(now)
+            return True, 0
+
+    def _prune_locked(self, cutoff: float) -> None:
+        stale = [key for key, bucket in self._hits.items() if not bucket or bucket[-1] <= cutoff]
+        for key in stale:
+            del self._hits[key]
+
+
+def _rate_limited(limiter: RateLimiter, key: str):
+    allowed, retry_after = limiter.allow(key)
+    if allowed:
+        return None
+    response = jsonify(ok=False, error="请求过于频繁，请稍后再试")
+    response.status_code = 429
+    response.headers["Retry-After"] = str(retry_after)
+    return response
 
 
 def create_app(
@@ -55,6 +130,8 @@ def create_app(
     app.log_dir.mkdir(parents=True, exist_ok=True)
     app.static_dir = Path(static_dir or root / "static")
     app.secure_cookie = os.environ.get("RAVEN_FEEDBACK_SECURE_COOKIE", "1") != "0"
+    app.public_limiter = RateLimiter(PUBLIC_RATE_LIMIT, PUBLIC_RATE_WINDOW)
+    app.login_limiter = RateLimiter(LOGIN_RATE_LIMIT, LOGIN_RATE_WINDOW)
 
     @app.get("/api/feedback/health")
     def health():
@@ -62,17 +139,23 @@ def create_app(
 
     @app.post("/api/feedback")
     def submit():
+        limited = _rate_limited(app.public_limiter, _client_ip())
+        if limited:
+            return limited
         _limit_public_request()
         payload, log_bytes = _read_submission()
         log_name = ""
         log_sha = ""
         if log_bytes:
             log_sha = hashlib.sha256(log_bytes).hexdigest()
-        ticket = app.store.insert_ticket(
-            payload,
-            log_bytes=len(log_bytes),
-            log_sha256=log_sha,
-        )
+        try:
+            ticket = app.store.insert_ticket(
+                payload,
+                log_bytes=len(log_bytes),
+                log_sha256=log_sha,
+            )
+        except ValueError as error:
+            return jsonify(ok=False, error=str(error)), 422
         if log_bytes:
             log_name = f"{ticket['id']}.log"
             target = app.log_dir / log_name
@@ -86,6 +169,9 @@ def create_app(
 
     @app.post("/api/admin/login")
     def login():
+        limited = _rate_limited(app.login_limiter, _client_ip())
+        if limited:
+            return limited
         body = request.get_json(silent=True) or {}
         password = str(body.get("password") or "")
         if not app.store.check_admin_password(password):
@@ -168,6 +254,10 @@ def create_app(
     def admin_page():
         return send_from_directory(app.static_dir, "admin.html")
 
+    @app.get("/admin/app.js")
+    def admin_script():
+        return send_from_directory(app.static_dir, "admin.js", mimetype="text/javascript")
+
     @app.get("/api/feedback/meta")
     def meta():
         return jsonify(categories=list(CATEGORIES), sources=list(SOURCES), statuses=list(STATUSES), maxLogBytes=MAX_LOG_BYTES)
@@ -239,8 +329,17 @@ def _redact_log(raw: bytes) -> bytes:
     if not raw:
         return b""
     text = raw.decode("utf-8", errors="replace")
-    cleaned = "\n".join(SECRET_LINE.sub("[redacted]", line) for line in text.splitlines())
-    return cleaned.encode("utf-8")
+    # Same intent as core:common LogRedactor: headers, key/value pairs, bearer/basic credentials,
+    # signed query strings, cookie pairs and private keys are replaced before the log is stored.
+    text = PRIVATE_KEY_BLOCK.sub("[redacted](private key)", text)
+    text = SECRET_HEADER.sub(lambda match: match.group(1) + "[redacted]", text)
+    text = SECRET_KEY_VALUE.sub(
+        lambda match: f"{match.group(1)}{match.group(2)}{match.group(3)}[redacted]", text
+    )
+    text = BEARER_TOKEN.sub(lambda match: f"{match.group(1)} [redacted]", text)
+    text = URL_SECRET_QUERY.sub(lambda match: match.group(1) + "[redacted]", text)
+    text = COOKIE_PAIR.sub(lambda match: f"{match.group(1)}=[redacted]", text)
+    return text.encode("utf-8")
 
 
 def _attach_log(store: FeedbackStore, ticket_id: str, name: str, size: int, digest: str) -> None:

@@ -373,13 +373,15 @@ class SettingsViewModel(
         }
     }
 
-    fun configureAppPin(pin: String): Boolean {
+    fun configureAppPin(pin: String, onResult: (Boolean) -> Unit = {}): Boolean {
         val store = privacyLockStore ?: run {
             auxState.update { it.copy(feedbackMessage = "当前环境不支持 PIN 应用锁存储") }
+            onResult(false)
             return false
         }
         if (!PrivacyLockStore.isValidPinFormat(pin)) {
             auxState.update { it.copy(feedbackMessage = "PIN 必须为 4 到 8 位数字") }
+            onResult(false)
             return false
         }
         viewModelScope.launch {
@@ -394,10 +396,12 @@ class SettingsViewModel(
                         feedbackMessage = "已设置应用锁 PIN 并开启锁定保护",
                     )
                 }
+                onResult(true)
             } catch (ce: CancellationException) {
                 throw ce
             } catch (e: Exception) {
                 auxState.update { it.copy(feedbackMessage = e.message ?: "保存 PIN 失败") }
+                onResult(false)
             }
         }
         return true

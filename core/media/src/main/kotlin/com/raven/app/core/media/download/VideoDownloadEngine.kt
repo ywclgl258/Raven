@@ -138,6 +138,7 @@ class VideoDownloadEngine(
     private val applicationScope: CoroutineScope,
     private val dispatchers: AppDispatchers = DefaultAppDispatchers(),
     private val clockMs: () -> Long = System::currentTimeMillis,
+    private val notificationPrivacyProvider: () -> Boolean = { false },
 ) {
     private val appContext = context.applicationContext
     private val json = Json {
@@ -275,6 +276,7 @@ class VideoDownloadEngine(
                                             title = meta?.title.orEmpty(),
                                             isVideo = true,
                                             errorDetail = failureDetail,
+                                            privacySensitive = notificationPrivacyProvider(),
                                         )
                                     }
                                 }
@@ -287,6 +289,7 @@ class VideoDownloadEngine(
                                 title = meta?.title.orEmpty(),
                                 isVideo = true,
                                 errorDetail = failureDetail,
+                                privacySensitive = notificationPrivacyProvider(),
                             )
                         }
                     } else if (download.state == Download.STATE_COMPLETED) {
@@ -306,6 +309,7 @@ class VideoDownloadEngine(
                                 title = meta.title,
                                 isVideo = true,
                                 detail = detail.ifBlank { null },
+                                privacySensitive = notificationPrivacyProvider(),
                             )
                         }
                     } else if (download.state == Download.STATE_STOPPED || download.state == Download.STATE_REMOVING) {

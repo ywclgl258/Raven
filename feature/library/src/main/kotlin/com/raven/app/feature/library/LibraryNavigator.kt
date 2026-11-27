@@ -49,6 +49,8 @@ interface LibraryNavigator {
 
     fun openSiteFeed(route: RavenRoute.SiteFeed)
 
+    fun openSiteDirectory(siteId: SiteId, section: String)
+
     fun openSiteFunctions(siteId: SiteId)
 
     /**
@@ -211,13 +213,7 @@ fun LibraryNavigator.openResolvedLink(
                 )
             }
         }
-        is ResolvedLink.Directory -> openSiteFeed(
-            RavenRoute.SiteFeed(
-                siteId = link.siteId.value,
-                section = link.section,
-                title = fallbackTitle,
-            ),
-        )
+        is ResolvedLink.Directory -> openSiteDirectory(link.siteId, link.section)
     }
 }
 

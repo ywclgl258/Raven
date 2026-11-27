@@ -2,8 +2,11 @@ package com.raven.app.feature.settings
 
 import com.raven.app.core.common.TagDictionary
 import com.raven.app.core.media.download.DownloadCoordinator
+import com.raven.app.core.database.repository.HistoryRepository
+import com.raven.app.core.database.repository.ShelfRepository
 import com.raven.app.core.media.storage.DuplicateSource
 import com.raven.app.core.media.storage.LocalLibraryImporter
+import com.raven.app.core.media.storage.deleteLocalBookCompletely
 import com.raven.app.core.model.RavenRoute
 import com.raven.app.core.network.RavenOkHttpPool
 import java.io.File
@@ -100,10 +103,17 @@ val settingsFeatureModule: Module = module {
     single<DuplicateCopyDeleter> {
         val coordinator = get<DownloadCoordinator>()
         val localImporter = get<LocalLibraryImporter>()
+        val shelfRepository = get<ShelfRepository>()
+        val historyRepository = get<HistoryRepository>()
         DuplicateCopyDeleter { copy ->
             when (copy.source) {
                 DuplicateSource.DOWNLOAD -> coordinator.delete(copy.id, sourceRoot = copy.sourceRoot)
-                DuplicateSource.LOCAL -> localImporter.removeBook(copy.mediaId)
+                DuplicateSource.LOCAL -> deleteLocalBookCompletely(
+                    bookId = copy.mediaId,
+                    localLibraryImporter = localImporter,
+                    shelfRepository = shelfRepository,
+                    historyRepository = historyRepository,
+                )
             }
         }
     }

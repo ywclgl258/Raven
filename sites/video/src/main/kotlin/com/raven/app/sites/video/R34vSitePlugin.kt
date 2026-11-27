@@ -32,8 +32,11 @@ import com.raven.app.core.sitespi.HttpClientAdapter
 import com.raven.app.core.sitespi.JsExtractor
 import com.raven.app.core.sitespi.LinkResolver
 import com.raven.app.core.sitespi.ResolvedLink
+import com.raven.app.core.sitespi.RequestSessionScope
 import com.raven.app.core.sitespi.SearchSource
+import com.raven.app.core.sitespi.SiteHttpRequest
 import com.raven.app.core.sitespi.SitePlugin
+import com.raven.app.core.sitespi.SiteRequestKind
 import com.raven.app.core.sitespi.SiteSessionStore
 import com.raven.app.core.sitespi.VideoSource
 import com.raven.app.core.sitespi.suspendRunCatching
@@ -181,10 +184,27 @@ class R34vSitePlugin(
                 throw SiteException.AuthRequired("请填写用户名和密码", siteId = SiteId.R34V)
             }
             val loginUrl = "$BASE_URL/login/"
-            val getResp = http.getText(
-                url = loginUrl,
-                siteId = SiteId.R34V,
-                allowCache = false,
+            val previousCookies = sessionStore.getCookies(SiteId.R34V)
+            val previousSessionId = previousCookies["PHPSESSID"]?.takeIf { it.isNotBlank() }
+            // Use pre-login cookies (excluding any prior PHPSESSID) only for the CSRF handshake so
+            // switching accounts cannot impersonate the previous session or inherit old cookies.
+            val preLoginCookies = previousCookies.filterKeys { it != "PHPSESSID" }
+            val getHeaders = if (preLoginCookies.isNotEmpty()) {
+                mapOf("Cookie" to VideoSiteSupport.formatCookieHeader(preLoginCookies))
+            } else {
+                emptyMap()
+            }
+            val getResp = http.execute(
+                SiteHttpRequest(
+                    url = loginUrl,
+                    siteId = SiteId.R34V,
+                    kind = SiteRequestKind.PAGE,
+                    headers = getHeaders,
+                    allowCookies = false,
+                    allowCache = false,
+                    allowRetry = false,
+                    sessionScope = RequestSessionScope.ISOLATED,
+                ),
             )
             val loginHtml = VideoSiteSupport.ensureSuccess(getResp, SiteId.R34V, checkChallenge = true)
             val csrfToken = Jsoup.parse(loginHtml)
@@ -193,63 +213,72 @@ class R34vSitePlugin(
                 ?.takeIf { it.isNotBlank() }
                 ?: throw SiteException.ParseError("无法读取登录令牌，站点可能要求浏览器验证", siteId = SiteId.R34V)
 
-            val cookies = LinkedHashMap<String, String>()
-            cookies.putAll(sessionStore.getCookies(SiteId.R34V))
-            cookies.putAll(VideoSiteSupport.extractSetCookies(getResp))
+            val csrfCookies = LinkedHashMap(preLoginCookies)
+            csrfCookies.putAll(VideoSiteSupport.extractSetCookies(getResp))
 
-            val postHeaders = if (cookies.isNotEmpty()) {
-                mapOf("Cookie" to VideoSiteSupport.formatCookieHeader(cookies))
+            val postHeaders = if (csrfCookies.isNotEmpty()) {
+                mapOf("Cookie" to VideoSiteSupport.formatCookieHeader(csrfCookies))
             } else {
                 emptyMap()
             }
 
-            val postResp = http.postForm(
-                url = loginUrl,
-                fields = linkedMapOf(
-                    "username" to trimmedUser,
-                    "pass" to password,
-                    "action" to "login",
-                    "remember_me" to "1",
-                    "remember_me_csrf_token" to csrfToken,
-                ),
-                siteId = SiteId.R34V,
-                headers = postHeaders,
-                followRedirects = true,
-            )
-            val body = VideoSiteSupport.ensureSuccess(postResp, SiteId.R34V, checkChallenge = true)
-            val doc = Jsoup.parse(body)
-            val errorText = HtmlUrlCleaner.cleanText(
-                doc.selectFirst(".generic-error, .alert-error")?.text().orEmpty(),
-            )
-            if (errorText.isNotBlank()) {
-                throw SiteException.AuthRequired(errorText, siteId = SiteId.R34V)
-            }
-            if (body.contains("id=\"login_username\"") &&
-                !body.contains("action=logout") &&
-                !body.contains("/logout/")
-            ) {
-                throw SiteException.AuthRequired("登录未成功，请检查用户名、密码和邮箱验证", siteId = SiteId.R34V)
+            // Clear the prior cookie bucket before POST so redirect-chain jar writes contain only
+            // cookies issued by this login attempt; restore it on failure.
+            if (previousCookies.isNotEmpty()) {
+                sessionStore.replaceCookies(SiteId.R34V, emptyMap())
             }
 
-            cookies.putAll(sessionStore.getCookies(SiteId.R34V))
-            cookies.putAll(VideoSiteSupport.extractSetCookies(getResp))
-            // Merge order during 302 login: preCookies -> cookie-jar stored 302 cookies -> final postResp Set-Cookie.
-            val merged = LinkedHashMap<String, String>(cookies)
-            merged.putAll(sessionStore.getCookies(SiteId.R34V))
-            merged.putAll(VideoSiteSupport.extractSetCookies(postResp))
-            if (merged.isNotEmpty()) {
-                sessionStore.saveCookies(SiteId.R34V, merged)
+            return try {
+                val postResp = http.postForm(
+                    url = loginUrl,
+                    fields = linkedMapOf(
+                        "username" to trimmedUser,
+                        "pass" to password,
+                        "action" to "login",
+                        "remember_me" to "1",
+                        "remember_me_csrf_token" to csrfToken,
+                    ),
+                    siteId = SiteId.R34V,
+                    headers = postHeaders,
+                    followRedirects = true,
+                )
+                val body = VideoSiteSupport.ensureSuccess(postResp, SiteId.R34V, checkChallenge = true)
+                val doc = Jsoup.parse(body)
+                val errorText = HtmlUrlCleaner.cleanText(
+                    doc.selectFirst(".generic-error, .alert-error")?.text().orEmpty(),
+                )
+                if (errorText.isNotBlank()) {
+                    throw SiteException.AuthRequired(errorText, siteId = SiteId.R34V)
+                }
+                val provesNewLogin = body.contains("action=logout") || body.contains("/logout/")
+                if (body.contains("id=\"login_username\"") && !provesNewLogin) {
+                    throw SiteException.AuthRequired("登录未成功，请检查用户名、密码和邮箱验证", siteId = SiteId.R34V)
+                }
+
+                // Determine the fresh session strictly from the POST response and redirect-chain jar.
+                val jarAfterPost = sessionStore.getCookies(SiteId.R34V)
+                val postSetCookies = VideoSiteSupport.extractSetCookies(postResp)
+                val freshCookies = LinkedHashMap<String, String>(jarAfterPost).apply {
+                    putAll(postSetCookies)
+                }
+                val postSessionId = (postSetCookies["PHPSESSID"] ?: jarAfterPost["PHPSESSID"])
+                    ?.takeIf { it.isNotBlank() }
+                    ?: throw SiteException.AuthRequired("服务器没有返回会话 (缺少 PHPSESSID)", siteId = SiteId.R34V)
+                if (previousSessionId != null && postSessionId == previousSessionId && !provesNewLogin) {
+                    throw SiteException.AuthRequired("登录未返回新的有效会话，请检查账号状态", siteId = SiteId.R34V)
+                }
+
+                sessionStore.replaceCookies(SiteId.R34V, freshCookies)
+                sessionStore.saveUsername(SiteId.R34V, trimmedUser)
+                AuthState(
+                    isAuthenticated = true,
+                    username = trimmedUser,
+                    epoch = sessionStore.authEpoch(SiteId.R34V),
+                )
+            } catch (t: Throwable) {
+                sessionStore.replaceCookies(SiteId.R34V, previousCookies)
+                throw t
             }
-            val persisted = sessionStore.getCookies(SiteId.R34V)
-            if (!persisted.containsKey("PHPSESSID")) {
-                throw SiteException.AuthRequired("服务器没有返回会话 (缺少 PHPSESSID)", siteId = SiteId.R34V)
-            }
-            sessionStore.saveUsername(SiteId.R34V, trimmedUser)
-            return AuthState(
-                isAuthenticated = true,
-                username = trimmedUser,
-                epoch = sessionStore.authEpoch(SiteId.R34V),
-            )
         }
 
         override suspend fun logout() {

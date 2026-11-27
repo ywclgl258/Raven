@@ -74,8 +74,9 @@ val coreNetworkModule: Module = module {
     } bind CookieJar::class
 
     // Plugins mutate credentials directly through SiteSessionStore (login / import / logout), so the
-    // vault's epoch is the authoritative signal: every move drops account-derived caches. Registered
-    // here so no plugin needs to know about the network layer.
+    // vault's epoch is the authoritative signal: every move drops account-derived caches. The app
+    // resolves this binding at startup to attach the listener without Koin eager-init AndroidContext
+    // requirements in JVM graph tests.
     single {
         SessionCacheInvalidationBinding(
             sessionVault = get(),

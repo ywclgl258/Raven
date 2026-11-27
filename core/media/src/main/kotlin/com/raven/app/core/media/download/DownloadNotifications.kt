@@ -12,9 +12,13 @@ import android.os.Build
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
+import com.raven.app.core.database.datastore.SettingsDataStore
 import com.raven.app.core.media.R
 import java.util.Locale
 import kotlin.math.roundToInt
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.launch
 
 /**
  * Shared notification channel management, pure progress-formatting helpers, and completion/failure
@@ -165,6 +169,7 @@ object DownloadNotifications {
         title: String,
         isVideo: Boolean,
         detail: String? = null,
+        privacySensitive: Boolean = false,
     ) {
         val appContext = context?.applicationContext ?: return
         if (!canPostNotifications(appContext)) return
@@ -172,15 +177,21 @@ object DownloadNotifications {
         val notificationId = stableEventNotificationId(downloadId)
         val kindLabel = if (isVideo) "视频离线下载完成" else "图集离线下载完成"
         val cleanTitle = title.ifBlank { if (isVideo) "离线视频" else "离线图集" }
-        val body = if (!detail.isNullOrBlank()) "$cleanTitle · $detail" else cleanTitle
-        val notification = NotificationCompat.Builder(appContext, CHANNEL_DOWNLOAD_EVENTS)
+        val body = when {
+            privacySensitive -> if (isVideo) "视频已保存到离线下载" else "图集已保存到离线下载"
+            !detail.isNullOrBlank() -> "$cleanTitle · $detail"
+            else -> cleanTitle
+        }
+        val builder = NotificationCompat.Builder(appContext, CHANNEL_DOWNLOAD_EVENTS)
             .setSmallIcon(android.R.drawable.stat_sys_download_done)
             .setContentTitle(kindLabel)
             .setContentText(body)
             .setContentIntent(buildOpenDownloadsPendingIntent(appContext, notificationId))
             .setAutoCancel(true)
-            .build()
-        runCatching { NotificationManagerCompat.from(appContext).notify(notificationId, notification) }
+        if (privacySensitive) builder.setVisibility(NotificationCompat.VISIBILITY_SECRET)
+        runCatching {
+            NotificationManagerCompat.from(appContext).notify(notificationId, builder.build())
+        }
     }
 
     @SuppressLint("MissingPermission")
@@ -190,6 +201,7 @@ object DownloadNotifications {
         title: String,
         isVideo: Boolean,
         errorDetail: String? = null,
+        privacySensitive: Boolean = false,
     ) {
         val appContext = context?.applicationContext ?: return
         if (!canPostNotifications(appContext)) return
@@ -197,15 +209,21 @@ object DownloadNotifications {
         val notificationId = stableEventNotificationId(downloadId)
         val kindLabel = if (isVideo) "视频离线下载失败" else "图集离线下载失败"
         val cleanTitle = title.ifBlank { if (isVideo) "离线视频" else "离线图集" }
-        val body = if (!errorDetail.isNullOrBlank()) "$cleanTitle · $errorDetail" else cleanTitle
-        val notification = NotificationCompat.Builder(appContext, CHANNEL_DOWNLOAD_EVENTS)
+        val body = when {
+            privacySensitive -> "下载失败，请打开应用查看详情"
+            !errorDetail.isNullOrBlank() -> "$cleanTitle · $errorDetail"
+            else -> cleanTitle
+        }
+        val builder = NotificationCompat.Builder(appContext, CHANNEL_DOWNLOAD_EVENTS)
             .setSmallIcon(android.R.drawable.stat_notify_error)
             .setContentTitle(kindLabel)
             .setContentText(body)
             .setContentIntent(buildOpenDownloadsPendingIntent(appContext, notificationId))
             .setAutoCancel(true)
-            .build()
-        runCatching { NotificationManagerCompat.from(appContext).notify(notificationId, notification) }
+        if (privacySensitive) builder.setVisibility(NotificationCompat.VISIBILITY_SECRET)
+        runCatching {
+            NotificationManagerCompat.from(appContext).notify(notificationId, builder.build())
+        }
     }
 
     private fun canPostNotifications(context: Context): Boolean {
@@ -218,4 +236,25 @@ object DownloadNotifications {
         }
         return NotificationManagerCompat.from(context).areNotificationsEnabled()
     }
+}
+
+/**
+ * Caches the persisted lock/privacy posture so event notifications can avoid exposing media
+ * titles on the lock screen without suspending on DataStore inside notification emitters.
+ */
+class DownloadNotificationPrivacy(
+    settingsDataStore: SettingsDataStore,
+    scope: CoroutineScope,
+) {
+    private val sensitive = MutableStateFlow(true)
+
+    init {
+        scope.launch {
+            settingsDataStore.settings.collect { settings ->
+                sensitive.value = settings.appLockEnabled || settings.privacyScreenSecure
+            }
+        }
+    }
+
+    fun isSensitive(): Boolean = sensitive.value
 }
