@@ -6,13 +6,21 @@
 
 | 要查什么 | 从哪里看 |
 |---|---|
-| 复查原始样本、重新验签 | [原始 APK 副本](original/copymanga.release_20261110_3.1.1.apk) |
-| 查看全部文件，按名称查找或比对后续版本 | [完整解包目录](unpacked/) · [逐文件大小与 SHA-256 清单](files.csv) |
-| 搜索接口、找二进制中的原始位置 | [路由与偏移 CSV](routes.csv) · [对应的 ARM64 业务库](unpacked/lib/arm64-v8a/libapp.so) |
+| 复查原始样本、重新验签 | 本机 `original/copymanga.release_20261110_3.1.1.apk`（不入库） |
+| 查看全部文件，按名称查找或比对后续版本 | 本机 `unpacked/`（不入库） · [逐文件大小与 SHA-256 清单](files.csv) |
+| 搜索接口、找二进制中的原始位置 | [路由与偏移 CSV](routes.csv) · 本机 `unpacked/lib/arm64-v8a/libapp.so` |
 | 查包名、版本、组件、权限和网络配置 | [包信息](evidence/package.txt) · [可读 Android 清单](evidence/manifest.txt) · [可读网络配置](evidence/network-security.txt) |
 | 复核签名 | [Android SDK 验签输出](evidence/signature.txt) |
 
-`unpacked/` 保留 APK 内部的原始目录和二进制格式。`evidence/` 中的文本由 Android SDK Build Tools 36.0.0 从同一 APK 导出。文中写作 `0x…` 的位置，除特别标注外，均为 **`unpacked/lib/arm64-v8a/libapp.so` 内的文件偏移**。其他 CPU 架构的偏移不同。
+`unpacked/` 保留 APK 内部的原始目录和二进制格式，`evidence/` 中的文本由 Android SDK Build Tools 36.0.0 从同一 APK 导出。文中写作 `0x…` 的位置，除特别标注外，均为 **`unpacked/lib/arm64-v8a/libapp.so` 内的文件偏移**，其他 CPU 架构的偏移不同。`original/` 与 `unpacked/` 只在本机保留，见下节。
+
+## 仓库保留范围
+
+`original/`（约 101 MB APK）与 `unpacked/`（2,098 个文件，约 100 MB）已列入 `.gitignore`，不再纳入版本控制。样本自带拷贝漫画的 Firebase 配置：`unpacked/resources.arsc` 与三份 `libapp.so` 内嵌同一把 `google_api_key`，GitHub Secret Scanning 会将其报告为公开泄漏的 Google API Key。该凭据归属 `com.copymanga.app`，不是 Raven 的凭据；Raven 源码与构建配置未引用 Firebase 或该 Key。
+
+仓库保留可读证据与清单：[包信息](evidence/package.txt)、[清单](evidence/manifest.txt)、[网络配置](evidence/network-security.txt)、[验签输出](evidence/signature.txt)、[逐文件指纹](files.csv)、[路由表](routes.csv)。复核二进制时按「样本与验证范围」的 SHA-256 从官方渠道取回同一版本 APK，再在本地解包。
+
+这两类文件由提交 `96a2cd40` 引入，本次起不再跟踪；该提交仍在既有分支与标签历史中。要彻底清除需重写历史并同步标签，属破坏性操作，另行确认。
 
 ## 样本与验证范围
 
@@ -87,8 +95,8 @@ Raven 打开正文时取桌面网页 `/comic/{path_word}/chapter/{uuid}`，再�
 | 部分 | 观察到的内容 | 原始依据 |
 |---|---|---|
 | 运行时 | Flutter + Dart AOT，业务代码提前编译为机器码。ARM64 引擎带有 `3.1.0 (stable)` 和 `android_arm64` 版本字符串 | `lib/arm64-v8a/libflutter.so` 中 `0x138a7f`，另见 `libapp.so` 的 Dart 快照标志 |
-| CPU 架构 | `arm64-v8a`、`armeabi-v7a`、`x86_64` 各有 `libapp.so` 和 `libflutter.so`。APK 还包含其他库的 `x86` 条目 | [原生库目录](unpacked/lib/) |
-| 网络与图片 | 依赖声明列有 `dio`、`http`、`connectivity_plus`、`cached_network_image` 和 `flutter_cache_manager`。尚未确定每个端点使用哪个网络库 | [Flutter 依赖许可清单，gzip 压缩](unpacked/assets/flutter_assets/NOTICES.Z) |
+| CPU 架构 | `arm64-v8a`、`armeabi-v7a`、`x86_64` 各有 `libapp.so` 和 `libflutter.so`。APK 还包含其他库的 `x86` 条目 | 本机 `unpacked/lib/` |
+| 网络与图片 | 依赖声明列有 `dio`、`http`、`connectivity_plus`、`cached_network_image` 和 `flutter_cache_manager`。尚未确定每个端点使用哪个网络库 | 本机 `unpacked/assets/flutter_assets/NOTICES.Z`（gzip 压缩） |
 | 状态、偏好和网页 | 依赖声明列有 `provider`、`shared_preferences`、`sqflite` 和 `webview_flutter` | 同一份 Flutter 依赖清单 |
 | Android 宿主与广告 | 清单含 Flutter 入口和多个广告 SDK 组件。包中有 `libijiami_1011.so`、`assets/ijiami_1011.VData`、穿山甲及广点通相关文件 | [组件清单](evidence/manifest.txt) · [文件索引](files.csv) |
 | 网络配置 | Android 的 `base-config` 允许明文流量，声明信任系统和用户证书。实际业务流量协议和 Dart 网络栈行为未经实测 | [可读网络配置](evidence/network-security.txt) |
