@@ -24,7 +24,7 @@ Android 包管理器（`PackageManager`）在执行覆盖安装时，强制校�
 
 ## 2. 官方发布证书与版本元数据基线
 
-仓库根目录 [release.properties](../release.properties) 是正式版版本号与公钥指纹的**唯一受控源**。当前源码版本为 `0.9.1` / `versionCode = 14`；下面的 `0.1.0` / `1` **仅用于展示文件结构，不是当前版本或发布指令**，实际值必须直接读取 `release.properties`：
+仓库根目录 [release.properties](../release.properties) 是正式版版本号与公钥指纹的**唯一受控源**。当前源码版本为 `0.9.2` / `versionCode = 15`；下面的 `0.1.0` / `1` **仅用于展示文件结构，不是当前版本或发布指令**，实际值必须直接读取 `release.properties`：
 
 ```properties
 versionName=0.1.0
