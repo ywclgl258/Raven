@@ -117,6 +117,8 @@ private data class DirectoryLoadState(
     val rawEntries: List<DirectoryEntry> = emptyList(),
     val currentPage: Int = 1,
     val hasMore: Boolean = false,
+    /** Remote query that produced [rawEntries]; paging must reuse it verbatim. */
+    val loadedQuery: String? = null,
 )
 
 class SiteDirectoryViewModel(
@@ -203,7 +205,10 @@ class SiteDirectoryViewModel(
             isLoading = state.isLoading,
             isRefreshing = state.isRefreshing,
             isLoadingMore = state.isLoadingMore,
-            hasMore = state.hasMore && needle.isEmpty(),
+            // Paging is only meaningful for the unfiltered remote dataset. Any local filter text,
+            // or a loaded remote query, hides the footer so触底 can never request page 2 with a
+            // query that does not match the page-1 request that produced these entries.
+            hasMore = state.hasMore && state.loadedQuery == null && needle.isEmpty(),
             authGateRequired = state.authGateRequired,
             errorMessage = state.errorMessage,
             paginationErrorMessage = state.paginationErrorMessage,
@@ -248,6 +253,11 @@ class SiteDirectoryViewModel(
 
     fun updateFilterQuery(query: String) {
         filterQuery.value = query
+        // Clearing the box after a remote query had loaded leaves page-1 results that no longer
+        // correspond to the input. Reload the unfiltered first page so the list matches the state.
+        if (query.isBlank() && loadState.value.loadedQuery != null) {
+            triggerLoad(section = activeSection.value, remoteQuery = null, isRefresh = false)
+        }
     }
 
     fun submitRemoteFilter() {
@@ -267,6 +277,9 @@ class SiteDirectoryViewModel(
     fun loadNextPage() {
         val snap = loadState.value
         if (snap.isLoading || snap.isLoadingMore || snap.authGateRequired || !snap.hasMore) return
+        // Guard: page 2 must use the exact query that produced page 1. Mixing a freshly typed/cleared
+        // filter text with the retained page-1 results would silently change the result set mid-list.
+        if (snap.loadedQuery != null || filterQuery.value.trim().isNotEmpty()) return
         val dirSource = plugin?.directorySource ?: return
         val section = activeSection.value
 
@@ -279,10 +292,11 @@ class SiteDirectoryViewModel(
                     dirSource.loadDirectory(
                         section = section,
                         page = nextPage,
-                        query = filterQuery.value.trim().takeIf { it.isNotEmpty() },
+                        query = snap.loadedQuery,
                     )
                 }
                 loadState.update { state ->
+                    if (state.loadedQuery != snap.loadedQuery) return@update state
                     val seen = state.rawEntries.mapTo(HashSet()) { "${it.id}:${it.url}" }
                     val appended = incoming.filter { seen.add("${it.id}:${it.url}") }
                     state.copy(
@@ -351,6 +365,7 @@ class SiteDirectoryViewModel(
                     rawEntries = unique,
                     currentPage = 1,
                     hasMore = unique.size >= 12,
+                    loadedQuery = remoteQuery?.trim()?.takeIf { it.isNotEmpty() },
                 )
             } catch (ce: CancellationException) {
                 throw ce
@@ -419,7 +434,7 @@ fun SiteDirectoryScreenContent(
     val listState = rememberLazyListState()
     val pullState = rememberPullToRefreshState()
 
-    LaunchedEffect(listState, uiState.hasMore, uiState.isLoadingMore, uiState.entries.size) {
+    LaunchedEffect(listState, uiState.hasMore, uiState.isLoadingMore, uiState.paginationErrorMessage, uiState.entries.size) {
         snapshotFlow {
             val total = listState.layoutInfo.totalItemsCount
             val lastVisible = listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0
@@ -428,7 +443,9 @@ fun SiteDirectoryScreenContent(
             .distinctUntilChanged()
             .filter { it }
             .collect {
-                if (uiState.hasMore && !uiState.isLoadingMore) onLoadNextPage()
+                if (uiState.hasMore && !uiState.isLoadingMore && uiState.paginationErrorMessage == null) {
+                    onLoadNextPage()
+                }
             }
     }
 

@@ -179,6 +179,145 @@ class NewSerialComicSitesPluginTest {
     }
 
     @Test
+    fun `mangacopy never sends the token to runtime-discovered or fallback hosts`() = runTest {
+        val http = FakeHttpClientAdapter()
+        val store = InMemorySiteSessionStore()
+        store.saveBearerToken(SiteId.MANGACOPY, "copy-jwt-7", "raven")
+
+        // A hostile/compromised `network2` advertises an attacker-controlled API host first.
+        http.onMatch({ req -> req.url.contains("/api/v3/system/network2") }) { req ->
+            jsonResp(req, """{"code":200,"results":{"api":[["evil-copy.example"]]}}""")
+        }
+        http.onMatch({ req -> req.url.contains("/api/v3/h5/homeIndex2") }) { req ->
+            jsonResp(req, """{"code":200,"results":{}}""")
+        }
+        // Copy API rejects (210) so the request lands on the HotManga cluster instead.
+        http.onMatch({ req -> req.url.startsWith("https://api.copy") && req.url.contains("/api/v3/comics") }) { req ->
+            jsonResp(req, """{"code":210,"message":"限制"}""")
+        }
+        http.onMatch({ req -> req.url.startsWith("https://mapi.hotmanga") && req.url.contains("/api/v3/comics") }) { req ->
+            jsonResp(
+                req,
+                """{"code":200,"results":{"total":1,"offset":0,"list":[{"name":"Confine","path_word":"confine","cover":""}]}}""",
+            )
+        }
+
+        val plugin = MangacopySitePlugin(http, store)
+        plugin.feedSource.loadFeed(FeedRequest(siteId = SiteId.MANGACOPY, section = "latest"))
+
+        // No request to any host outside the pinned CopyManga allow-list may carry the token.
+        val pinned = CopyHotApiSupport.COPY_API_HOSTS
+        val leaked = http.recordedRequests.filter { req ->
+            val host = java.net.URI(req.url).host?.lowercase().orEmpty()
+            req.headers["Authorization"] != null && pinned.none { it.equals(host, ignoreCase = true) }
+        }
+        assertTrue("token leaked to non-pinned host: ${leaked.map { it.url }}", leaked.isEmpty())
+
+        // decorateRequestHeaders follows the same rule for the transport interceptor.
+        assertEquals(
+            emptyMap<String, String>(),
+            plugin.authProvider.decorateRequestHeaders(
+                SiteHttpRequest(url = "https://evil-copy.example/api/v3/comics", siteId = SiteId.MANGACOPY),
+                host = "evil-copy.example",
+            ),
+        )
+        assertEquals(
+            emptyMap<String, String>(),
+            plugin.authProvider.decorateRequestHeaders(
+                SiteHttpRequest(url = "https://mapi.hotmangasg.com/api/v3/comics", siteId = SiteId.MANGACOPY),
+                host = "mapi.hotmangasg.com",
+            ),
+        )
+        // The pinned official host still receives it.
+        assertEquals(
+            mapOf("Authorization" to "Token copy-jwt-7"),
+            plugin.authProvider.decorateRequestHeaders(
+                SiteHttpRequest(url = "https://api.copy202601.com/api/v3/comics", siteId = SiteId.MANGACOPY),
+                host = "api.copy202601.com",
+            ),
+        )
+    }
+
+    @Test
+    fun `mangacopy and relamanhua never cache or report a truncated chapter list`() = runTest {
+        // CopyManga pages chapters 100 at a time, so a partial "page 1 only" result is only
+        // observable when the first page is FULL and the follow-up page fails.
+        fun chapterPageJson(offset: Int, count: Int, total: Int = 200): String {
+            val items = (0 until count).joinToString(",") { i ->
+                """{"uuid":"c${offset + i}","name":"第 ${offset + i + 1} 话"}"""
+            }
+            return """{"code":200,"results":{"total":$total,"offset":$offset,"list":[$items]}}"""
+        }
+
+        // ---- CopyManga ----
+        val http = FakeHttpClientAdapter()
+        var failNextPage = true
+        http.onMatch({ req -> req.url.contains("/api/v3/comic2/trunc-work") }) { req ->
+            jsonResp(
+                req,
+                """{"code":200,"results":{"comic":{"name":"Trunc","path_word":"trunc-work","cover":""},"groups":{"default":{"path_word":"default"}}}}""",
+            )
+        }
+        http.onMatch({ req -> req.url.contains("/api/v3/comic/trunc-work/group/default/chapters") }) { req ->
+            val offset = Regex("""offset=(\d+)""").find(req.url)?.groupValues?.get(1)?.toInt() ?: 0
+            if (offset == 100 && failNextPage) {
+                SiteHttpResponse(code = 500, finalUrl = req.url, body = "boom".toByteArray())
+            } else {
+                jsonResp(req, chapterPageJson(offset, 100))
+            }
+        }
+        val mangacopy = MangacopySitePlugin(http)
+
+        // Page 2 fails -> the collected page-1 prefix must NOT be reported as a complete list.
+        val firstError = runCatching {
+            mangacopy.feedSource.loadFeed(
+                FeedRequest(siteId = SiteId.MANGACOPY, section = "chapters", category = "trunc-work"),
+            )
+        }.exceptionOrNull()
+        assertNotNull("truncated chapter list must throw, got $firstError", firstError)
+
+        // Recovery on the same work must return the full ordered list (nothing cached short).
+        failNextPage = false
+        val recovered = mangacopy.feedSource.loadFeed(
+            FeedRequest(siteId = SiteId.MANGACOPY, section = "chapters", category = "trunc-work"),
+        )
+        assertEquals(200, recovered.items.size)
+        assertEquals("c199", recovered.items.last().extra["chapterUuid"])
+
+        // ---- HotManga (relamanhua) ----
+        val hot = FakeHttpClientAdapter()
+        var failHotPage = true
+        hot.onMatch({ req -> req.url.contains("/api/v3/comic2/trunc-work") }) { req ->
+            jsonResp(
+                req,
+                """{"code":200,"results":{"comic":{"name":"Trunc","path_word":"trunc-work","cover":""},"groups":{"default":{"path_word":"default"}}}}""",
+            )
+        }
+        hot.onMatch({ req -> req.url.contains("/api/v3/comic/trunc-work/group/default/chapters") }) { req ->
+            val offset = Regex("""offset=(\d+)""").find(req.url)?.groupValues?.get(1)?.toInt() ?: 0
+            if (offset == 100 && failHotPage) {
+                SiteHttpResponse(code = 500, finalUrl = req.url, body = "boom".toByteArray())
+            } else {
+                jsonResp(req, chapterPageJson(offset, 100))
+            }
+        }
+        val rela = RelamanhuaSitePlugin(hot)
+        val hotError = runCatching {
+            rela.feedSource.loadFeed(
+                FeedRequest(siteId = SiteId.RELAMANHUA, section = "chapters", category = "trunc-work"),
+            )
+        }.exceptionOrNull()
+        assertNotNull("relamanhua truncated list must throw, got $hotError", hotError)
+
+        failHotPage = false
+        val hotRecovered = rela.feedSource.loadFeed(
+            FeedRequest(siteId = SiteId.RELAMANHUA, section = "chapters", category = "trunc-work"),
+        )
+        assertEquals(200, hotRecovered.items.size)
+        assertEquals("c199", hotRecovered.items.last().extra["chapterUuid"])
+    }
+
+    @Test
     fun `mangacopy falls back to hotmanga cluster on 210 and decrypts desktop html aes as last resort`() = runTest {
         val http = FakeHttpClientAdapter()
         http.onMatch({ req -> req.url.startsWith("https://api.copy") && req.url.contains("/api/v3/comic2/fallback-work") }) { req ->

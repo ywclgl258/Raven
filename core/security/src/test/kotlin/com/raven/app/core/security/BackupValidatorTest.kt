@@ -5,9 +5,11 @@ import com.raven.app.core.model.FavoriteItem
 import com.raven.app.core.model.FavoriteKind
 import com.raven.app.core.model.ImageFavorite
 import com.raven.app.core.model.MediaKind
+import com.raven.app.core.model.PageBookmark
 import com.raven.app.core.model.RavenBackupPayload
 import com.raven.app.core.model.SavedSearch
 import com.raven.app.core.model.SearchHistoryEntry
+import com.raven.app.core.model.SearchScope
 import com.raven.app.core.model.Shelf
 import com.raven.app.core.model.ShelfItem
 import com.raven.app.core.model.SiteDescriptor
@@ -283,5 +285,81 @@ class BackupValidatorTest {
             ),
         )
         assertThrows(BackupValidationException::class.java) { validator.validate(blankTranslation) }
+    }
+
+    @Test
+    fun `accepts cross-site search history under the global wildcard while still rejecting other unknown sites`() {
+        // Cross-site searches are written under SiteId.GLOBAL ("*") by SearchViewModel; the
+        // validator must honour that contract or one entry blocks the whole export.
+        val payload = RavenBackupPayload(
+            exportedAt = 1_700_000_000_000L,
+            searchHistory = listOf(
+                SearchHistoryEntry(SiteId.GLOBAL, "共享关键词", SearchScope.ALL, searchedAt = 10L),
+                SearchHistoryEntry(SiteId.R34V, "站内", SearchScope.ALL, searchedAt = 20L),
+            ),
+        )
+        val summary = validator.validate(payload)
+        assertEquals(2, summary.searchHistoryCount)
+
+        // The wildcard exception is scoped to search history: a global watch record still fails.
+        val globalWatch = RavenBackupPayload(
+            exportedAt = 100L,
+            watchProgress = listOf(
+                WatchProgress(SiteId.GLOBAL, "1", "", "Bad", positionMs = 0, durationMs = 10, updatedAt = 1),
+            ),
+        )
+        assertThrows(BackupValidationException::class.java) { validator.validate(globalWatch) }
+
+        // A never-registered site is still refused.
+        val unknownSite = RavenBackupPayload(
+            exportedAt = 100L,
+            searchHistory = listOf(SearchHistoryEntry(SiteId.of("unknown-site"), "q", searchedAt = 1L)),
+        )
+        assertThrows(BackupValidationException::class.java) { validator.validate(unknownSite) }
+    }
+
+    @Test
+    fun `rejects a portable payload whose page bookmark still carries a local file cover`() {
+        val hash = "d".repeat(64)
+        val payload = RavenBackupPayload(
+            exportedAt = 100L,
+            pageBookmarks = listOf(
+                PageBookmark(
+                    id = "pb1",
+                    siteId = SiteId.LOCAL,
+                    mediaId = hash,
+                    url = "ravenlocal://$hash",
+                    title = "Local",
+                    coverUrl = "file:///storage/emulated/0/Raven/cover.jpg",
+                    page = 2,
+                ),
+            ),
+            shelves = listOf(Shelf(id = Shelf.WATCH_LATER_ID, name = "稍后看")),
+            shelfItems = listOf(
+                ShelfItem(Shelf.WATCH_LATER_ID, SiteId.LOCAL, hash, "ravenlocal://$hash", MediaKind.COMIC, "Local"),
+            ),
+        )
+        assertThrows(BackupValidationException::class.java) { validator.validate(payload) }
+    }
+
+    @Test
+    fun `canonical tag and collection bounds match the exporter constants`() {
+        assertEquals(RavenBackupPayload.MAX_TAG_CHINESE_NAME_LENGTH, BackupValidator.MAX_TAG_LENGTH)
+        assertEquals(RavenBackupPayload.MAX_TAG_NAMESPACE_LENGTH, BackupValidator.MAX_NAMESPACE_LENGTH)
+        assertEquals(RavenBackupPayload.MAX_SHELVES, BackupValidator.MAX_SHELVES)
+        assertEquals(RavenBackupPayload.MAX_SEARCH_HISTORY_PER_SITE, BackupValidator.MAX_SEARCH_HISTORY_PER_SITE)
+
+        val atLimit = TagTranslationEntry(
+            rawSlug = "slug",
+            chineseName = "译".repeat(RavenBackupPayload.MAX_TAG_CHINESE_NAME_LENGTH),
+        )
+        val overLimit = TagTranslationEntry(
+            rawSlug = "slug",
+            chineseName = "译".repeat(RavenBackupPayload.MAX_TAG_CHINESE_NAME_LENGTH + 1),
+        )
+        validator.validate(RavenBackupPayload(exportedAt = 1L, customTagTranslations = listOf(atLimit)))
+        assertThrows(BackupValidationException::class.java) {
+            validator.validate(RavenBackupPayload(exportedAt = 1L, customTagTranslations = listOf(overLimit)))
+        }
     }
 }

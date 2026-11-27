@@ -185,6 +185,7 @@ fun LibraryHubScreenContent(
     uiState: LibraryHubUiState,
     navigator: LibraryNavigator,
     onSelectTab: (LibraryHubTab) -> Unit,
+    modifier: Modifier = Modifier,
     onRemoveFromWatchLater: (ShelfItem) -> Unit = {},
     onRefreshSmartRecommendations: () -> Unit = {},
     onCreateShelf: (name: String, note: String, isPinned: Boolean) -> Unit,
@@ -209,7 +210,6 @@ fun LibraryHubScreenContent(
     onDismissImportStatus: () -> Unit,
     onCompleteTutorial: () -> Unit = {},
     onSkipAllTutorials: () -> Unit = {},
-    modifier: Modifier = Modifier,
 ) {
     val colors = LocalRavenColors.current
     val listState = rememberLazyListState()

@@ -48,6 +48,7 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.stateIn
@@ -232,13 +233,11 @@ class LibraryHubViewModel(
     )
 
     private val controlsFlow = combine(
-        selectedTab,
         importState,
         transientMessage,
         localLibraryImporter.books,
-    ) { tab, importing, message, books ->
+    ) { importing, message, books ->
         HubControlsSnapshot(
-            tab = tab,
             importState = importing,
             message = message,
             localBooks = books,
@@ -253,7 +252,7 @@ class LibraryHubViewModel(
         Triple(likes, recState, appSettings)
     }
 
-    val uiState: StateFlow<LibraryHubUiState> = combine(
+    private val contentFlow = combine(
         metricCountsFlow,
         secondaryCountsFlow,
         shelfDataFlow,
@@ -301,7 +300,6 @@ class LibraryHubViewModel(
         }
 
         LibraryHubUiState(
-            selectedTab = controls.tab,
             historyCount = metrics.historyCount,
             favoriteCount = metrics.favoriteCount,
             completedDownloadCount = metrics.completedDownloadCount,
@@ -327,10 +325,15 @@ class LibraryHubViewModel(
             showLibraryTutorial = appSettings != null && !appSettings.hasSeenTutorial(FeatureTutorialIds.LIBRARY_HUB),
             message = controls.message,
         )
+    }.flowOn(dispatchers.default)
+
+    private val initialState = LibraryHubUiState(allSiteOptions = allSiteOptions)
+    val uiState = combine(contentFlow, selectedTab) { content, tab ->
+        content.copy(selectedTab = tab)
     }.stateIn(
         scope = viewModelScope,
         started = SharingStarted.WhileSubscribed(5_000L),
-        initialValue = LibraryHubUiState(allSiteOptions = allSiteOptions),
+        initialValue = initialState,
     )
 
     init {
@@ -782,7 +785,6 @@ class LibraryHubViewModel(
     }
 
     private data class HubControlsSnapshot(
-        val tab: LibraryHubTab,
         val importState: LocalImportState,
         val message: String?,
         val localBooks: List<LocalBook>,

@@ -45,6 +45,16 @@ internal fun boundedMorphTint(start: Color, target: Color, progress: Float): Col
     return lerp(start, target, bounded)
 }
 
+// Only source geometry is shared. Each mounted icon owns its paths and writable frame buffers.
+private class GlyphGeometry(glyph: RavenMorphGlyph) {
+    val strokes = MorphIconEngine.resampleGlyph(glyph)
+    val restingPlan by lazy { MorphIconEngine.buildPlan(strokes, strokes) }
+}
+
+private object GlyphGeometryCache : android.util.LruCache<RavenMorphGlyph, GlyphGeometry>(64) {
+    override fun create(key: RavenMorphGlyph) = GlyphGeometry(key)
+}
+
 private class MorphIconRuntimeState(
     initialGlyph: RavenMorphGlyph,
     preset: MorphSpringPreset,
@@ -54,7 +64,7 @@ private class MorphIconRuntimeState(
     var targetGlyph: RavenMorphGlyph = initialGlyph
     var startTint: Color = initialTint
     var targetTint: Color? = initialTargetTint
-    var plan: MorphPlan = MorphIconEngine.buildPlan(initialGlyph, initialGlyph)
+    var plan: MorphPlan = GlyphGeometryCache.get(initialGlyph).restingPlan
     var buffers: MutableList<FloatArray> = plan.allocateBuffers().toMutableList()
     var paths: MutableList<Path> = MutableList(plan.pairs.size) { Path() }
     val spring: MorphSpring = MorphSpring(preset)
@@ -94,8 +104,8 @@ private class MorphIconRuntimeState(
 @Composable
 fun RavenMorphIcon(
     glyph: RavenMorphGlyph,
-    tint: Color = LocalContentColor.current,
     modifier: Modifier = Modifier,
+    tint: Color = LocalContentColor.current,
     size: Dp = 24.dp,
     strokeWidth: Dp = 2.dp,
     springPreset: MorphSpringPreset = MorphSpringPreset.SNAPPY,
@@ -112,7 +122,7 @@ fun RavenMorphIcon(
         val visualChanged = glyphChanged || tintChanged
         if (motionReduced) {
             if (visualChanged || runtime.spring.isRunning) {
-                val staticPlan = MorphIconEngine.buildPlan(glyph, glyph)
+                val staticPlan = GlyphGeometryCache.get(glyph).restingPlan
                 runtime.ensureCapacity(staticPlan)
                 runtime.plan = staticPlan
                 runtime.targetGlyph = glyph
@@ -131,7 +141,7 @@ fun RavenMorphIcon(
                 boundedMorphTint(runtime.startTint, currentTarget, currentT)
             } ?: tint
             val currentSnapshot = MorphIconEngine.snapshotBuffers(runtime.plan, runtime.buffers, currentT)
-            val targetSampled = MorphIconEngine.resampleGlyph(glyph)
+            val targetSampled = GlyphGeometryCache.get(glyph).strokes
             val nextPlan = MorphIconEngine.buildPlan(currentSnapshot, targetSampled)
             runtime.ensureCapacity(nextPlan)
             runtime.plan = nextPlan
@@ -251,9 +261,9 @@ fun RavenMorphToggleIcon(
     active: Boolean,
     activeGlyph: RavenMorphGlyph,
     inactiveGlyph: RavenMorphGlyph,
+    modifier: Modifier = Modifier,
     activeTint: Color = LocalRavenColors.current.crimson,
     inactiveTint: Color = LocalRavenColors.current.inkSecondary,
-    modifier: Modifier = Modifier,
     size: Dp = 24.dp,
     strokeWidth: Dp = 2.dp,
     springPreset: MorphSpringPreset = MorphSpringPreset.SNAPPY,

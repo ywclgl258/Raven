@@ -3,8 +3,10 @@ package com.raven.app.core.network
 import coil3.ImageLoader
 import com.raven.app.core.common.AppDispatchers
 import com.raven.app.core.common.DefaultAppDispatchers
+import com.raven.app.core.security.SessionVault
 import com.raven.app.core.sitespi.HttpClientAdapter
 import com.raven.app.core.sitespi.SiteRegistry
+import com.raven.app.core.sitespi.SiteSessionStore
 import kotlinx.coroutines.CoroutineScope
 import okhttp3.ConnectionPool
 import okhttp3.CookieJar
@@ -49,6 +51,10 @@ val coreNetworkModule: Module = module {
         MediaRedirectCache(
             eligible = { url -> get<SiteRegistry>().isRegisteredSiteHost(url.host) },
             rateLimitLog = get(),
+            // Signed CDN URLs are minted per account: bind each entry to the owning account and the
+            // epoch it was resolved under so a logout/login can never replay the old account's URL.
+            accountResolver = { url -> get<SiteRegistry>().findForHost(url.host)?.id },
+            credentialEpochProvider = { accounts -> get<SessionVault>().authEpoch(accounts) },
         )
     }
 
@@ -56,8 +62,27 @@ val coreNetworkModule: Module = module {
         SiteCookieJar(
             sessionStore = get(),
             siteRegistryProvider = { get<SiteRegistry>() },
-        )
+        ).apply {
+            // Account switch / logout invalidates every media URL minted for that account.
+            onAccountChanged = { accountId ->
+                // Signed media URLs and personalized PAGE/API bodies from the previous account
+                // must never be replayed after a login/logout/import.
+                get<MediaRedirectCache>().invalidateForSite(accountId)
+                get<RavenOkHttpPool>().evictHttpCache()
+            }
+        }
     } bind CookieJar::class
+
+    // Plugins mutate credentials directly through SiteSessionStore (login / import / logout), so the
+    // vault's epoch is the authoritative signal: every move drops account-derived caches. Registered
+    // here so no plugin needs to know about the network layer.
+    single {
+        SessionCacheInvalidationBinding(
+            sessionVault = get(),
+            mediaRedirectCache = get(),
+            okHttpPool = get(),
+        )
+    }
 
     single {
         val redirectCache = get<MediaRedirectCache>()
@@ -81,6 +106,7 @@ val coreNetworkModule: Module = module {
             mediaRedirectCache = get(),
             peerTracker = get(),
             siteRegistryProvider = { get<SiteRegistry>() },
+            sessionStoreProvider = { get<SiteSessionStore>() },
         )
     }
 

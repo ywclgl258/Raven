@@ -71,10 +71,14 @@ class LanCastManagerTest {
 
         val soap = LanCastManager.buildSetAvTransportUriSoap(
             streamUrl = "https://cdn.example/v.mp4?a=1&b=2",
-            title = "Test <Video>",
+            title = "A & B <Video>",
         )
-        assertTrue(soap.contains("https://cdn.example/v.mp4?a=1&amp;b=2"))
-        assertTrue(soap.contains("Test &lt;Video&gt;"))
+        val parser = javax.xml.parsers.DocumentBuilderFactory.newInstance().newDocumentBuilder()
+        val envelope = parser.parse(soap.byteInputStream())
+        assertEquals("https://cdn.example/v.mp4?a=1&b=2", envelope.getElementsByTagName("CurrentURI").item(0).textContent)
+        val metadata = envelope.getElementsByTagName("CurrentURIMetaData").item(0).textContent
+        val didl = parser.parse(metadata.byteInputStream())
+        assertEquals("A & B <Video>", didl.getElementsByTagName("dc:title").item(0).textContent)
     }
 
     @Test
@@ -108,6 +112,10 @@ class LanCastManagerTest {
             val oversized = "A".repeat(LanCastManager.MAX_DESCRIPTION_XML_BYTES + 128)
             server.enqueue(MockResponse().setResponseCode(200).setBody(oversized))
             assertNull(manager.fetchXml(server.url("/huge.xml").toString()))
+            server.enqueue(MockResponse().setChunkedBody(oversized, 8192))
+            assertNull(manager.fetchXml(server.url("/chunked.xml").toString()))
+            server.enqueue(MockResponse().setChunkedBody("<root/>", 4))
+            assertEquals("<root/>", manager.fetchXml(server.url("/small.xml").toString()))
         } finally {
             server.shutdown()
             redirectTarget.shutdown()

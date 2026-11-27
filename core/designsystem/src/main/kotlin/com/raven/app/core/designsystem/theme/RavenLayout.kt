@@ -1,11 +1,16 @@
 package com.raven.app.core.designsystem.theme
 
+import android.content.res.Configuration
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalWindowInfo
+import androidx.compose.ui.platform.WindowInfo
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import kotlin.math.roundToInt
 
 /**
  * HarmonyOS Design responsive horizontal width breakpoints (`xs` / `sm` / `md` / `lg`).
@@ -128,19 +133,79 @@ object RavenLayout {
 }
 
 /**
- * Remembers the active [RavenGridSpec] for the current configuration's screen width.
+ * Responsive window width/height in `dp` sourced from [LocalWindowInfo] rather than
+ * `LocalConfiguration`.
+ *
+ * `Configuration.screenWidthDp` / `screenHeightDp` describe the *device* screen and are rounded to
+ * whole `dp`. On edge-to-edge (`enableEdgeToEdge`) and in split-screen / freeform / foldable
+ * multi-window they overstate the space actually available to this composition, which is exactly
+ * what Lint's `ConfigurationScreenWidthHeight` warns about. `WindowInfo.containerSize` reports the
+ * real current window bounds and updates on resize, so modal sizing stays correct when the user
+ * drags the window divider or unfolds the device.
+ */
+@Immutable
+data class RavenWindowSize(val widthDp: Int, val heightDp: Int)
+
+/**
+ * Resolves the current window size in `dp`, preferring live [WindowInfo.containerSize] bounds and
+ * falling back to the configuration only before the host `ComposeView` has reported a real size.
+ */
+@Composable
+fun rememberRavenWindowSize(): RavenWindowSize {
+    val containerSize = LocalWindowInfo.current.containerSize
+    val density = LocalDensity.current
+    val configuration = LocalConfiguration.current
+    // WindowInfo's default implementation yields Int.MIN_VALUE and an unattached LazyWindowInfo
+    // yields 0x0, so guard both before trusting the value.
+    val hasMeasuredSize = containerSize.width > 0 && containerSize.height > 0
+    val widthDp = if (hasMeasuredSize) {
+        with(density) { containerSize.width.toDp().value }.roundToInt()
+    } else {
+        configuration.deviceScreenFallbackWidth()
+    }
+    val heightDp = if (hasMeasuredSize) {
+        with(density) { containerSize.height.toDp().value }.roundToInt()
+    } else {
+        configuration.deviceScreenFallbackHeight()
+    }
+    // A single remember keeps the slot layout stable across the measured/unmeasured transition.
+    return remember(widthDp, heightDp) { RavenWindowSize(widthDp, heightDp) }
+}
+
+/**
+ * Device-screen width `dp`, used only by [rememberRavenWindowSize] before the composition window
+ * has been measured.
+ *
+ * Deliberately a plain (non-`@Composable`) function: on edge-to-edge and multi-window these values
+ * overstate the usable window, so they must never be the primary source inside composition —
+ * keeping the read here prevents lint's `ConfigurationScreenWidthHeight` from being masked by a
+ * blanket suppression while still avoiding a zero-sized first frame.
+ */
+private fun Configuration.deviceScreenFallbackWidth(): Int = screenWidthDp
+
+/** Device-screen height `dp` counterpart of [deviceScreenFallbackWidth]. */
+private fun Configuration.deviceScreenFallbackHeight(): Int = screenHeightDp
+
+/**
+ * The current window width in `dp`, for the active composition window.
+ */
+@Composable
+fun rememberRavenWindowWidthDp(): Int = rememberRavenWindowSize().widthDp
+
+/**
+ * Remembers the active [RavenGridSpec] for the current window width.
  */
 @Composable
 fun rememberRavenGridSpec(): RavenGridSpec {
-    val widthDp = LocalConfiguration.current.screenWidthDp
+    val widthDp = rememberRavenWindowWidthDp()
     return remember(widthDp) { RavenLayout.gridSpecForWidth(widthDp) }
 }
 
 /**
- * Remembers the active [RavenWindowClass] for the current configuration's screen width.
+ * Remembers the active [RavenWindowClass] for the current window width.
  */
 @Composable
 fun rememberRavenWindowClass(): RavenWindowClass {
-    val widthDp = LocalConfiguration.current.screenWidthDp
+    val widthDp = rememberRavenWindowWidthDp()
     return remember(widthDp) { RavenLayout.windowClassForWidth(widthDp) }
 }

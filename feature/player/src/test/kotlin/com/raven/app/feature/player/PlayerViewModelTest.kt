@@ -11,6 +11,7 @@ import com.raven.app.core.model.VideoStream
 import com.raven.app.core.model.WatchProgress
 import com.raven.app.core.sitespi.SiteRegistry
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.advanceUntilIdle
@@ -991,5 +992,204 @@ class PlayerViewModelTest {
             assertEquals(45_000L, saved!!.positionMs)
             cancelAndIgnoreRemainingEvents()
         }
+    }
+
+    // ---- Review item #4: pause / ON_STOP progress must survive the ExoPlayer thread constraint ----
+
+    @Test
+    fun `pause flushes the exact position even when the player handle cannot be read`() = runTest {
+        val harness = PlayerTestHarness(mainDispatcherRule.dispatcher)
+        val (registry, _) = buildRegistry()
+        val vm = harness.createViewModel(
+            registry,
+            initialArgs = PlayerLaunchArgs(SiteId.R34V, "v-thread", "https://r34v.example/video/v-thread"),
+        )
+        advanceUntilIdle()
+
+        // ExoPlayer.currentPosition throws when read off its application thread. The `pause` flush
+        // is dispatched on the application scope, so a swallowed exception used to drop this save
+        // entirely and leave only the last periodic snapshot (or nothing) behind.
+        harness.playbackPort.failDirectPositionReads = true
+        harness.playbackPort.seekTo(87_000L)
+        vm.pause()
+        advanceUntilIdle()
+
+        val saved = harness.historyRepository.getWatchProgress(SiteId.R34V, "v-thread")
+        assertNotNull(saved)
+        assertEquals(87_000L, saved!!.positionMs)
+    }
+
+    @Test
+    fun `onBackgrounded while paused still flushes the latest position`() = runTest {
+        val harness = PlayerTestHarness(mainDispatcherRule.dispatcher)
+        val (registry, _) = buildRegistry()
+        val vm = harness.createViewModel(
+            registry,
+            initialArgs = PlayerLaunchArgs(SiteId.R34V, "v-stop", "https://r34v.example/video/v-stop"),
+        )
+        advanceUntilIdle()
+
+        harness.playbackPort.seekTo(120_000L)
+        // ON_STOP flush is dispatched off the application thread; the position must still land.
+        harness.playbackPort.failDirectPositionReads = true
+        vm.onBackgrounded(isInPipMode = false)
+        advanceUntilIdle()
+
+        val saved = harness.historyRepository.getWatchProgress(SiteId.R34V, "v-stop")
+        assertNotNull(saved)
+        assertEquals(120_000L, saved!!.positionMs)
+    }
+
+    @Test
+    fun `periodic progress save keeps writing when direct position reads are unavailable`() = runTest {
+        val harness = PlayerTestHarness(mainDispatcherRule.dispatcher)
+        val (registry, _) = buildRegistry()
+        val vm = harness.createViewModel(
+            registry,
+            initialArgs = PlayerLaunchArgs(SiteId.R34V, "v-periodic", "https://r34v.example/video/v-periodic"),
+        )
+        advanceUntilIdle()
+
+        harness.playbackPort.failDirectPositionReads = true
+        harness.playbackPort.seekTo(150_000L)
+        val tickerJob = launch { vm.runForegroundTicker() }
+        advanceTimeBy(PlayerViewModel.PROGRESS_SAVE_INTERVAL_MS + 200L)
+        runCurrent()
+
+        val saved = harness.historyRepository.getWatchProgress(SiteId.R34V, "v-periodic")
+        assertNotNull(saved)
+        assertEquals(150_000L, saved!!.positionMs)
+        tickerJob.cancel()
+    }
+
+    // ---- Review item #8: bookmark capture must not rely on the frozen structural position ----
+
+    @Test
+    fun `bookmark captured after controls hide records the live position instead of zero`() = runTest {
+        val harness = PlayerTestHarness(mainDispatcherRule.dispatcher)
+        val (registry, _) = buildRegistry()
+        val vm = harness.createViewModel(
+            registry,
+            initialArgs = PlayerLaunchArgs(SiteId.R34V, "v-bm", "https://r34v.example/video/v-bm"),
+        )
+        advanceUntilIdle()
+
+        // Position advanced well past zero while the controls overlay is not collecting
+        // `progressState` (WhileSubscribed freezes at its last value once nothing subscribes).
+        harness.playbackPort.seekTo(96_000L)
+
+        // What the sheet/settings path reads: the structural state keeps positionMs at 0.
+        assertEquals(0L, vm.structuralUiState.value.positionMs)
+        // What must be used instead: the authoritative live position.
+        assertEquals(96_000L, vm.currentPlaybackPositionMs())
+
+        vm.addTimeBookmark(label = "精彩片段")
+        advanceUntilIdle()
+
+        val bookmarks = harness.bookmarkRepository.observeTimeBookmarks().first()
+        assertEquals(1, bookmarks.size)
+        assertEquals(96_000L, bookmarks.single().positionMs)
+    }
+
+    @Test
+    fun `addTimeBookmark explicit position still wins over the live read`() = runTest {
+        val harness = PlayerTestHarness(mainDispatcherRule.dispatcher)
+        val (registry, _) = buildRegistry()
+        val vm = harness.createViewModel(
+            registry,
+            initialArgs = PlayerLaunchArgs(SiteId.R34V, "v-bm2", "https://r34v.example/video/v-bm2"),
+        )
+        advanceUntilIdle()
+
+        harness.playbackPort.seekTo(20_000L)
+        vm.addTimeBookmark(label = "A 点", positionMs = 55_500L)
+        advanceUntilIdle()
+
+        val bookmarks = harness.bookmarkRepository.observeTimeBookmarks().first()
+        assertEquals(55_500L, bookmarks.single().positionMs)
+    }
+
+    // ---- Review item #10: background audio must still honour the sleep deadline ----
+
+    @Test
+    fun `sleep timer pauses playback while the app stays backgrounded with background audio`() = runTest {
+        val harness = PlayerTestHarness(mainDispatcherRule.dispatcher, elapsedMs = 1_000L)
+        harness.preferencesRepository.setBackgroundAudioPlayback(true)
+        val (registry, _) = buildRegistry()
+        val vm = harness.createViewModel(
+            registry,
+            initialArgs = PlayerLaunchArgs(SiteId.R34V, "v-bg-sleep", "https://r34v.example/video/v-bg-sleep"),
+        )
+        advanceUntilIdle()
+        assertTrue(harness.playbackPort.state.value.isPlaying)
+
+        assertTrue(vm.setSleepTimerMinutes(1))
+        harness.playbackPort.seekTo(30_000L)
+
+        // App leaves the foreground: the STARTED-scoped ticker stops, playback continues because
+        // background audio is enabled, and the deadline watcher takes over.
+        vm.onBackgrounded(isInPipMode = false)
+        runCurrent()
+        assertTrue(harness.playbackPort.state.value.isPlaying)
+
+        // Deadline passes while the screen is still in the background.
+        harness.elapsedMs += 61_000L
+        advanceTimeBy(PlayerViewModel.BACKGROUND_SLEEP_TIMER_POLL_MS + 1_000L)
+        advanceUntilIdle()
+
+        assertFalse(harness.playbackPort.state.value.isPlaying)
+        val saved = harness.historyRepository.getWatchProgress(SiteId.R34V, "v-bg-sleep")
+        assertNotNull(saved)
+        assertEquals(30_000L, saved!!.positionMs)
+    }
+
+    @Test
+    fun `cancelling the sleep timer in the background leaves playback running`() = runTest {
+        val harness = PlayerTestHarness(mainDispatcherRule.dispatcher, elapsedMs = 1_000L)
+        harness.preferencesRepository.setBackgroundAudioPlayback(true)
+        val (registry, _) = buildRegistry()
+        val vm = harness.createViewModel(
+            registry,
+            initialArgs = PlayerLaunchArgs(SiteId.R34V, "v-bg-cancel", "https://r34v.example/video/v-bg-cancel"),
+        )
+        advanceUntilIdle()
+
+        assertTrue(vm.setSleepTimerMinutes(1))
+        vm.onBackgrounded(isInPipMode = false)
+        runCurrent()
+
+        vm.cancelSleepTimer()
+        harness.elapsedMs += 120_000L
+        advanceTimeBy(PlayerViewModel.BACKGROUND_SLEEP_TIMER_POLL_MS + 1_000L)
+        advanceUntilIdle()
+
+        assertTrue(harness.playbackPort.state.value.isPlaying)
+    }
+
+    @Test
+    fun `foreground resume disarms the background watcher so it cannot double-evaluate`() = runTest {
+        val harness = PlayerTestHarness(mainDispatcherRule.dispatcher, elapsedMs = 1_000L)
+        harness.preferencesRepository.setBackgroundAudioPlayback(true)
+        val (registry, _) = buildRegistry()
+        val vm = harness.createViewModel(
+            registry,
+            initialArgs = PlayerLaunchArgs(SiteId.R34V, "v-bg-resume", "https://r34v.example/video/v-bg-resume"),
+        )
+        advanceUntilIdle()
+
+        assertTrue(vm.setSleepTimerMinutes(1))
+        vm.onBackgrounded(isInPipMode = false)
+        runCurrent()
+
+        // Back in STARTED: runForegroundTicker disarms the fallback and owns the deadline again.
+        val tickerJob = launch { vm.runForegroundTicker() }
+        runCurrent()
+        harness.elapsedMs += 61_000L
+        advanceTimeBy(PlayerViewModel.STALL_AND_SLEEP_TICK_MS + 100L)
+        runCurrent()
+
+        assertFalse(harness.playbackPort.state.value.isPlaying)
+        tickerJob.cancel()
+        advanceUntilIdle()
     }
 }

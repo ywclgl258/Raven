@@ -1,6 +1,8 @@
 package com.raven.app.core.sitespi
 
 import com.raven.app.core.model.SiteException
+import java.net.URLDecoder
+import java.net.URLEncoder
 
 enum class DualMergeStrategy {
     /** Pick item with higher numeric ID first (newest feed merge). */
@@ -15,23 +17,40 @@ data class DualCursor(
     val indexA: Int = 0,
     val pageB: Int = 1,
     val indexB: Int = 0,
+    val nextStream: Int = 0,
+    val emittedIds: Set<String> = emptySet(),
 ) {
-    fun encode(): String = "$pageA,$indexA,$pageB,$indexB"
+    fun encode(): String {
+        val positions = "$pageA,$indexA,$pageB,$indexB"
+        if (emittedIds.isEmpty() && nextStream == 0) return positions
+        val history = emittedIds.joinToString("|") { URLEncoder.encode(it, "UTF-8") }
+        return "$positions;$nextStream;$history"
+    }
 
     companion object {
         private const val MAX_SLOT_VALUE = 1_000_000
 
         fun parse(raw: String?): DualCursor {
             if (raw.isNullOrBlank()) return DualCursor()
-            val parts = raw.trim().split(',')
-            if (parts.size != 4) {
+            val fields = raw.trim().split(';', limit = 3)
+            val parts = fields.first().split(',')
+            if (parts.size != 4 || fields.size == 2) {
                 throw SiteException.ParseError("Invalid dual-language cursor format: '$raw'")
             }
             val nums = parts.map { token ->
                 token.trim().toIntOrNull()?.takeIf { it in 0..MAX_SLOT_VALUE }
                     ?: throw SiteException.ParseError("Invalid dual-language cursor value in '$raw'")
             }
-            return DualCursor(nums[0], nums[1], nums[2], nums[3])
+            val positions = DualCursor(nums[0], nums[1], nums[2], nums[3])
+            if (fields.size == 1) return positions
+            val nextStream = fields[1].toIntOrNull()?.takeIf { it in 0..1 }
+                ?: throw SiteException.ParseError("Invalid dual-language stream index")
+            val history = try {
+                fields[2].split('|').mapTo(mutableSetOf()) { URLDecoder.decode(it, "UTF-8") }
+            } catch (ex: IllegalArgumentException) {
+                throw SiteException.ParseError("Invalid dual-language item ID")
+            }
+            return positions.copy(nextStream = nextStream, emittedIds = history)
         }
     }
 }
@@ -103,8 +122,8 @@ object DualLanguageMerger {
         }
 
         val merged = mutableListOf<T>()
-        val seenIds = HashSet<String>(pageSize * 2)
-        var turn = 0
+        val seenIds = initial.emittedIds.toMutableSet()
+        var turn = initial.nextStream
 
         while (merged.size < pageSize) {
             val headA = peek(0)
@@ -129,9 +148,24 @@ object DualLanguageMerger {
             }
         }
 
-        val hasMore = peek(0) != null || peek(1) != null
+        // Advance both cursors past duplicates before splitting the output page.
+        // In numeric order, all copies of the last emitted ID are adjacent.
+        for (stream in 0..1) {
+            while (true) {
+                val head = peek(stream) ?: break
+                if (idOf(head) !in seenIds) break
+                indices[stream]++
+            }
+        }
+        val hasMore = pages.any { it > 0 }
         val nextCursor = if (hasMore) {
-            DualCursor(pages[0], indices[0], pages[1], indices[1]).encode()
+            val positions = DualCursor(pages[0], indices[0], pages[1], indices[1])
+            if (strategy == DualMergeStrategy.INTERLEAVED) {
+                // Popularity ordering can place the same ID arbitrarily far apart.
+                positions.copy(nextStream = turn % 2, emittedIds = seenIds).encode()
+            } else {
+                positions.encode()
+            }
         } else {
             null
         }

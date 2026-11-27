@@ -2,6 +2,7 @@ package com.raven.app.feature.browse
 
 import com.raven.app.core.model.DirectoryEntry
 import com.raven.app.core.model.FeedRequest
+import com.raven.app.core.model.FeedSort
 import com.raven.app.core.model.MediaItem
 import com.raven.app.core.model.RavenRoute
 import com.raven.app.core.model.SearchScope
@@ -90,6 +91,9 @@ interface BrowseNavigator {
 
 /**
  * Converts a plugin [FeedRequest] into a Type-Safe [RavenRoute.SiteFeed].
+ *
+ * Carries the request's sort, starting page, media kind and include-tag set so share-link feeds
+ * (e.g. an Iwara gallery search) land on the requested list instead of page 1 of the default feed.
  */
 fun FeedRequest.toSiteFeedRoute(title: String? = null): RavenRoute.SiteFeed = RavenRoute.SiteFeed(
     siteId = siteId.value,
@@ -98,6 +102,10 @@ fun FeedRequest.toSiteFeedRoute(title: String? = null): RavenRoute.SiteFeed = Ra
     query = query,
     scope = scope.name,
     title = title,
+    sort = sort.takeUnless { it == FeedSort.DEFAULT }?.name,
+    page = page.takeIf { it > 1 },
+    mediaKind = mediaKind?.name,
+    includeTags = advancedFilters.includeTags.distinct(),
 )
 
 /**

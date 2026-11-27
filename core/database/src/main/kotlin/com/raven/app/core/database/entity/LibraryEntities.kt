@@ -75,6 +75,7 @@ data class ShelfItemEntity(
     @ColumnInfo(name = "completed") val completed: Boolean,
     @ColumnInfo(name = "duration_seconds") val durationSeconds: Int?,
     @ColumnInfo(name = "page_count") val pageCount: Int?,
+    @ColumnInfo(name = "completion_changed_at") val completionChangedAt: Long? = null,
 )
 
 @Entity(

@@ -786,7 +786,7 @@ internal fun ExploreVideoGrid(
         }
     }
 
-    LaunchedEffect(gridState, hasMore, isLoadingMore, items.size) {
+    LaunchedEffect(gridState, hasMore, isLoadingMore, paginationError, items.size) {
         snapshotFlow {
             val total = gridState.layoutInfo.totalItemsCount
             val lastVisible = gridState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0
@@ -795,7 +795,8 @@ internal fun ExploreVideoGrid(
             .distinctUntilChanged()
             .filter { it }
             .collect {
-                if (hasMore && !isLoadingMore) onLoadNextPage()
+                // Skip automatic retries while a pagination error is visible; the footer owns retry.
+                if (hasMore && !isLoadingMore && paginationError == null) onLoadNextPage()
             }
     }
 
@@ -803,13 +804,17 @@ internal fun ExploreVideoGrid(
         val currentItems by rememberUpdatedState(items)
         val currentPageNum by rememberUpdatedState(currentPage)
         LaunchedEffect(gridState) {
-            snapshotFlow { gridState.firstVisibleItemIndex }
+            // Resolve the anchor via the visible item key: the grid prepends a footer and the
+            // saved index would otherwise drift whenever chrome rows appear.
+            snapshotFlow {
+                gridState.layoutInfo.visibleItemsInfo
+                    .firstNotNullOfOrNull { info -> (info.key as? String)?.takeIf { it.isNotEmpty() } }
+            }
                 .distinctUntilChanged()
-                .collect { index ->
-                    val anchor = currentItems.getOrNull(index)
-                    if (anchor != null && index > 0) {
-                        onSaveBrowsePosition(anchor.id, currentPageNum)
-                    }
+                .collect { itemKey ->
+                    if (itemKey == null) return@collect
+                    val anchor = currentItems.firstOrNull { it.compositeKey == itemKey } ?: return@collect
+                    onSaveBrowsePosition(anchor.id, currentPageNum)
                 }
         }
     }
@@ -903,7 +908,7 @@ internal fun ExploreGalleryGrid(
         }
     }
 
-    LaunchedEffect(gridState, hasMore, isLoadingMore, items.size) {
+    LaunchedEffect(gridState, hasMore, isLoadingMore, paginationError, items.size) {
         snapshotFlow {
             val total = gridState.layoutInfo.totalItemsCount
             val lastVisible = gridState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0
@@ -912,7 +917,7 @@ internal fun ExploreGalleryGrid(
             .distinctUntilChanged()
             .filter { it }
             .collect {
-                if (hasMore && !isLoadingMore) onLoadNextPage()
+                if (hasMore && !isLoadingMore && paginationError == null) onLoadNextPage()
             }
     }
 
@@ -920,13 +925,15 @@ internal fun ExploreGalleryGrid(
         val currentItems by rememberUpdatedState(items)
         val currentPageNum by rememberUpdatedState(currentPage)
         LaunchedEffect(gridState) {
-            snapshotFlow { gridState.firstVisibleItemIndex }
+            snapshotFlow {
+                gridState.layoutInfo.visibleItemsInfo
+                    .firstNotNullOfOrNull { info -> (info.key as? String)?.takeIf { it.isNotEmpty() } }
+            }
                 .distinctUntilChanged()
-                .collect { index ->
-                    val anchor = currentItems.getOrNull(index)
-                    if (anchor != null && index > 0) {
-                        onSaveBrowsePosition(anchor.id, currentPageNum)
-                    }
+                .collect { itemKey ->
+                    if (itemKey == null) return@collect
+                    val anchor = currentItems.firstOrNull { it.compositeKey == itemKey } ?: return@collect
+                    onSaveBrowsePosition(anchor.id, currentPageNum)
                 }
         }
     }

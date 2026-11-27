@@ -69,6 +69,9 @@ class DeletionGenerationGuard {
 
     fun currentGeneration(id: String): Long = generations[id] ?: 0L
 
+    /** Immutable snapshot of per-id generations, so a long scan can detect deletes started after it. */
+    fun snapshotGenerations(): Map<String, Long> = generations.toMap()
+
     fun isRemoving(id: String): Boolean = inFlightRemovals.containsKey(id)
 
     fun removalDeferred(id: String): CompletableDeferred<Unit>? = inFlightRemovals[id]
@@ -358,6 +361,23 @@ class VideoDownloadEngine(
         }
     }
 
+    suspend fun pauseAllAndWait() = withContext(dispatchers.main) {
+        manager.pauseDownloads()
+    }
+
+    suspend fun awaitWriteQuiescence(timeoutMs: Long = 5_000L) = withContext(dispatchers.io) {
+        val start = clockMs()
+        while (clockMs() - start < timeoutMs) {
+            val active = runCatching { manager.currentDownloads }.getOrNull().orEmpty().any { dl ->
+                dl.state == Download.STATE_DOWNLOADING ||
+                    dl.state == Download.STATE_QUEUED ||
+                    dl.state == Download.STATE_RESTARTING
+            }
+            if (!active) break
+            kotlinx.coroutines.delay(100)
+        }
+    }
+
     fun resumeAll() {
         storageRootManager.checkDownloadsAllowed()
         applicationScope.launch(dispatchers.main) {
@@ -483,14 +503,24 @@ class VideoDownloadEngine(
         storageRootManager.checkDownloadsAllowed()
         val generation = generationGuard.currentGeneration(id)
         refreshJobs[id]?.join()
-        val current = manager.downloadIndex.getDownload(id)
-        if (current?.state != Download.STATE_FAILED || id in submittedIds || generationGuard.isRemoving(id)) {
+        val current = runCatching { manager.downloadIndex.getDownload(id) }.getOrNull()
+        if (id in submittedIds || generationGuard.isRemoving(id)) {
             return@withContext false
         }
-        val meta = decodeMeta(current) ?: error("无法读取视频下载元数据")
+        val retryable = current == null ||
+            current.state == Download.STATE_FAILED ||
+            current.state == Download.STATE_COMPLETED
+        if (!retryable) {
+            return@withContext false
+        }
+        val meta = (current?.let(::decodeMeta) ?: recoverMetaFromDiskOrDb(id))
+            ?: error("无法读取视频下载元数据")
+        if (current != null && current.state == Download.STATE_COMPLETED) {
+            runCatching { manager.removeDownload(id) }
+        }
         val freshStream = refreshStream(meta) ?: error("原清晰度 ${meta.quality} 暂不可用")
-        val recheck = manager.downloadIndex.getDownload(id)?.state
-        if (recheck != Download.STATE_FAILED || id in submittedIds || generationGuard.isStale(id, generation)) {
+        val recheckState = runCatching { manager.downloadIndex.getDownload(id)?.state }.getOrNull()
+        if (recheckState != null && recheckState != Download.STATE_FAILED && recheckState != Download.STATE_COMPLETED || id in submittedIds || generationGuard.isStale(id, generation)) {
             return@withContext false
         }
         refreshedOnce.remove(id)
@@ -498,6 +528,40 @@ class VideoDownloadEngine(
             enqueueInternal(meta, freshStream, expectedGeneration = generation)
         }
         true
+    }
+
+    private suspend fun recoverMetaFromDiskOrDb(id: String): VideoDownloadMeta? {
+        val parts = id.split(':')
+        if (parts.size < 3) return null
+        val siteId = runCatching { SiteId.of(parts.first()) }.getOrNull() ?: return null
+        val quality = parts.last()
+        val mediaId = parts.subList(1, parts.size - 1).joinToString(":")
+        for (layout in storageRootManager.readableLayouts()) {
+            val record = storageRootManager.readSidecar(
+                storageRootManager.videoSidecarFile(siteId, mediaId, quality, layout),
+            ) ?: continue
+            return VideoDownloadMeta(
+                siteId = record.siteId,
+                mediaId = record.mediaId,
+                title = record.title,
+                url = record.url,
+                coverUrl = record.coverUrl,
+                durationSeconds = record.durationSeconds,
+                quality = record.quality.ifBlank { quality },
+                headers = emptyMap(),
+            )
+        }
+        val dbItem = runCatching { downloadStateRepository.getById(id) }.getOrNull() ?: return null
+        return VideoDownloadMeta(
+            siteId = dbItem.siteId,
+            mediaId = dbItem.mediaId,
+            title = dbItem.title,
+            url = dbItem.url,
+            coverUrl = dbItem.coverUrl,
+            durationSeconds = null,
+            quality = dbItem.quality.orEmpty().ifBlank { quality },
+            headers = emptyMap(),
+        )
     }
 
     fun remove(id: String) {

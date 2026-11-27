@@ -144,6 +144,10 @@ class IwaraSitePlugin(
         override fun decorateRequestHeaders(request: SiteHttpRequest, host: String): Map<String, String> {
             val normalizedHost = host.trim().lowercase()
             if (request.authEpoch != null && request.authEpoch != sessionStore.authEpoch(SiteId.IWARA)) {
+                // Typed cancellation. When this runs inside an OkHttp interceptor, the shared
+                // SiteRequestHeaderInterceptor converts it into SiteAuthCancelledException (an
+                // IOException) so the call fails locally instead of escaping as an unchecked throw;
+                // :core:network maps it back to SiteException.Cancelled at the adapter boundary.
                 throw SiteException.Cancelled("Iwara 会话已切换", siteId = SiteId.IWARA)
             }
             val headers = LinkedHashMap<String, String>()

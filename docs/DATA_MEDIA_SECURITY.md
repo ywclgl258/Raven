@@ -26,10 +26,10 @@ flowchart LR
 
 ## 1. 数据持久化层（`:core:database`）
 
-### 1.1 `RavenDatabase` 与全部 20 张表结构
+### 1.1 `RavenDatabase` 与全部 21 张表结构
 
 - **实现路径**：`core/database/src/main/kotlin/com/raven/app/core/database/RavenDatabase.kt`
-- **关键配置**：`DATABASE_NAME = "raven.db"`、`SCHEMA_VERSION = 3`、`exportSchema = true`、`@TypeConverters(RavenTypeConverters::class)`；构建时显式挂载 `MIGRATION_1_2` 与 `MIGRATION_2_3`。
+- **关键配置**：`DATABASE_NAME = "raven.db"`、`SCHEMA_VERSION = 5`、`exportSchema = true`、`@TypeConverters(RavenTypeConverters::class)`；`build()` 注册从 v1 到 v5 的逐版迁移。
 - **建库种子回调**：`watchLaterSeedCallback` 在 `onCreate` 时通过 `INSERT OR IGNORE` 预置内置系统片单 `id = "watch-later"`（`Shelf.WATCH_LATER_ID`，名称 `"稍后看"`，`is_system = 1`）。该片单受业务层保护，禁止重命名或删除。
 
 | # | 表名 (`tableName`) | Entity 类 | 主键 (PK) | 外键 (FK) | 索引 (Indices) | 容量上限 / 语义备注 |
@@ -54,6 +54,7 @@ flowchart LR
 | 18 | `browse_positions` | `BrowsePositionEntity` | `position_key` | 无 | `(updated_at DESC)` | 全局上限 **32** 条，跨进程恢复列表浏览锚点 |
 | 19 | `tag_translations` | `TagTranslationEntity` | `(source, namespace, raw_slug)` | 无 | `(raw_slug)`, `(chinese_name)`, `(source)` | 中文标签词典；由 `MIGRATION_1_2` 引入 |
 | 20 | `media_tag_cache` | `MediaTagCacheEntity` | `(site_id, media_id)` | 无 | `(updated_at DESC)` | 作品标签缓存，用于本地过滤与屏蔽；由 `MIGRATION_1_2` 引入 |
+| 21 | `media_likes` | `MediaLikeEntity` | `(site_id, media_id)` | 无 | `(liked_at DESC)` | 点赞作品与时间 |
 
 ### 1.2 13 个 Domain Repository 与 Koin 装配
 
@@ -123,22 +124,22 @@ flowchart LR
 | D1 | `site_language_<siteId>` | `String`（动态前缀） | 键缺失 = `ALL` | 是（经 `siteLanguages` 字段） | 按站点语言偏好；设为 `ALL` 时移除该键 |
 | D2 | `site_explore_filter_<siteId>` | `String`（JSON，动态前缀） | 键缺失 = 空筛选 | 否 | 按站点保存 `ExploreFilterState`；为空时移除 |
 
-### 1.4 当前 Schema v3 与迁移链
+### 1.4 当前 Schema v5 与迁移链
 
-迁移直接定义在 `RavenDatabase.kt` 的 `companion object`，并由 `RavenDatabase.build()` 通过 `.addMigrations(MIGRATION_1_2, MIGRATION_2_3)` 挂载。生产构建未使用 `fallbackToDestructiveMigration()`。
+`RavenDatabase.build()` 为每个受支持的旧版本注册显式迁移。各版导出的表结构位于 `core/database/schemas/com.raven.app.core.database.RavenDatabase/`。
 
-| 迁移 | 当前实现 | 验证源码 |
-|---|---|---|
-| `MIGRATION_1_2` | 新建 `tag_translations`（含 `raw_slug` / `chinese_name` / `source` 索引）与 `media_tag_cache`（含 `updated_at DESC` 索引） | `RavenDatabaseMigrationTest.migrate1To3PreservesDataAndCreatesExpectedIndices` 覆盖 `1 -> 2 -> 3` 链 |
-| `MIGRATION_2_3` | 新建 `shelf_items(site_id, media_id)` 与 `update_inbox(site_id ASC, discovered_at DESC)` 索引 | `migrate1To3PreservesDataAndCreatesExpectedIndices` 与 `migrate2To3ValidatesNewIndices` |
-
-仓库已导出 `core/database/schemas/com.raven.app.core.database.RavenDatabase/1.json`、`2.json`、`3.json`。上述 androidTest 共 2 处 `@Test`；这里只描述测试源码覆盖点，不声称本轮已执行。
+| 迁移 | 数据变化 |
+|---|---|
+| 1 → 2 | 创建标签译名、作品标签缓存及索引。 |
+| 2 → 3 | 为片单条目和订阅更新增加查询索引。 |
+| 3 → 4 | 创建 `media_likes` 并按点赞时间建立索引。 |
+| 4 → 5 | 为 `shelf_items` 增加可空的 `completion_changed_at`。旧条目继续根据原完成标志和观看、阅读历史判断。手动标记后，该条目按用户的选择显示。 |
 
 后续表结构变更必须延续显式迁移，不得回退到破坏性重建：
 
-1. 修改 Entity/DAO，并将 `SCHEMA_VERSION` 从当前 `3` 递增到下一版本；新增表还需加入 `@Database(entities = [...])`、DAO 声明与 Koin 注册。
+1. 修改 Entity/DAO，并将 `SCHEMA_VERSION` 递增到下一版本；新增表还需加入 `@Database(entities = [...])`、DAO 声明与 Koin 注册。
 2. 在 `RavenDatabase.kt` 编写下一段确定性 `Migration`，并加入 `build()` 的 `addMigrations(...)`；补齐必要索引与旧行默认值。
-3. 执行 `./gradlew :core:database:kspDebugKotlin` 导出新 Schema JSON，与 `3.json` diff 核对表、列、主键、外键和索引。
+3. 执行 `./gradlew :core:database:kspDebugKotlin` 导出新 Schema JSON，与前一版 JSON 对比并核对表、列、主键、外键和索引。
 4. 在 `core/database/src/androidTest/.../RavenDatabaseMigrationTest.kt` 增加从旧版本到最新版本的 `MigrationTestHelper` 验证；在设备/模拟器上运行 `:core:database:connectedDebugAndroidTest` 后以实际报告为准。
 
 ---
@@ -545,14 +546,25 @@ stateDiagram-v2
 ### 6.5 应用内更新与签名链路核验（`RavenUpdater` & `AndroidApkSignatureVerifier`）
 
 - **实现路径**：`feature/settings/src/main/kotlin/com/raven/app/feature/settings/RavenUpdater.kt`、`SettingsFeatureModule.kt`
-- **网络复用与隔离**：在 `settingsFeatureModule` 中装配，`/releases/latest` 元数据请求复用 `NetworkQualifiers.API`，APK 流式下载复用 `NetworkQualifiers.IMAGE`（无总超时 + 30s 读卡死超时）。因 `api.github.com` 不是已注册站点域名，`SiteCookieJar` **绝不会外泄任何站点 Cookie 或 Token**。
+- 更新检查、WebDAV 和词典同步使用独立的外部请求客户端，与站点请求共享连接池。外部客户端不装配站点 CookieJar、账号拦截器或站点响应缓存。更新清单限制为解压后 1 MiB，APK 下载使用 30 秒读取超时。
 - **端到端校验与安装流水线**：
   1. **防误触与节流**：Debug 构建直接返回 `UpdateCheckOutcome.DebugBuildSkipped`；自动检查执行 **12 小时节流**（`AUTO_CHECK_INTERVAL_MS`），状态通过临时文件原子重命名持久到 `cacheDir/updates/updater-state.json`。
   2. **版本与 ABI 选包**：`isRemoteVersionNewer()` 按语义化版本比较（同版本号正式版 > 预发布版）；`selectReleaseAsset()` 剔除 `debug` 与非 `.apk` 资产，按设备 `Build.SUPPORTED_ABIS` 优先级与旧签名 `-compat` 兼容标识（`needsCompatibilityPackage()`）选择最匹配资产。
   3. **字节与 SHA-256 校验**：流式下载到 `cacheDir/updates/apk/<releaseId>-<assetId>/download-*.apk`，边读边校验累计字节数（超过 Release 声明的 `sizeBytes` 立即抛出 `UpdateVerificationException` 中止），完成后核对精确长度与 GitHub Asset `digest`（`sha256:...`）。
   4. **安装包签名谱系核验（`AndroidApkSignatureVerifier.verify`）**：
      - 校验候选 APK `packageName == appInfo.packageName`。
-     - 校验版本号单调非降级：`candidateVersionCode >= appInfo.versionCode`（防止降级攻击）。
+     - 校验 `candidateVersionCode > appInfo.versionCode`，并要求包内版本名与发布标签（去掉开头的 `v`）一致。缓存命中也执行这两项检查。
      - **API 28+（Android 9+）**：要求当前已安装应用的所有活跃签名者（`installed.signingInfo.apkContentsSigners`）**全部**出现在候选 APK 的 `signingCertificateHistory + apkContentsSigners` 中，既防伪造包又合法支持 APK Signature Scheme v3 证书轮换。
      - **API 24–27**：要求候选 APK 与当前已安装应用的签名 SHA-256 列表完全一致。
   5. **原子发布与安装拉起**：验签全部通过后才原子重命名为 `<sha256>.apk` 并清理历史缓存 APK；交由 `RavenUpdateInstaller` 检查 Android 8+ 未知来源安装权限（`canRequestPackageInstalls()`），再通过 `FileProvider`（`${applicationId}.fileprovider`）生成 `FLAG_GRANT_READ_URI_PERMISSION` 只读 URI 拉起系统安装器。
+
+### 6.6 更新渠道发布闸门（`deploy/update-server/publish.py`）
+
+- **权威校验，无自实现密码学**：发布入口不包含任何手工 PKCS#7 / APK Signing Block / AXML 解析，全部委托 Android SDK 官方工具：
+  - `aapt2 dump badging` 读取真实包名、`versionCode`、`versionName`、`split` 与 `minSdkVersion`；
+  - `apksigner verify --verbose --print-certs` 跑两次：默认范围（v2/v3）与 `--min-sdk-version 23 --max-sdk-version 23`（强制 v1）。因为默认范围在存在 v2/v3 时会跳过 JAR 校验，而 API 24–27 设备仍依赖 v1 才能安装。
+  - 工具发现顺序：`--apksigner/--aapt2` → `RAVEN_APKSIGNER`/`RAVEN_AAPT2` → `ANDROID_BUILD_TOOLS`/`ANDROID_HOME`/`ANDROID_SDK_ROOT` → 仓库 `local.properties` 的 `sdk.dir` → `PATH`。任一缺失或 `java` 不可用即 **fail-closed** 拒发。
+- **入口拒绝项（均在写 web 根之前判定）**：普通 ZIP、Debug 包（`com.raven.app.debug`）、包名/`versionCode`/`versionName` 与 `release.properties` 不符、`minSdkVersion > 24`、拆分 APK、证书指纹 ≠ `releaseCertificate`、v1/v2/v3 任一未通过、多签名者/多证书。
+- **发布顺序与原子性**：`flock` → 落资产并 fsync → 原子改名资产 → 写保留账本 → 原子改名清单 → 清理超窗资产。清单是客户端唯一读取的指针，始终最后替换；注入清单写入失败时旧清单与其资产仍然可下载（`tests/test_publish.py` 覆盖）。同版本号不同字节重发被拒（资产按 `Cache-Control: immutable` 分发），同字节重发幂等跳过；`versionCode` 必须严格递增、`versionName` 不得回退、新码同名拒发。
+- **保留窗口**：`--keep-previous`（默认 2）保留历史资产，已取旧清单的客户端仍可下载；更旧的资产在成功换代后清理。
+- **操作手册与自测**：见 [deploy/update-server/README.md](../deploy/update-server/README.md)；`python -m unittest discover -s deploy/update-server/tests` 用已产出的正式/调试 APK 跑官方工具，覆盖正例、ZIP、Debug、版本不符、异证书、篡改包与缺工具兜底。

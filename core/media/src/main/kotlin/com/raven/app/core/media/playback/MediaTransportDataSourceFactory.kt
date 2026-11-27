@@ -45,9 +45,11 @@ class MediaTransportDataSourceFactory(
             runCatching { registry.get(SiteId.of(raw)) }.getOrNull()?.let { return it }
         }
         val host = runCatching {
-            Uri.parse(url)?.host?.takeIf { it.isNotBlank() }
-                ?: java.net.URI(url).host.orEmpty()
-        }.getOrDefault("")
+            // `java.net.URI` first: media URL routing is exercised by JVM unit tests, where
+            // android.net.Uri has no functional host parser.
+            java.net.URI(url).host?.takeIf { it.isNotBlank() }
+                ?: Uri.parse(url)?.host?.takeIf { it.isNotBlank() }
+        }.getOrNull().orEmpty()
         return if (host.isNotBlank()) registry.findForMediaHost(host) else null
     }
 

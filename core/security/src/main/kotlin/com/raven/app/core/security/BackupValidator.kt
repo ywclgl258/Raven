@@ -227,6 +227,9 @@ class BackupValidator(
             checkRule(mark.scrollOffsetPx in -MAX_SCROLL_OFFSET..MAX_SCROLL_OFFSET) { "书签滚动偏移超出范围" }
             checkRule(mark.note.length <= MAX_NOTE_LENGTH) { "书签备注过长" }
             validateSiteUrl(mark.url, mark.siteId, allowBlank = true, allowRelative = true)
+            // Portable backups never carry device paths. Local comics can hold a file://
+            // thumbnail, which export strips (BackupDataRepository.portableSnapshot); a payload
+            // that still contains one is a broken package and must be rejected.
             validateOptionalHttpsOrLocalImageUrl(mark.coverUrl, mark.siteId)
         }
 
@@ -317,10 +320,13 @@ class BackupValidator(
             checkRule(term.term.length in 1..MAX_ID_LENGTH) { "屏蔽词长度无效" }
         }
 
-        // 13. Search history
+        // 13. Search history (cross-site searches are recorded under SiteId.GLOBAL "*", exactly
+        // like global blocked terms; every other record type stays restricted to real sites)
         val historyBySite = HashMap<SiteId, Int>()
         for (entry in payload.searchHistory) {
-            validateSite(entry.siteId)
+            if (!entry.siteId.isGlobal) {
+                validateSite(entry.siteId)
+            }
             val count = (historyBySite[entry.siteId] ?: 0) + 1
             checkRule(count <= MAX_SEARCH_HISTORY_PER_SITE) { "站点 ${entry.siteId.value} 搜索历史超过上限 ($MAX_SEARCH_HISTORY_PER_SITE)" }
             historyBySite[entry.siteId] = count
@@ -477,20 +483,21 @@ class BackupValidator(
 
         const val MAX_HISTORY_PER_SITE: Int = 500
         const val MAX_FAVORITES_PER_SITE: Int = 50_000
-        const val MAX_SHELVES: Int = 1_000
-        const val MAX_ITEMS_PER_SHELF: Int = 50_000
-        const val MAX_SMART_SHELVES: Int = 1_000
-        const val MAX_PAGE_BOOKMARKS: Int = 50_000
-        const val MAX_TIME_BOOKMARKS: Int = 5_000
-        const val MAX_IMAGE_FAVORITES: Int = 20_000
+        // Canonical bounds live in `RavenBackupPayload` so the merger and the validator cannot drift.
+        const val MAX_SHELVES: Int = RavenBackupPayload.MAX_SHELVES
+        const val MAX_ITEMS_PER_SHELF: Int = RavenBackupPayload.MAX_ITEMS_PER_SHELF
+        const val MAX_SMART_SHELVES: Int = RavenBackupPayload.MAX_SMART_SHELVES
+        const val MAX_PAGE_BOOKMARKS: Int = RavenBackupPayload.MAX_PAGE_BOOKMARKS
+        const val MAX_TIME_BOOKMARKS: Int = RavenBackupPayload.MAX_TIME_BOOKMARKS
+        const val MAX_IMAGE_FAVORITES: Int = RavenBackupPayload.MAX_IMAGE_FAVORITES
         const val MAX_SUBSCRIPTIONS_PER_SITE: Int = 5_000
-        const val MAX_SAVED_SEARCHES: Int = 1_000
-        const val MAX_INBOX_ITEMS: Int = 10_000
+        const val MAX_SAVED_SEARCHES: Int = RavenBackupPayload.MAX_SAVED_SEARCHES
+        const val MAX_INBOX_ITEMS: Int = RavenBackupPayload.MAX_INBOX_ITEMS
         const val MAX_BLOCKED_PER_SITE: Int = 10_000
-        const val MAX_SEARCH_HISTORY_PER_SITE: Int = 30
-        const val MAX_CUSTOM_TAG_TRANSLATIONS: Int = 50_000
-        const val MAX_NAMESPACE_LENGTH: Int = 64
-        const val MAX_TAG_LENGTH: Int = 200
+        const val MAX_SEARCH_HISTORY_PER_SITE: Int = RavenBackupPayload.MAX_SEARCH_HISTORY_PER_SITE
+        const val MAX_CUSTOM_TAG_TRANSLATIONS: Int = RavenBackupPayload.MAX_CUSTOM_TAG_TRANSLATIONS
+        const val MAX_NAMESPACE_LENGTH: Int = RavenBackupPayload.MAX_TAG_NAMESPACE_LENGTH
+        const val MAX_TAG_LENGTH: Int = RavenBackupPayload.MAX_TAG_CHINESE_NAME_LENGTH
 
         val LOCAL_SHA256_REGEX: Regex = Regex("^[a-f0-9]{64}$")
         val LOCAL_ITEM_URI_REGEX: Regex = Regex("^(ravenlocal|r34local)://[a-f0-9]{64}$")

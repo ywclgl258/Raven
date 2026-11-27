@@ -37,7 +37,7 @@ class GalleryRetryWakeupWorker(
     companion object {
         private const val UNIQUE_WORK_NAME: String = "raven-gallery-retry-wakeup"
 
-        fun schedule(context: Context, delayMs: Long) {
+        fun schedule(context: Context, taskId: String, delayMs: Long) {
             val constraints = Constraints.Builder()
                 .setRequiredNetworkType(NetworkType.CONNECTED)
                 .build()
@@ -46,7 +46,7 @@ class GalleryRetryWakeupWorker(
                 .setConstraints(constraints)
                 .build()
             WorkManager.getInstance(context.applicationContext)
-                .enqueueUniqueWork(UNIQUE_WORK_NAME, ExistingWorkPolicy.REPLACE, request)
+                .enqueueUniqueWork("$UNIQUE_WORK_NAME:$taskId", ExistingWorkPolicy.REPLACE, request)
         }
     }
 }

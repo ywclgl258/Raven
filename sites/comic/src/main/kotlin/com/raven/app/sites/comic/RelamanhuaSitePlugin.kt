@@ -172,7 +172,13 @@ class RelamanhuaSitePlugin(
         }
 
         override fun decorateRequestHeaders(request: SiteHttpRequest, host: String): Map<String, String> {
-            if (!descriptor.matchesRequestHost(host)) return emptyMap()
+            // Token confinement: only the pinned HotManga API hosts ever receive the bearer token.
+            // Image CDNs, web mirrors and any other host stay credential-free.
+            val normalized = host.trim().lowercase()
+            val isCredentialHost = CopyHotApiSupport.HOTMANGA_API_HOSTS.any {
+                it.equals(normalized, ignoreCase = true)
+            }
+            if (!isCredentialHost) return emptyMap()
             val token = sessionStore?.getBearerToken(SiteId.RELAMANHUA)?.takeIf { it.isNotBlank() }
                 ?: return emptyMap()
             return mapOf("Authorization" to "Token $token")
@@ -537,10 +543,14 @@ class RelamanhuaSitePlugin(
         val collected = LinkedHashMap<String, CopyHotApiSupport.ChapterEntry>()
         var succeededGroups = 0
         var firstError: Throwable? = null
+        // A group that stopped on a failure (rather than reaching its last page) leaves only a
+        // partial prefix; that must never be cached or reported as the complete chapter list.
+        var paginationTruncated = false
 
         for ((groupPath, groupName) in groupPairs) {
             var offset = 0
             var groupSucceeded = false
+            var groupComplete = false
             var pageCount = 0
             while (pageCount < MAX_CHAPTER_PAGES) {
                 pageCount++
@@ -560,7 +570,10 @@ class RelamanhuaSitePlugin(
                 }
                 groupSucceeded = true
                 val list = results.safeArray("list").orEmpty()
-                if (list.isEmpty()) break
+                if (list.isEmpty()) {
+                    groupComplete = true
+                    break
+                }
                 list.forEach { element ->
                     val chapter = element as? JsonObject ?: return@forEach
                     val uuid = chapter.safeString("uuid").takeIf { it.isNotBlank() } ?: return@forEach
@@ -577,14 +590,24 @@ class RelamanhuaSitePlugin(
                 }
                 val total = results.safeInt("total") ?: list.size
                 offset += list.size
-                if (offset >= total || list.size < CHAPTER_PAGE_SIZE) break
+                if (offset >= total || list.size < CHAPTER_PAGE_SIZE) {
+                    groupComplete = true
+                    break
+                }
             }
             if (groupSucceeded) succeededGroups += 1
+            if (!groupComplete) paginationTruncated = true
         }
         if (throwIfAllFailed && succeededGroups == 0 && firstError != null) {
             throw firstError
         }
         val chapters = collected.values.toList()
+        if (paginationTruncated) {
+            throw firstError ?: SiteException.ParseError(
+                message = "热辣漫画章节目录未能完整加载，请重试",
+                siteId = SiteId.RELAMANHUA,
+            )
+        }
         if (chapters.isNotEmpty()) {
             chapterListCache.put(pathWord, chapters)
         }

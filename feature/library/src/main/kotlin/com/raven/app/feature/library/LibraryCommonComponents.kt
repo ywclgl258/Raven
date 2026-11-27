@@ -272,11 +272,11 @@ internal fun LibraryTextInputField(
 @Composable
 internal fun LibraryFeedbackBanner(
     message: String,
+    modifier: Modifier = Modifier,
     tone: RavenStatusTone = RavenStatusTone.NEUTRAL,
     onDismiss: (() -> Unit)? = null,
     actionLabel: String? = null,
     onActionClick: (() -> Unit)? = null,
-    modifier: Modifier = Modifier,
 ) {
     val colors = LocalRavenColors.current
     val accent = when (tone) {
@@ -468,8 +468,8 @@ internal fun LibrarySelectionActionBar(
     onSelectAll: () -> Unit,
     onClearSelection: () -> Unit,
     onAddToShelf: () -> Unit,
-    onDeleteSelected: (() -> Unit)? = null,
     modifier: Modifier = Modifier,
+    onDeleteSelected: (() -> Unit)? = null,
 ) {
     val colors = LocalRavenColors.current
     Row(

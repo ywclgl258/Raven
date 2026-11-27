@@ -121,13 +121,16 @@ class MangacopySitePlugin(
             val salt = SecureRandom().nextInt(9999)
             val encodedPassword = CopyHotApiSupport.encodeLoginPassword(password, salt)
             val (device, pseudo) = CopyHotApiSupport.stableDeviceIdentity(sessionStore, SiteId.MANGACOPY)
+            // Credentials MUST only ever leave the device towards a pinned CopyManga API host.
+            // Hosts discovered at runtime via `/system/network2` are transport-only: they are never
+            // trusted with the account password or the issued token.
             val headers = CopyHotApiSupport.buildCopyAppHeaders(
                 version = appVersion,
                 device = device,
                 pseudoId = pseudo,
                 epochMillis = clockMs(),
             )
-            val host = currentCopyCandidates().first()
+            val host = credentialHosts().first()
             val response = try {
                 httpClient.postForm(
                     url = "https://$host/api/v3/login",
@@ -177,7 +180,7 @@ class MangacopySitePlugin(
             val token = sessionStore?.getBearerToken(SiteId.MANGACOPY)
             if (!token.isNullOrBlank()) {
                 runCatching {
-                    val host = currentCopyCandidates().first()
+                    val host = credentialHosts().first()
                     httpClient.postForm(
                         url = "https://$host/api/v3/logout",
                         fields = emptyMap(),
@@ -201,7 +204,10 @@ class MangacopySitePlugin(
         }
 
         override fun decorateRequestHeaders(request: SiteHttpRequest, host: String): Map<String, String> {
-            if (!descriptor.matchesRequestHost(host)) return emptyMap()
+            // Token confinement: only the pinned, statically known CopyManga API hosts may ever see
+            // the bearer token. Runtime-discovered hosts (network2), HotManga fallback hosts, image
+            // CDNs and the web mirrors all stay credential-free.
+            if (!isCredentialHost(host)) return emptyMap()
             val token = sessionStore?.getBearerToken(SiteId.MANGACOPY)?.takeIf { it.isNotBlank() }
                 ?: return emptyMap()
             return mapOf("Authorization" to "Token $token")
@@ -664,10 +670,14 @@ class MangacopySitePlugin(
         val collected = LinkedHashMap<String, CopyHotApiSupport.ChapterEntry>()
         var succeededGroups = 0
         var firstError: Throwable? = null
+        // True when a group stopped early because of a network/parse failure instead of reaching its
+        // last page. A partial prefix must never be presented (or cached) as the full chapter list.
+        var paginationTruncated = false
 
         for ((groupPath, groupName) in groupPairs) {
             var offset = 0
             var groupSucceeded = false
+            var groupComplete = false
             var pageCount = 0
             while (pageCount < MAX_CHAPTER_PAGES) {
                 pageCount++
@@ -688,7 +698,10 @@ class MangacopySitePlugin(
                 }
                 groupSucceeded = true
                 val list = results.safeArray("list").orEmpty()
-                if (list.isEmpty()) break
+                if (list.isEmpty()) {
+                    groupComplete = true
+                    break
+                }
                 list.forEach { element ->
                     val chapter = element as? JsonObject ?: return@forEach
                     val uuid = chapter.safeString("uuid").takeIf { it.isNotBlank() } ?: return@forEach
@@ -705,14 +718,26 @@ class MangacopySitePlugin(
                 }
                 val total = results.safeInt("total") ?: list.size
                 offset += list.size
-                if (offset >= total || list.size < CHAPTER_PAGE_SIZE) break
+                if (offset >= total || list.size < CHAPTER_PAGE_SIZE) {
+                    groupComplete = true
+                    break
+                }
             }
             if (groupSucceeded) succeededGroups += 1
+            if (!groupComplete) paginationTruncated = true
         }
         if (throwIfAllFailed && succeededGroups == 0 && firstError != null) {
             throw firstError
         }
         val chapters = collected.values.toList()
+        // Caching a truncated prefix would make the reader (and the 5-minute cache) treat the
+        // remainder as non-existent; report the failure instead so a retry re-fetches it.
+        if (paginationTruncated) {
+            throw firstError ?: SiteException.ParseError(
+                message = "拷贝漫画章节目录未能完整加载，请重试",
+                siteId = SiteId.MANGACOPY,
+            )
+        }
         if (chapters.isNotEmpty()) {
             chapterListCache.put(pathWord, chapters)
         }
@@ -879,10 +904,13 @@ class MangacopySitePlugin(
         }.take(MAX_COPY_HOST_ATTEMPTS)
 
         val token = sessionStore?.getBearerToken(SiteId.MANGACOPY)
-        val headers = buildCopyHeaders(token)
         var lastError: Throwable? = null
 
         for (host in ordered) {
+            // Token confinement: only pinned official API hosts receive `Authorization: Token …`.
+            // Runtime-discovered hosts still get the app signature headers (they need those), but
+            // never the account credential.
+            val headers = buildCopyHeaders(token.takeIf { isCredentialHost(host) })
             try {
                 val results = executeApiOnHost(
                     host = host,
@@ -1062,6 +1090,19 @@ class MangacopySitePlugin(
     private fun currentCopyCandidates(): List<String> = buildList {
         dynamicCopyHosts.forEach { if (it !in this) add(it) }
         CopyHotApiSupport.COPY_API_HOSTS.forEach { if (it !in this) add(it) }
+    }
+
+    /**
+     * Hosts allowed to receive account credentials (login password, logout, bearer token).
+     * Static allow-list only — runtime `network2` discoveries are transport candidates, not
+     * credential destinations.
+     */
+    private fun credentialHosts(): List<String> = CopyHotApiSupport.COPY_API_HOSTS
+
+    /** True when [host] is one of the pinned official CopyManga API hosts. */
+    private fun isCredentialHost(host: String): Boolean {
+        val normalized = host.trim().lowercase()
+        return CopyHotApiSupport.COPY_API_HOSTS.any { it.equals(normalized, ignoreCase = true) }
     }
 
     private fun buildCopyHeaders(token: String?): Map<String, String> {

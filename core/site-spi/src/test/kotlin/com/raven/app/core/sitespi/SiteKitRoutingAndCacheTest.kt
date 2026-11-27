@@ -32,7 +32,7 @@ class SiteKitRoutingAndCacheTest {
         )
         assertEquals(listOf("100", "95", "90"), page1.items)
         assertTrue(page1.hasMore)
-        assertEquals("1,2,1,1", page1.nextCursor)
+        assertEquals("1,2,1,2", page1.nextCursor)
 
         val page2 = DualLanguageMerger.merge(
             cursorRaw = page1.nextCursor,
@@ -42,9 +42,7 @@ class SiteKitRoutingAndCacheTest {
             fetchStreamA = { p -> streamA[p] ?: StreamSlice(emptyList(), false) },
             fetchStreamB = { p -> streamB[p] ?: StreamSlice(emptyList(), false) },
         )
-        // Note: "90" from streamB is next on page2 if page2 doesn't know page1's seen set,
-        // wait: streamA consumed "90" on page1, streamB still has "90" at index 1 in real API only if streams aren't disjoint.
-        // In nhentai streamB uses `-language:chinese` so streams are disjoint; test disjoint streams too!
+        assertEquals(listOf("100", "95", "90", "85", "80", "70"), page1.items + page2.items)
         assertFalse(page2.hasMore)
         assertNull(page2.nextCursor)
     }
@@ -62,6 +60,23 @@ class SiteKitRoutingAndCacheTest {
         assertEquals(listOf("zh1", "ja1", "zh2", "ja2"), page.items)
         assertFalse(page.hasMore)
         assertNull(page.nextCursor)
+    }
+
+    @Test
+    fun `interleaved one-item pages retain turn and skip a delayed duplicate`() = runTest {
+        val repeated = "a;b|c+%"
+        val items = mutableListOf<String>()
+        var cursor: String? = null
+        do {
+            val page = DualLanguageMerger.merge(
+                cursor, 1, DualMergeStrategy.INTERLEAVED, { it },
+                { StreamSlice(listOf(repeated, "c", "e"), false) },
+                { StreamSlice(listOf("b", "d", repeated), false) },
+            )
+            items += page.items.single()
+            cursor = page.nextCursor
+        } while (cursor != null)
+        assertEquals(listOf(repeated, "b", "c", "d", "e"), items)
     }
 
     @Test(expected = SiteException.ParseError::class)

@@ -352,7 +352,7 @@ class ShelfDetailViewModelTest {
             ),
         )
 
-        val vm = ShelfDetailViewModel(
+        fun openShelf() = ShelfDetailViewModel(
             target = ShelfDetailTarget.Custom(shelf.id),
             shelfRepository = harness.shelfRepository,
             historyRepository = harness.historyRepository,
@@ -362,6 +362,7 @@ class ShelfDetailViewModelTest {
             dispatchers = harness.dispatchers,
             clockMs = harness.clock,
         )
+        val vm = openShelf()
         vm.uiState.test {
             awaitItem()
             advanceUntilIdle()
@@ -372,6 +373,12 @@ class ShelfDetailViewModelTest {
             advanceUntilIdle()
             val afterUnmark = expectMostRecentItem().allEntries.single()
             assertFalse(afterUnmark.completed)
+            cancelAndIgnoreRemainingEvents()
+        }
+        openShelf().uiState.test {
+            awaitItem()
+            advanceUntilIdle()
+            assertFalse(expectMostRecentItem().allEntries.single().completed)
             cancelAndIgnoreRemainingEvents()
         }
     }

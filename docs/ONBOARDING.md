@@ -1,7 +1,7 @@
 # Raven（渡鸦）新开发者接手与日常开发指南 (`ONBOARDING.md`)
 
 > **适用读者**：首次接手、日常维护、评审 PR 或为 Raven 扩展新功能模块/页面的 Android 工程师  
-> **代码基准**：`d:\Raven` · Application ID `com.raven.app`（Debug：`com.raven.app.debug`）· 当前版本 `0.6.0` / `versionCode = 10`（见 `release.properties`）· 17 模块 Clean Architecture
+> **代码基准**：`d:\Raven` · Application ID `com.raven.app`（Debug：`com.raven.app.debug`）· 当前版本见 [release.properties](../release.properties)· 17 模块 Clean Architecture
 > **关联手册**：仓库与发布红线见 [AGENTS.md](../AGENTS.md) · 签名与发布指南见 [SIGNING.md](SIGNING.md) · 架构总览见 [ARCHITECTURE.md](ARCHITECTURE.md) · 站点插件见 [SITE_PLUGIN_GUIDE.md](SITE_PLUGIN_GUIDE.md) · 设计与 UI 见 [DESIGN_AND_UI_GUIDE.md](DESIGN_AND_UI_GUIDE.md) · 数据/媒体/安全见 [DATA_MEDIA_SECURITY.md](DATA_MEDIA_SECURITY.md)
 
 ---
@@ -160,7 +160,7 @@ flowchart TB
 | 3 | `:core:site-spi` | Pure JVM | `com.raven.app.core.sitespi` | — | `SitePlugin.kt`, `SiteCapabilities.kt`, `SiteRegistry.kt`, `SiteHttp.kt`, `SiteSessionStore.kt`, 9 个协议工具 (`Base62Packer`, `RouPngProtocol`, `CossoraAesProtocol`, `JmcomicStripMath` 等) | `.\gradlew.bat :core:site-spi:test --no-daemon` |
 | 4 | `:core:security` | Android Lib | `com.raven.app.core.security` | `coreSecurityModule` | `CoreSecurityModule.kt`, `SessionVault.kt`, `VaultCipher.kt`, `BackupCodec.kt`, `BackupValidator.kt`, `LegacyR34vBackupAdapter.kt` | `.\gradlew.bat :core:security:testDebugUnitTest --no-daemon` |
 | 5 | `:core:network` | Android Lib | `com.raven.app.core.network` | `coreNetworkModule` | `CoreNetworkModule.kt`, `RavenOkHttpPool.kt`, `SiteHttpClient.kt`, `HostPacer.kt`, `SiteCookieJar.kt`, `Ipv4FirstDns.kt`, `SystemProxySelector.kt`, `NetworkMonitor.kt`, `RavenImageLoaderFactory.kt` | `.\gradlew.bat :core:network:testDebugUnitTest --no-daemon` |
-| 6 | `:core:database` | Android Lib (KSP) | `com.raven.app.core.database` | `coreDatabaseModule` | `CoreDatabaseModule.kt`, `RavenDatabase.kt` (20 表 / Schema v3), `SettingsDataStore.kt` (37 固定 Key + 2 类动态站点 Key), `entity/*`, `dao/*`, `repository/*` (13 仓储) | `.\gradlew.bat :core:database:testDebugUnitTest --no-daemon` |
+| 6 | `:core:database` | Android Lib (KSP) | `com.raven.app.core.database` | `coreDatabaseModule` | `CoreDatabaseModule.kt`, `RavenDatabase.kt` (21 表 / Schema v5), `SettingsDataStore.kt` (37 固定 Key + 2 类动态站点 Key), `entity/*`, `dao/*`, `repository/*` (13 仓储) | `.\gradlew.bat :core:database:testDebugUnitTest --no-daemon` |
 | 7 | `:core:designsystem` | Android Lib (Compose) | `com.raven.app.core.designsystem` | — | `theme/RavenTheme.kt`, `RavenColors.kt`, `RavenTypography.kt`, `RavenShapes.kt`, `RavenMotion.kt`, `component/*` | `.\gradlew.bat :core:designsystem:testDebugUnitTest --no-daemon` |
 | 8 | `:core:media` | Android Lib | `com.raven.app.core.media` | `coreMediaModule` | `CoreMediaModule.kt`, `playback/PlayerSessionController.kt`, `reader/GalleryPageRepository.kt`, `reader/ReaderBuffer.kt`, `download/DownloadCoordinator.kt`, `storage/StorageRootManager.kt`, `LocalLibraryImporter.kt`, `DuplicateScanner.kt` | `.\gradlew.bat :core:media:testDebugUnitTest --no-daemon` |
 | 9 | `:sites:video` | Pure JVM | `com.raven.app.sites.video` | `videoSitesModule` | `VideoSitesModule.kt`, `VideoSiteSupport.kt`, 7 个视频插件 (`R34v`, `Hanime`, `Iwara`, `Missav`, `Jable`, `Rouvideo`, `Pornhub`) | `.\gradlew.bat :sites:video:test --no-daemon` |

@@ -177,6 +177,7 @@ fun ShelfItem.toEntity(): ShelfItemEntity = ShelfItemEntity(
     position = position,
     addedAt = addedAt,
     completed = completed,
+    completionChangedAt = completionChangedAt,
     durationSeconds = durationSeconds,
     pageCount = pageCount,
 )
@@ -192,6 +193,7 @@ fun ShelfItemEntity.toDomain(): ShelfItem = ShelfItem(
     position = position,
     addedAt = addedAt,
     completed = completed,
+    completionChangedAt = completionChangedAt,
     durationSeconds = durationSeconds,
     pageCount = pageCount,
 )

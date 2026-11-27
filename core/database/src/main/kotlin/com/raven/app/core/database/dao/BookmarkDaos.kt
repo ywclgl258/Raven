@@ -49,6 +49,9 @@ interface TimeBookmarkDao {
     @Query("SELECT * FROM time_bookmarks ORDER BY created_at DESC")
     suspend fun getAll(): List<TimeBookmarkEntity>
 
+    @Query("SELECT * FROM time_bookmarks WHERE id = :id LIMIT 1")
+    suspend fun getById(id: String): TimeBookmarkEntity?
+
     @Upsert
     suspend fun upsert(entity: TimeBookmarkEntity)
 

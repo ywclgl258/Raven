@@ -292,7 +292,6 @@ private class RavenSquashPressNode(
     CompositionLocalConsumerModifierNode {
 
     private val sxAnim = Animatable(1f)
-    private val syAnim = Animatable(1f)
     private var pointerPressed = false
     private var interactionJob: Job? = null
     private var animJob: Job? = null
@@ -359,22 +358,20 @@ private class RavenSquashPressNode(
             pointerPressed
         }
         val targetSx = if (isPressed) SQUASH_PRESS_SX else 1f
-        val targetSy = if (isPressed) SQUASH_PRESS_SY else 1f
+        val previousVelocity = sxAnim.velocity
         val motionReduced = currentValueOf(LocalMotionReduced)
 
         animJob?.cancel()
         animJob = coroutineScope.launch {
             if (motionReduced) {
                 sxAnim.snapTo(targetSx)
-                syAnim.snapTo(targetSy)
             } else {
                 val spec = if (isPressed) {
-                    RavenMotion.responsiveSpringSpec<Float>()
+                    RavenMotion.pressScaleSpring
                 } else {
-                    spring(dampingRatio = 0.72f, stiffness = 460f)
+                    spring(dampingRatio = 0.72f, stiffness = 460f, visibilityThreshold = 0.0004f)
                 }
-                launch { sxAnim.animateTo(targetSx, spec) }
-                launch { syAnim.animateTo(targetSy, spec) }
+                sxAnim.animateTo(targetSx, spec, initialVelocity = previousVelocity)
             }
         }
     }
@@ -406,8 +403,9 @@ private class RavenSquashPressNode(
         val placeable = measurable.measure(constraints)
         return layout(placeable.width, placeable.height) {
             placeable.placeWithLayer(0, 0) {
-                scaleX = sxAnim.value
-                scaleY = syAnim.value
+                val stretch = sxAnim.value
+                scaleX = stretch
+                scaleY = 1f / stretch
             }
         }
     }

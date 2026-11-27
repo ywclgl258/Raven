@@ -23,6 +23,7 @@ import kotlinx.coroutines.withContext
 data class SiteAccountUiState(
     val siteId: SiteId,
     val site: SiteDescriptor? = null,
+    val logoutSiteNames: String = site?.displayName.orEmpty(),
     val authMode: AuthMode = AuthMode.None,
     val requiresAuthGate: Boolean = false,
     /** Plugin implements credential POST even though its primary mode is WebView-based. */
@@ -65,7 +66,7 @@ data class SiteAccountUiState(
 
 /**
  * Per-site account ViewModel adapting purely to [SitePlugin.authProvider] (`AuthMode`).
- * Strictly capability-driven with zero site-ID branching; logout clears ONLY the target [SiteId].
+ * Sites sharing an account are listed together before logout.
  */
 class SiteAccountViewModel(
     val route: RavenRoute.SiteAccount,
@@ -80,6 +81,9 @@ class SiteAccountViewModel(
         SiteAccountUiState(
             siteId = siteId,
             site = plugin?.descriptor,
+            logoutSiteNames = siteRegistry.allPlugins()
+                .filter { it.id.accountId == siteId.accountId }
+                .joinToString("、") { it.descriptor.displayName },
             authMode = plugin?.authProvider?.mode ?: AuthMode.None,
             requiresAuthGate = plugin?.authProvider?.requiresAuthGate == true,
             credentialFallbackSupported = plugin?.authProvider?.supportsCredentialFallback == true,
@@ -229,9 +233,6 @@ class SiteAccountViewModel(
         }
     }
 
-    /**
-     * Logs out ONLY [siteId] without disturbing sessions belonging to any other site.
-     */
     fun logout() {
         val targetPlugin = plugin ?: return
         if (_uiState.value.isSubmitting) return
@@ -248,7 +249,7 @@ class SiteAccountViewModel(
                         passwordInput = "",
                         cookieInput = "",
                         isSubmitting = false,
-                        successMessage = "已退出 ${targetPlugin.descriptor.displayName} 账号，其余站点会话不受影响",
+                        successMessage = "已退出 ${it.logoutSiteNames}",
                     )
                 }
             } catch (ce: CancellationException) {

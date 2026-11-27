@@ -2,6 +2,7 @@ package com.raven.app.core.sitespi
 
 import com.raven.app.core.model.SiteId
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -47,5 +48,66 @@ class SiteSessionStoreTest {
         assertNull(store.getUsername(SiteId.IWARA))
         assertNull(store.getSecret(SiteId.IWARA, "refreshToken"))
         assertEquals(mapOf("ipb_member_id" to "2002"), store.getCookies(SiteId.EXHENTAI))
+    }
+
+    @Test
+    fun `E-Hentai and ExHentai resolve to one account bucket and one epoch`() {
+        val store: SiteSessionStore = InMemorySiteSessionStore()
+        store.saveCookies(SiteId.EXHENTAI, mapOf("ipb_member_id" to "777"))
+        // Written through the EX host, readable through both ids, one shared epoch.
+        assertEquals("777", store.getCookies(SiteId.EHENTAI)["ipb_member_id"])
+        assertEquals(store.authEpoch(SiteId.EHENTAI), store.authEpoch(SiteId.EXHENTAI))
+        store.clearSite(SiteId.EHENTAI)
+        assertTrue(store.getCookies(SiteId.EXHENTAI).isEmpty())
+    }
+
+    @Test
+    fun `compare-and-write rejects a snapshot whose expected epoch already moved`() {
+        val store: SiteSessionStore = InMemorySiteSessionStore()
+        store.saveCookies(SiteId.IWARA, mapOf("a" to "1"))
+        val epoch = store.authEpoch(SiteId.IWARA)
+        assertTrue(
+            store.storeSessionSnapshotIfEpoch(
+                siteId = SiteId.IWARA,
+                expectedEpoch = epoch,
+                cookies = mapOf("b" to "2"),
+                secrets = emptyMap(),
+            ),
+        )
+        // A logout in between bumps the epoch; the stale write must be refused.
+        store.clearSite(SiteId.IWARA)
+        val epochAfter = store.authEpoch(SiteId.IWARA)
+        assertTrue(epochAfter > epoch)
+        assertFalse(
+            store.storeSessionSnapshotIfEpoch(
+                siteId = SiteId.IWARA,
+                expectedEpoch = epoch,
+                cookies = mapOf("resurrected" to "yes"),
+                secrets = emptyMap(),
+            ),
+        )
+        assertTrue(store.getCookies(SiteId.IWARA).isEmpty())
+    }
+
+    @Test
+    fun `snapshot writes without an epoch bump leave in-flight guards satisfied`() {
+        val store: SiteSessionStore = InMemorySiteSessionStore()
+        store.saveCookies(SiteId.IWARA, mapOf("sid" to "v1"))
+        val epoch = store.authEpoch(SiteId.IWARA)
+        store.updateSessionSnapshotWithoutEpochBump(SiteId.IWARA, mapOf("sid" to "v1"), emptyMap())
+        assertEquals(epoch, store.authEpoch(SiteId.IWARA))
+        store.storeSessionSnapshot(SiteId.IWARA, mapOf("sid" to "v1"), emptyMap(), bumpEpoch = false)
+        assertEquals(epoch, store.authEpoch(SiteId.IWARA))
+        assertEquals("v1", store.getCookies(SiteId.IWARA)["sid"])
+    }
+
+    @Test
+    fun `hasSession reflects cookies and bearer tokens`() {
+        val store: SiteSessionStore = InMemorySiteSessionStore()
+        assertFalse(store.hasSession(SiteId.IWARA))
+        store.saveCookies(SiteId.IWARA, mapOf("sid" to "x"))
+        assertTrue(store.hasSession(SiteId.IWARA))
+        store.clearSite(SiteId.IWARA)
+        assertFalse(store.hasSession(SiteId.IWARA))
     }
 }

@@ -7,6 +7,7 @@ import com.raven.app.core.common.BlockedTermExcludeInjection
 import com.raven.app.core.common.ContentFilter
 import com.raven.app.core.common.MediaDateParser
 import com.raven.app.core.common.TagDictionary
+import com.raven.app.core.database.model.AppSettings
 import com.raven.app.core.database.model.BrowsePosition
 import com.raven.app.core.database.model.ExploreFilterState
 import com.raven.app.core.database.model.ShelfWithSummary
@@ -173,6 +174,9 @@ class ExploreViewModel(
     private val allDescriptors: List<SiteDescriptor> = siteRegistry.allDescriptors()
     private val loadState = MutableStateFlow(ExploreLoadState())
     private val filterEditMutex = Mutex()
+    // Live settings snapshot so scroll-time persistence can read `incognitoMode` / `activeSiteId`
+    // synchronously rather than resolving them after the debounce.
+    private val latestSettings = MutableStateFlow(AppSettings())
 
     /** Optional so existing JVM tests without download fakes keep constructing successfully. */
     private val mediaActions: BrowseMediaActions? =
@@ -368,6 +372,9 @@ class ExploreViewModel(
             loadKeyFlow.collect { key ->
                 triggerLoad(key = key, isRefresh = false)
             }
+        }
+        viewModelScope.launch {
+            preferencesRepository.settings.collect { latestSettings.value = it }
         }
     }
 
@@ -594,7 +601,14 @@ class ExploreViewModel(
     fun saveBrowsePosition(workId: String, throughPage: Int = uiState.value.currentPage) {
         val cleanWorkId = workId.trim()
         if (cleanWorkId.isEmpty()) return
-        val siteId = uiState.value.activeSite?.id ?: return
+        // Incognito pauses browse progress persistence; also keep the site key stable for the
+        // whole debounce so a mid-flight site switch cannot redirect this write.
+        if (latestSettings.value.incognitoMode) return
+        val siteId = latestSettings.value.activeSiteId
+            .takeIf { siteRegistry.get(it) != null }
+            ?: uiState.value.activeSite?.id
+            ?: return
+        val clampedPage = throughPage.coerceAtLeast(1)
         browsePositionJob?.cancel()
         browsePositionJob = viewModelScope.launch {
             delay(BROWSE_POSITION_DEBOUNCE_MS)
@@ -603,7 +617,7 @@ class ExploreViewModel(
                     positionKey = "explore:${siteId.value}",
                     siteId = siteId,
                     workId = cleanWorkId,
-                    throughPage = throughPage.coerceAtLeast(1),
+                    throughPage = clampedPage,
                     updatedAt = 0L,
                 ),
             )

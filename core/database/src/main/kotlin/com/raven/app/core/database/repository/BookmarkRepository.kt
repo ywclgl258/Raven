@@ -105,12 +105,25 @@ class BookmarkRepository(
         require(bookmark.groupName.length <= MAX_TIME_BOOKMARK_GROUP_LENGTH) {
             "TimeBookmark.groupName exceeds $MAX_TIME_BOOKMARK_GROUP_LENGTH characters"
         }
-        val prepared = bookmark.copy(
-            id = bookmark.id.trim().ifBlank { UUID.randomUUID().toString() },
-            createdAt = bookmark.createdAt.takeIf { it > 0L } ?: clock(),
-        )
-        timeBookmarkDao.upsert(prepared.toEntity())
-        return prepared
+        val cleanId = bookmark.id.trim()
+        return transactionRunner {
+            val existing = if (cleanId.isNotEmpty()) timeBookmarkDao.getById(cleanId) else null
+            // A label edit on an existing row refreshes `createdAt`: the merge uses it as the
+            // edit ordering, so a re-exported backup carries the edited copy's timestamp and wins
+            // over an older backup of the same bookmark.
+            val isLabelEdit = existing != null &&
+                (existing.label != bookmark.label || existing.groupName != bookmark.groupName)
+            val prepared = bookmark.copy(
+                id = cleanId.ifBlank { UUID.randomUUID().toString() },
+                createdAt = when {
+                    isLabelEdit -> clock()
+                    bookmark.createdAt > 0L -> bookmark.createdAt
+                    else -> clock()
+                },
+            )
+            timeBookmarkDao.upsert(prepared.toEntity())
+            prepared
+        }
     }
 
     suspend fun deleteTimeBookmark(id: String) {

@@ -89,6 +89,12 @@ class StorageMigrationViewModelTest {
             assertNotNull(result)
             assertEquals(3, result!!.copiedFiles)
             assertEquals(StorageLocation.SHARED, result.pendingLocation)
+            // Media3 cache spans are copied by the cache owner, so the UI must not claim every
+            // byte was SHA-256 verified just because the file walker succeeded.
+            assertFalse(result.videoCachesVerified)
+            val info = completed.infoMessage.orEmpty()
+            assertTrue(info.contains("视频缓存由下载缓存自查"))
+            assertFalse(info.contains("完整性校验全部通过"))
             assertEquals(StorageLocation.SHARED, completed.status?.pendingLocation)
             assertEquals(StorageLocation.SHARED, db.settingsDataStore.currentSettings().pendingStorageLocation)
             // Original private files remain intact for rollback

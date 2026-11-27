@@ -3,6 +3,7 @@ package com.raven.app.core.database
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.emptyPreferences
+import com.raven.app.core.database.dao.BackupRestoreJournalDao
 import com.raven.app.core.database.dao.BlockedTermDao
 import com.raven.app.core.database.dao.BrowsePositionDao
 import com.raven.app.core.database.dao.DownloadItemDao
@@ -23,6 +24,7 @@ import com.raven.app.core.database.dao.TagTranslationDao
 import com.raven.app.core.database.dao.TimeBookmarkDao
 import com.raven.app.core.database.dao.UpdateInboxDao
 import com.raven.app.core.database.dao.WatchProgressDao
+import com.raven.app.core.database.entity.BackupRestoreJournalEntity
 import com.raven.app.core.database.entity.BlockedTermEntity
 import com.raven.app.core.database.entity.BrowsePositionEntity
 import com.raven.app.core.database.entity.DownloadItemEntity
@@ -102,6 +104,7 @@ internal class FakeRavenDb {
     val browsePositions = FakeBrowsePositionDao()
     val tagTranslations = FakeTagTranslationDao()
     val mediaTagCache = FakeMediaTagCacheDao()
+    val backupRestoreJournal = FakeBackupRestoreJournalDao()
 
     val transactionRunner: DatabaseTransactionRunner = object : DatabaseTransactionRunner {
         override suspend fun <R> invoke(block: suspend () -> R): R {
@@ -125,6 +128,7 @@ internal class FakeRavenDb {
             val snapPos = browsePositions.rows.value
             val snapTagTrans = tagTranslations.rows.value
             val snapMediaTagCache = mediaTagCache.rows.value
+            val snapRestoreJournal = backupRestoreJournal.rows.value
             return try {
                 block()
             } catch (t: Throwable) {
@@ -148,6 +152,7 @@ internal class FakeRavenDb {
                 browsePositions.rows.value = snapPos
                 tagTranslations.rows.value = snapTagTrans
                 mediaTagCache.rows.value = snapMediaTagCache
+                backupRestoreJournal.rows.value = snapRestoreJournal
                 throw t
             }
         }
@@ -404,10 +409,10 @@ internal class FakeShelfItemDao : ShelfItemDao {
         rows.value = rows.value + entities.associateBy { Triple(it.shelfId, it.siteId, it.mediaId) }
     }
 
-    override suspend fun updateCompleted(shelfId: String, siteId: String, mediaId: String, completed: Boolean) {
+    override suspend fun updateCompleted(shelfId: String, siteId: String, mediaId: String, completed: Boolean, changedAt: Long) {
         val key = Triple(shelfId, siteId, mediaId)
         val current = rows.value[key] ?: return
-        rows.value = rows.value + (key to current.copy(completed = completed))
+        rows.value = rows.value + (key to current.copy(completed = completed, completionChangedAt = changedAt))
     }
 
     override suspend fun updatePosition(shelfId: String, siteId: String, mediaId: String, position: Int) {
@@ -510,6 +515,8 @@ internal class FakeTimeBookmarkDao : TimeBookmarkDao {
 
     override suspend fun getAll(): List<TimeBookmarkEntity> =
         rows.value.values.sortedByDescending(TimeBookmarkEntity::createdAt)
+
+    override suspend fun getById(id: String): TimeBookmarkEntity? = rows.value[id]
 
     override suspend fun upsert(entity: TimeBookmarkEntity) {
         rows.value = rows.value + (entity.id to entity)
@@ -1183,5 +1190,19 @@ internal class FakeMediaTagCacheDao : MediaTagCacheDao {
             .take(limit)
             .mapTo(mutableSetOf()) { it.siteId to it.mediaId }
         rows.value = rows.value.filterKeys { it in keep }
+    }
+}
+
+internal class FakeBackupRestoreJournalDao : BackupRestoreJournalDao {
+    val rows = MutableStateFlow<BackupRestoreJournalEntity?>(null)
+
+    override suspend fun get(): BackupRestoreJournalEntity? = rows.value
+
+    override suspend fun put(entry: BackupRestoreJournalEntity) {
+        rows.value = entry
+    }
+
+    override suspend fun clear() {
+        rows.value = null
     }
 }

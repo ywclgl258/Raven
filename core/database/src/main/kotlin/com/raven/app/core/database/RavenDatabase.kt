@@ -29,6 +29,8 @@ import com.raven.app.core.database.dao.TagTranslationDao
 import com.raven.app.core.database.dao.TimeBookmarkDao
 import com.raven.app.core.database.dao.UpdateInboxDao
 import com.raven.app.core.database.dao.WatchProgressDao
+import com.raven.app.core.database.dao.BackupRestoreJournalDao
+import com.raven.app.core.database.entity.BackupRestoreJournalEntity
 import com.raven.app.core.database.entity.BlockedTermEntity
 import com.raven.app.core.database.entity.BrowsePositionEntity
 import com.raven.app.core.database.entity.DownloadItemEntity
@@ -75,6 +77,7 @@ import com.raven.app.core.model.Shelf
         TagTranslationEntity::class,
         MediaTagCacheEntity::class,
         MediaLikeEntity::class,
+        BackupRestoreJournalEntity::class,
     ],
     version = RavenDatabase.SCHEMA_VERSION,
     exportSchema = true,
@@ -102,10 +105,11 @@ abstract class RavenDatabase : RoomDatabase() {
     abstract fun tagTranslationDao(): TagTranslationDao
     abstract fun mediaTagCacheDao(): MediaTagCacheDao
     abstract fun mediaLikeDao(): MediaLikeDao
+    abstract fun backupRestoreJournalDao(): BackupRestoreJournalDao
 
     companion object {
         const val DATABASE_NAME: String = "raven.db"
-        const val SCHEMA_VERSION: Int = 4
+        const val SCHEMA_VERSION: Int = 5
         const val DEFAULT_WATCH_LATER_NAME: String = "稍后看"
 
         val MIGRATION_1_2: Migration = object : Migration(1, 2) {
@@ -184,6 +188,26 @@ abstract class RavenDatabase : RoomDatabase() {
             }
         }
 
+        val MIGRATION_4_5: Migration = object : Migration(4, 5) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                // Shelf manual-completion override timestamp; null means "never toggled", which
+                // keeps legacy rows losing to any explicit choice during backup merge.
+                db.execSQL("ALTER TABLE `shelf_items` ADD COLUMN `completion_changed_at` INTEGER")
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS `backup_restore_journal` (
+                        `id` INTEGER NOT NULL,
+                        `restore_id` TEXT NOT NULL,
+                        `created_at` INTEGER NOT NULL,
+                        `settings_json` TEXT NOT NULL,
+                        `site_languages_json` TEXT NOT NULL,
+                        PRIMARY KEY(`id`)
+                    )
+                    """.trimIndent(),
+                )
+            }
+        }
+
         private val watchLaterSeedCallback = object : Callback() {
             override fun onCreate(db: SupportSQLiteDatabase) {
                 super.onCreate(db)
@@ -205,7 +229,7 @@ abstract class RavenDatabase : RoomDatabase() {
                 RavenDatabase::class.java,
                 DATABASE_NAME,
             )
-                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
+                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5)
                 .addCallback(watchLaterSeedCallback)
                 .build()
     }

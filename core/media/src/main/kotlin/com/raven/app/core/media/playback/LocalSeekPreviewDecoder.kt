@@ -4,6 +4,7 @@ import android.graphics.Bitmap
 import android.media.MediaDataSource
 import android.media.MediaMetadataRetriever
 import android.os.Build
+import androidx.core.graphics.scale
 import com.raven.app.core.common.AppDispatchers
 import com.raven.app.core.common.DefaultAppDispatchers
 import java.io.File
@@ -112,11 +113,9 @@ class LocalSeekPreviewDecoder private constructor(
         val scale = minOf(1f, PREVIEW_WIDTH.toFloat() / frame.width, PREVIEW_HEIGHT.toFloat() / frame.height)
         if (scale >= 1f) return frame
         return try {
-            Bitmap.createScaledBitmap(
-                frame,
+            frame.scale(
                 (frame.width * scale).roundToInt().coerceAtLeast(1),
                 (frame.height * scale).roundToInt().coerceAtLeast(1),
-                true,
             )
         } finally {
             frame.recycle()

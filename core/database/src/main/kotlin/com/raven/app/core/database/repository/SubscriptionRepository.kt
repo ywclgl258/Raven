@@ -71,12 +71,12 @@ class SubscriptionRepository(
         slug: String,
         scope: SearchScope = SearchScope.TAG,
     ) {
-        val cleanSlug = slug.trim()
-        val sourceId = "${siteId.value}:${scope.name}:$cleanSlug"
-        transactionRunner {
-            tagSubscriptionDao.delete(siteId.value, cleanSlug, scope)
-            updateInboxDao.deleteBySource(InboxSourceKind.TAG_SUBSCRIPTION, sourceId)
-        }
+        transactionRunner { deleteSubscription(siteId, slug.trim(), scope) }
+    }
+
+    private suspend fun deleteSubscription(siteId: SiteId, slug: String, scope: SearchScope) {
+        tagSubscriptionDao.delete(siteId.value, slug, scope)
+        updateInboxDao.deleteBySource(InboxSourceKind.TAG_SUBSCRIPTION, "${siteId.value}:${scope.name}:$slug")
     }
 
     /**
@@ -92,7 +92,7 @@ class SubscriptionRepository(
                 subscription.scope,
             )
             if (existing != null) {
-                tagSubscriptionDao.delete(subscription.siteId.value, cleanSlug, subscription.scope)
+                deleteSubscription(subscription.siteId, cleanSlug, subscription.scope)
                 false
             } else {
                 val nextOrder = (tagSubscriptionDao.getMaxSortOrder(subscription.siteId.value) ?: -1) + 1

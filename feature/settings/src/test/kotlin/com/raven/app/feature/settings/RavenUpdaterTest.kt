@@ -68,7 +68,9 @@ class RavenUpdaterTest {
         )
         assertEquals("raven-1.2.0-universal-release.apk", universal?.name)
 
-        // Selects compat package strictly when compatibilityMode == true
+        // Old Android prefers a compatible legacy asset when the release includes one.
+        val mirrorAssets = listOf(assets[4])
+        assertEquals(assets[4], RavenUpdater.selectReleaseAsset(mirrorAssets, true, listOf("x86_64")))
         val compat = RavenUpdater.selectReleaseAsset(
             assets = assets,
             compatibilityMode = true,
@@ -77,6 +79,9 @@ class RavenUpdaterTest {
         assertEquals("raven-1.2.0-compat-2.0.0.apk", compat?.name)
 
         // Returns null when only mismatched ABI exists
+        val only64BitCompat = listOf(assets[5].copy(name = "raven-x86_64-compat.apk"))
+        assertNull(RavenUpdater.selectReleaseAsset(only64BitCompat, true, listOf("x86")))
+        assertEquals(assets[4], RavenUpdater.selectReleaseAsset(only64BitCompat + assets[4], true, listOf("x86")))
         val onlyArm64 = listOf(assets[3])
         assertNull(
             RavenUpdater.selectReleaseAsset(
@@ -101,7 +106,7 @@ class RavenUpdaterTest {
             downloadClient = client,
             updatesDir = updatesDir,
             signatureVerifier = object : ApkSignatureVerifier {
-                override fun verify(apkFile: File) = Unit
+                override fun verify(apkFile: File, releaseTag: String) = Unit
             },
             stateStore = stateStore,
             dispatchers = mainDispatcherRule.appDispatchers,
@@ -117,7 +122,7 @@ class RavenUpdaterTest {
             downloadClient = client,
             updatesDir = updatesDir,
             signatureVerifier = object : ApkSignatureVerifier {
-                override fun verify(apkFile: File) = Unit
+                override fun verify(apkFile: File, releaseTag: String) = Unit
             },
             stateStore = stateStore,
             dispatchers = mainDispatcherRule.appDispatchers,
@@ -175,7 +180,7 @@ class RavenUpdaterTest {
                 downloadClient = client,
                 updatesDir = updatesDir,
                 signatureVerifier = object : ApkSignatureVerifier {
-                    override fun verify(apkFile: File) {
+                    override fun verify(apkFile: File, releaseTag: String) {
                         verifyCalls += 1
                     }
                 },
@@ -249,7 +254,7 @@ class RavenUpdaterTest {
                 downloadClient = OkHttpClient(),
                 updatesDir = tempFolder.newFolder("updates-vps-fallback"),
                 signatureVerifier = object : ApkSignatureVerifier {
-                    override fun verify(apkFile: File) = Unit
+                    override fun verify(apkFile: File, releaseTag: String) = Unit
                 },
                 stateStore = InMemoryUpdateStateStore(),
                 supportedAbisProvider = { listOf("arm64-v8a") },
@@ -301,7 +306,7 @@ class RavenUpdaterTest {
                 downloadClient = OkHttpClient(),
                 updatesDir = updatesDir,
                 signatureVerifier = object : ApkSignatureVerifier {
-                    override fun verify(apkFile: File) = Unit
+                    override fun verify(apkFile: File, releaseTag: String) = Unit
                 },
                 stateStore = InMemoryUpdateStateStore(),
                 dispatchers = mainDispatcherRule.appDispatchers,
@@ -320,6 +325,37 @@ class RavenUpdaterTest {
             assertTrue(dir.listFiles().orEmpty().isEmpty())
         } finally {
             server.shutdown()
+        }
+    }
+
+    @Test
+    fun `package version must match release tag and strictly advance installed code`() {
+        AndroidApkSignatureVerifier.verifyReleaseVersion(15, 14, "0.9.2", "v0.9.2")
+        for ((code, name) in listOf(14L to "0.9.2", 13L to "0.9.2", 15L to "0.9.1", 15L to null)) {
+            org.junit.Assert.assertThrows(UpdateVerificationException::class.java) {
+                AndroidApkSignatureVerifier.verifyReleaseVersion(code, 14, name, "v0.9.2")
+            }
+        }
+    }
+
+    @Test
+    fun `chunked oversized release metadata is rejected before JSON decoding`() = runTest {
+        MockWebServer().use { server ->
+            val oversized = " ".repeat(RavenUpdater.MAX_METADATA_BYTES.toInt() + 1)
+            server.enqueue(MockResponse().setChunkedBody(oversized, 8192))
+            server.start()
+            val client = OkHttpClient()
+            val updater = RavenUpdater(
+                appInfo = RavenAppInfo("1.0.0", 1L, isDebug = false, packageName = "com.raven.app", mirrorReleasesApiBaseUrl = null),
+                metadataClient = client, downloadClient = client, updatesDir = tempFolder.newFolder("metadata-limit"),
+                signatureVerifier = object : ApkSignatureVerifier {
+                    override fun verify(apkFile: File, releaseTag: String) = Unit
+                },
+                stateStore = InMemoryUpdateStateStore(), dispatchers = mainDispatcherRule.appDispatchers,
+                releasesApiBaseUrlOverride = server.url("/releases").toString(),
+            )
+            val result = updater.checkForUpdate(manual = true) as UpdateCheckOutcome.Error
+            assertTrue(result.message, result.message.contains("发布清单超过大小上限"))
         }
     }
 

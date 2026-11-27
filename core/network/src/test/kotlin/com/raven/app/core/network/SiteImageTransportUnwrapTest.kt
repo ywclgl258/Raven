@@ -91,6 +91,7 @@ class SiteImageTransportUnwrapTest {
                 mediaRedirectCache = MediaRedirectCache(eligible = { false }, rateLimitLog = RateLimitLog()),
                 peerTracker = PeerTracker(),
                 siteRegistryProvider = { registry },
+                sessionStoreProvider = { vault },
             )
 
             val encReq = Request.Builder()

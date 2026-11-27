@@ -34,6 +34,9 @@ class MediaDateParserTest {
     fun `round-trips ISO date formatting and validates leap or invalid calendar dates`() {
         val leapDay = MediaDateParser.parseIsoDateToEpochDay("2024-02-29")
         assertEquals("2024-02-29", MediaDateParser.formatEpochDayToIso(leapDay!!))
+        assertEquals(leapDay, MediaDateParser.parseMediaDateLabelToEpochDay("2024年2月29日"))
+        assertNull(MediaDateParser.parseMediaDateLabelToEpochDay("发布于2025年2月29日"))
+        assertEquals(anchorDay - 365L, MediaDateParser.parseMediaDateLabelToEpochDay("1年前", anchorDay))
         assertNull(MediaDateParser.parseIsoDateToEpochDay("2025-02-29"))
         assertNull(MediaDateParser.parseIsoDateToEpochDay("2026-13-01"))
     }

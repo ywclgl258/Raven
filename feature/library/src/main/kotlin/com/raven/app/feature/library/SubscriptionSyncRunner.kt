@@ -286,11 +286,9 @@ class SubscriptionSyncRunner(
                         scope = saved.scope,
                         mediaKind = saved.mediaKind,
                         sort = saved.sort,
-                        language = if (saved.language != ComicLanguage.ALL) {
-                            saved.language
-                        } else {
-                            settings.languageFor(siteId)
-                        },
+                        language = saved.filters.siteLanguages[siteId]
+                            ?: saved.language.takeUnless { it == ComicLanguage.ALL }
+                            ?: settings.languageFor(siteId),
                         advancedFilters = saved.filters,
                         page = 1,
                     )

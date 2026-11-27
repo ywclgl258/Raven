@@ -189,13 +189,13 @@ interface ApkSignatureVerifier {
     fun needsCompatibilityPackage(): Boolean = false
 
     @Throws(UpdateVerificationException::class)
-    fun verify(apkFile: File)
+    fun verify(apkFile: File, releaseTag: String)
 }
 
 /**
  * Production Android verifier matching R34V's hardened signing lineage rules:
  * - Package name must equal the currently installed app.
- * - `candidateVersionCode >= installedVersionCode` (prevents downgrade attacks).
+ * - `candidateVersionCode > installedVersionCode`, and the APK version name must match the release tag.
  * - API 28+: every active signer in `installed.signingInfo.apkContentsSigners` must be present in
  *   `candidate.signingInfo.signingCertificateHistory`.
  * - API 24-27: candidate signature SHA-256 digests must match installed signatures.
@@ -219,7 +219,7 @@ class AndroidApkSignatureVerifier(
     }
 
     @Suppress("DEPRECATION")
-    override fun verify(apkFile: File) {
+    override fun verify(apkFile: File, releaseTag: String) {
         if (!apkFile.isFile || apkFile.length() <= 0L) {
             throw UpdateVerificationException("安装包文件不存在或为空")
         }
@@ -242,9 +242,7 @@ class AndroidApkSignatureVerifier(
         } else {
             candidate.versionCode.toLong()
         }
-        if (candidateVersion < appInfo.versionCode) {
-            throw UpdateVerificationException("安装包版本号 ($candidateVersion) 低于当前版本 (${appInfo.versionCode})，已拒绝安装")
-        }
+        verifyReleaseVersion(candidateVersion, appInfo.versionCode, candidate.versionName, releaseTag)
 
         val signatureAccepted = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
             val candidateHistory = candidate.signingInfo
@@ -288,6 +286,14 @@ class AndroidApkSignatureVerifier(
     }
 
     internal companion object {
+        internal fun verifyReleaseVersion(code: Long, installedCode: Long, name: String?, releaseTag: String) {
+            if (code <= installedCode) throw UpdateVerificationException("安装包版本号 $code 必须高于当前版本 $installedCode")
+            val expected = releaseTag.trim().removePrefix("v").removePrefix("V")
+            if (name.isNullOrBlank() || name != expected) {
+                throw UpdateVerificationException("安装包版本名与发布标签 $releaseTag 不一致")
+            }
+        }
+
         internal fun isCandidateSignatureAccepted(
             isDebug: Boolean,
             expectedReleaseCertSha256: String?,
@@ -468,7 +474,7 @@ class RavenUpdater(
                 ) ?: return@withContext UpdateCheckOutcome.Error("此版本暂未提供适配当前设备的正式 APK，请稍后重试")
 
                 val asset = RavenReleaseAsset.fromDto(resolvedRelease.id, selectedDto)
-                val cachedFile = findVerifiedCachedApk(asset)
+                val cachedFile = findVerifiedCachedApk(asset, remoteTag)
                 val releaseInfo = RavenReleaseInfo(
                     releaseId = resolvedRelease.id,
                     tagName = remoteTag,
@@ -511,15 +517,18 @@ class RavenUpdater(
             .header("User-Agent", "Raven/${appInfo.versionName} (Android)")
             .build()
         return executeCancellable(metadataClient.newCall(request)).use { response ->
-            val body = response.body?.string().orEmpty()
             if (response.code == 403 || response.code == 429) {
                 throw IOException("${endpoint.label} 请求受限 (HTTP ${response.code})")
             }
             if (!response.isSuccessful) {
                 throw IOException("HTTP ${response.code}")
             }
-            if (body.isBlank()) throw IOException("发布信息为空")
-            json.decodeFromString(GitHubReleaseDto.serializer(), body)
+            val body = response.body ?: throw IOException("发布信息为空")
+            val source = body.source()
+            if (body.contentLength() > MAX_METADATA_BYTES || source.request(MAX_METADATA_BYTES + 1L)) {
+                throw IOException("发布清单超过大小上限")
+            }
+            json.decodeFromString(GitHubReleaseDto.serializer(), source.readUtf8())
         }
     }
 
@@ -538,7 +547,7 @@ class RavenUpdater(
         return try {
             withContext(dispatchers.io) {
                 val asset = release.asset
-                findVerifiedCachedApk(asset)?.let { cached ->
+                findVerifiedCachedApk(asset, release.tagName)?.let { cached ->
                     onProgress(UpdateDownloadProgress(asset.sizeBytes, asset.sizeBytes))
                     return@withContext cached
                 }
@@ -593,7 +602,7 @@ class RavenUpdater(
                             throw UpdateVerificationException("安装包 SHA-256 摘要校验不一致，已中止安装")
                         }
 
-                        signatureVerifier.verify(tempFile)
+                        signatureVerifier.verify(tempFile, release.tagName)
                         coroutineCtx.ensureActive()
 
                         val finalFile = File(targetDir, "$actualHash.apk")
@@ -625,7 +634,7 @@ class RavenUpdater(
         }
     }
 
-    private suspend fun findVerifiedCachedApk(asset: RavenReleaseAsset): File? {
+    private suspend fun findVerifiedCachedApk(asset: RavenReleaseAsset, releaseTag: String): File? {
         val dir = asset.cacheDirectory(updatesDir)
         if (!dir.isDirectory) return null
         val candidates = asset.expectedSha256?.let { listOf(File(dir, "$it.apk")) }
@@ -640,7 +649,7 @@ class RavenUpdater(
             runCatching {
                 val actual = sha256File(file) { coroutineCtx.ensureActive() }
                 if (!actual.equals(hashName, ignoreCase = true)) return@firstOrNull false
-                signatureVerifier.verify(file)
+                signatureVerifier.verify(file, releaseTag)
                 true
             }.getOrDefault(false)
         }
@@ -688,6 +697,7 @@ class RavenUpdater(
 
     companion object {
         const val AUTO_CHECK_INTERVAL_MS: Long = 12L * 60L * 60L * 1_000L
+        internal const val MAX_METADATA_BYTES = 1024L * 1024L
         private const val MAX_RELEASE_NOTES_CHARS: Int = 2_000
         private val SHA256_REGEX = Regex("^[0-9a-f]{64}$")
         private val KNOWN_ABIS = listOf("arm64-v8a", "armeabi-v7a", "x86_64", "x86")
@@ -720,7 +730,7 @@ class RavenUpdater(
         /**
          * Selects the best matching release APK asset from [assets]:
          * - Excludes non-`.apk`, empty (`size <= 0`), and `debug` APKs.
-         * - Enforces compatibility variant matching when [compatibilityMode] is true (and excludes
+         * - Prefers a compatible legacy variant when [compatibilityMode] is true (and excludes
          *   `-compat` packages when false).
          * - Prefers device ABI match in [supportedAbis] priority order, then `universal` or generic
          *   architecture-neutral release APKs, avoiding incompatible ABI builds.
@@ -739,27 +749,32 @@ class RavenUpdater(
             }
             if (apkCandidates.isEmpty()) return null
 
-            val compatMatched = apkCandidates.filter { asset ->
-                isCompatPackageName(asset.name) == compatibilityMode
-            }
-            if (compatMatched.isEmpty()) return null
+            val compatible = if (compatibilityMode) apkCandidates.filter { isCompatPackageName(it.name) } else emptyList()
+            val regular = apkCandidates.filterNot { isCompatPackageName(it.name) }
+            return bestAbiAsset(compatible, supportedAbis) ?: bestAbiAsset(regular, supportedAbis)
+        }
+
+        private fun bestAbiAsset(candidates: List<GitHubReleaseAssetDto>, supportedAbis: List<String>): GitHubReleaseAssetDto? {
 
             val normalizedAbis = supportedAbis.map { it.trim().lowercase(Locale.ROOT) }.filter { it.isNotEmpty() }
 
             // 1. Prefer highest-priority matching ABI asset.
             for (abi in normalizedAbis) {
-                compatMatched.firstOrNull { it.name.lowercase(Locale.ROOT).contains(abi) }?.let { return it }
+                candidates.firstOrNull { asset ->
+                    val name = asset.name.lowercase(Locale.ROOT)
+                    KNOWN_ABIS.firstOrNull { name.contains(it) } == abi
+                }?.let { return it }
             }
 
             // 2. Prefer explicit universal APK or ABI-neutral APK (no known ABI token in name).
-            compatMatched.firstOrNull { it.name.lowercase(Locale.ROOT).contains("universal") }?.let { return it }
-            compatMatched.firstOrNull { asset ->
+            candidates.firstOrNull { it.name.lowercase(Locale.ROOT).contains("universal") }?.let { return it }
+            candidates.firstOrNull { asset ->
                 val lower = asset.name.lowercase(Locale.ROOT)
                 KNOWN_ABIS.none { abi -> lower.contains(abi) }
             }?.let { return it }
 
             // 3. If no ABI hint was supplied (e.g., generic check), return first compat-matched APK.
-            return if (normalizedAbis.isEmpty()) compatMatched.firstOrNull() else null
+            return if (normalizedAbis.isEmpty()) candidates.firstOrNull() else null
         }
 
         private fun isCompatPackageName(name: String): Boolean {

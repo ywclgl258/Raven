@@ -1,5 +1,9 @@
 package com.raven.app.feature.settings
 
+import android.content.ActivityNotFoundException
+import android.net.Uri
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
@@ -66,6 +70,20 @@ fun BackupRestoreScreen(
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
 
+    // Only the destination survives process death. The user re-enters the encryption password.
+    var pendingExportUri by rememberSaveable { mutableStateOf<Uri?>(null) }
+    val createDocument = rememberLauncherForActivityResult(
+        ActivityResultContracts.CreateDocument(SettingsExportDefaults.BACKUP_MIME_TYPE),
+    ) { uri ->
+        if (uri != null && !viewModel.uiState.value.canStartExport) {
+            pendingExportUri = uri
+            viewModel.onExportPasswordRequired()
+        } else {
+            viewModel.exportToUri(uri)
+        }
+    }
+    val openDocument = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument(), viewModel::selectImportUri)
+
     BackupRestoreScreenContent(
         uiState = uiState,
         navigator = navigator,
@@ -73,13 +91,24 @@ fun BackupRestoreScreen(
         onExportPasswordChange = viewModel::updateExportPassword,
         onExportPasswordConfirmChange = viewModel::updateExportPasswordConfirm,
         onStartExportPicker = {
-            navigator.launchCreateBackupDocument(
-                suggestedFileName = SettingsExportDefaults.defaultBackupFileName(),
-                onDocumentCreated = viewModel::exportToUri,
-            )
+            val destination = pendingExportUri
+            if (destination != null) {
+                pendingExportUri = null
+                viewModel.exportToUri(destination)
+            } else {
+                try {
+                    createDocument.launch(SettingsExportDefaults.defaultBackupFileName())
+                } catch (_: ActivityNotFoundException) {
+                    viewModel.onDocumentPickerUnavailable(BackupRestoreTab.EXPORT)
+                }
+            }
         },
         onStartImportPicker = {
-            navigator.launchOpenBackupDocument(onDocumentOpened = viewModel::selectImportUri)
+            try {
+                openDocument.launch(arrayOf("*/*"))
+            } catch (_: ActivityNotFoundException) {
+                viewModel.onDocumentPickerUnavailable(BackupRestoreTab.IMPORT)
+            }
         },
         onImportPasswordChange = viewModel::updateImportPassword,
         onDecryptImport = viewModel::decryptAndPreviewImport,
@@ -94,7 +123,9 @@ fun BackupRestoreScreen(
         onClearWebDavConfig = viewModel::clearWebDavConfig,
         onTestWebDavConnection = viewModel::testWebDavConnection,
         onPushWebDavBackup = viewModel::pushWebDavBackup,
-        onPullWebDavBackup = viewModel::pullAndRestoreWebDavBackup,
+        onPullWebDavBackup = viewModel::pullAndPreviewWebDavBackup,
+        onConfirmWebDavRestore = viewModel::confirmWebDavRestore,
+        onCancelWebDavPreview = viewModel::cancelWebDavPullPreview,
         modifier = modifier,
     )
 }
@@ -105,6 +136,7 @@ fun BackupRestoreScreenContent(
     uiState: BackupRestoreUiState,
     navigator: SettingsNavigator,
     onSelectTab: (BackupRestoreTab) -> Unit,
+    modifier: Modifier = Modifier,
     onExportPasswordChange: (String) -> Unit,
     onExportPasswordConfirmChange: (String) -> Unit,
     onStartExportPicker: () -> Unit,
@@ -123,7 +155,8 @@ fun BackupRestoreScreenContent(
     onTestWebDavConnection: () -> Unit = {},
     onPushWebDavBackup: () -> Unit = {},
     onPullWebDavBackup: () -> Unit = {},
-    modifier: Modifier = Modifier,
+    onConfirmWebDavRestore: () -> Unit = {},
+    onCancelWebDavPreview: () -> Unit = {},
 ) {
     val colors = LocalRavenColors.current
     var exportPwdVisible by rememberSaveable { mutableStateOf(false) }
@@ -669,9 +702,9 @@ fun BackupRestoreScreenContent(
                                             .testTag("webdav_push_button"),
                                     )
                                     SettingsSecondaryButton(
-                                        text = "拉取并合并",
+                                        text = "拉取并预览",
                                         icon = Icons.Outlined.Restore,
-                                        enabled = !uiState.isWebDavBusy,
+                                        enabled = !uiState.isWebDavBusy && uiState.webDavPullPreview == null,
                                         onClick = onPullWebDavBackup,
                                         modifier = Modifier
                                             .weight(1f)
@@ -679,6 +712,160 @@ fun BackupRestoreScreenContent(
                                     )
                                 }
                             }
+                        }
+                    }
+
+                    val davPreview = uiState.webDavPullPreview
+                    if (davPreview != null) {
+                        item(key = "webdav_preview_card") {
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(RavenShapes.CardShape)
+                                    .background(colors.surface1)
+                                    .border(0.5.dp, colors.hairline, RavenShapes.CardShape)
+                                    .padding(16.dp)
+                                    .testTag("webdav_preview_card"),
+                                verticalArrangement = Arrangement.spacedBy(12.dp),
+                            ) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically,
+                                ) {
+                                    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                                        Text(
+                                            text = "云端备份校验通过 · 待确认合并",
+                                            style = MaterialTheme.typography.titleMedium,
+                                            color = colors.inkPrimary,
+                                        )
+                                        Text(
+                                            text = "来源：${davPreview.endpointLabel}${davPreview.remoteFileName} · 下载于 ${SettingsFormatters.formatTimestamp(davPreview.downloadedAtMs)}",
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = colors.inkSecondary,
+                                        )
+                                        Text(
+                                            text = "备份导出时间：${SettingsFormatters.formatTimestamp(davPreview.summary.exportedAt)} · ${davPreview.downloadedBytes} B",
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = colors.inkSecondary,
+                                        )
+                                    }
+                                    RavenStatusPill(
+                                        text = formatBadgeLabel(davPreview.format),
+                                        tone = if (davPreview.format == BackupFormat.LEGACY_R34V_V1) {
+                                            RavenStatusTone.WARNING
+                                        } else {
+                                            RavenStatusTone.SUCCESS
+                                        },
+                                    )
+                                }
+
+                                FlowRow(
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                    verticalArrangement = Arrangement.spacedBy(6.dp),
+                                ) {
+                                    RavenStatusPill(text = "收藏 ${davPreview.summary.favoritesCount}")
+                                    RavenStatusPill(text = "历史 ${davPreview.summary.totalHistoryCount}")
+                                    RavenStatusPill(text = "片单 ${davPreview.summary.shelvesCount}（${davPreview.summary.shelfItemsCount} 项）")
+                                    RavenStatusPill(text = "书签 ${davPreview.summary.totalBookmarksCount}")
+                                    RavenStatusPill(text = "订阅 ${davPreview.summary.tagSubscriptionsCount}")
+                                    if (davPreview.summary.imageFavoritesCount > 0) {
+                                        RavenStatusPill(text = "单图收藏 ${davPreview.summary.imageFavoritesCount}")
+                                    }
+                                    if (davPreview.summary.blockedTermsCount > 0) {
+                                        RavenStatusPill(text = "屏蔽词 ${davPreview.summary.blockedTermsCount}")
+                                    }
+                                }
+
+                                RavenGroupedSection(title = "详细条目统计") {
+                                    RavenGroupedRow(
+                                        title = "收藏",
+                                        value = "${davPreview.summary.favoritesCount} 项",
+                                    )
+                                    RavenGroupedDivider()
+                                    RavenGroupedRow(
+                                        title = "观看 / 阅读历史",
+                                        subtitle = "观看 ${davPreview.summary.watchProgressCount} · 阅读 ${davPreview.summary.readingProgressCount}",
+                                        value = "${davPreview.summary.totalHistoryCount} 项",
+                                    )
+                                    RavenGroupedDivider()
+                                    RavenGroupedRow(
+                                        title = "片单与智能片单",
+                                        subtitle = "片单条目 ${davPreview.summary.shelfItemsCount} · 智能片单 ${davPreview.summary.smartShelvesCount}",
+                                        value = "${davPreview.summary.shelvesCount} 个",
+                                    )
+                                    RavenGroupedDivider()
+                                    RavenGroupedRow(
+                                        title = "页码与时间书签",
+                                        subtitle = "页码 ${davPreview.summary.pageBookmarksCount} · 时间 ${davPreview.summary.timeBookmarksCount}",
+                                        value = "${davPreview.summary.totalBookmarksCount} 个",
+                                    )
+                                    RavenGroupedDivider()
+                                    RavenGroupedRow(
+                                        title = "订阅、搜索与屏蔽词",
+                                        subtitle = "保存的搜索 ${davPreview.summary.savedSearchesCount} · 屏蔽词 ${davPreview.summary.blockedTermsCount}",
+                                        value = "订阅 ${davPreview.summary.tagSubscriptionsCount}",
+                                    )
+                                }
+
+                                davPreview.warnings.forEach { warning ->
+                                    SettingsNoticeBanner(
+                                        message = warning,
+                                        tone = if (warning.contains("退役") || warning.contains("R34VBK01")) {
+                                            RavenStatusTone.WARNING
+                                        } else {
+                                            RavenStatusTone.NEUTRAL
+                                        },
+                                    )
+                                }
+
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                                ) {
+                                    SettingsSecondaryButton(
+                                        text = "取消恢复",
+                                        enabled = !uiState.isWebDavBusy,
+                                        onClick = onCancelWebDavPreview,
+                                        modifier = Modifier
+                                            .weight(1f)
+                                            .testTag("webdav_preview_cancel_button"),
+                                    )
+                                    SettingsPrimaryButton(
+                                        text = if (uiState.isWebDavBusy) "正在原子合并…" else "确认合并恢复",
+                                        icon = Icons.Outlined.Restore,
+                                        loading = uiState.isWebDavBusy,
+                                        enabled = !uiState.isWebDavBusy,
+                                        onClick = onConfirmWebDavRestore,
+                                        modifier = Modifier
+                                            .weight(1f)
+                                            .testTag("webdav_preview_confirm_button"),
+                                    )
+                                }
+                            }
+                        }
+                    }
+
+                    val davRestored = uiState.webDavRestoreCompleted
+                    if (davRestored != null) {
+                        item(key = "webdav_restore_completed_banner") {
+                            val summary = davRestored.mergedSummary
+                            SettingsNoticeBanner(
+                                title = "云端备份合并恢复完成（${formatBadgeLabel(davRestored.format)}）",
+                                message = "合并后合计：收藏 ${summary.favoritesCount} 项 · 历史 ${summary.totalHistoryCount} 项 · 片单 ${summary.shelvesCount} 个（${summary.shelfItemsCount} 项）· 书签 ${summary.totalBookmarksCount} 个 · 订阅 ${summary.tagSubscriptionsCount} 项。",
+                                tone = RavenStatusTone.SUCCESS,
+                                modifier = Modifier.testTag("webdav_restore_success_banner"),
+                            )
+                        }
+                    }
+
+                    uiState.webDavWarnings.forEachIndexed { index, warning ->
+                        item(key = "webdav_warning_$index") {
+                            SettingsNoticeBanner(
+                                message = warning,
+                                tone = RavenStatusTone.WARNING,
+                                modifier = Modifier.testTag("webdav_warning_banner"),
+                            )
                         }
                     }
 

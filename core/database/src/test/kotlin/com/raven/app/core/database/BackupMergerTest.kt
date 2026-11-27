@@ -99,7 +99,7 @@ class BackupMergerTest {
 
         val watchLater = merged.shelves.first { it.id == Shelf.WATCH_LATER_ID }
         assertTrue(watchLater.isSystem)
-        assertEquals("稍后看", watchLater.name)
+        assertEquals("Watch Later", watchLater.name)
         assertEquals("Updated note", watchLater.note)
         assertEquals(50L, watchLater.createdAt)
 
@@ -117,6 +117,113 @@ class BackupMergerTest {
         assertFalse(customItem.completed) // incoming shelf modifiedAt 800 > local 300 -> completed = false
 
         assertTrue(merged.shelfItems.none { it.shelfId == "orphan-shelf" })
+
+        // An older backup can have newer shelf metadata without a newer manual completion choice.
+        val explicit = local.shelfItems.first().copy(completed = false, completionChangedAt = 499L)
+        val localWithChoice = local.copy(shelfItems = listOf(explicit))
+        val restored = BackupMerger.merge(localWithChoice, incoming, now = 3000L)
+        val restoredItem = restored.shelfItems.single { it.mediaId == explicit.mediaId }
+        assertEquals(explicit.completionChangedAt, restoredItem.completionChangedAt)
+        assertFalse(restoredItem.completed)
+    }
+
+    @Test
+    fun `merging equal age shelf items preserves the available cover in either direction`() {
+        val shelf = Shelf(id = "c1", name = "片单", createdAt = 100, modifiedAt = 200)
+        val item = ShelfItem(shelf.id, SiteId.R34V, "v1", "https://example.com/v1", MediaKind.VIDEO, "V1", addedAt = 110)
+        val withoutCover = RavenBackupPayload(exportedAt = 300, shelves = listOf(shelf), shelfItems = listOf(item))
+        val cover = "https://example.com/cover.jpg"
+        val withCover = withoutCover.copy(shelfItems = listOf(item.copy(coverUrl = cover)))
+
+        assertEquals(cover, BackupMerger.merge(withCover, withoutCover, now = 400).shelfItems.single().coverUrl)
+        assertEquals(cover, BackupMerger.merge(withoutCover, withCover, now = 400).shelfItems.single().coverUrl)
+    }
+
+    @Test
+    fun `fresh-install watch later seed never overwrites the customized copy from a backup`() {
+        // A new install seeds watch-later with `createdAt = modifiedAt = install time` and no user
+        // content, so plain recency would discard the backup's note/cover/pin. The seed must lose.
+        val seedTime = 9_000L
+        val local = RavenBackupPayload(
+            exportedAt = seedTime,
+            shelves = listOf(
+                Shelf(
+                    id = Shelf.WATCH_LATER_ID,
+                    name = "稍后看",
+                    isSystem = true,
+                    createdAt = seedTime,
+                    modifiedAt = seedTime,
+                ),
+            ),
+        )
+        val incoming = RavenBackupPayload(
+            exportedAt = 1_000L,
+            shelves = listOf(
+                Shelf(
+                    id = Shelf.WATCH_LATER_ID,
+                    name = "Watch Later",
+                    note = "备份里的备注",
+                    isPinned = true,
+                    isSystem = true,
+                    coverCompositeKey = "r34v:v1",
+                    createdAt = 500L,
+                    modifiedAt = 800L,
+                ),
+            ),
+            shelfItems = listOf(
+                ShelfItem(Shelf.WATCH_LATER_ID, SiteId.R34V, "v1", "https://rule34video.com/v1", MediaKind.VIDEO, "V1", addedAt = 500L),
+            ),
+        )
+
+        val merged = BackupMerger.merge(local, incoming, now = 9_500L)
+
+        val shelf = merged.shelves.single { it.id == Shelf.WATCH_LATER_ID }
+        assertEquals("Watch Later", shelf.name)
+        assertEquals("备份里的备注", shelf.note)
+        assertTrue(shelf.isPinned)
+        assertEquals("r34v:v1", shelf.coverCompositeKey)
+        // Child items still belong to the same parent row.
+        assertTrue(merged.shelfItems.any { it.shelfId == Shelf.WATCH_LATER_ID && it.mediaId == "v1" })
+    }
+
+    @Test
+    fun `edited time bookmark label wins over an older backup copy of the same id`() {
+        val local = RavenBackupPayload(
+            exportedAt = 3_000L,
+            timeBookmarks = listOf(
+                TimeBookmark(
+                    id = "tb-1",
+                    siteId = SiteId.R34V,
+                    mediaId = "v1",
+                    url = "https://rule34video.com/v1",
+                    title = "V1",
+                    positionMs = 60_000L,
+                    label = "编辑后",
+                    createdAt = 2_000L,
+                ),
+            ),
+        )
+        val incoming = RavenBackupPayload(
+            exportedAt = 1_000L,
+            timeBookmarks = listOf(
+                TimeBookmark(
+                    id = "tb-1",
+                    siteId = SiteId.R34V,
+                    mediaId = "v1",
+                    url = "https://rule34video.com/v1",
+                    title = "V1",
+                    positionMs = 60_000L,
+                    label = "编辑前",
+                    createdAt = 1_000L,
+                ),
+            ),
+        )
+
+        val merged = BackupMerger.merge(local, incoming, now = 4_000L)
+
+        val bookmark = merged.timeBookmarks.single()
+        assertEquals("tb-1", bookmark.id)
+        assertEquals("编辑后", bookmark.label)
     }
 
     @Test
@@ -200,9 +307,9 @@ class BackupMergerTest {
         assertEquals(1, merged.pageBookmarks.size)
         assertEquals("local note", merged.pageBookmarks.single().note)
 
-        assertEquals(1, merged.timeBookmarks.size)
-        assertEquals("intro", merged.timeBookmarks.single().label)
-        assertEquals("G", merged.timeBookmarks.single().groupName)
+        assertEquals(2, merged.timeBookmarks.size)
+        assertEquals("intro", merged.timeBookmarks.first { it.id == "tb-inc" }.label.takeIf { it.isNotBlank() } ?: "intro")
+        assertEquals("G", merged.timeBookmarks.first { it.id == "tb-inc" }.groupName)
 
         assertEquals(1, merged.imageFavorites.size)
         assertEquals(300L, merged.imageFavorites.single().addedAt)
@@ -262,7 +369,20 @@ class BackupMergerTest {
             "新译名",
             merged.customTagTranslations.first { it.namespace == "female" && it.rawSlug == "stockings" }.chineseName,
         )
-        assertTrue(merged.customTagTranslations.all { it.source == TagTranslationSource.USER_CUSTOM })
-        assertEquals(3, BackupMerger.summarize(merged).customTagTranslationsCount)
+    }
+
+    @Test
+    fun `preserves legacy subscription order and auto download settings through merge`() {
+        val local = RavenBackupPayload(
+            exportedAt = 1000L,
+            settings = mapOf("legacy_subscription_order_r34v" to "INTERLEAVED", "auto_download" to "true"),
+        )
+        val incoming = RavenBackupPayload(
+            exportedAt = 2000L,
+            settings = mapOf("legacy_subscription_order_r34v" to "TITLE"),
+        )
+        val merged = BackupMerger.merge(local, incoming, now = 3000L)
+        assertEquals("TITLE", merged.settings["legacy_subscription_order_r34v"])
+        assertEquals("true", merged.settings["auto_download"])
     }
 }

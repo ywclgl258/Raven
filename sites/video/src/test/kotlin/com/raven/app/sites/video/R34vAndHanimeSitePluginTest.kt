@@ -727,8 +727,14 @@ class R34vAndHanimeSitePluginTest {
         val fakeHttp = FakeHttpClientAdapter()
         val store = InMemorySiteSessionStore()
 
-        fakeHttp.onGetDynamic("https://hanime1.me/") {
-            SiteHttpResponse(code = 200, finalUrl = "https://hanime1.me/", body = "<html>ok</html>".toByteArray())
+        // A signed-in homepage: hanime1 renders the header's `/user/<uid>` link only for accounts.
+        fakeHttp.onGetDynamic("https://hanime1.me/") { req ->
+            assertEquals("PHPSESSID=php-sess-1; cf_clearance=cf-clear-1", req.headers["Cookie"])
+            SiteHttpResponse(
+                code = 200,
+                finalUrl = "https://hanime1.me/",
+                body = """<html><a href="/user/4242">me</a></html>""".toByteArray(),
+            )
         }
         val plugin = HanimeSitePlugin(fakeHttp, store, rateLimitBackoffMs = 0L)
 
@@ -747,6 +753,14 @@ class R34vAndHanimeSitePluginTest {
         assertTrue(imported.isAuthenticated)
         assertEquals("php-sess-1", store.getCookies(SiteId.HANIME1)["PHPSESSID"])
         assertTrue(plugin.authProvider.currentAuthState().isAuthenticated)
+        // Verified identity is what makes the native account sections addressable.
+        assertEquals("4242", store.getSecret(SiteId.HANIME1, "hanime_user_id"))
+        // Verification ran isolated: the site jar was never consulted for this probe.
+        assertFalse(fakeHttp.requests.single().allowCookies)
+        assertEquals(
+            com.raven.app.core.sitespi.RequestSessionScope.ISOLATED,
+            fakeHttp.requests.single().sessionScope,
+        )
 
         // Cookies without a recognisable session are rejected before touching the store.
         store.clearSite(SiteId.HANIME1)
@@ -759,6 +773,60 @@ class R34vAndHanimeSitePluginTest {
         assertTrue(rejected is SiteException.AuthRequired)
         assertFalse(plugin.authProvider.currentAuthState().isAuthenticated)
         assertTrue(store.getCookies(SiteId.HANIME1).isEmpty())
+    }
+
+    @Test
+    fun `hanime1 rejects an anonymous 200 on cookie import and never disturbs the live account`() = runTest {
+        val fakeHttp = FakeHttpClientAdapter()
+        val store = InMemorySiteSessionStore()
+        // A different live account already signed in; every candidate probe must leave it intact.
+        store.saveCookies(SiteId.HANIME1, mapOf("PHPSESSID" to "live-sess", "cf_clearance" to "live-cf"))
+        store.saveSecret(SiteId.HANIME1, "hanime_session_ok", "1")
+        store.saveSecret(SiteId.HANIME1, "hanime_user_id", "1111")
+        val liveEpoch = store.authEpoch(SiteId.HANIME1)
+        val liveCookies = store.getCookies(SiteId.HANIME1)
+
+        // Anonymous homepage: HTTP 200, no `/user/<uid>` link, and a tempting Set-Cookie.
+        fakeHttp.onGetDynamic("https://hanime1.me/") {
+            SiteHttpResponse(
+                code = 200,
+                finalUrl = "https://hanime1.me/",
+                headers = mapOf("Set-Cookie" to listOf("anon_session=leak; Path=/")),
+                body = "<html><body>welcome, guest</body></html>".toByteArray(),
+            )
+        }
+        val plugin = HanimeSitePlugin(fakeHttp, store, rateLimitBackoffMs = 0L)
+
+        // 200 OK alone must NOT be accepted as signed in.
+        var rejected: Throwable? = null
+        try {
+            plugin.authProvider.importCookies(mapOf("PHPSESSID" to "php-sess-2", "cf_clearance" to "cf-2"))
+        } catch (e: Throwable) {
+            rejected = e
+        }
+        assertTrue("anonymous 200 must be rejected, got $rejected", rejected is SiteException.AuthRequired)
+
+        // Isolation guarantees: live cookies and epoch untouched, response cookie never persisted.
+        assertEquals(liveCookies, store.getCookies(SiteId.HANIME1))
+        assertEquals(liveEpoch, store.authEpoch(SiteId.HANIME1))
+        assertTrue(store.getCookies(SiteId.HANIME1).none { it.key == "anon_session" })
+        val probe = fakeHttp.requests.single()
+        assertEquals(com.raven.app.core.sitespi.RequestSessionScope.ISOLATED, probe.sessionScope)
+        assertFalse(probe.allowCookies)
+
+        // A real account page is accepted and atomically replaces the candidate set.
+        fakeHttp.onGetDynamic("https://hanime1.me/") {
+            SiteHttpResponse(
+                code = 200,
+                finalUrl = "https://hanime1.me/",
+                body = """<html><a href="/user/2222">me</a></html>""".toByteArray(),
+            )
+        }
+        val imported = plugin.authProvider.importCookies(mapOf("PHPSESSID" to "php-sess-2", "cf_clearance" to "cf-2"))
+        assertTrue(imported.isAuthenticated)
+        assertEquals("php-sess-2", store.getCookies(SiteId.HANIME1)["PHPSESSID"])
+        assertEquals("2222", store.getSecret(SiteId.HANIME1, "hanime_user_id"))
+        assertTrue(store.authEpoch(SiteId.HANIME1) > liveEpoch)
     }
 
     @Test

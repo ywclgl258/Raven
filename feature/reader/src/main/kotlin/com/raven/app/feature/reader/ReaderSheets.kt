@@ -151,8 +151,8 @@ internal fun ReaderThumbnailsSheet(
     val pagesByIndex = remember(detail?.pages) {
         detail?.pages?.associateBy { it.index }.orEmpty()
     }
-    val bookmarkedPages = remember(uiState.pageBookmarks) {
-        uiState.pageBookmarks.mapTo(hashSetOf()) { it.page }
+    val bookmarkedPages = remember(uiState.thumbnailPageBookmarks) {
+        uiState.thumbnailPageBookmarks.mapTo(hashSetOf()) { it.page }
     }
     val initialIndex = remember(uiState.pageNumbers, uiState.currentPage) {
         uiState.pageNumbers.indexOf(uiState.currentPage).coerceAtLeast(0)

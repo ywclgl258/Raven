@@ -162,7 +162,7 @@ fun SearchScreen(
     modifier: Modifier = Modifier,
     route: RavenRoute.Search = RavenRoute.Search(),
     viewModel: SearchViewModel = koinViewModel(
-        key = "search_${route.initialQuery.orEmpty()}_${route.crossSite}",
+        key = "search_${route.initialQuery.orEmpty()}_${route.crossSite}_${route.sourceSiteId.orEmpty()}",
         parameters = { parametersOf(route) },
     ),
 ) {

@@ -408,7 +408,11 @@ fun StorageMigrationScreenContent(
                         footer = result.summary,
                     ) {
                         RavenGroupedRow(
-                            title = "已复制并通过 SHA-256 校验",
+                            title = if (result.videoCachesVerified) {
+                                "已复制并通过 SHA-256 校验"
+                            } else {
+                                "已复制并通过 SHA-256 校验（图集与索引）"
+                            },
                             value = "${result.copiedFiles} 个文件",
                             icon = Icons.Outlined.Verified,
                             iconTint = colors.success,

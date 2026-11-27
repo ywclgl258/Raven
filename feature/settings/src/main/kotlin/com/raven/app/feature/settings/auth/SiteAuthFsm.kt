@@ -67,14 +67,31 @@ class SiteAuthPolicy(
 
     private val targetHost: String? = targetUrl.toHttpUrlOrNull()?.host?.lowercase(Locale.ROOT)
 
+    // CSP is evaluated by Chromium during form redirects, including the redirect hops that
+    // shouldInterceptRequest does not expose. Only the descriptor's login origin can receive forms.
+    val formActionPolicy: String = loginUrl.toHttpUrlOrNull()
+        ?.takeIf { isAllowedUrl(loginUrl) }
+        ?.let { "form-action https://${it.host}" }
+        ?: "form-action 'none'"
+
     /**
      * Strictly enforces HTTPS scheme and membership in [normalizedAllowedHosts].
      * Cleartext HTTP, `javascript:`, `file:`, `data:`, `content:`, and off-domain hosts are always rejected.
      */
     fun isAllowedUrl(url: String): Boolean {
         val parsed = url.toHttpUrlOrNull() ?: return false
-        if (!parsed.isHttps) return false
+        if (!parsed.isHttps || parsed.port != 443 || parsed.username.isNotEmpty() || parsed.password.isNotEmpty()) return false
         return parsed.host.lowercase(Locale.ROOT) in normalizedAllowedHosts
+    }
+
+    fun allowsMainFrameRequest(phase: SiteAuthPhase, method: String, url: String): Boolean {
+        if (onMainFrameNavigation(phase, url) != SiteAuthNavigation.ALLOW) return false
+        return when (method.uppercase(Locale.ROOT)) {
+            "GET", "HEAD" -> true
+            // Resource/challenge hosts may be navigable without receiving login form data.
+            "POST" -> phase == SiteAuthPhase.FORUM && url.toHttpUrlOrNull()?.host == loginUrl.toHttpUrlOrNull()?.host
+            else -> false
+        }
     }
 
     /**

@@ -53,12 +53,12 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
@@ -82,6 +82,7 @@ import com.raven.app.core.designsystem.theme.RavenShapes
 import com.raven.app.core.designsystem.theme.RavenTabularTextStyle
 import com.raven.app.core.designsystem.theme.ambientHeroGlow
 import com.raven.app.core.designsystem.theme.ravenSpringPress
+import com.raven.app.core.designsystem.theme.rememberRavenWindowSize
 import com.raven.app.core.model.MediaItem
 import kotlinx.coroutines.launch
 import kotlin.math.abs
@@ -114,7 +115,7 @@ fun RavenHeroBanner(
     val motionReduced = LocalMotionReduced.current
     val reduceTransparency = LocalReduceTransparency.current
     val feedback = LocalRavenFeedback.current
-    val screenHeightDp = LocalConfiguration.current.screenHeightDp
+    val screenHeightDp = rememberRavenWindowSize().heightDp
     val effectiveBannerHeight = if (screenHeightDp in 1..600) {
         minOf(bannerHeight, (screenHeightDp * 0.60f).dp).coerceAtLeast(240.dp)
     } else {
@@ -411,23 +412,23 @@ fun RavenHeroBanner(
                                 },
                             contentAlignment = Alignment.Center,
                         ) {
-                            // Continuous offset-linked pill width driven in draw phase (zero 120Hz recomposition)
-                            val indicatorFraction = if (motionReduced) {
-                                if (active) 1f else 0f
-                            } else {
-                                val dist = abs(pagerState.getOffsetDistanceInPages(index)).coerceIn(0f, 1f)
-                                1f - dist
-                            }
-                            val widthDp = 6.dp + (20.dp * indicatorFraction)
                             Box(
                                 modifier = Modifier
-                                    .height(6.dp)
-                                    .width(widthDp)
-                                    .clip(CircleShape)
+                                    .size(width = 26.dp, height = 6.dp)
                                     .drawBehind {
+                                        val indicatorFraction = if (motionReduced) {
+                                            if (active) 1f else 0f
+                                        } else {
+                                            1f - abs(pagerState.getOffsetDistanceInPages(index)).coerceIn(0f, 1f)
+                                        }
+                                        val trackWidth = size.height + (size.width - size.height) * indicatorFraction
+                                        val origin = Offset((size.width - trackWidth) / 2f, 0f)
+                                        val radius = CornerRadius(size.height / 2f)
                                         drawRoundRect(
                                             color = dotTrackColor,
-                                            cornerRadius = CornerRadius(size.height / 2f, size.height / 2f),
+                                            topLeft = origin,
+                                            size = Size(trackWidth, size.height),
+                                            cornerRadius = radius,
                                         )
                                         if (indicatorFraction > 0.02f) {
                                             val fillFraction = if (canAutoAdvance && active && !pagerState.isScrollInProgress) {
@@ -437,8 +438,9 @@ fun RavenHeroBanner(
                                             }
                                             drawRoundRect(
                                                 color = dotActiveColor.copy(alpha = (0.35f + 0.65f * indicatorFraction).coerceIn(0f, 1f)),
-                                                size = Size(size.width * fillFraction, size.height),
-                                                cornerRadius = CornerRadius(size.height / 2f, size.height / 2f),
+                                                topLeft = origin,
+                                                size = Size(trackWidth * fillFraction, size.height),
+                                                cornerRadius = radius,
                                             )
                                         }
                                     },

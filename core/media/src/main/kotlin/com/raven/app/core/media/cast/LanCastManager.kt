@@ -2,8 +2,8 @@ package com.raven.app.core.media.cast
 
 import android.content.Context
 import android.content.Intent
-import android.net.Uri
 import android.os.Build
+import androidx.core.net.toUri
 import com.raven.app.core.common.AppDispatchers
 import com.raven.app.core.common.DefaultAppDispatchers
 import java.io.ByteArrayOutputStream
@@ -164,7 +164,7 @@ class LanCastManager(
                         val read = stream.read(buf)
                         if (read < 0) break
                         if (out.size() + read > MAX_DESCRIPTION_XML_BYTES) {
-                            return@use null
+                            return null
                         }
                         out.write(buf, 0, read)
                     }
@@ -289,18 +289,16 @@ class LanCastManager(
         fun buildSetAvTransportUriSoap(streamUrl: String, title: String): String {
             val safeUrl = escapeXml(streamUrl)
             val safeTitle = escapeXml(title.ifBlank { "Raven Video" })
-            return """
-                <?xml version="1.0" encoding="utf-8"?>
-                <s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/" s:encodingStyle="http://schemas.xmlsoap.org/soap/encoding/">
-                  <s:Body>
-                    <u:SetAVTransportURI xmlns:u="$AV_TRANSPORT_SERVICE">
-                      <InstanceID>0</InstanceID>
-                      <CurrentURI>$safeUrl</CurrentURI>
-                      <CurrentURIMetaData>&lt;DIDL-Lite xmlns="urn:schemas-upnp-org:metadata-1-0/DIDL-Lite/" xmlns:dc="http://purl.org/dc/elements/1.1/"&gt;&lt;item id="0" parentID="-1" restricted="1"&gt;&lt;dc:title&gt;$safeTitle&lt;/dc:title&gt;&lt;/item&gt;&lt;/DIDL-Lite&gt;</CurrentURIMetaData>
-                    </u:SetAVTransportURI>
-                  </s:Body>
-                </s:Envelope>
-            """.trimIndent()
+            val metadata = """<DIDL-Lite xmlns="urn:schemas-upnp-org:metadata-1-0/DIDL-Lite/" xmlns:dc="http://purl.org/dc/elements/1.1/">""" +
+                """<item id="0" parentID="-1" restricted="1"><dc:title>$safeTitle</dc:title></item></DIDL-Lite>"""
+            return buildString {
+                append("""<?xml version="1.0" encoding="utf-8"?>""")
+                append("""<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/" s:encodingStyle="http://schemas.xmlsoap.org/soap/encoding/">""")
+                append("""<s:Body><u:SetAVTransportURI xmlns:u="$AV_TRANSPORT_SERVICE">""")
+                append("<InstanceID>0</InstanceID><CurrentURI>$safeUrl</CurrentURI>")
+                append("<CurrentURIMetaData>${escapeXml(metadata)}</CurrentURIMetaData>")
+                append("</u:SetAVTransportURI></s:Body></s:Envelope>")
+            }
         }
 
         fun buildPlaySoap(): String = """
@@ -329,7 +327,7 @@ class LanCastManager(
         fun buildExternalPlayerIntent(url: String, mimeType: String = "video/*"): Intent? {
             val trimmed = url.trim()
             if (trimmed.isEmpty()) return null
-            val parsed = runCatching { Uri.parse(trimmed) }.getOrNull() ?: return null
+            val parsed = runCatching { trimmed.toUri() }.getOrNull() ?: return null
             val scheme = parsed.scheme?.lowercase(Locale.ROOT)
             if (scheme !in setOf("http", "https", "file", "content")) return null
             return Intent(Intent.ACTION_VIEW).apply {

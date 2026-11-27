@@ -81,6 +81,94 @@ internal fun shouldSkipStaleCompletedVideoSidecar(
     record.updatedAt <= existing.updatedAt
 
 /**
+ * Decides whether a scanned on-disk record may be projected into Room.
+ *
+ * @param scanGeneration generation captured before the disk scan started.
+ * @param galleryGeneration generation captured at the same instant for gallery folders.
+ * Both checks are evaluated at commit time, so a delete landing between scan and commit
+ * invalidates the record instead of resurrecting a deleted book.
+ */
+internal fun shouldProjectDiskSidecar(
+    record: DiskSidecarRecord,
+    existing: DownloadItem?,
+    scanGeneration: Long,
+    galleryGeneration: Long,
+    currentScanGeneration: () -> Long,
+    galleryGuard: DeletionGenerationGuard,
+): Boolean {
+    if (scanGeneration != currentScanGeneration()) return false
+    val activeTask = existing != null && existing.status in setOf(
+        DownloadStatus.DOWNLOADING,
+        DownloadStatus.QUEUED,
+        DownloadStatus.RETRY_WAIT,
+    )
+    if (activeTask) return false
+    if (shouldSkipStaleCompletedVideoSidecar(record, existing)) return false
+    if (record.kind != DownloadKind.VIDEO && galleryGuard.isStale(record.compositeDownloadId, galleryGeneration)) {
+        return false
+    }
+    return true
+}
+
+/**
+ * Result of reconciling one on-disk gallery record with the Room row for the same media.
+ */
+internal data class GalleryScanProjection(
+    val status: DownloadStatus,
+    val selectedPages: List<Int>,
+    val completedUnits: Int,
+)
+
+/**
+ * Precedence rules for a gallery task whose disk state was re-scanned after a pause, a process
+ * kill or a reinstall.
+ *
+ * - A manager-paused/incomplete task keeps the pages the user picked. The scan result only
+ *   reports how many of them are already on disk; an empty `selectedPages` used to be
+ *   interpreted as "download the whole book" on resume.
+ * - Once every page the user picked is present, the task is complete even when the book itself
+ *   is not (a selective download never writes the `complete` marker).
+ */
+internal fun resolveGalleryScanProjection(
+    record: DiskSidecarRecord,
+    existing: DownloadItem?,
+): GalleryScanProjection {
+    if (record.status == DownloadStatus.COMPLETED) {
+        return GalleryScanProjection(DownloadStatus.COMPLETED, emptyList(), record.completedPages)
+    }
+    val diskSelection = record.intactSelection.distinct().sorted()
+    val declaredSelection = record.declaredSelection.distinct().sorted()
+    val userSelection = existing?.selectedPages.orEmpty().distinct().sorted()
+    val satisfiedSelection = when {
+        userSelection.isNotEmpty() && diskSelection.containsAll(userSelection) -> userSelection
+        userSelection.isNotEmpty() -> emptyList()
+        diskSelection.isNotEmpty() -> diskSelection
+        else -> emptyList()
+    }
+    if (satisfiedSelection.isNotEmpty()) {
+        return GalleryScanProjection(
+            status = DownloadStatus.COMPLETED,
+            selectedPages = emptyList(),
+            completedUnits = maxOf(record.completedPages, satisfiedSelection.size),
+        )
+    }
+    val keepPaused = existing != null &&
+        (userSelection.isNotEmpty() || declaredSelection.isNotEmpty()) &&
+        existing.status in setOf(DownloadStatus.PAUSED, DownloadStatus.FAILED)
+    return GalleryScanProjection(
+        status = if (keepPaused) DownloadStatus.PAUSED else record.status,
+        // Room lost the selection on reinstall; the manifest still names the user's range, so
+        // resuming must not silently widen the task to the whole book.
+        selectedPages = when {
+            userSelection.isNotEmpty() -> userSelection
+            declaredSelection.isNotEmpty() -> declaredSelection
+            else -> diskSelection
+        },
+        completedUnits = record.completedPages,
+    )
+}
+
+/**
  * Unified domain facade coordinating [VideoDownloadEngine], [GalleryDownloadEngine], disk-recovered
  * sidecars ([StorageRootManager]), and [DownloadStateRepository] (Room).
  *
@@ -106,6 +194,12 @@ class DownloadCoordinator(
     val completedCount: Flow<Int> = downloadStateRepository.observeCompletedCount()
     val networkPolicy: StateFlow<DownloadNetworkPolicy> = downloadPolicyController.policy
 
+    /**
+     * Tracks in-flight gallery deletions so a disk scan snapshot captured before the delete cannot
+     * write the deleted book's record back into Room.
+     */
+    internal val galleryRemovalGuard: DeletionGenerationGuard = DeletionGenerationGuard()
+
     private val _batchProgress = MutableStateFlow(BatchEnqueueProgress())
     val batchProgress: StateFlow<BatchEnqueueProgress> = _batchProgress.asStateFlow()
 
@@ -128,6 +222,8 @@ class DownloadCoordinator(
     fun start() {
         downloadPolicyController.start()
         applicationScope.launch(dispatchers.io) {
+            // Imports killed mid-copy leave `incoming-*` staging folders that never become books.
+            runCatching { localLibraryImporter.reclaimOrphanedImportStaging() }
             runCatching { syncFromDisk() }
             runCatching { galleryDownloadEngine.resumePending() }
         }
@@ -270,17 +366,21 @@ class DownloadCoordinator(
 
     suspend fun delete(id: String, sourceRoot: String = "") = withContext(dispatchers.io) {
         val item = downloadStateRepository.getById(id)
-        when {
-            item == null -> {
-                videoDownloadEngine.remove(id)
-                downloadStateRepository.delete(id)
+        val isVideo = item?.kind == DownloadKind.VIDEO
+        // Video and gallery download ids never collide (`site:media` vs `site:media:quality`), so an
+        // unknown row is guarded too: a folder snapshot from a concurrent scan must not resurrect it.
+        val removal = if (isVideo) null else galleryRemovalGuard.beginRemoval(id)
+        try {
+            when {
+                item == null -> {
+                    videoDownloadEngine.remove(id)
+                    downloadStateRepository.delete(id)
+                }
+                isVideo -> videoDownloadEngine.remove(id)
+                else -> galleryDownloadEngine.remove(id, sourceRoot = sourceRoot)
             }
-            item.kind == DownloadKind.VIDEO -> {
-                videoDownloadEngine.remove(id)
-            }
-            else -> {
-                galleryDownloadEngine.remove(id, sourceRoot = sourceRoot)
-            }
+        } finally {
+            if (removal != null) galleryRemovalGuard.completeRemoval(id, removal)
         }
     }
 
@@ -327,12 +427,26 @@ class DownloadCoordinator(
         runCatching { videoDownloadEngine.projectAllToRepository() }
         repeat(2) {
             val scanGeneration = videoDownloadEngine.removalGeneration()
+            // Gallery deletions bump this counter the same way Media3 removals do, so a folder
+            // snapshot taken before the delete can never be projected back into Room.
+            val galleryGeneration = galleryRemovalGuard.globalGeneration()
+            // Per-id snapshot taken before the folder walk: a delete of this specific book after the
+            // scan invalidates its record even though the global counter also moved for others.
+            val galleryGenerationSnapshot = galleryRemovalGuard.snapshotGenerations()
             val sidecars = storageRootManager.scanDiskSidecars(
                 isVideoCached = { key, root -> downloadCaches.isCached(key, root) },
                 inspectComicFolder = { siteId, folder, root ->
                     galleryPageRepository.inspectDiskBookForRecovery(siteId, folder, root)
                 },
             )
+            // Per-id snapshot: a delete of *this* book after the scan invalidates it, even when the
+            // delete's global counter moved before the scan started.
+            val galleryGenerations = sidecars
+                .filter { it.kind != DownloadKind.VIDEO }
+                .associate { record ->
+                    val id = record.compositeDownloadId
+                    id to (galleryGenerationSnapshot[id] ?: galleryGeneration)
+                }
             val projected = mutableListOf<DownloadItem>()
             var removalInterrupted = false
             for (record in sidecars) {
@@ -365,16 +479,17 @@ class DownloadCoordinator(
                         }
                         if (verifiedRecord != null) {
                             val existing = downloadStateRepository.getById(id)
-                            // Do not clobber an active in-progress/paused task with a disk scan snapshot.
-                            val activeTask = existing != null && existing.status in setOf(
-                                DownloadStatus.DOWNLOADING,
-                                DownloadStatus.QUEUED,
-                                DownloadStatus.RETRY_WAIT,
+                            // Evaluated at commit time: a deletion landing between scan and commit
+                            // must invalidate the record instead of resurrecting a removed book.
+                            val projectable = shouldProjectDiskSidecar(
+                                record = verifiedRecord,
+                                existing = existing,
+                                scanGeneration = scanGeneration,
+                                galleryGeneration = galleryGenerations[id] ?: galleryGeneration,
+                                currentScanGeneration = { videoDownloadEngine.removalGeneration() },
+                                galleryGuard = galleryRemovalGuard,
                             )
-                            // Media3 projection is newer than a stale sidecar on the same root.
-                            // Preserve its metadata/warning; allow FAILED and root moves through.
-                            val staleCompletedSidecar = shouldSkipStaleCompletedVideoSidecar(verifiedRecord, existing)
-                            if (!activeTask && !staleCompletedSidecar) {
+                            if (projectable) {
                                 val item = sidecarToDownloadItem(verifiedRecord, existing)
                                 downloadStateRepository.upsert(item)
                                 projected += item
@@ -468,6 +583,8 @@ class DownloadCoordinator(
         storageRootManager.beginMigration()
         return try {
             videoDownloadEngine.pauseAll()
+            videoDownloadEngine.pauseAllAndWait()
+            videoDownloadEngine.awaitWriteQuiescence()
             galleryDownloadEngine.withWritersStopped {
                 storageRootManager.migratePrivateToShared(
                     copyVideos = {
@@ -493,14 +610,20 @@ class DownloadCoordinator(
         } else {
             StorageLocation.PRIVATE
         }
+        val projection = if (record.kind == DownloadKind.VIDEO) {
+            null
+        } else {
+            resolveGalleryScanProjection(record, existing)
+        }
+        val status = projection?.status ?: record.status
         val totalUnits = if (record.kind == DownloadKind.VIDEO) 1 else record.totalPages
         val completedUnits = if (record.kind == DownloadKind.VIDEO) {
-            if (record.status == DownloadStatus.COMPLETED) 1 else 0
+            if (status == DownloadStatus.COMPLETED) 1 else 0
         } else {
-            record.completedPages
+            projection?.completedUnits ?: record.completedPages
         }
         val fraction = when {
-            record.status == DownloadStatus.COMPLETED -> 1f
+            status == DownloadStatus.COMPLETED -> 1f
             totalUnits > 0 -> (completedUnits.toFloat() / totalUnits.toFloat()).coerceIn(0f, 1f)
             else -> 0f
         }
@@ -512,17 +635,17 @@ class DownloadCoordinator(
             title = record.title,
             coverUrl = record.coverUrl,
             kind = record.kind,
-            status = record.status,
+            status = status,
             quality = record.quality.takeIf { it.isNotBlank() },
             groupName = existing?.groupName.orEmpty(),
             progressFraction = fraction,
             completedUnits = completedUnits,
             totalUnits = totalUnits,
             downloadedBytes = record.bytes,
-            totalBytes = if (record.status == DownloadStatus.COMPLETED) record.bytes else existing?.totalBytes,
-            selectedPages = record.intactSelection,
-            errorCategory = if (record.status == DownloadStatus.FAILED) existing?.errorCategory else null,
-            errorMessage = record.detail.takeIf { it.isNotBlank() },
+            totalBytes = if (status == DownloadStatus.COMPLETED) record.bytes else existing?.totalBytes,
+            selectedPages = projection?.selectedPages ?: record.intactSelection,
+            errorCategory = if (status == DownloadStatus.FAILED) existing?.errorCategory else null,
+            errorMessage = record.detail.takeIf { status != DownloadStatus.COMPLETED && it.isNotBlank() },
             priority = existing?.priority ?: 0,
             storageLocation = storageLoc,
             localPath = record.sourceRoot.takeIf { it.isNotBlank() },

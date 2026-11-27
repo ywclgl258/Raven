@@ -3,6 +3,7 @@ package com.raven.app.core.database.repository
 import com.raven.app.core.common.UrlSanitizer
 import com.raven.app.core.database.DatabaseTransactionRunner
 import com.raven.app.core.database.RavenDatabase
+import com.raven.app.core.database.dao.BackupRestoreJournalDao
 import com.raven.app.core.database.dao.BlockedTermDao
 import com.raven.app.core.database.dao.FavoriteDao
 import com.raven.app.core.database.dao.ImageFavoriteDao
@@ -21,18 +22,41 @@ import com.raven.app.core.database.dao.TimeBookmarkDao
 import com.raven.app.core.database.dao.UpdateInboxDao
 import com.raven.app.core.database.dao.WatchProgressDao
 import com.raven.app.core.database.datastore.SettingsDataStore
+import com.raven.app.core.database.entity.BackupRestoreJournalEntity
 import com.raven.app.core.database.domain.BackupMerger
 import com.raven.app.core.database.mapper.toDomain
 import com.raven.app.core.database.mapper.toEntity
 import com.raven.app.core.database.model.BackupSummary
 import com.raven.app.core.model.ComicLanguage
+import com.raven.app.core.model.FavoriteItem
 import com.raven.app.core.model.ImageFavorite
+import com.raven.app.core.model.PageBookmark
 import com.raven.app.core.model.RavenBackupPayload
 import com.raven.app.core.model.Shelf
+import com.raven.app.core.model.ShelfItem
 import com.raven.app.core.model.SiteId
 import com.raven.app.core.model.TagTranslationSource
+import com.raven.app.core.model.TimeBookmark
+import com.raven.app.core.model.WatchProgress
+import com.raven.app.core.model.ReadingProgress
 import kotlinx.coroutines.sync.Mutex
+import kotlinx.serialization.builtins.MapSerializer
+import kotlinx.serialization.builtins.serializer
+import kotlinx.serialization.json.Json
 import kotlinx.coroutines.sync.withLock
+
+ /**
+ * Raised when the Room transaction committed but the follow-up Preferences DataStore commit of
+ * restore settings failed. The settings journal survives and is replayed on the next startup,
+ * export, or restore, so the restore completes without user action.
+ */
+class BackupPartialRestoreException(
+    message: String,
+    val dataRestored: Boolean,
+    val settingsCommitted: Boolean,
+    cause: Throwable? = null,
+) : IllegalStateException(message, cause)
+
 
 /**
  * Exports [RavenBackupPayload] snapshots and atomically merges/applies incoming backups
@@ -62,12 +86,17 @@ class BackupDataRepository(
     private val transactionRunner: DatabaseTransactionRunner,
     private val clock: () -> Long = System::currentTimeMillis,
     private val tagTranslationDao: TagTranslationDao? = null,
+    private val tagDictionaryRepository: TagDictionaryRepository? = null,
+    private val backupRestoreJournalDao: BackupRestoreJournalDao? = null,
 ) {
     private val backupMutex = Mutex()
 
     fun summarize(payload: RavenBackupPayload): BackupSummary = BackupMerger.summarize(payload)
 
     suspend fun exportPayload(appVersion: String = ""): RavenBackupPayload = backupMutex.withLock {
+        // A restore interrupted between its Room commit and its settings write must be finished
+        // first, otherwise the exported payload would pair new data with stale settings.
+        recoverPendingSettings()
         val now = clock()
         val appSettings = settingsDataStore.readPersistedSettings()
         val portableSettings = settingsDataStore.exportPortableSettings()
@@ -77,13 +106,26 @@ class BackupDataRepository(
                 now = now,
                 siteLanguages = appSettings.siteLanguages,
                 portableSettings = portableSettings,
-            )
+            ).toPortableExport()
         }
     }
 
     /**
      * Serializes backup import/export so Room and DataStore snapshots cannot cross operation
-     * generations. Room mutations still roll back together if the database transaction fails.
+     * generations.
+     *
+     * Commit protocol (Room and Preferences DataStore cannot share a transaction):
+     * 1. One Room transaction merges, replaces every library row, **and** writes
+     *    [BackupRestoreJournalEntity] holding the settings that still have to reach DataStore.
+     *    The journal is therefore atomic with the data: a crash before commit leaves neither, a
+     *    crash after commit always leaves both.
+     * 2. `commitBackupSettings` applies that snapshot to DataStore.
+     * 3. The journal row is deleted (separate statement; replay is idempotent, so a crash between
+     *    2 and 3 just re-applies identical values).
+     *
+     * A failed step 2 keeps the journal, so the next startup / export / restore replays it and
+     * completes the restore. The user-visible states are "restored" and "restored, settings
+     * finishing on next launch" — never new library data permanently paired with old settings.
      */
     suspend fun applyBackup(
         incoming: RavenBackupPayload,
@@ -93,6 +135,9 @@ class BackupDataRepository(
             "Unsupported backup schemaVersion: ${incoming.schemaVersion}"
         }
         return backupMutex.withLock {
+            // Finish any restore interrupted on a previous run before merging on top of it.
+            recoverPendingSettings()
+
             val now = clock()
             val appSettings = settingsDataStore.readPersistedSettings()
             val portableSettings = settingsDataStore.exportPortableSettings()
@@ -106,15 +151,99 @@ class BackupDataRepository(
                 )
                 val combined = BackupMerger.merge(local = local, incoming = incoming, now = now)
                 writePayloadToDatabase(combined)
+                writeRestoreJournal(combined, now)
                 combined
             }
 
-            settingsDataStore.applyBackupSettings(
-                settingsMap = merged.settings,
-                siteLanguages = merged.siteLanguages,
-            )
+            commitJournaledSettings(merged.settings, merged.siteLanguages, journalMustSurviveOnFailure = true)
+
+            // Custom tag entries were replaced inside the Room transaction; the in-memory
+            // TagDictionary still holds the previous custom layer until it is rehydrated.
+            runCatching { tagDictionaryRepository?.hydrateCustomLayer() }
+
             BackupMerger.summarize(merged)
         }
+    }
+
+    /**
+     * Replays a journal left behind by an interrupted restore and clears it. Idempotent; called
+     * before every export/restore and from app startup (`RavenApplication`).
+     *
+     * @return `true` when a pending journal was found and replayed.
+     */
+    suspend fun recoverPendingSettings(): Boolean {
+        val dao = backupRestoreJournalDao ?: return false
+        val journal = runCatching { dao.get() }.getOrNull() ?: return false
+        val decoded = runCatching { journal.toSettingsSnapshot() }.getOrNull()
+        if (decoded == null) {
+            // Corrupt journal: drop it rather than replay garbage on every start.
+            runCatching { dao.clear() }
+            return false
+        }
+        commitJournaledSettings(decoded.first, decoded.second, journalMustSurviveOnFailure = false)
+        runCatching { tagDictionaryRepository?.hydrateCustomLayer() }
+        return true
+    }
+
+    private suspend fun commitJournaledSettings(
+        settingsMap: Map<String, String>,
+        siteLanguages: Map<SiteId, ComicLanguage>,
+        journalMustSurviveOnFailure: Boolean,
+    ) {
+        try {
+            settingsDataStore.commitBackupSettings(settingsMap, siteLanguages)
+        } catch (ce: kotlinx.coroutines.CancellationException) {
+            throw ce
+        } catch (failure: Exception) {
+            if (journalMustSurviveOnFailure) {
+                throw BackupPartialRestoreException(
+                    message = "本地数据已恢复，设置将在下次启动时自动补齐",
+                    dataRestored = true,
+                    settingsCommitted = false,
+                    cause = failure,
+                )
+            }
+            throw failure
+        }
+        clearRestoreJournal()
+    }
+
+    private suspend fun clearRestoreJournal() {
+        backupRestoreJournalDao?.clear()
+    }
+
+    private suspend fun writeRestoreJournal(payload: RavenBackupPayload, now: Long) {
+        val dao = backupRestoreJournalDao ?: return
+        dao.put(
+            BackupRestoreJournalEntity(
+                restoreId = java.util.UUID.randomUUID().toString(),
+                createdAt = now,
+                settingsJson = JOURNAL_JSON_ENCODER.encodeToString(
+                    MapSerializer(String.serializer(), String.serializer()),
+                    payload.settings,
+                ),
+                siteLanguagesJson = JOURNAL_JSON_ENCODER.encodeToString(
+                    MapSerializer(String.serializer(), String.serializer()),
+                    payload.siteLanguages.entries.associate { (siteId, language) -> siteId.value to language.name },
+                ),
+            ),
+        )
+    }
+
+    private fun BackupRestoreJournalEntity.toSettingsSnapshot(): Pair<Map<String, String>, Map<SiteId, ComicLanguage>> {
+        val settings = JOURNAL_JSON_ENCODER.decodeFromString(
+            MapSerializer(String.serializer(), String.serializer()),
+            settingsJson,
+        )
+        val languagesMap: Map<String, String> = JOURNAL_JSON_ENCODER.decodeFromString(
+            MapSerializer(String.serializer(), String.serializer()),
+            siteLanguagesJson,
+        )
+        val languages = languagesMap.mapNotNull { (rawSite, rawLanguage) ->
+            val language = ComicLanguage.entries.firstOrNull { it.name == rawLanguage } ?: return@mapNotNull null
+            SiteId.of(rawSite) to language
+        }.toMap()
+        return settings to languages
     }
 
     private suspend fun readLocalSnapshot(
@@ -138,7 +267,10 @@ class BackupDataRepository(
                 ) + existing
             }
         }
-        val imageFavorites = imageFavoriteDao.getAll().map { it.toDomain().stripLocalDiskPath() }
+        // Local rows keep their on-device URI while inside the merge pipeline; only the exported
+        // copy is scrubbed (see [toPortableExport]). Stripping here used to feed a scrubbed
+        // snapshot back into the merge and permanently drop local preview paths.
+        val imageFavorites = imageFavoriteDao.getAll().map { it.toDomain() }
         return RavenBackupPayload(
             schemaVersion = RavenBackupPayload.CURRENT_SCHEMA_VERSION,
             exportedAt = now,
@@ -260,6 +392,37 @@ class BackupDataRepository(
         }
     }
 
+    /**
+     * Produces the wire-safe copy of a local snapshot: device-local file paths are removed and
+     * nothing else changes. Applied only on the export path ([exportPayload]) so that
+     * [applyBackup]'s merge input keeps the real on-device URIs.
+     */
+    private fun RavenBackupPayload.toPortableExport(): RavenBackupPayload = copy(
+        imageFavorites = imageFavorites.map { it.stripLocalDiskPath() },
+        pageBookmarks = pageBookmarks.map { it.stripLocalCoverPath() },
+        shelfItems = shelfItems.map { it.stripLocalCoverPath() },
+        favorites = favorites.map { it.stripLocalCoverPath() },
+        watchProgress = watchProgress.map { it.stripLocalCoverPath() },
+        readingProgress = readingProgress.map { it.stripLocalCoverPath() },
+        timeBookmarks = timeBookmarks.map { it.stripLocalCoverPath() },
+        updateInbox = updateInbox.map { entry ->
+            val item = entry.item
+            if (item.siteId.isLocal && item.coverUrl.isNotBlank() && !UrlSanitizer.isHttpsUrl(item.coverUrl)) {
+                entry.copy(item = item.copy(coverUrl = ""))
+            } else {
+                entry
+            }
+        },
+        customTagTranslations = customTagTranslations.map {
+            it.copy(
+                namespace = it.namespace.take(RavenBackupPayload.MAX_TAG_NAMESPACE_LENGTH),
+                rawSlug = it.rawSlug.take(RavenBackupPayload.MAX_TAG_SLUG_LENGTH),
+                chineseName = it.chineseName.take(RavenBackupPayload.MAX_TAG_CHINESE_NAME_LENGTH),
+                intro = it.intro.take(RavenBackupPayload.MAX_TAG_INTRO_LENGTH),
+            )
+        },
+    )
+
     private fun ImageFavorite.stripLocalDiskPath(): ImageFavorite {
         if (!siteId.isLocal) return this
         val stripped = if (imageUrl.isNotBlank() && !UrlSanitizer.isHttpsUrl(imageUrl)) {
@@ -268,5 +431,45 @@ class BackupDataRepository(
             imageUrl
         }
         return if (stripped == imageUrl) this else copy(imageUrl = stripped)
+    }
+
+    // Local comics imported from device files can carry `file://` thumbnails. Portable backups
+    // must not leak absolute storage paths, so every exported cover for a local source is scrubbed.
+    private fun PageBookmark.stripLocalCoverPath(): PageBookmark {
+        if (!siteId.isLocal || coverUrl.isBlank() || UrlSanitizer.isHttpsUrl(coverUrl)) return this
+        return copy(coverUrl = "")
+    }
+
+    private fun ShelfItem.stripLocalCoverPath(): ShelfItem {
+        if (!siteId.isLocal || coverUrl.isBlank() || UrlSanitizer.isHttpsUrl(coverUrl)) return this
+        return copy(coverUrl = "")
+    }
+
+    private fun FavoriteItem.stripLocalCoverPath(): FavoriteItem {
+        if (!siteId.isLocal || coverUrl.isBlank() || UrlSanitizer.isHttpsUrl(coverUrl)) return this
+        return copy(coverUrl = "")
+    }
+
+    private fun WatchProgress.stripLocalCoverPath(): WatchProgress {
+        if (!siteId.isLocal || coverUrl.isBlank() || UrlSanitizer.isHttpsUrl(coverUrl)) return this
+        return copy(coverUrl = "")
+    }
+
+    private fun ReadingProgress.stripLocalCoverPath(): ReadingProgress {
+        if (!siteId.isLocal || coverUrl.isBlank() || UrlSanitizer.isHttpsUrl(coverUrl)) return this
+        return copy(coverUrl = "")
+    }
+
+    private fun TimeBookmark.stripLocalCoverPath(): TimeBookmark {
+        if (!siteId.isLocal || coverUrl.isBlank() || UrlSanitizer.isHttpsUrl(coverUrl)) return this
+        return copy(coverUrl = "")
+    }
+
+    companion object {
+        /** Lenient decoder for the journal blobs written by this class only. */
+        private val JOURNAL_JSON_ENCODER: Json = Json {
+            ignoreUnknownKeys = true
+            encodeDefaults = true
+        }
     }
 }

@@ -3,6 +3,7 @@ package com.raven.app.sites.gallery
 import com.raven.app.core.model.FeedRequest
 import com.raven.app.core.model.SiteException
 import com.raven.app.core.model.SiteId
+import com.raven.app.core.sitespi.SiteHttpResponse
 import kotlinx.coroutines.test.runTest
 import org.jsoup.Jsoup
 import org.junit.Assert.assertEquals
@@ -261,5 +262,94 @@ class WordPressPhotoEngineTest {
         )
         val phraseDetail = cosplayPlugin.gallerySource.loadGalleryDetail(phraseUrl)
         assertEquals(listOf("https://cosplaytele.com/wp-content/uploads/2026/11/ok.webp"), phraseDetail.pages.map { it.imageUrl })
+    }
+
+    @Test
+    fun hostileContentPageClaimIsClampedBeforeAllocationAndAwaitAllFollowsBatchSize() = runTest {
+        // Fallback responder answers every unstubbed request (the 2..31 content pages) with one image.
+        val fakeHttp = FakeHttpClientAdapter { req ->
+            val pageNumber = Regex("""/huge-claim/(\d+)/""").find(req.url)?.groupValues?.get(1)?.toIntOrNull() ?: 1
+            val oneImage = """
+                <html><body><article class="post"><div class="entry-content">
+                  <figure><img src="https://cdn.example.net/huge-claim-$pageNumber.webp" /></figure>
+                </div></article></body></html>
+            """.trimIndent()
+            SiteHttpResponse(code = 200, finalUrl = req.url, body = oneImage.toByteArray(Charsets.UTF_8))
+        }
+        val plugin = EveriaSitePlugin(fakeHttp)
+        val postUrl = "https://everia.club/2026/11/05/huge-claim/"
+        val canonical = "https://everia.club/2026/11/05/huge-claim/"
+
+        // A corrupted/hostile pagination bar claims 9,999 content pages.
+        val claimHtml = """
+            <!DOCTYPE html><html><head><title>Huge Claim - Everia.club</title></head><body>
+            <article class="post"><div class="entry-content">
+              <figure><img src="https://cdn.example.net/p1.webp" /></figure>
+            </div></article>
+            <div class="page-links"><a class="post-page-numbers" href="/huge-claim/2/">2</a>
+              <a class="post-page-numbers" href="/huge-claim/9999/">9999</a></div>
+            </body></html>
+        """.trimIndent()
+        fakeHttp.stubHtml(postUrl, claimHtml)
+        val engine = plugin.engine
+
+        val doc = Jsoup.parse(claimHtml, postUrl)
+        assertEquals(9999, engine.extractContentPageCount(doc))
+        // The validated count is clamped to MAX_CONTENT_PAGES, never the raw site claim.
+        val validated = engine.validatedContentPageCount(doc, canonical)
+        assertEquals(WordPressPhotoEngine.MAX_CONTENT_PAGES, validated)
+
+        // Full detail load must materialise exactly clamp-many pages in ascending index order.
+        val detail = plugin.gallerySource.loadGalleryDetail(postUrl)
+        assertEquals(WordPressPhotoEngine.MAX_CONTENT_PAGES, detail.pages.size)
+        assertEquals((1..WordPressPhotoEngine.MAX_CONTENT_PAGES).toList(), detail.pages.map { it.index })
+        val contentPageRequests = fakeHttp.recordedRequests
+            .mapNotNull { req -> Regex("""/huge-claim/(\d+)/""").find(req.url)?.groupValues?.get(1)?.toIntOrNull() }
+        assertTrue("no request may target a page beyond the clamp", contentPageRequests.all { it <= WordPressPhotoEngine.MAX_CONTENT_PAGES })
+    }
+
+    @Test
+    fun batchedContentPageFetchFlattensUnevenPagesInStrictPageThenOffsetOrder() = runTest {
+        // 12 pages = two 6-page waves, deliberately uneven image counts. Batching must not
+        // reorder pages or lose a page, and flat indices stay page-then-offset sequential.
+        val canonical = "https://everia.club/2026/11/06/uneven-waves/"
+        val pageCounts = listOf(1, 3, 2, 4, 1, 2, 5, 1, 2, 3, 1, 2)
+        val fakeHttp = FakeHttpClientAdapter { req ->
+            val pageNumber = Regex("""/uneven-waves/(\d+)/""").find(req.url)?.groupValues?.get(1)?.toIntOrNull() ?: 1
+            val count = pageCounts.getOrElse(pageNumber - 1) { 1 }
+            val images = (0 until count).joinToString("") {
+                "<figure><img src=\"https://cdn.example.net/uneven-$pageNumber-$it.webp\" /></figure>"
+            }
+            val pager = if (pageNumber == 1) {
+                "<div class=\"page-links\">" + (1..pageCounts.size).joinToString("") { n ->
+                    "<a class=\"post-page-numbers\" href=\"$canonical$n/\">$n</a>"
+                } + "</div>"
+            } else {
+                ""
+            }
+            SiteHttpResponse(
+                code = 200,
+                finalUrl = req.url,
+                body = "<html><body><article class=\"post\"><div class=\"entry-content\">$images$pager</div></article></body></html>"
+                    .toByteArray(),
+            )
+        }
+
+        val plugin = EveriaSitePlugin(fakeHttp)
+        val detail = plugin.gallerySource.loadGalleryDetail(canonical)
+        assertEquals(pageCounts.sum(), detail.pageCount)
+
+        val expectedImages = pageCounts.mapIndexed { zeroBased, count ->
+            val page = zeroBased + 1
+            (0 until count).map { offset -> "https://cdn.example.net/uneven-$page-$offset.webp" }
+        }.flatten()
+        assertEquals(expectedImages, detail.pages.map { it.imageUrl })
+
+        // Encoded page URLs carry the true content-page coordinate, so pages never collapse.
+        val contentPagesInUrls = detail.pages
+            .map { it.pageUrl.substringAfterLast('#').split('-')[1].toInt() }
+            .distinct()
+        assertEquals(pageCounts.size, contentPagesInUrls.size)
+        assertEquals((1..pageCounts.size).toList(), contentPagesInUrls)
     }
 }

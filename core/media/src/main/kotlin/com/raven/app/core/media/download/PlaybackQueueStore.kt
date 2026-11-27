@@ -3,6 +3,7 @@ package com.raven.app.core.media.download
 import android.content.Context
 import com.raven.app.core.common.AppDispatchers
 import com.raven.app.core.common.DefaultAppDispatchers
+import com.raven.app.core.media.storage.AtomicFiles
 import com.raven.app.core.model.MediaItem
 import com.raven.app.core.model.SiteId
 import java.io.File
@@ -84,16 +85,9 @@ class AtomicFilePlaybackQueuePersistence(
         val parent = file.parentFile ?: return
         check(parent.isDirectory || parent.mkdirs()) { "无法创建播放队列存储目录" }
         val encoded = json.encodeToString(PlaybackQueueSession.serializer(), session)
-        val temp = File(parent, "${file.name}.${System.nanoTime()}.part")
-        try {
-            temp.writeText(encoded)
-            if (!temp.renameTo(file)) {
-                if (file.exists()) file.delete()
-                check(temp.renameTo(file)) { "无法保存播放队列状态" }
-            }
-        } finally {
-            temp.delete()
-        }
+        // Keeps the previous queue snapshot until the replacement is published; deleting the
+        // destination first would lose the only recoverable session when the rename is refused.
+        AtomicFiles.writeText(file, encoded)
     }
 
     companion object {

@@ -16,14 +16,26 @@ import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
  * Strictly site-partitioned [CookieJar] backed by encrypted [SiteSessionStore] (`SessionVault`).
  *
  * Security & protocol invariants:
- * 1. Cookies are partitioned strictly by [SiteDescriptor.matchesHost]. Media CDNs (`mediaDomains`),
- *    API-only hosts (`apiHosts`), and update servers NEVER receive or store cookies.
+ * 1. Cookies are partitioned strictly by [SiteDescriptor.matchesHost] **and** by
+ *    [SiteId.accountId] (E-Hentai / ExHentai are one login, so they share exactly one bucket).
+ *    Media CDNs (`mediaDomains`), API-only hosts (`apiHosts`), and update servers NEVER receive
+ *    or store cookies.
  * 2. Host-only cookies are encoded explicitly as `h\u0001<host>\u0001<raw>` and domain cookies as
  *    `d\u0001<raw>` so host-only scoping never expands to subdomains across restarts.
  * 3. Always merges [com.raven.app.core.sitespi.AuthProvider.defaultCookies] (e.g., `nw=1` for
  *    E-Hentai / ExHentai) on matching registered site hosts.
- * 4. Interoperates seamlessly with site plugins that import/inspect plain cookie maps via
- *    [SiteSessionStore.saveCookies] / [SiteSessionStore.getCookies].
+ * 4. Response writes are guarded by the epoch the call **left** under, captured by
+ *    [SiteCookieEpochInterceptor] before the request hits the network and read back here through
+ *    [SiteCookieEpochScope]. The comparison happens inside
+ *    [SiteSessionStore.storeSessionSnapshotIfEpoch] and therefore atomically with the write, under
+ *    the store's own lock — so a `Set-Cookie` that arrives after a logout can never restore the
+ *    cleared session (NET-09), while two concurrent requests to the same URL stay correctly paired
+ *    because the scope is per-call (thread-scoped around `chain.proceed`), not URL-keyed.
+ * 5. Cookie-jar writes never bump the epoch for a byte-identical snapshot. Renewal of an identical
+ *    `Set-Cookie` (same name/value, new expiry) is detected and skipped entirely, so a routine
+ *    session refresh never cancels authenticated requests that are already in flight.
+ * 6. Cookies whose expiry has passed are tombstoned: they are never resurrected from the plain
+ *    name/value summary, which carries no expiry information.
  */
 class SiteCookieJar(
     private val sessionStore: SiteSessionStore,
@@ -42,13 +54,23 @@ class SiteCookieJar(
     )
 
     private val lock = Any()
+
+    /** accountId -> epoch for which the rich jar blob and plain summary were last reconciled. */
     private val lastSyncedEpoch = HashMap<SiteId, Long>()
 
     override fun saveFromResponse(url: HttpUrl, cookies: List<Cookie>) {
         if (cookies.isEmpty()) return
         val plugin = resolveRegisteredSite(url.host) ?: return
         val descriptor = plugin.descriptor
+        val accountId = plugin.id.accountId
         val now = clockMs()
+
+        // Epoch captured at dispatch, when this response came from a real network call.
+        // A null scope means the caller invoked the jar directly (WebView import / explicit
+        // replace), which is synchronous by construction: no in-flight response can race it, so the
+        // write proceeds unguarded. Real OkHttp responses always arrive inside the scope set by
+        // SiteCookieEpochInterceptor on the shared pool.
+        val dispatchEpoch = SiteCookieEpochScope.epochFor(accountId)
 
         synchronized(lock) {
             try {
@@ -56,19 +78,20 @@ class SiteCookieJar(
                 var mutated = false
                 for (cookie in cookies) {
                     if (!descriptor.matchesHost(cookie.domain)) continue
-                    bucket.removeAll { existing ->
-                        existing.name == cookie.name &&
-                            existing.domain.equals(cookie.domain, ignoreCase = true) &&
-                            existing.path == cookie.path
+                    if (cookie.expiresAt <= now) {
+                        // Explicit deletion still has to be applied to the persisted bucket.
+                        if (bucket.removeAll { existing -> sameCookieIdentity(existing, cookie) }) mutated = true
+                        continue
                     }
-                    if (cookie.expiresAt > now) {
-                        bucket.add(cookie)
-                    }
+                    bucket.removeAll { existing -> sameCookieIdentity(existing, cookie) }
+                    bucket.add(cookie)
                     mutated = true
                 }
-                if (mutated) {
-                    persistSiteCookiesLocked(plugin.id, bucket)
-                }
+                if (!mutated) return
+
+                // Compare-and-write under the store's lock: a logout/login that bumped the epoch
+                // after this request left rejects the write atomically and keeps the session cleared.
+                persistSiteCookiesLocked(accountId, bucket, expectedEpoch = dispatchEpoch)
             } catch (_: SessionVaultException) {
                 // Skip persisting when KeyStore decryption/encryption fails rather than crashing requests.
             }
@@ -120,11 +143,11 @@ class SiteCookieJar(
         val now = clockMs()
         synchronized(lock) {
             val active = cookies.filter { it.expiresAt > now }
-            persistSiteCookiesLocked(siteId, active)
+            persistSiteCookiesLocked(siteId.accountId, active, bumpEpoch = true)
         }
     }
 
-    /** Clears ONLY [siteId] credentials/cookies without affecting any other site. */
+    /** Clears ONLY [siteId]'s credential bucket (EH/EX share one account bucket; others unaffected). */
     fun clearSite(siteId: SiteId) {
         // ExHentai shares E-Hentai's account bucket, so clearing either clears the shared session.
         val accountId = siteId.accountId
@@ -132,7 +155,23 @@ class SiteCookieJar(
             lastSyncedEpoch.remove(accountId)
             sessionStore.clearSite(accountId)
         }
+        notifyAccountChanged(accountId)
     }
+
+    /**
+     * Called after a plugin-driven login/import/logout replaced [siteId]'s credentials outside this
+     * jar, so account-derived caches (media URLs, HTTP response cache) can be dropped. Safe to call
+     * with either EH or EX id.
+     */
+    fun notifyAccountChanged(siteId: SiteId) {
+        onAccountChanged?.invoke(siteId.accountId)
+    }
+
+    /**
+     * Invoked after a site's account bucket is cleared or replaced, so owners of account-derived
+     * caches (e.g. [MediaRedirectCache]) can drop them. Never invoked while holding [lock].
+     */
+    var onAccountChanged: ((SiteId) -> Unit)? = null
 
     private fun resolveRegisteredSite(host: String): SitePlugin? {
         val plugin = siteRegistryProvider().findForHost(host) ?: return null
@@ -155,33 +194,40 @@ class SiteCookieJar(
 
     private fun loadSiteCookiesLocked(plugin: SitePlugin, now: Long): List<Cookie> {
         // Session state is stored per account identity, so E-Hentai/ExHentai share one bucket.
-        val siteId = plugin.id.accountId
+        val accountId = plugin.id.accountId
         val descriptor = plugin.descriptor
         val accountDescriptors = accountDescriptorsLocked(plugin)
         val acceptsHost: (String) -> Boolean = { host ->
             accountDescriptors.any { it.matchesHost(host) }
         }
-        val encodedBlob = sessionStore.getSecret(siteId, JAR_SECRET_KEY)
-        val plainMap = sessionStore.getCookies(siteId)
+        val encodedBlob = sessionStore.getSecret(accountId, JAR_SECRET_KEY)
+        val plainMap = sessionStore.getCookies(accountId)
 
         val jarCookies = encodedBlob
             ?.lineSequence()
             ?.filter { it.isNotBlank() }
             ?.mapNotNull { decodeCookie(descriptor, it, acceptsHost) }
-            ?.filter { it.expiresAt > now }
             ?.toList()
             .orEmpty()
 
-        val syncedEpoch = lastSyncedEpoch[siteId]
-        val currentEpoch = sessionStore.authEpoch(siteId)
-        if (syncedEpoch != null && syncedEpoch == currentEpoch && jarCookies.isNotEmpty()) {
-            return jarCookies
+        // Expired jar entries whose summary still carries the exact same stale value are tombstones:
+        // the summary has no expiry, so rebuilding from it would resurrect a dead session cookie.
+        val resurrectedNames = jarCookies
+            .filter { it.expiresAt <= now }
+            .mapNotNull { cookie -> cookie.name.takeIf { plainMap[cookie.name] == cookie.value } }
+            .toHashSet()
+
+        val syncedEpoch = lastSyncedEpoch[accountId]
+        val currentEpoch = sessionStore.authEpoch(accountId)
+        val activeJarCookies = jarCookies.filter { it.expiresAt > now }
+        if (syncedEpoch != null && syncedEpoch == currentEpoch && activeJarCookies.isNotEmpty()) {
+            return activeJarCookies
         }
 
         // Reconcile rich jar entries with any direct plain cookie mutations (e.g. WebView/manual import)
         val result = mutableListOf<Cookie>()
         val matchedPlainNames = HashSet<String>()
-        for (jarCookie in jarCookies) {
+        for (jarCookie in activeJarCookies) {
             val plainValue = plainMap[jarCookie.name]
             if (plainValue == null) {
                 // Cookie was removed externally via removeCookies / replaceCookies / clearSite
@@ -196,6 +242,7 @@ class SiteCookieJar(
         val defaultBareHost = descriptor.defaultHost.trim().lowercase(Locale.ROOT).removePrefix("www.")
         for ((name, rawVal) in plainMap) {
             if (name in matchedPlainNames) continue
+            if (name in resurrectedNames) continue
             if (rawVal.startsWith(HOST_ONLY_PREFIX) || rawVal.startsWith(DOMAIN_PREFIX)) {
                 decodeCookie(descriptor, rawVal, acceptsHost)?.takeIf { it.expiresAt > now }?.let(result::add)
             } else if (name.isNotBlank() && defaultBareHost.isNotEmpty()) {
@@ -213,19 +260,57 @@ class SiteCookieJar(
         return result
     }
 
-    private fun persistSiteCookiesLocked(siteId: SiteId, cookies: List<Cookie>) {
-        val accountId = siteId.accountId
-        if (cookies.isEmpty()) {
-            sessionStore.saveSecret(accountId, JAR_SECRET_KEY, null)
-            sessionStore.replaceCookies(accountId, emptyMap())
+    private fun persistSiteCookiesLocked(
+        accountId: SiteId,
+        cookies: List<Cookie>,
+        bumpEpoch: Boolean = false,
+        expectedEpoch: Long? = null,
+    ) {
+        val active = cookies.filter { it.expiresAt > clockMs() }
+        val encodedLines = active.joinToString("\n") { encodeCookie(it) }
+        val plainSummary = LinkedHashMap<String, String>(active.size)
+        for (cookie in active) {
+            plainSummary[cookie.name] = cookie.value
+        }
+
+        // Identical renewal (same names/values, refreshed expiry only) is a no-op snapshot:
+        // skip the write entirely so nothing observes a session change it did not cause.
+        val previousBlob = sessionStore.getSecret(accountId, JAR_SECRET_KEY)
+        val previousSummary = sessionStore.getCookies(accountId)
+        if (previousBlob == encodedLines && previousSummary == plainSummary) {
+            lastSyncedEpoch[accountId] = sessionStore.authEpoch(accountId)
+            return
+        }
+
+        val secrets = if (active.isEmpty()) {
+            mapOf(JAR_SECRET_KEY to null)
         } else {
-            val encodedLines = cookies.joinToString("\n") { encodeCookie(it) }
-            sessionStore.saveSecret(accountId, JAR_SECRET_KEY, encodedLines)
-            val plainSummary = LinkedHashMap<String, String>(cookies.size)
-            for (cookie in cookies) {
-                plainSummary[cookie.name] = cookie.value
-            }
-            sessionStore.replaceCookies(accountId, plainSummary)
+            mapOf(JAR_SECRET_KEY to encodedLines)
+        }
+        val written = if (expectedEpoch == null) {
+            sessionStore.storeSessionSnapshot(
+                siteId = accountId,
+                cookies = if (active.isEmpty()) emptyMap() else plainSummary,
+                secrets = secrets,
+                bumpEpoch = bumpEpoch,
+            )
+            true
+        } else {
+            // Response-write path: compare against the epoch captured at dispatch, atomically with
+            // the write, so a logout that already happened can never be undone by a late Set-Cookie.
+            sessionStore.storeSessionSnapshotIfEpoch(
+                siteId = accountId,
+                expectedEpoch = expectedEpoch,
+                cookies = if (active.isEmpty()) emptyMap() else plainSummary,
+                secrets = secrets,
+                bumpEpoch = bumpEpoch,
+            )
+        }
+        if (!written) {
+            // Session moved on while this response was in flight: keep the reconciliation cache
+            // stale so the next read re-derives from the (cleared) store instead of this attempt.
+            lastSyncedEpoch.remove(accountId)
+            return
         }
         lastSyncedEpoch[accountId] = sessionStore.authEpoch(accountId)
     }
@@ -234,6 +319,11 @@ class SiteCookieJar(
         internal const val JAR_SECRET_KEY: String = "__raven_okhttp_cookie_jar_v1"
         private const val HOST_ONLY_PREFIX: String = "h\u0001"
         private const val DOMAIN_PREFIX: String = "d\u0001"
+
+        private fun sameCookieIdentity(a: Cookie, b: Cookie): Boolean =
+            a.name == b.name &&
+                a.domain.equals(b.domain, ignoreCase = true) &&
+                a.path == b.path
 
         /**
          * Encodes [cookie] preserving host-only vs domain-wide scope explicitly:

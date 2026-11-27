@@ -42,6 +42,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableIntStateOf
@@ -57,6 +58,8 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.net.toUri
 import androidx.core.view.WindowCompat
 import androidx.lifecycle.lifecycleScope
+import androidx.webkit.WebViewCompat
+import androidx.webkit.WebViewFeature
 import com.raven.app.core.common.AppDispatchers
 import com.raven.app.core.common.DefaultAppDispatchers
 import com.raven.app.core.designsystem.component.RavenStatusPill
@@ -69,12 +72,16 @@ import com.raven.app.core.model.SiteId
 import com.raven.app.core.sitespi.AuthMode
 import com.raven.app.core.sitespi.SitePlugin
 import com.raven.app.core.sitespi.SiteRegistry
+import com.raven.app.feature.settings.AppLockSessionCoordinator
+import com.raven.app.feature.settings.RavenPrivacyGate
 import com.raven.app.feature.settings.SettingsPrimaryButton
 import com.raven.app.feature.settings.SettingsSecondaryButton
+import java.io.ByteArrayInputStream
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.koin.android.ext.android.getKoin
+import org.koin.android.ext.android.inject
 
 /**
  * Dedicated `FLAG_SECURE` isolated WebView authentication Activity for sites declaring
@@ -92,6 +99,7 @@ import org.koin.android.ext.android.getKoin
  */
 class SiteAuthActivity : ComponentActivity() {
 
+    private val lockCoordinator: AppLockSessionCoordinator by inject()
     private lateinit var plugin: SitePlugin
     private lateinit var authMode: AuthMode.WebViewCookie
     private lateinit var policy: SiteAuthPolicy
@@ -104,11 +112,11 @@ class SiteAuthActivity : ComponentActivity() {
     private var browser: WebView? = null
     private var cookieManager: CookieManager? = null
     private var savedBrowserState: Bundle? = null
+    private var verificationJob: kotlinx.coroutines.Job? = null
     private var resumeVerification = false
     private var forumErrorShown = false
     private var targetVisitStarted = false
 
-    @OptIn(ExperimentalLayoutApi::class)
     override fun onCreate(savedInstanceState: Bundle?) {
         // Hard security invariant: enforce FLAG_SECURE BEFORE any content view is attached.
         window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
@@ -145,127 +153,13 @@ class SiteAuthActivity : ComponentActivity() {
 
         setContent {
             RavenTheme {
-                val colors = LocalRavenColors.current
-                Column(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .background(colors.canvas)
-                        .safeDrawingPadding()
-                        .imePadding()
-                        .testTag("site_auth_activity_root"),
-                ) {
-                    RavenTopBar(
-                        title = "${plugin.descriptor.displayName} 官方登录",
-                        subtitle = "安全隔离会话 · 已启用防截屏保护",
-                        navigationIcon = {
-                            IconButton(
-                                onClick = {
-                                    setResult(RESULT_CANCELED)
-                                    finish()
-                                },
-                                modifier = Modifier.testTag("site_auth_close_button"),
-                            ) {
-                                Icon(
-                                    imageVector = Icons.AutoMirrored.Rounded.ArrowBack,
-                                    contentDescription = "取消登录",
-                                    tint = colors.inkPrimary,
-                                )
-                            }
-                        },
-                        actions = {
-                            RavenStatusPill(
-                                text = phaseLabel(phase),
-                                tone = when (phase) {
-                                    SiteAuthPhase.TARGET_FAILED -> RavenStatusTone.ERROR
-                                    SiteAuthPhase.TARGET_READY, SiteAuthPhase.VERIFYING -> RavenStatusTone.SUCCESS
-                                    else -> RavenStatusTone.NEUTRAL
-                                },
-                                icon = Icons.Outlined.Lock,
-                            )
-                        },
-                    )
-
-                    Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .background(colors.surface1)
-                            .padding(horizontal = 16.dp, vertical = 12.dp),
-                        verticalArrangement = Arrangement.spacedBy(8.dp),
-                    ) {
-                        Text(
-                            text = "在官方登录页完成后，应用将验证 ${plugin.descriptor.displayName} 的访问权限，并在退出时自动清空所有临时 WebView 数据。",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = colors.inkSecondary,
-                        )
-                        Text(
-                            text = statusMessage,
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = colors.inkPrimary,
-                            modifier = Modifier
-                                .semantics { liveRegion = LiveRegionMode.Polite }
-                                .testTag("site_auth_status_text"),
-                        )
-
-                        FlowRow(
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                            verticalArrangement = Arrangement.spacedBy(8.dp),
-                        ) {
-                            SettingsPrimaryButton(
-                                text = "验证登录",
-                                icon = Icons.Rounded.Check,
-                                enabled = phase.canVerify,
-                                loading = phase == SiteAuthPhase.VERIFYING || phase == SiteAuthPhase.COPYING_IDENTITY,
-                                onClick = ::completeLogin,
-                                modifier = Modifier.testTag("site_auth_verify_button"),
-                            )
-                            SettingsSecondaryButton(
-                                text = "重新登录",
-                                icon = Icons.Rounded.Refresh,
-                                enabled = phase.canRestart,
-                                onClick = ::restartFlow,
-                                modifier = Modifier.testTag("site_auth_restart_button"),
-                            )
-                            SettingsSecondaryButton(
-                                text = "用浏览器打开",
-                                icon = Icons.Outlined.OpenInBrowser,
-                                onClick = ::openInExternalBrowser,
-                                modifier = Modifier.testTag("site_auth_external_browser_button"),
-                            )
-                        }
-                    }
-
-                    HorizontalDivider(thickness = 0.5.dp, color = colors.hairline)
-
-                    key(webSessionNonce) {
-                        AndroidView(
-                            factory = { ctx ->
-                                FrameLayout(ctx).apply {
-                                    createSecureWebView()?.let { web ->
-                                        addView(
-                                            web,
-                                            FrameLayout.LayoutParams(
-                                                ViewGroup.LayoutParams.MATCH_PARENT,
-                                                ViewGroup.LayoutParams.MATCH_PARENT,
-                                            ),
-                                        )
-                                    }
-                                }
-                            },
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .weight(1f),
-                            onRelease = { container ->
-                                (container.getChildAt(0) as? WebView)?.let(::releaseBrowser)
-                            },
-                        )
-                    }
-                }
+                RavenPrivacyGate(lockCoordinator) { AuthContent() }
             }
         }
 
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
-                val web = browser
+                val web = browser?.takeIf(::isCurrent)
                 if (phase == SiteAuthPhase.FORUM && web?.canGoBack() == true) {
                     web.goBack()
                 } else {
@@ -276,6 +170,126 @@ class SiteAuthActivity : ComponentActivity() {
         })
     }
 
+    @OptIn(ExperimentalLayoutApi::class)
+    @Composable
+    private fun AuthContent() {
+        val colors = LocalRavenColors.current
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(colors.canvas)
+                .safeDrawingPadding()
+                .imePadding()
+                .testTag("site_auth_activity_root"),
+        ) {
+            RavenTopBar(
+                title = "${plugin.descriptor.displayName} 官方登录",
+                subtitle = "安全隔离会话 · 已启用防截屏保护",
+                navigationIcon = {
+                    IconButton(
+                        onClick = {
+                            setResult(RESULT_CANCELED)
+                            finish()
+                        },
+                        modifier = Modifier.testTag("site_auth_close_button"),
+                    ) {
+                        Icon(
+                            imageVector = Icons.AutoMirrored.Rounded.ArrowBack,
+                            contentDescription = "取消登录",
+                            tint = colors.inkPrimary,
+                        )
+                    }
+                },
+                actions = {
+                    RavenStatusPill(
+                        text = phaseLabel(phase),
+                        tone = when (phase) {
+                            SiteAuthPhase.TARGET_FAILED -> RavenStatusTone.ERROR
+                            SiteAuthPhase.TARGET_READY, SiteAuthPhase.VERIFYING -> RavenStatusTone.SUCCESS
+                            else -> RavenStatusTone.NEUTRAL
+                        },
+                        icon = Icons.Outlined.Lock,
+                    )
+                },
+            )
+
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(colors.surface1)
+                    .padding(horizontal = 16.dp, vertical = 12.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Text(
+                    text = "在官方登录页完成后，应用将验证 ${plugin.descriptor.displayName} 的访问权限，并在退出时自动清空所有临时 WebView 数据。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = colors.inkSecondary,
+                )
+                Text(
+                    text = statusMessage,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = colors.inkPrimary,
+                    modifier = Modifier
+                        .semantics { liveRegion = LiveRegionMode.Polite }
+                        .testTag("site_auth_status_text"),
+                )
+
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    SettingsPrimaryButton(
+                        text = "验证登录",
+                        icon = Icons.Rounded.Check,
+                        enabled = phase.canVerify,
+                        loading = phase == SiteAuthPhase.VERIFYING || phase == SiteAuthPhase.COPYING_IDENTITY,
+                        onClick = ::completeLogin,
+                        modifier = Modifier.testTag("site_auth_verify_button"),
+                    )
+                    SettingsSecondaryButton(
+                        text = "重新登录",
+                        icon = Icons.Rounded.Refresh,
+                        enabled = phase.canRestart,
+                        onClick = ::restartFlow,
+                        modifier = Modifier.testTag("site_auth_restart_button"),
+                    )
+                    SettingsSecondaryButton(
+                        text = "用浏览器打开",
+                        icon = Icons.Outlined.OpenInBrowser,
+                        onClick = ::openInExternalBrowser,
+                        modifier = Modifier.testTag("site_auth_external_browser_button"),
+                    )
+                }
+            }
+
+            HorizontalDivider(thickness = 0.5.dp, color = colors.hairline)
+
+            key(webSessionNonce) {
+                AndroidView(
+                    factory = { ctx ->
+                        FrameLayout(ctx).apply {
+                            createSecureWebView()?.let { web ->
+                                addView(
+                                    web,
+                                    FrameLayout.LayoutParams(
+                                        ViewGroup.LayoutParams.MATCH_PARENT,
+                                        ViewGroup.LayoutParams.MATCH_PARENT,
+                                    ),
+                                )
+                            }
+                        }
+                    },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(1f),
+                    onRelease = { container ->
+                        (container.getChildAt(0) as? WebView)?.let(::releaseBrowser)
+                    },
+                )
+            }
+        }
+    }
+
     /**
      * Official forum login requires JavaScript; ZERO native JS interfaces are exposed,
      * file/content access and third-party cookies are disabled, mixed content is blocked,
@@ -283,6 +297,7 @@ class SiteAuthActivity : ComponentActivity() {
      */
     @SuppressLint("SetJavaScriptEnabled")
     private fun createSecureWebView(): WebView? = try {
+        check(WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT))
         val web = WebView(this).apply {
             settings.javaScriptEnabled = true
             settings.domStorageEnabled = true
@@ -297,7 +312,47 @@ class SiteAuthActivity : ComponentActivity() {
             settings.javaScriptCanOpenWindowsAutomatically = false
             settings.setSupportMultipleWindows(false)
 
+            // Install before loading any page. At document start Chromium may not have parsed
+            // <head> yet, so attach the policy as soon as the parser creates it.
+            WebViewCompat.addDocumentStartJavaScript(
+                this,
+                """
+                    (() => {
+                        if (window !== window.top) return;
+                        const install = () => {
+                            if (!document.head) return false;
+                            const policy = document.createElement('meta');
+                            policy.httpEquiv = 'Content-Security-Policy';
+                            policy.content = ${org.json.JSONObject.quote(policy.formActionPolicy)};
+                            document.head.prepend(policy);
+                            return true;
+                        };
+                        if (!install()) {
+                            const observer = new MutationObserver(() => {
+                                if (install()) observer.disconnect();
+                            });
+                            observer.observe(document, {childList: true, subtree: true});
+                        }
+                    })();
+                """.trimIndent(),
+                setOf("*"),
+            )
+
             webViewClient = object : WebViewClient() {
+                // WebView skips shouldOverrideUrlLoading for form POSTs. Reject an unsafe
+                // destination before the network stack receives the body.
+                override fun shouldInterceptRequest(view: WebView, request: WebResourceRequest): WebResourceResponse? {
+                    if (!request.isForMainFrame && request.url.scheme == "https") return null
+                    val lock = lockCoordinator.state.value
+                    if (request.isForMainFrame && lock.lockInitialized && !lock.isLocked &&
+                        policy.allowsMainFrameRequest(phase, request.method, request.url.toString())
+                    ) return null
+                    return WebResourceResponse(
+                        "text/plain", "UTF-8", 403, "Blocked", emptyMap(),
+                        ByteArrayInputStream("登录请求已拦截".toByteArray()),
+                    )
+                }
+
                 override fun shouldOverrideUrlLoading(
                     view: WebView,
                     request: WebResourceRequest,
@@ -322,7 +377,13 @@ class SiteAuthActivity : ComponentActivity() {
                 }
 
                 override fun onPageStarted(view: WebView, url: String, favicon: Bitmap?) {
-                    if (!isCurrent(view) || phase != SiteAuthPhase.LOADING_TARGET) return
+                    if (!isCurrent(view)) return
+                    if (!policy.isAllowedUrl(url)) {
+                        view.stopLoading()
+                        failTarget("已拦截非官方登录地址。")
+                        return
+                    }
+                    if (phase != SiteAuthPhase.LOADING_TARGET) return
                     if (policy.failsOnPageStarted(phase, url)) {
                         view.stopLoading()
                         val reason = if (policy.isAllowedUrl(url)) {
@@ -467,7 +528,8 @@ class SiteAuthActivity : ComponentActivity() {
         }
     }
 
-    private fun isCurrent(web: WebView): Boolean = browser === web && !isFinishing && !isDestroyed
+    private fun isCurrent(web: WebView): Boolean =
+        browser === web && !isFinishing && !isDestroyed && !lockCoordinator.state.value.isLocked
 
     private fun handleMainFrameError(view: WebView, url: String, message: String) {
         if (!isCurrent(view) || !policy.handlesMainFrameError(phase, url, targetVisitStarted)) return
@@ -594,7 +656,7 @@ class SiteAuthActivity : ComponentActivity() {
 
         phase = SiteAuthPhase.VERIFYING
         statusMessage = "正在通过加密网络通道验证 ${plugin.descriptor.displayName} 权限…"
-        lifecycleScope.launch {
+        verificationJob = lifecycleScope.launch {
             try {
                 withContext(dispatchers.io) {
                     plugin.authProvider.importCookies(values)
@@ -619,7 +681,15 @@ class SiteAuthActivity : ComponentActivity() {
     }
 
     private fun releaseBrowser(web: WebView) {
-        if (browser === web) browser = null
+        if (browser === web) {
+            browser = null
+            verificationJob?.cancel()
+            verificationJob = null
+            if (phase == SiteAuthPhase.VERIFYING) {
+                phase = SiteAuthPhase.TARGET_READY
+                resumeVerification = true
+            }
+        }
         runCatching {
             web.stopLoading()
             web.clearCache(true)
@@ -645,7 +715,7 @@ class SiteAuthActivity : ComponentActivity() {
         browser?.let(::releaseBrowser)
         if (isFinishing) {
             runCatching { WebStorage.getInstance().deleteAllData() }
-            cookieManager?.let { manager ->
+            (cookieManager ?: runCatching { CookieManager.getInstance() }.getOrNull())?.let { manager ->
                 runCatching {
                     manager.removeAllCookies { manager.flush() }
                 }

@@ -172,7 +172,6 @@ private data class ShelfEphemeralState(
     val pendingLaunch: ShelfQueueLaunchEvent? = null,
     val deleted: Boolean = false,
     val message: String? = null,
-    val manuallyUncompletedKeys: Set<String> = emptySet(),
 )
 
 class ShelfDetailViewModel(
@@ -307,15 +306,6 @@ class ShelfDetailViewModel(
     fun toggleItemCompleted(entry: ShelfEntryUi) {
         val customTarget = target as? ShelfDetailTarget.Custom ?: return
         val nextCompleted = !entry.completed
-        val key = entry.compositeKey
-        ephemeralState.update { current ->
-            val updatedKeys = if (nextCompleted) {
-                current.manuallyUncompletedKeys - key
-            } else {
-                current.manuallyUncompletedKeys + key
-            }
-            current.copy(manuallyUncompletedKeys = updatedKeys)
-        }
         viewModelScope.launch(dispatchers.io) {
             shelfRepository.setItemCompleted(
                 shelfId = customTarget.shelfId,
@@ -546,11 +536,12 @@ class ShelfDetailViewModel(
                 val reading = readingByKey[key]
                 val dls = downloadsByKey[key].orEmpty()
                 val bestStatus = resolveAggregateDownloadStatus(dls)
-                val isCompleted = key !in ephemeral.manuallyUncompletedKeys && (
-                    item.completed ||
-                        (watch != null && CompletionPolicy.isWatchCompleted(watch)) ||
+                val isCompleted = if (item.completionChangedAt != null) {
+                    item.completed
+                } else {
+                    item.completed || (watch != null && CompletionPolicy.isWatchCompleted(watch)) ||
                         (reading != null && CompletionPolicy.isReadingCompleted(reading))
-                    )
+                }
                 val fraction = when {
                     watch != null && watch.durationMs > 0L -> watch.progressFraction
                     reading != null && reading.totalPages > 0 -> reading.progressFraction

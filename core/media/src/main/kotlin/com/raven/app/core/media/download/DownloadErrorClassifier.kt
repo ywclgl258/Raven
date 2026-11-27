@@ -97,8 +97,8 @@ object DownloadErrorClassifier {
         return when (error) {
             is SiteException.RateLimited -> {
                 val waitMs = error.retryAfterSeconds
-                    ?.coerceAtLeast(0L)
-                    ?.let { (it * 1_000L).coerceAtMost(MAX_RETRY_AFTER_MS) }
+                    ?.coerceIn(0L, MAX_RETRY_AFTER_MS / 1_000L)
+                    ?.times(1_000L)
                 ClassifiedDownloadFailure(
                     category = DownloadErrorCategory.RATE_LIMITED,
                     message = rawMessage.ifBlank { "原站请求过于频繁，请稍后重试" },
@@ -201,7 +201,7 @@ object DownloadErrorClassifier {
         val value = raw?.trim().orEmpty()
         if (value.isEmpty()) return null
         value.toLongOrNull()?.let { seconds ->
-            return (seconds * 1_000L).coerceIn(0L, MAX_RETRY_AFTER_MS)
+            return seconds.coerceIn(0L, MAX_RETRY_AFTER_MS / 1_000L) * 1_000L
         }
         for (pattern in HTTP_DATE_PATTERNS) {
             val parsed = runCatching {

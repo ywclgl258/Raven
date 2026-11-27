@@ -102,6 +102,34 @@ object BackupMerger {
             incoming = incoming.customTagTranslations,
         )
 
+        // Two individually valid payloads can union past the per-collection caps the validator
+        // enforces on export. Trim here, inside the merge, so a successful restore is always
+        // re-exportable ("restore, then immediately export" stays green).
+        val boundedShelves = boundShelves(
+            shelves = mergedShelves,
+            localShelfIds = local.shelves.mapTo(HashSet(local.shelves.size)) { it.id },
+        )
+        val retainedShelfIds = boundedShelves.mapTo(HashSet(boundedShelves.size)) { it.id }
+        val boundedShelfItems = mergedShelfItems
+            .filter { it.shelfId in retainedShelfIds }
+            .groupBy { it.shelfId }
+            .values
+            .flatMap { items ->
+                items.sortedWith(compareBy<ShelfItem> { it.position }.thenBy { it.addedAt })
+                    .take(RavenBackupPayload.MAX_ITEMS_PER_SHELF)
+                    .mapIndexed { index, item -> if (item.position == index) item else item.copy(position = index) }
+            }
+        val boundedSmartShelves = keepLocalFirst(mergedSmartShelves, local.smartShelves, RavenBackupPayload.MAX_SMART_SHELVES) { it.id }
+        val boundedPageBookmarks = keepLocalFirst(mergedPageBookmarks, local.pageBookmarks, RavenBackupPayload.MAX_PAGE_BOOKMARKS) { it.id }
+        val boundedTimeBookmarks = keepLocalFirst(mergedTimeBookmarks, local.timeBookmarks, RavenBackupPayload.MAX_TIME_BOOKMARKS) { it.id }
+        val boundedSavedSearches = keepLocalFirst(mergedSavedSearches, local.savedSearches, RavenBackupPayload.MAX_SAVED_SEARCHES) { it.id }
+        val boundedInbox = keepLocalFirst(mergedInbox, local.updateInbox, RavenBackupPayload.MAX_INBOX_ITEMS) { it.id }
+        val boundedCustomTags = keepLocalFirst(
+            mergedCustomTags,
+            local.customTagTranslations,
+            RavenBackupPayload.MAX_CUSTOM_TAG_TRANSLATIONS,
+        ) { "${it.namespace}:${it.rawSlug}" }
+
         return RavenBackupPayload(
             schemaVersion = RavenBackupPayload.CURRENT_SCHEMA_VERSION,
             exportedAt = maxOf(local.exportedAt, incoming.exportedAt, now),
@@ -109,22 +137,66 @@ object BackupMerger {
             watchProgress = mergedWatch,
             readingProgress = mergedReading,
             favorites = mergedFavorites,
-            shelves = mergedShelves,
-            shelfItems = mergedShelfItems,
-            smartShelves = mergedSmartShelves,
-            pageBookmarks = mergedPageBookmarks,
-            timeBookmarks = mergedTimeBookmarks,
+            shelves = boundedShelves,
+            shelfItems = boundedShelfItems,
+            smartShelves = boundedSmartShelves,
+            pageBookmarks = boundedPageBookmarks,
+            timeBookmarks = boundedTimeBookmarks,
             imageFavorites = mergedImageFavorites,
             tagSubscriptions = mergedSubscriptions,
-            savedSearches = mergedSavedSearches,
-            updateInbox = mergedInbox,
+            savedSearches = boundedSavedSearches,
+            updateInbox = boundedInbox,
             blockedTerms = mergedBlocked,
             searchHistory = mergedSearchHistory,
             playbackPreferences = mergedPlaybackPrefs,
             readerPreferences = mergedReaderPrefs,
             siteLanguages = mergedLanguages,
             settings = mergedSettings,
-            customTagTranslations = mergedCustomTags,
+            customTagTranslations = boundedCustomTags,
+        )
+    }
+
+    /**
+     * Caps the merged shelf list at [RavenBackupPayload.MAX_SHELVES] while always keeping the
+     * system watch-later shelf. Pinned and recently modified shelves win the remaining slots.
+     */
+    /**
+     * Caps a merged union at [limit] without silently deleting records the device already had.
+     * Local keys are always kept; the remaining slots go to the merged (incoming-influenced) tail.
+     */
+    private fun <T> keepLocalFirst(
+        merged: List<T>,
+        local: List<T>,
+        limit: Int,
+        key: (T) -> String,
+    ): List<T> {
+        if (merged.size <= limit) return merged
+        val localKeys = local.mapTo(HashSet(local.size)) { key(it) }
+        val keptLocal = merged.filter { key(it) in localKeys }
+        if (keptLocal.size >= limit) return keptLocal.take(limit)
+        val keptIncoming = merged.filter { key(it) !in localKeys }.take(limit - keptLocal.size)
+        return keptLocal + keptIncoming
+    }
+
+    /**
+     * Caps the merged shelf list at [RavenBackupPayload.MAX_SHELVES] while always keeping the
+     * system watch-later shelf. Existing local shelves are never dropped (a restore must not delete
+     * data the user already had); incoming shelves fill the remaining slots.
+     */
+    private fun boundShelves(shelves: List<Shelf>, localShelfIds: Set<String>): List<Shelf> {
+        if (shelves.size <= RavenBackupPayload.MAX_SHELVES) return shelves
+        val watchLater = shelves.firstOrNull { it.id == Shelf.WATCH_LATER_ID }
+        val keepIds = HashSet(localShelfIds).apply { if (watchLater != null) add(Shelf.WATCH_LATER_ID) }
+        val retainedLocal = shelves.filter { it.id in keepIds }
+        val remainingSlots = (RavenBackupPayload.MAX_SHELVES - retainedLocal.size).coerceAtLeast(0)
+        val retainedIncoming = shelves
+            .asSequence()
+            .filter { it.id !in keepIds }
+            .sortedWith(compareByDescending<Shelf> { it.isPinned }.thenByDescending { it.modifiedAt })
+            .take(remainingSlots)
+            .toList()
+        return (retainedLocal + retainedIncoming).sortedWith(
+            compareByDescending<Shelf> { it.isPinned }.thenByDescending { it.modifiedAt },
         )
     }
 
@@ -207,7 +279,13 @@ object BackupMerger {
                 byKey[entry.compositeKey] = entry
             }
         }
-        return byKey.values.sortedByDescending { it.addedAt }
+        // Per-site cap mirrors BackupValidator.MAX_FAVORITES_PER_SITE; without it two large
+        // backups can produce a payload that fails its own next export.
+        return byKey.values
+            .groupBy { it.siteId }
+            .values
+            .flatMap { siteList -> siteList.sortedByDescending { it.addedAt }.take(MAX_FAVORITES_PER_SITE) }
+            .sortedByDescending { it.addedAt }
     }
 
     private fun mergeShelvesAndItems(
@@ -247,8 +325,19 @@ object BackupMerger {
                     val earliestCreated = minPositive(first.createdAt, second.createdAt)
                     val latestModified = maxOf(first.modifiedAt, second.modifiedAt)
                     val isWatchLater = id == Shelf.WATCH_LATER_ID
-                    winner.copy(
-                        name = if (isWatchLater) first.name.ifBlank { RavenDatabase.DEFAULT_WATCH_LATER_NAME } else winner.name,
+                    // A fresh install seeds watch-later with `now` as `modifiedAt`, which would beat
+                    // the backup's customized copy and wipe its note/cover/pin. If the local copy is
+                    // still the untouched seed, the incoming copy wins regardless of timestamps.
+                    val firstIsPristineSeed = isWatchLater && first.id == Shelf.WATCH_LATER_ID &&
+                        first.note.isBlank() && first.coverCompositeKey.isNullOrBlank() && !first.isPinned &&
+                        first.name == RavenDatabase.DEFAULT_WATCH_LATER_NAME
+                    val winnerAfterSeed = if (firstIsPristineSeed) second else winner
+                    winnerAfterSeed.copy(
+                        name = if (firstIsPristineSeed) {
+                            second.name.ifBlank { RavenDatabase.DEFAULT_WATCH_LATER_NAME }
+                        } else {
+                            winnerAfterSeed.name.ifBlank { RavenDatabase.DEFAULT_WATCH_LATER_NAME }
+                        },
                         isSystem = isWatchLater || first.isSystem || second.isSystem,
                         createdAt = earliestCreated,
                         modifiedAt = latestModified,
@@ -329,15 +418,30 @@ object BackupMerger {
             localItem.addedAt > incomingItem.addedAt -> localItem
             else -> incomingItem.copy(completed = localItem.completed || incomingItem.completed)
         }
+        val explicitCompletion = listOf(localItem, incomingItem)
+            .filter { it.completionChangedAt != null }
+            .maxByOrNull { it.completionChangedAt!! }
         return latestState.copy(
+            completed = explicitCompletion?.completed ?: latestState.completed,
+            completionChangedAt = explicitCompletion?.completionChangedAt,
             addedAt = earliestAddedAt,
-            coverUrl = latestState.coverUrl.ifBlank {
-                if (latestState === incomingItem) localItem.coverUrl else incomingItem.coverUrl
-            },
+            coverUrl = latestState.coverUrl.ifBlank { localItem.coverUrl.ifBlank { incomingItem.coverUrl } },
             durationSeconds = latestState.durationSeconds ?: localItem.durationSeconds ?: incomingItem.durationSeconds,
             pageCount = latestState.pageCount ?: localItem.pageCount ?: incomingItem.pageCount,
         )
     }
+
+    /**
+     * Watch-later is seeded on a fresh install with `createdAt == modifiedAt == install time`
+     * and no user content. Treating that as "newest" would overwrite a customized backup copy,
+     * so a pristine seed always loses to the incoming shelf.
+     */
+    private fun Shelf.isPristineWatchLaterSeed(): Boolean =
+        id == Shelf.WATCH_LATER_ID &&
+            note.isBlank() &&
+            coverCompositeKey.isNullOrBlank() &&
+            !isPinned &&
+            name == RavenDatabase.DEFAULT_WATCH_LATER_NAME
 
     private fun mergeSmartShelves(
         local: List<SmartShelf>,
@@ -396,46 +500,71 @@ object BackupMerger {
             }
     }
 
+    /**
+     * Identity for time bookmarks is the row, not the position.
+     *
+     * The player lets a user save several labels at one timestamp, so two records may legitimately
+     * share `(site, media, positionMs)` with different IDs and different labels. Merging by position
+     * alone collapsed those into one. Rules:
+     * - same ID -> a single record; the later state wins. Label edits refresh `createdAt`
+     *   (`BookmarkRepository.saveTimeBookmark` keeps `createdAt` only when it is already > 0, and
+     *   `PlayerViewModel.updateTimeBookmark` passes the edited copy), so a stale backup copy loses.
+     * - different IDs -> both survive, even at the identical millisecond.
+     */
     private fun mergeTimeBookmarks(
         local: List<TimeBookmark>,
         incoming: List<TimeBookmark>,
     ): List<TimeBookmark> {
-        val byComposite = linkedMapOf<String, TimeBookmark>()
-        val usedIds = mutableSetOf<String>()
+        val byId = linkedMapOf<String, TimeBookmark>()
+        val anonymous = mutableListOf<TimeBookmark>()
 
         fun accept(bookmark: TimeBookmark, preferOnTie: Boolean) {
             if (bookmark.mediaId.isBlank() || bookmark.positionMs < 0L) return
-            val key = "${bookmark.siteId.value}:${bookmark.mediaId}:${bookmark.positionMs}"
-            val prev = byComposite[key]
-            if (prev == null) {
-                byComposite[key] = bookmark
-            } else {
-                val winner = when {
-                    bookmark.createdAt > prev.createdAt -> bookmark
-                    prev.createdAt > bookmark.createdAt -> prev
-                    preferOnTie -> bookmark
-                    else -> prev
-                }
-                val other = if (winner === bookmark) prev else bookmark
-                byComposite[key] = winner.copy(
-                    label = winner.label.ifBlank { other.label },
-                    groupName = winner.groupName.ifBlank { other.groupName },
-                    coverUrl = winner.coverUrl.ifBlank { other.coverUrl },
-                    durationMs = maxOf(winner.durationMs, other.durationMs),
-                )
+            val id = bookmark.id.trim()
+            if (id.isEmpty()) {
+                anonymous += bookmark
+                return
             }
+            val prev = byId[id]
+            if (prev == null) {
+                byId[id] = bookmark
+                return
+            }
+            val winner = when {
+                bookmark.createdAt > prev.createdAt -> bookmark
+                prev.createdAt > bookmark.createdAt -> prev
+                preferOnTie -> bookmark
+                else -> prev
+            }
+            val other = if (winner === bookmark) prev else bookmark
+            byId[id] = winner.copy(
+                label = winner.label.ifBlank { other.label },
+                groupName = winner.groupName.ifBlank { other.groupName },
+                coverUrl = winner.coverUrl.ifBlank { other.coverUrl },
+                durationMs = maxOf(winner.durationMs, other.durationMs),
+            )
         }
 
         local.forEach { accept(it, preferOnTie = false) }
         incoming.forEach { accept(it, preferOnTie = true) }
 
-        return byComposite.values
-            .sortedByDescending { it.createdAt }
-            .map { mark ->
-                val safeId = mark.id.takeIf { it.isNotBlank() && usedIds.add(it) }
-                    ?: UUID.randomUUID().toString().also(usedIds::add)
-                if (safeId == mark.id) mark else mark.copy(id = safeId)
+        // ID-less rows (legacy imports) have no durable identity, so fold them on full content
+        // equality; anything else is kept, which means repeated restores of the same file are
+        // idempotent while distinct labels still survive.
+        for (mark in anonymous) {
+            val duplicate = byId.values.any { existing ->
+                existing.siteId == mark.siteId &&
+                    existing.mediaId == mark.mediaId &&
+                    existing.positionMs == mark.positionMs &&
+                    existing.label == mark.label &&
+                    existing.groupName == mark.groupName
             }
+            if (!duplicate) byId[UUID.randomUUID().toString()] = mark
+        }
+
+        return byId.values
+            .sortedByDescending { it.createdAt }
+            .take(RavenBackupPayload.MAX_TIME_BOOKMARKS)
     }
 
     private fun mergeImageFavorites(
@@ -515,8 +644,11 @@ object BackupMerger {
             }
         }
 
+        // Per-site subscription cap mirrors BackupValidator.MAX_SUBSCRIPTIONS_PER_SITE.
         return bySite.values.flatMap { siteSubs ->
-            siteSubs.values.mapIndexed { index, sub -> sub.copy(sortOrder = index) }
+            siteSubs.values
+                .take(MAX_SUBSCRIPTIONS_PER_SITE)
+                .mapIndexed { index, sub -> sub.copy(sortOrder = index) }
         }
     }
 
@@ -604,9 +736,14 @@ object BackupMerger {
         }
         local.forEach(::accept)
         incoming.forEach(::accept)
-        return byKey.values.sortedWith(
-            compareBy<BlockedTerm> { it.siteId.value }.thenByDescending { it.createdAt },
-        )
+        // Per-site blocked-term cap mirrors BackupValidator.MAX_BLOCKED_PER_SITE.
+        return byKey.values
+            .groupBy { it.siteId }
+            .values
+            .flatMap { siteList ->
+                siteList.sortedByDescending { it.createdAt }.take(MAX_BLOCKED_PER_SITE)
+            }
+            .sortedWith(compareBy<BlockedTerm> { it.siteId.value }.thenByDescending { it.createdAt })
     }
 
     private fun mergeSearchHistory(
@@ -709,7 +846,16 @@ object BackupMerger {
     }
 
     private fun filterPortableSettings(settings: Map<String, String>): Map<String, String> =
-        settings.filterKeys { it in SettingsDataStore.PORTABLE_BACKUP_KEYS }
+        settings.filterKeys { key ->
+            key in SettingsDataStore.PORTABLE_BACKUP_KEYS ||
+                key == "auto_download" ||
+                key.startsWith("legacy_subscription_order_")
+        }
+
+    // Internal (not private) so the cap-parity test can assert they equal the validator limits.
+    internal const val MAX_FAVORITES_PER_SITE: Int = RavenBackupPayload.MAX_FAVORITES_PER_SITE
+    internal const val MAX_SUBSCRIPTIONS_PER_SITE: Int = RavenBackupPayload.MAX_SUBSCRIPTIONS_PER_SITE
+    internal const val MAX_BLOCKED_PER_SITE: Int = RavenBackupPayload.MAX_BLOCKED_PER_SITE
 
     private fun minPositive(a: Long, b: Long): Long = when {
         a > 0L && b > 0L -> minOf(a, b)

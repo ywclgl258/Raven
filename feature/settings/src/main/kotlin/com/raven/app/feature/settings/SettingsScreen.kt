@@ -191,6 +191,7 @@ fun SettingsScreen(
 fun SettingsScreenContent(
     uiState: SettingsUiState,
     navigator: SettingsNavigator,
+    modifier: Modifier = Modifier,
     onToggleReduceTransparency: (Boolean) -> Unit,
     onToggleTranslateTags: (Boolean) -> Unit,
     onToggleAutoFullscreen: (Boolean) -> Unit,
@@ -232,7 +233,6 @@ fun SettingsScreenContent(
     onToggleUiSoundEffects: (Boolean) -> Unit = {},
     onChangeImageLoadConcurrency: (Int) -> Unit = {},
     onResetFeatureTutorials: () -> Unit = {},
-    modifier: Modifier = Modifier,
 ) {
     val colors = LocalRavenColors.current
     val listState = rememberLazyListState()

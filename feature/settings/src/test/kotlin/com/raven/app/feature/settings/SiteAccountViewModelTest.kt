@@ -150,6 +150,12 @@ class SiteAccountViewModelTest {
         assertFalse(policy.isAllowedUrl("javascript:alert(1)"))
         assertFalse(policy.isAllowedUrl("file:///etc/hosts"))
 
+        assertTrue(policy.allowsMainFrameRequest(SiteAuthPhase.FORUM, "POST", mode.loginUrl))
+        assertFalse(policy.allowsMainFrameRequest(SiteAuthPhase.FORUM, "POST", mode.targetUrl))
+        assertFalse(policy.allowsMainFrameRequest(SiteAuthPhase.LOADING_TARGET, "POST", mode.loginUrl))
+        assertFalse(policy.allowsMainFrameRequest(SiteAuthPhase.FORUM, "POST", "https://forums.e-hentai.org:8443/"))
+        assertTrue(policy.allowsMainFrameRequest(SiteAuthPhase.LOADING_TARGET, "GET", mode.targetUrl))
+
         // Navigation FSM transitions
         assertEquals(
             SiteAuthNavigation.ALLOW,
@@ -237,7 +243,17 @@ class SiteAccountViewModelTest {
         assertEquals("4242", sessionStore.getCookies(SiteId.EHENTAI)["ipb_member_id"])
 
         // Logging out of E-Hentai also signs ExHentai out because they share one session.
-        registry.get(SiteId.EHENTAI)!!.authProvider.logout()
+        val affectedSites = setOf(SiteId.EHENTAI, SiteId.EXHENTAI)
+            .map { registry.require(it).descriptor.displayName }.toSet()
+        for (siteId in listOf(SiteId.EHENTAI, SiteId.EXHENTAI)) {
+            val vm = SiteAccountViewModel(RavenRoute.SiteAccount(siteId.value), registry, mainDispatcherRule.appDispatchers)
+            advanceUntilIdle()
+            val names = vm.uiState.value.logoutSiteNames
+            assertEquals(affectedSites, names.split("、").toSet())
+            vm.logout()
+            advanceUntilIdle()
+            assertEquals("已退出 $names", vm.uiState.value.successMessage)
+        }
         assertFalse(registry.get(SiteId.EXHENTAI)!!.authProvider.currentAuthState().isAuthenticated)
         assertTrue(sessionStore.getCookies(SiteId.EXHENTAI.accountId).isEmpty())
     }

@@ -155,12 +155,17 @@ class BaozimhSitePlugin(
             }
         }
 
-        override fun supportedSorts(request: FeedRequest): List<FeedSort> =
-            if (request.section.equals("chapters", ignoreCase = true)) {
-                emptyList()
-            } else {
-                listOf(FeedSort.POPULAR, FeedSort.NEWEST)
-            }
+        /**
+         * `amp_comic_list` accepts type/region/state/page only — no sort parameter exists, `/search`
+         * ignores ordering, and `/list/new` is a fixed newest view. Each entry therefore advertises
+         * exactly the ordering its URL implicitly produces, so the UI never offers a no-op choice.
+         */
+        override fun supportedSorts(request: FeedRequest): List<FeedSort> = when {
+            request.section.equals("chapters", ignoreCase = true) -> emptyList()
+            !request.query.isNullOrBlank() -> listOf(FeedSort.RELEVANCE)
+            request.section?.trim()?.lowercase() == "new" -> listOf(FeedSort.NEWEST)
+            else -> listOf(FeedSort.POPULAR)
+        }
     }
 
     override val searchSource: SearchSource = object : SearchSource {
@@ -603,7 +608,13 @@ class BaozimhSitePlugin(
         val visited = HashSet<String>()
         var currentUrl: String? = firstUrl
         var guard = 0
-        while (currentUrl != null && guard < MAX_SUB_PAGES && visited.add(currentUrl)) {
+        var abortedByLoop = false
+        while (currentUrl != null && guard < MAX_SUB_PAGES) {
+            if (!visited.add(currentUrl)) {
+                // A repeated URL means the "next page" chain cycles — protective exit, not an end.
+                abortedByLoop = true
+                break
+            }
             guard++
             val html = executeTextChecked(currentUrl, host, SiteRequestKind.PAGE)
             val doc = Jsoup.parse(html, currentUrl)
@@ -617,13 +628,30 @@ class BaozimhSitePlugin(
                 ?.attr("href")
                 ?.takeIf { it.isNotBlank() }
             val resolvedNext = nextHref?.let { ComicUrl.parse(currentUrl)?.resolve(it)?.toString() }
+            // Same-chapter sub-pages are `{slot}.html` (first page) and `{slot}_{n}.html` (follow-ups).
+            // Matching only `{slot}_` dropped the first page from the chain, so a cycle back to page 1
+            // looked like a normal end-of-chapter and the truncated prefix was cached.
             currentUrl = if (resolvedNext != null &&
-                resolvedNext.contains("/comic/chapter/$comicId/${slot}_")
+                resolvedNext.contains("/comic/chapter/$comicId/${slot}.html") ||
+                (resolvedNext != null && resolvedNext.contains("/comic/chapter/$comicId/${slot}_"))
             ) {
                 resolvedNext
             } else {
                 null
             }
+        }
+        // Reaching the traversal ceiling while still holding a next link is also protective.
+        val exhaustedGuard = guard >= MAX_SUB_PAGES && currentUrl != null
+        if (collected.isEmpty()) return emptyList()
+        if (abortedByLoop || exhaustedGuard) {
+            // Never hand a truncated prefix to the caller: it caches non-empty results and stops
+            // trying other mirrors. Failing lets the next mirror attempt fetch the full set.
+            throw SiteException.ParseError(
+                message = "包子漫畫章节 $comicId/$slot 分页" +
+                    (if (abortedByLoop) "出现循环" else "达到遍历上限 $MAX_SUB_PAGES") +
+                    "，仅取得 ${collected.size} 张，拒绝作为完整章节返回",
+                siteId = SiteId.BAOZIMH,
+            )
         }
         return collected.toList()
     }

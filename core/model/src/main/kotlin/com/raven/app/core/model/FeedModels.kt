@@ -17,6 +17,7 @@ data class AdvancedSearchFilters(
     val minRating: Int? = null,
     val publishedFrom: String? = null,
     val publishedTo: String? = null,
+    val siteLanguages: Map<SiteId, ComicLanguage> = emptyMap(),
 ) {
     val isEmpty: Boolean
         get() = includeTags.isEmpty() &&

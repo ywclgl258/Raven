@@ -1,7 +1,7 @@
 # Raven · 渡鸦
 
 > **多源原生媒体浏览、影院级播放与沉浸式阅读 Android 客户端**  
-> Package: `com.raven.app`（Debug: `com.raven.app.debug`） · 当前版本 `0.6.0`（`versionCode = 10`，唯一源为 [release.properties](release.properties)） · Kotlin `2.3.21` · Jetpack Compose · Material 3 Adaptive · Media3 `1.11.1` · Room `2.8.5` · Koin `4.2.2`
+> Package: `com.raven.app`（Debug: `com.raven.app.debug`） · 当前版本见 [release.properties](release.properties) · Kotlin `2.3.21` · Jetpack Compose · Material 3 Adaptive · Media3 `1.11.1` · Room `2.8.5` · Koin `4.2.2`
 
 Raven（**渡鸦**）是一款采用 **17 模块 Clean Architecture** 构建的原生 Android 多源媒体应用，将 **Dark Obsidian（纯黑曜石 OLED）× Apple HIG Precision（苹果级克制与精致）× Netflix Cinema（流媒体影院氛围）** 设计语言贯通至 24 个视频、漫画、连载漫画与写真站点，提供统一的沉浸浏览、离线下载、个人资料库、全能播放器与四模式阅读器体验。
 
@@ -17,7 +17,7 @@ Raven（**渡鸦**）是一款采用 **17 模块 Clean Architecture** 构建的�
 | **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** | 系统架构与工程蓝图 | 17 模块依赖 DAG、Koin 13 模块装配约定、设计令牌、27 路由契约、Room 20 表与 DataStore 37 个固定 Key + 2 类动态站点 Key、加密备份线协议与 14 条站点协议不变量 |
 | **[docs/SITE_PLUGIN_GUIDE.md](docs/SITE_PLUGIN_GUIDE.md)** | 站点插件架构、24 站维护与新站接入 | 组合式 `SitePlugin` SPI 与 10 项可选能力、`SiteKit` 9 个协议工具、24 站维护总表与排障手册、从零接入新站的实战骨架与契约测试 |
 | **[docs/DESIGN_AND_UI_GUIDE.md](docs/DESIGN_AND_UI_GUIDE.md)** | 设计系统与 UI 架构手册 | 品牌与自适应图标（`0.68` 安全区缩放）、色板/排版(`tnum`)/圆角/动效磨砂令牌、`:core:designsystem` 全量组件目录、3-Activity 拓扑与 27 路由、Feature Navigator 解耦、无障碍与 `testTag` 规范 |
-| **[docs/DATA_MEDIA_SECURITY.md](docs/DATA_MEDIA_SECURITY.md)** | 数据、网络、媒体内核与安全备份手册 | Room 20 表/13 仓储与 Schema v3 迁移、5 类 OkHttp 客户端与单例 Coil 3、Media3 播放与 4 级缓存、阅读器预读与反混淆、双引擎下载/双存储根迁移、`SessionVault` / `SiteAuthActivity` / `RVNBK01` 备份与签名更新器 |
+| **[docs/DATA_MEDIA_SECURITY.md](docs/DATA_MEDIA_SECURITY.md)** | 数据、网络、媒体内核与安全备份手册 | Room 21 表与版本迁移、5 类 OkHttp 客户端与单例 Coil 3、Media3 播放与 4 级缓存、阅读器预读与反混淆、双引擎下载/双存储根迁移、`SessionVault` / `SiteAuthActivity` / `RVNBK01` 备份与签名更新器 |
 | **[docs/audit-env.md](docs/audit-env.md)** | 历史审计：构建环境与工具链基线 | JDK 17、Android SDK API 36、Gradle 缓存、Windows 增量编译与 API 37 依赖断层实测依据 |
 | **[docs/audit-app-ux.md](docs/audit-app-ux.md)** | 历史审计：应用架构与 UX 重构输入 | 旧版 R34V 功能盘点与 Raven 现代化重构对比基线 |
 | **[docs/audit-sites.md](docs/audit-sites.md)** | 历史审计：19 站网络协议规范基准（新增站点未覆盖） | 19 个在线站点的抓包/协议细节与边界条件基线 |
@@ -58,7 +58,7 @@ Raven（**渡鸦**）是一款采用 **17 模块 Clean Architecture** 构建的�
 | | `:sites:gallery` | 5 个写真/图集站点插件（共享 `WordPressPhotoEngine`） |
 | **Core Engine** | `:core:media` | Media3 播放控制器、4 级缓存、`RouPngDataSource`、局域网投屏、图集页缓存与 JMComic 反混淆渲染、统一视频/图集下载引擎、存储迁移与去重扫描 |
 | | `:core:designsystem` | Dark Obsidian × Apple HIG × Netflix Cinema 令牌、等宽数字排版、`RavenAdaptiveScaffold`（支持 `>= 1200dp` Drawer）、影院/图集卡片、分组列表与底部表单 |
-| | `:core:database` | Room 20 表数据库（Schema v3，全响应式 `Flow` DAO）、Preferences DataStore（37 个固定 Key + 2 类动态站点 Key）与 13 个领域仓储 |
+| | `:core:database` | Room 21 表数据库（Schema v5，全响应式 `Flow` DAO）、Preferences DataStore（37 个固定 Key + 2 类动态站点 Key）与 13 个领域仓储 |
 | | `:core:network` | 共享 OkHttp 连接池、IPv4 优先 DNS、系统代理监听、`HostPacer` 协程限速、302 媒体重定向缓存、加密 CookieJar、单实例分站 Coil 3 `ImageLoader` |
 | | `:core:security` | `SessionVault`、`PrivacyLockStore`、`WebDavCredentialStore`（AndroidKeyStore AES-256-GCM）、`BackupCodec`（`RVNBK01` + `R34VBK01` import）、`BackupValidator` |
 | **Pure JVM SPI** | `:core:site-spi` | 组合式 `SitePlugin` SPI、不可变 `SiteRegistry`、9 个站点协议工具（`Base62Packer`、`RouPngProtocol`、`CossoraAesProtocol`、`JmcomicStripMath`、`MirrorLeaseRouter` 等） |
@@ -107,4 +107,4 @@ Raven（**渡鸦**）是一款采用 **17 模块 Clean Architecture** 构建的�
 (rg -o --no-filename '@Test\b' -g '**/src/androidTest/**/*.kt' . | Measure-Object).Count
 ```
 
-> **代码基线说明**：本文按当前源码静态核对；测试数量仅描述 `@Test` 注解计数，执行结果以本地或 CI 测试报告为准。当前版本为 `0.6.0` / `versionCode = 10`，发布时始终以 [release.properties](release.properties) 为唯一版本元数据来源。初次上手请从 [docs/ONBOARDING.md](docs/ONBOARDING.md) 开始，按需查阅上方**开发与接手文档索引**中的专题手册。
+> **代码基线说明**：本文按当前源码静态核对；测试数量仅描述 `@Test` 注解计数，执行结果以本地或 CI 测试报告为准。构建与发布均以 [release.properties](release.properties) 为唯一版本元数据来源。初次上手请从 [docs/ONBOARDING.md](docs/ONBOARDING.md) 开始，按需查阅上方**开发与接手文档索引**中的专题手册。

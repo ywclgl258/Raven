@@ -103,7 +103,7 @@ class HipmhSitePlugin(
                     ?: throw SiteException.ParseError("章节请求缺少作品编号", siteId = SiteId.HIPMH)
                 return loadChapterFeed(mid)
             }
-            val url = buildListUrl(request.section, page, query = "")
+            val url = buildListUrl(request.section, page, query = "", sort = request.sort)
             val body = fetchApi(url)
             val root = runCatching { json.parseToJsonElement(body).jsonObject }.getOrNull()
                 ?: throw SiteException.ParseError("嬉皮漫畫列表数据格式异常", siteId = SiteId.HIPMH)
@@ -126,12 +126,12 @@ class HipmhSitePlugin(
             )
         }
 
-        override fun supportedSorts(request: FeedRequest): List<FeedSort> =
-            if (request.section.equals("chapters", ignoreCase = true)) {
-                emptyList()
-            } else {
-                listOf(FeedSort.NEWEST, FeedSort.POPULAR, FeedSort.TRENDING)
-            }
+        override fun supportedSorts(request: FeedRequest): List<FeedSort> = when {
+            request.section.equals("chapters", ignoreCase = true) -> emptyList()
+            // `/v1/search` and `/v1/mangas?keyword=` accept no sort parameter: relevance only.
+            !request.query.isNullOrBlank() -> listOf(FeedSort.RELEVANCE)
+            else -> sortsForSection(request.section)
+        }
     }
 
     override val searchSource: SearchSource = object : SearchSource {
@@ -358,7 +358,12 @@ class HipmhSitePlugin(
         )
     }
 
-    private fun buildListUrl(section: String?, page: Int, query: String): String {
+    /**
+     * Builds `/v1/mangas` URLs. `sort` overrides the section's default only where the site actually
+     * accepts it: the keyword and status/category entries ignore `sort`, so it is only emitted for
+     * the generic list entry (no section filters). `supportedSorts` mirrors this exactly.
+     */
+    private fun buildListUrl(section: String?, page: Int, query: String, sort: FeedSort? = null): String {
         val params = mutableListOf<String>()
         if (query.isNotEmpty()) {
             params += "keyword=${encode(query)}"
@@ -378,14 +383,35 @@ class HipmhSitePlugin(
                 "cat_cn" -> params += "category=2"
                 "cat_ko" -> params += "category=1"
                 else -> {
-                    GENRE_IDS[id]?.let { params += "genre=$it" }
-                        ?: params.let { if (it.isEmpty()) it += "sort=updated" }
+                    val genre = GENRE_IDS[id]
+                    if (genre != null) {
+                        params += "genre=$genre"
+                    } else {
+                        // Only the unfiltered list entry lets the caller's sort reach the request.
+                        params += "sort=${sortParam(sort)}"
+                    }
                 }
             }
         }
         params += "page=$page"
         params += "per_page=$PAGE_SIZE"
         return "$API_BASE/v1/mangas?" + params.joinToString("&")
+    }
+
+    private fun sortParam(sort: FeedSort?): String = when (sort) {
+        FeedSort.POPULAR -> "popular"
+        else -> "updated"
+    }
+
+    /**
+     * Declared sorts per section. Sections whose URL is sort-fixed (popular / weekly / new /
+     * status / category / genre) advertise only the value their URL actually encodes, so the UI
+     * can never offer a selection that fails to change the request.
+     */
+    private fun sortsForSection(section: String?): List<FeedSort> = when (section?.trim()?.lowercase().orEmpty()) {
+        "", "latest" -> SORT_OVERRIDABLE_SORTS
+        "popular", "weekly" -> listOf(FeedSort.POPULAR)
+        else -> listOf(FeedSort.NEWEST)
     }
 
     private fun parseMangaSummary(obj: JsonObject): MediaItem? {
@@ -777,10 +803,18 @@ class HipmhSitePlugin(
         private const val MAX_CHAPTER_PAGES = 40
         private const val CHAPTER_CACHE_TTL_MS = 30 * 60 * 1_000L
 
+        /** Sorts the unfiltered `/v1/mangas` list entry actually forwards to the request. */
+        private val SORT_OVERRIDABLE_SORTS: List<FeedSort> = listOf(
+            FeedSort.NEWEST,
+            FeedSort.POPULAR,
+        )
+
         internal val SECTIONS: List<SiteSectionSpec> = listOf(
             SiteSectionSpec("latest", "最近更新", defaultSort = FeedSort.NEWEST),
             SiteSectionSpec("popular", "人氣", defaultSort = FeedSort.POPULAR),
-            SiteSectionSpec("weekly", "本週熱門", defaultSort = FeedSort.TRENDING),
+            // The "weekly" entry degrades to sort=popular upstream; advertising TRENDING would
+            // promise a ranking the API never returns.
+            SiteSectionSpec("weekly", "本週熱門", defaultSort = FeedSort.POPULAR),
             SiteSectionSpec("new", "最新上架", defaultSort = FeedSort.NEWEST),
             SiteSectionSpec("ongoing", "連載中"),
             SiteSectionSpec("completed", "已完結"),
@@ -826,7 +860,7 @@ class HipmhSitePlugin(
                 SiteCapability.TAGS,
                 SiteCapability.AUTHORS,
             ),
-            feedSorts = listOf(FeedSort.NEWEST, FeedSort.POPULAR, FeedSort.TRENDING),
+            feedSorts = listOf(FeedSort.NEWEST, FeedSort.POPULAR),
             sections = SECTIONS,
             searchScopes = listOf(SearchScope.ALL),
             networkProfile = SiteNetworkProfile(

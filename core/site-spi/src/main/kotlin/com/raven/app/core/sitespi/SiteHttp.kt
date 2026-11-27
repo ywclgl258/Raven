@@ -34,6 +34,36 @@ enum class SiteRequestKind {
     PROBE,
 }
 
+/**
+ * Per-request credential scope.
+ *
+ * - [SITE]: normal behaviour — the site cookie jar supplies `Cookie`, response `Set-Cookie`
+ *   values are merged into the encrypted session store, and [SiteHttpRequest.authEpoch] guards
+ *   against stale sessions.
+ * - [ISOLATED]: candidate/credential-handshake path — the cookie jar is bypassed entirely for the
+ *   outgoing hop (the caller passes an explicit `Cookie` header), and no response cookie is ever
+ *   persisted. Used so probing a login candidate can never mutate (or epoch-bump) the live session.
+ */
+enum class RequestSessionScope {
+    SITE,
+    ISOLATED,
+}
+
+/**
+ * Cancellation signalled from inside the OkHttp interceptor chain (e.g. Iwara's per-request
+ * `authEpoch` guard in [AuthProvider.decorateRequestHeaders]).
+ *
+ * It intentionally derives from [java.io.IOException]: OkHttp only handles [java.io.IOException]
+ * through its interceptor/route machinery, and a checked [SiteException] thrown from an interceptor
+ * escapes as an arbitrary throwable that callers written against `catch (IOException)` (Coil 3,
+ * Media3 datasources, download workers) would not catch. `:core:network`'s `SiteHttpErrorMapper`
+ * converts this back into `SiteException.Cancelled`, so both layers see the right semantics.
+ */
+class SiteAuthCancelledException(
+    message: String = "会话状态已变更",
+    val siteId: SiteId? = null,
+) : java.io.IOException(message)
+
 data class SiteHttpRequest(
     val url: String,
     val siteId: SiteId? = null,
@@ -49,6 +79,16 @@ data class SiteHttpRequest(
     val rangeHeader: String? = null,
     val authEpoch: Long? = null,
     val timeoutMs: Long? = null,
+    /**
+     * Cookie/credential scope for this single request.
+     *
+     * [RequestSessionScope.ISOLATED] means "never read or write the site's cookie jar and never
+     * attach stored credentials": the plugin supplies its own `Cookie` header for a candidate
+     * login handshake, and any `Set-Cookie` in the response is discarded instead of being merged
+     * into the vault. That keeps a failed/partial login attempt from polluting (and bumping the
+     * epoch of) the currently signed-in session.
+     */
+    val sessionScope: RequestSessionScope = RequestSessionScope.SITE,
 ) {
     override fun equals(other: Any?): Boolean {
         if (this === other) return true
@@ -66,7 +106,8 @@ data class SiteHttpRequest(
             allowRetry == other.allowRetry &&
             rangeHeader == other.rangeHeader &&
             authEpoch == other.authEpoch &&
-            timeoutMs == other.timeoutMs
+            timeoutMs == other.timeoutMs &&
+            sessionScope == other.sessionScope
     }
 
     override fun hashCode(): Int {
@@ -84,6 +125,7 @@ data class SiteHttpRequest(
         result = 31 * result + (rangeHeader?.hashCode() ?: 0)
         result = 31 * result + (authEpoch?.hashCode() ?: 0)
         result = 31 * result + (timeoutMs?.hashCode() ?: 0)
+        result = 31 * result + sessionScope.hashCode()
         return result
     }
 }
@@ -197,6 +239,7 @@ interface HttpClientAdapter {
         siteId: SiteId? = null,
         headers: Map<String, String> = emptyMap(),
         followRedirects: Boolean = true,
+        sessionScope: RequestSessionScope = RequestSessionScope.SITE,
     ): SiteHttpResponse {
         val encoded = fields.entries.joinToString("&") { (k, v) ->
             "${URLEncoder.encode(k, "UTF-8")}=${URLEncoder.encode(v, "UTF-8")}"
@@ -213,6 +256,7 @@ interface HttpClientAdapter {
                 followRedirects = followRedirects,
                 allowCache = false,
                 allowRetry = false,
+                sessionScope = sessionScope,
             ),
         )
     }
@@ -223,6 +267,7 @@ interface HttpClientAdapter {
         siteId: SiteId? = null,
         headers: Map<String, String> = emptyMap(),
         followRedirects: Boolean = false,
+        sessionScope: RequestSessionScope = RequestSessionScope.SITE,
     ): SiteHttpResponse = execute(
         SiteHttpRequest(
             url = url,
@@ -235,6 +280,41 @@ interface HttpClientAdapter {
             followRedirects = followRedirects,
             allowCache = false,
             allowRetry = false,
+            sessionScope = sessionScope,
         ),
     )
+
+    /**
+     * Candidate-login probe: runs with [RequestSessionScope.ISOLATED] so [cookies] are the ONLY
+     * credential the target sees and no response `Set-Cookie` reaches the site jar.
+     */
+    suspend fun probeWithCookies(
+        url: String,
+        cookies: Map<String, String>,
+        siteId: SiteId? = null,
+        kind: SiteRequestKind = SiteRequestKind.PAGE,
+        headers: Map<String, String> = emptyMap(),
+    ): SiteHttpResponse = execute(
+        SiteHttpRequest(
+            url = url,
+            siteId = siteId,
+            method = SiteHttpMethod.GET,
+            kind = kind,
+            headers = headers + mapOf("Cookie" to formatCookieHeader(cookies)),
+            allowCookies = false,
+            allowCache = false,
+            allowRetry = false,
+            sessionScope = RequestSessionScope.ISOLATED,
+        ),
+    )
+}
+
+/** Formats [cookies] as a `Cookie` header value (`a=1; b=2`), skipping blank names/values. */
+fun formatCookieHeader(cookies: Map<String, String>): String = buildString {
+    for ((name, value) in cookies) {
+        val trimmedName = name.trim()
+        if (trimmedName.isEmpty()) continue
+        if (isNotEmpty()) append("; ")
+        append(trimmedName).append('=').append(value.trim())
+    }
 }

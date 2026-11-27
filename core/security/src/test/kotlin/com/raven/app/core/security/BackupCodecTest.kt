@@ -99,6 +99,7 @@ class BackupCodecTest {
                 addedAt = 1_730_000_000_000L,
             ),
         ),
+        searchHistory = listOf(com.raven.app.core.model.SearchHistoryEntry(SiteId.GLOBAL, "跨站查询", searchedAt = 123L)),
         siteLanguages = mapOf(SiteId.NHENTAI to ComicLanguage.CHINESE_AND_JAPANESE),
         settings = mapOf("translate_tags" to "true", "default_playback_speed" to "1.25"),
     )
@@ -342,6 +343,8 @@ class BackupCodecTest {
 
         val search = payload.savedSearches.single()
         assertTrue(search.id.isNotBlank())
+        val repeated = LegacyR34vBackupAdapter.decodeToRavenPayload(legacyJson, registry)
+        assertEquals(search.id, repeated.savedSearches.single().id)
         assertEquals(SearchScope.AUTHOR, search.scope)
         assertEquals(listOf(SiteId.IWARA, SiteId.RETIRED_KBJ), search.siteIds)
 

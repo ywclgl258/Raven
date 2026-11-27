@@ -1,8 +1,11 @@
 package com.raven.app.core.network
 
 import com.raven.app.core.model.SiteDescriptor
+import com.raven.app.core.model.SiteException
 import com.raven.app.core.model.SiteId
 import com.raven.app.core.model.SiteNetworkProfile
+import com.raven.app.core.sitespi.RequestSessionScope
+import com.raven.app.core.sitespi.SiteAuthCancelledException
 import com.raven.app.core.sitespi.SiteHttpMethod
 import com.raven.app.core.sitespi.SiteHttpRequest
 import com.raven.app.core.sitespi.SitePlugin
@@ -161,6 +164,9 @@ internal class SiteRequestHeaderInterceptor(
             ?: registry.findForMediaHost(host)
         val descriptor = plugin?.descriptor
         val effectiveKind = tag?.siteRequest?.kind ?: defaultKind
+        // Candidate login handshakes must be self-contained: the caller supplies its own Cookie
+        // header and NO stored credential or site decoration is added on top of it.
+        val isolated = tag?.siteRequest?.sessionScope == RequestSessionScope.ISOLATED
 
         val builder = original.newBuilder()
         if (plugin != null && original.tag(CredentialScopeOriginTag::class.java) == null) {
@@ -186,7 +192,7 @@ internal class SiteRequestHeaderInterceptor(
 
             // Attach site-specific headers (e.g. Iwara Origin/x-site & Bearer on apiHosts)
             val isExplicitSiteTag = tag?.siteId == plugin.id
-            val isAllowedForSiteHeaders = descriptor.matchesMediaHost(host) || isExplicitSiteTag
+            val isAllowedForSiteHeaders = !isolated && (descriptor.matchesMediaHost(host) || isExplicitSiteTag)
             if (isAllowedForSiteHeaders) {
                 val siteReq = tag?.siteRequest ?: SiteHttpRequest(
                     url = original.url.toString(),
@@ -198,7 +204,7 @@ internal class SiteRequestHeaderInterceptor(
                     },
                     kind = effectiveKind,
                 )
-                val decorated = plugin.authProvider.decorateRequestHeaders(siteReq, host)
+                val decorated = decorateWithinInterceptor(plugin, siteReq, host)
                 val allowAuthCredentials = descriptor.matchesRequestHost(host) &&
                     effectiveKind != SiteRequestKind.PROBE &&
                     (effectiveKind != SiteRequestKind.IMAGE || plugin.authProvider.requiresAuthGate)
@@ -233,11 +239,45 @@ internal class SiteRequestHeaderInterceptor(
 
         return chain.proceed(builder.build())
     }
+
+    /**
+     * Runs a plugin's header decoration inside the interceptor chain.
+     *
+     * Plugins guard their own credential headers with an `authEpoch` check and historically threw
+     * `SiteException.Cancelled` from here. A checked exception escaping an [Interceptor] is not an
+     * [java.io.IOException], so OkHttp's dispatcher and every caller written around
+     * `catch (IOException)` (Coil 3 fetchers, Media3 datasources, download workers) would see an
+     * unrelated failure and lose cancellation semantics. Convert it to
+     * [SiteAuthCancelledException] (an IOException) so the request fails cleanly; `:core:network`
+     * maps it back to `SiteException.Cancelled` at the adapter boundary.
+     */
+    private fun decorateWithinInterceptor(
+        plugin: SitePlugin,
+        request: SiteHttpRequest,
+        host: String,
+    ): Map<String, String> = try {
+        plugin.authProvider.decorateRequestHeaders(request, host)
+    } catch (e: SiteAuthCancelledException) {
+        throw e
+    } catch (e: SiteException) {
+        // Only IOException may travel through an OkHttp interceptor without destabilising the call.
+        // Cancellation becomes its own IOException subtype; every other typed failure is carried as
+        // an IOException preserving the original as cause, which SiteHttpErrorMapper unwraps.
+        if (e is SiteException.Cancelled) {
+            throw SiteAuthCancelledException(e.message.orEmpty(), siteId = e.siteId ?: plugin.id)
+        }
+        throw java.io.IOException(e.message.orEmpty(), e)
+    }
 }
 
 /**
  * Network-layer defense-in-depth interceptor ensuring manually attached `Authorization` or
  * `Cookie` headers NEVER leak onto a redirected third-party CDN or foreign host.
+ *
+ * Per-hop confinement: credentials survive only while the hop host stays inside the tagged site's
+ * request allowlist ([com.raven.app.core.model.SiteDescriptor.matchesRequestHost] — primary/mirror
+ * hosts plus declared `apiHosts`). The first hop that leaves the allowlist is scrubbed, and since
+ * OkHttp re-enters this network interceptor for every redirect, later hops cannot regain them.
  *
  * Unscoped requests (e.g. user WebDAV Basic Auth without site/redirect origin tags) are untouched.
  */
@@ -247,9 +287,7 @@ internal class CrossHostCredentialGuardInterceptor(
 
     override fun intercept(chain: Interceptor.Chain): Response {
         val request = chain.request()
-        val hasAuth = request.header("Authorization") != null
-        val hasCookie = request.header("Cookie") != null
-        if (!hasAuth && !hasCookie) {
+        if (!hasCredentialHeaders(request)) {
             return chain.proceed(request)
         }
 
@@ -260,7 +298,7 @@ internal class CrossHostCredentialGuardInterceptor(
         val redirectOrigin = request.tag(MediaRedirectCache.RedirectOriginTag::class.java)
 
         var stripCredentials = false
-        val taggedSiteId = siteTag?.siteId ?: scopeOrigin?.siteId
+        val taggedSiteId = siteTag?.siteId ?: scopeOrigin?.siteId ?: redirectOrigin?.accountId
         if (taggedSiteId != null) {
             val descriptor = registry.get(taggedSiteId)?.descriptor
             if (descriptor == null || !descriptor.matchesRequestHost(hopHost)) {
@@ -281,11 +319,28 @@ internal class CrossHostCredentialGuardInterceptor(
         if (!stripCredentials) {
             return chain.proceed(request)
         }
-        val sanitized = request.newBuilder()
-            .removeHeader("Authorization")
-            .removeHeader("Cookie")
-            .build()
+        val sanitized = request.newBuilder().apply {
+            for (header in CREDENTIAL_HEADERS) {
+                removeHeader(header)
+            }
+        }.build()
         return chain.proceed(sanitized)
+    }
+
+    private fun hasCredentialHeaders(request: Request): Boolean =
+        CREDENTIAL_HEADERS.any { request.header(it) != null }
+
+    companion object {
+        /** Headers that carry user identity or a bearer secret and must never cross an allowlist boundary. */
+        private val CREDENTIAL_HEADERS: List<String> = listOf(
+            "Authorization",
+            "Cookie",
+            "Proxy-Authorization",
+            "X-Auth-Token",
+            "X-Api-Key",
+            "X-Access-Token",
+            "X-Csrf-Token",
+        )
     }
 }
 

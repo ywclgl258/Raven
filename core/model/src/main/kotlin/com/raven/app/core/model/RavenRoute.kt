@@ -20,6 +20,12 @@ sealed interface RavenRoute {
     data class Search(
         val initialQuery: String? = null,
         val crossSite: Boolean = false,
+        /**
+         * Site that originated the search (e.g. the gallery's site when searching a tag/author
+         * from a library-opened detail page). `null` means "use the currently active site".
+         * Without this, a detail page for site B opened while site A is active would search A.
+         */
+        val sourceSiteId: String? = null,
     ) : RavenRoute
 
     @Serializable
@@ -37,6 +43,15 @@ sealed interface RavenRoute {
         val query: String? = null,
         val scope: String = "ALL",
         val title: String? = null,
+        /**
+         * Share-link feed fidelity (e.g. Iwara `?tags=...&page=3&sort=...&type=images`).
+         * When set, the feed destination starts on this server sort, page, media kind, and
+         * include-tag set instead of resetting to page 1 of the site's default video list.
+         */
+        val sort: String? = null,
+        val page: Int? = null,
+        val mediaKind: String? = null,
+        val includeTags: List<String> = emptyList(),
     ) : RavenRoute
 
     @Serializable

@@ -567,6 +567,7 @@ class Manwa2SitePlugin(
         val collected = mutableListOf<String>()
         var page = 1
         var totalPages = 1
+        var emptyRetries = 0
         while (page <= totalPages && page <= MAX_IMAGE_PAGES) {
             val url = "https://$host/api/comic/image/$chapterId?page=$page&page_size=$IMAGE_PAGE_SIZE"
             val data = fetchApiData(url, host) as? JsonObject
@@ -574,11 +575,35 @@ class Manwa2SitePlugin(
             val imgs = data.safeArray("images").orEmpty().mapNotNull { el ->
                 (el as? JsonObject)?.safeString("url")?.takeIf { it.isNotBlank() }
             }
-            collected += imgs
             val tp = data.safeObject("pagination")?.safeInt("totalPages") ?: 1
             totalPages = tp.coerceAtLeast(1)
-            if (imgs.isEmpty()) break
+            if (imgs.isEmpty()) {
+                // Upstream still claims more pages: a transient empty page must not be read as
+                // "chapter over". Retry the SAME page a bounded number of times, then fail loudly
+                // instead of caching a prefix as a complete chapter.
+                if (page < totalPages && emptyRetries < MAX_EMPTY_PAGE_RETRIES) {
+                    emptyRetries++
+                    continue
+                }
+                if (page < totalPages) {
+                    throw SiteException.ParseError(
+                        "漫蛙2章节第 $page 页为空但仍有 ${totalPages - page + 1} 页未取，章节不完整",
+                        siteId = SiteId.MANWA2,
+                    )
+                }
+                break
+            }
+            emptyRetries = 0
+            collected += imgs
             page++
+        }
+        // Hitting the hard page ceiling with additional upstream pages is a protective exit, never
+        // a complete chapter — refuse to cache it so the next attempt can fetch the full set.
+        if (page <= totalPages && page > MAX_IMAGE_PAGES) {
+            throw SiteException.ParseError(
+                "漫蛙2章节页数超过上限 $MAX_IMAGE_PAGES（声明 $totalPages 页），未缓存部分结果",
+                siteId = SiteId.MANWA2,
+            )
         }
         if (collected.isEmpty()) {
             throw SiteException.ParseError("漫蛙2章节暂无可用图片", siteId = SiteId.MANWA2)
@@ -895,6 +920,7 @@ class Manwa2SitePlugin(
         private const val SEARCH_PAGE_SIZE = 20
         private const val IMAGE_PAGE_SIZE = 9999
         private const val MAX_IMAGE_PAGES = 10
+        private const val MAX_EMPTY_PAGE_RETRIES = 2
         private const val DETAIL_CACHE_TTL_MS = 5 * 60 * 1_000L
         private const val CHAPTER_CACHE_TTL_MS = 30 * 60 * 1_000L
         private const val KEY_REFRESH_COOLDOWN_MS = 10 * 60 * 1_000L

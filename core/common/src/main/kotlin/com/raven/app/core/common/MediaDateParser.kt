@@ -80,12 +80,8 @@ object MediaDateParser {
 
         // 1. Explicit numeric Y-M-D / Y/M/D / Y.M.D / YYYY年M月D日
         ymdRegex.find(raw)?.let { m ->
-            val y = m.groupValues[1].toIntOrNull()
-            val mo = m.groupValues[2].toIntOrNull()
-            val d = m.groupValues[3].toIntOrNull()
-            if (y != null && mo != null && d != null) {
-                toUtcEpochDay(y, mo, d)?.let { return it }
-            }
+            val (year, month, day) = m.destructured
+            return toUtcEpochDay(year.toInt(), month.toInt(), day.toInt())
         }
 
         // 2. English month name formats

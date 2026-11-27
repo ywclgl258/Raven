@@ -784,9 +784,9 @@ private fun PlayerActionStrip(
     onOpenAddBookmark: () -> Unit,
     onShareClick: () -> Unit,
     onOpenExternalPlayers: () -> Unit,
+    modifier: Modifier = Modifier,
     onToggleLike: () -> Unit = {},
     onOpenCast: () -> Unit = {},
-    modifier: Modifier = Modifier,
 ) {
     val colors = LocalRavenColors.current
     val downloadLabel = when {

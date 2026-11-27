@@ -70,10 +70,21 @@ class GuazimanhuaSitePlugin(
             val doc = Jsoup.parse(html, url)
             val items = parseComicCards(doc)
             if (items.isEmpty()) {
-                if (query.isNotEmpty()) {
-                    return FeedPage(items = emptyList(), nextPage = null, hasMore = false, title = query)
+                // An explicit site empty-state is a genuine zero-result; anything else means the
+                // markup no longer matches the parser and MUST surface as an error, not as "0 条".
+                val emptyState = looksLikeEmptyState(doc, html)
+                if (emptyState) {
+                    return FeedPage(
+                        items = emptyList(),
+                        nextPage = null,
+                        hasMore = false,
+                        title = query.ifEmpty { sectionTitle(request.section) },
+                    )
                 }
-                throw SiteException.ParseError("瓜子漫画列表结构不可识别", siteId = SiteId.GUAZIMANHUA)
+                throw SiteException.ParseError(
+                    "瓜子漫画列表结构不可识别（$url）",
+                    siteId = SiteId.GUAZIMANHUA,
+                )
             }
             val hasMore = doc.selectFirst("a[href*='page=${page + 1}']") != null ||
                 html.contains("rel=\"next\"", ignoreCase = true)
@@ -85,7 +96,12 @@ class GuazimanhuaSitePlugin(
             )
         }
 
-        override fun supportedSorts(request: FeedRequest): List<FeedSort> = FEED_SORTS
+        /**
+         * `category.php` honours `sort` for both keyword and section requests, so every mapped
+         * value in [FEED_SORTS] genuinely changes the request. Chapter feeds are lists only.
+         */
+        override fun supportedSorts(request: FeedRequest): List<FeedSort> =
+            if (request.section.equals(CHAPTERS_SECTION, ignoreCase = true)) emptyList() else FEED_SORTS
     }
 
     override val searchSource: SearchSource = object : SearchSource {
@@ -194,11 +210,14 @@ class GuazimanhuaSitePlugin(
     // -------------------------------------------------------------------------
 
     private fun resolveFeedUrl(request: FeedRequest, page: Int, query: String): String {
-        if (query.isNotEmpty()) {
-            return "${descriptor.baseUrl}/category.php?keyword=${HtmlUrlCleaner.encodeQueryParam(query)}" +
-                "&sort=hits&page=$page"
-        }
         val section = request.section?.trim()?.lowercase().orEmpty()
+        val sort = sortParam(request.sort)
+            ?: if (query.isNotEmpty() || section == "popular") "hits" else "update"
+        if (query.isNotEmpty()) {
+            // Search must honour the selected sort; the site previously ignored it (fixed hits).
+            return "${descriptor.baseUrl}/category.php?keyword=${HtmlUrlCleaner.encodeQueryParam(query)}" +
+                "&sort=$sort&page=$page"
+        }
         val params = mutableListOf<String>()
         when {
             section.startsWith("cid_") && section.removePrefix("cid_").let { it.isNotEmpty() && it.all(Char::isDigit) } ->
@@ -211,8 +230,6 @@ class GuazimanhuaSitePlugin(
                 params += "is_end=${section.removePrefix("end_")}"
         }
         request.category?.trim()?.takeIf { it.isNotEmpty() && it.all(Char::isDigit) }?.let { params += "cid=$it" }
-        val sort = sortParam(request.sort)
-            ?: if (section == "popular") "hits" else "update"
         params += "sort=$sort"
         params += "page=$page"
         return "${descriptor.baseUrl}/category.php?" + params.joinToString("&")
@@ -224,6 +241,18 @@ class GuazimanhuaSitePlugin(
         FeedSort.TRENDING -> "daily"
         FeedSort.RATING -> "score"
         else -> null
+    }
+
+    /**
+     * Recognises the site's own zero-result markers. A keyword page with no cards AND no marker is
+     * a parser mismatch, not an empty gallery, and must not be shown as "0 条结果".
+     */
+    private fun looksLikeEmptyState(doc: org.jsoup.nodes.Document, html: String): Boolean {
+        val text = doc.text()
+        return EMPTY_STATE_MARKERS.any { text.contains(it, ignoreCase = true) } ||
+            html.contains("未找到相关漫画", ignoreCase = true) ||
+            html.contains("没有找到相关结果", ignoreCase = true) ||
+            EMPTY_LIST_SELECTOR_REGEX.containsMatchIn(html)
     }
 
     private fun sectionTitle(section: String?): String =
@@ -438,6 +467,22 @@ class GuazimanhuaSitePlugin(
 
         private val CHAPTER_IMAGE_REGEX =
             Regex("""https://img\.guazicdn\.com/th/comics/chapters/[^\s"'<>\\]+""")
+
+        /** Feed-level empty-state markers (site copy when a category/search has no comics). */
+        private val EMPTY_STATE_MARKERS = listOf(
+            "暂无漫画",
+            "暂无内容",
+            "无结果",
+            "没有找到",
+            "沒有找到",
+            "无相关漫画",
+            "Nothing Found",
+            "no results",
+            "no data",
+        )
+
+        /** Structural empty marker (`<div class="empty-list">`-style nodes). */
+        private val EMPTY_LIST_SELECTOR_REGEX = Regex("""class=["'][^"']*empty[-_ ]?(list|state|result)""")
 
         private val FEED_SORTS = listOf(
             FeedSort.NEWEST,

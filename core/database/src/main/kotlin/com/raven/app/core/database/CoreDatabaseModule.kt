@@ -52,6 +52,7 @@ val coreDatabaseModule: Module = module {
     single { get<RavenDatabase>().tagTranslationDao() }
     single { get<RavenDatabase>().mediaTagCacheDao() }
     single { get<RavenDatabase>().mediaLikeDao() }
+    single { get<RavenDatabase>().backupRestoreJournalDao() }
 
     // Preferences DataStore
     single<DataStore<Preferences>> { SettingsDataStore.createDataStore(androidContext()) }
@@ -170,6 +171,10 @@ val coreDatabaseModule: Module = module {
             settingsDataStore = get(),
             transactionRunner = get(),
             tagTranslationDao = get(),
+            // Optional: lets applyBackup refresh the in-memory TagDictionary custom layer so
+            // restored translations take effect without a process restart.
+            tagDictionaryRepository = getOrNull<TagDictionaryRepository>(),
+            backupRestoreJournalDao = getOrNull(),
         )
     }
 }

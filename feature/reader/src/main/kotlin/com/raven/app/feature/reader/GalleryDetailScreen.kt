@@ -221,21 +221,13 @@ fun GalleryDetailScreen(
         }
     }
 
+    val exportPicker = rememberExportDocumentPicker { prepared, uri, _ ->
+        viewModel.completeSafExport(prepared, uri, context.contentResolver)
+    }
     LaunchedEffect(viewModel, navigator) {
         viewModel.events.collect { event ->
             when (event) {
-                is GalleryDetailEvent.RequestSaveDocument -> {
-                    navigator.launchSaveDocument(
-                        suggestedFileName = event.suggestedFileName,
-                        mimeType = event.mimeType,
-                    ) { uri ->
-                        viewModel.completeSafExport(
-                            prepared = event.prepared,
-                            targetUri = uri,
-                            contentResolver = context.contentResolver,
-                        )
-                    }
-                }
+                is GalleryDetailEvent.RequestSaveDocument -> exportPicker(event.prepared, false)
             }
         }
     }
@@ -343,7 +335,7 @@ fun GalleryDetailScreen(
                                 )
                             },
                             onOpenAuthor = { author ->
-                                navigator.openAuthorSearch(author, crossSite = true)
+                                navigator.openAuthorSearch(author, crossSite = true, sourceSiteId = activeDetail.item.siteId)
                             },
                             onLongPressAuthor = viewModel::openAuthorActions,
                             onOpenTag = { tag ->
@@ -441,7 +433,7 @@ fun GalleryDetailScreen(
             onDismiss = viewModel::dismissTagActions,
             onSearchTag = { crossSite ->
                 viewModel.dismissTagActions()
-                navigator.openTagSearch(activeTagAction.tag, crossSite)
+                navigator.openTagSearch(activeTagAction.tag, crossSite, sourceSiteId = uiState.siteId)
             },
             onCopyTag = { text ->
                 viewModel.dismissTagActions()
@@ -468,7 +460,7 @@ fun GalleryDetailScreen(
             },
             onSearchAuthor = { crossSite ->
                 viewModel.dismissAuthorActions()
-                navigator.openAuthorSearch(activeAuthorAction, crossSite)
+                navigator.openAuthorSearch(activeAuthorAction, crossSite, sourceSiteId = uiState.siteId)
             },
         )
     }
@@ -2068,8 +2060,8 @@ internal fun GalleryChapterPickerSection(
     currentChapterHints: List<String>,
     onSelect: (MediaItem) -> Unit,
     onRefresh: () -> Unit,
-    title: String = "选集",
     modifier: Modifier = Modifier,
+    title: String = "选集",
     fillAvailableHeight: Boolean = false,
     readState: ChapterPickerReadState = ChapterPickerReadState(),
     onOpenNextUnread: ((MediaItem) -> Unit)? = null,

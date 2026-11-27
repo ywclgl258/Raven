@@ -720,8 +720,8 @@ fun RavenButtonRow(
 @Composable
 fun RavenButtonRow(
     primary: @Composable (Modifier) -> Unit,
-    secondary: (@Composable (Modifier) -> Unit)? = null,
     modifier: Modifier = Modifier,
+    secondary: (@Composable (Modifier) -> Unit)? = null,
 ) {
     val items = if (secondary != null) listOf(secondary, primary) else listOf(primary)
     RavenButtonRow(buttons = items, modifier = modifier)

@@ -50,6 +50,13 @@ internal object LegacyR34vBackupAdapter {
         isLenient = false
     }
 
+    private inline fun <reified T> legacyRecordId(kind: String, record: T, occurrences: MutableMap<String, Int>): String {
+        val encoded = legacyJson.encodeToString(record)
+        val ordinal = occurrences.getOrDefault(encoded, 0)
+        occurrences[encoded] = ordinal + 1
+        return UUID.nameUUIDFromBytes("R34V:$kind:$ordinal:$encoded".toByteArray(Charsets.UTF_8)).toString()
+    }
+
     private val legacyBooleanKeys = setOf(
         "translate_tags",
         "auto_fullscreen",
@@ -278,6 +285,7 @@ internal object LegacyR34vBackupAdapter {
         }
 
         // Smart shelves
+        val smartShelfOccurrences = mutableMapOf<String, Int>()
         val smartShelves = personal.smartShelves.map { s ->
             val rule = when (s.rule) {
                 "UNFINISHED" -> SmartShelfRule.UNFINISHED
@@ -286,7 +294,7 @@ internal object LegacyR34vBackupAdapter {
                 else -> throw BackupValidationException("旧版智能片单规则无效：${s.rule}")
             }
             SmartShelf(
-                id = s.id.ifBlank { UUID.randomUUID().toString() },
+                id = s.id.ifBlank { legacyRecordId("shelf", s, smartShelfOccurrences) },
                 name = s.name,
                 rule = rule,
                 mediaKindFilter = mapCategoryOrNull(s.category),
@@ -348,12 +356,16 @@ internal object LegacyR34vBackupAdapter {
         }
 
         // Saved searches
+        val searchOccurrences = mutableMapOf<String, Int>()
         val savedSearches = personal.savedSearches.map { s ->
-            val resolvedId = s.id?.takeIf { it.isNotBlank() } ?: UUID.randomUUID().toString()
+            val resolvedId = s.id?.takeIf { it.isNotBlank() }
+                ?: legacyRecordId("search", s.copy(id = null, languages = s.languages.toSortedMap()), searchOccurrences)
             val sources = s.sources.map { SiteId.of(it) }
-            val primaryLang = s.languages.values.firstOrNull()?.let { raw ->
-                mapComicLanguage(raw) ?: throw BackupValidationException("保存搜索语言无效：$raw")
-            } ?: ComicLanguage.ALL
+            val legacySiteLanguages = s.languages.map { (siteKey, raw) ->
+                val mapped = mapComicLanguage(raw)
+                    ?: throw BackupValidationException("保存搜索语言无效：$raw")
+                SiteId.of(siteKey) to mapped
+            }.toMap()
             SavedSearch(
                 id = resolvedId,
                 name = s.name,
@@ -361,8 +373,8 @@ internal object LegacyR34vBackupAdapter {
                 scope = mapLegacyScope(s.singleSiteScope),
                 siteIds = sources,
                 mediaKind = mapCategoryOrNull(s.category),
-                language = primaryLang,
-                filters = mapLegacyFilter(s.filter, s.includeTags, s.excludeTags),
+                filters = mapLegacyFilter(s.filter, s.includeTags, s.excludeTags)
+                    .copy(siteLanguages = legacySiteLanguages),
                 createdAt = legacy.at,
             )
         }

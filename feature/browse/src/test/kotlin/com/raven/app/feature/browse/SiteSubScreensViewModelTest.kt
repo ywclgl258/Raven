@@ -160,6 +160,141 @@ class SiteSubScreensViewModelTest {
         }
 
     @Test
+    fun `SiteDirectoryViewModel pages only with the query that produced page one`() =
+        runTest(mainDispatcherRule.dispatcher) {
+            val harness = BrowseTestHarness(mainDispatcherRule.dispatcher)
+            val requests = mutableListOf<Triple<String, Int, String?>>()
+            val dirSections = listOf(SiteSectionSpec(id = "tags", title = "标签", isDirectory = true))
+            val plugin = FakeSitePlugin(
+                descriptor = SiteDescriptor(
+                    id = SiteId.R34V,
+                    displayName = "Rule34Video",
+                    primaryKind = MediaKind.VIDEO,
+                    defaultHost = "rule34video.com",
+                    capabilities = setOf(SiteCapability.DIRECTORY),
+                ),
+                directoryHandler = { section, page, query ->
+                    requests += Triple(section, page, query)
+                    (1..12).map { idx ->
+                        DirectoryEntry(
+                            SiteId.R34V,
+                            "tag-$page-$idx",
+                            "Tag $page $idx",
+                            "https://r34v.example/tags/tag-$page-$idx",
+                            SearchScope.TAG,
+                        )
+                    } + if (query != null) {
+                        listOf(
+                            DirectoryEntry(
+                                SiteId.R34V,
+                                "remote-$query",
+                                "Remote $query",
+                                "https://r34v.example/tags/remote-$query",
+                                SearchScope.TAG,
+                            ),
+                        )
+                    } else {
+                        emptyList()
+                    }
+                },
+                directorySectionsList = dirSections,
+            )
+            val vm = SiteDirectoryViewModel(
+                route = RavenRoute.SiteDirectory(siteId = SiteId.R34V.value, section = "tags"),
+                siteRegistry = SiteRegistry(listOf(plugin)),
+                preferencesRepository = harness.preferencesRepository,
+                dispatchers = harness.dispatchers,
+            )
+
+            vm.uiState.test {
+                advanceUntilIdle()
+                assertEquals(Triple("tags", 1, null), requests.first())
+                assertTrue(expectMostRecentItem().hasMore)
+
+                // Page 2 keeps the same (null) remote query.
+                vm.loadNextPage()
+                advanceUntilIdle()
+                assertEquals(Triple("tags", 2, null), requests.last())
+
+                // Remote query reloads page 1 with a keyword and hides pagination.
+                vm.updateFilterQuery("blonde")
+                vm.submitRemoteFilter()
+                advanceUntilIdle()
+                assertEquals(Triple("tags", 1, "blonde"), requests.last())
+                assertFalse(expectMostRecentItem().hasMore)
+
+                // Clearing the box reloads the unfiltered first page instead of mixing queries.
+                vm.updateFilterQuery("")
+                advanceUntilIdle()
+                assertEquals(Triple("tags", 1, null), requests.last())
+                assertTrue(expectMostRecentItem().hasMore)
+
+                cancelAndIgnoreRemainingEvents()
+            }
+        }
+
+    @Test
+    fun `SiteFeedViewModel honors a share-link sort, page, media kind and include tags`() =
+        runTest(mainDispatcherRule.dispatcher) {
+            val harness = BrowseTestHarness(mainDispatcherRule.dispatcher)
+            val requests = mutableListOf<com.raven.app.core.model.FeedRequest>()
+            val plugin = FakeSitePlugin(
+                descriptor = SiteDescriptor(
+                    id = SiteId.IWARA,
+                    displayName = "Iwara",
+                    shortName = "Iwara",
+                    primaryKind = MediaKind.VIDEO,
+                    defaultHost = "iwara.tv",
+                    feedSorts = listOf(FeedSort.NEWEST, FeedSort.VIEWS),
+                    sections = listOf(
+                        SiteSectionSpec(id = "latest", title = "最新", mediaKind = MediaKind.VIDEO),
+                        SiteSectionSpec(id = "images", title = "图集", mediaKind = MediaKind.PHOTO),
+                    ),
+                ),
+                feedHandler = { req ->
+                    requests += req
+                    FeedPage(items = listOf(sampleMediaItem(SiteId.IWARA, "p_${req.page}", req.mediaKind ?: MediaKind.VIDEO)), hasMore = false)
+                },
+                searchHandler = { req ->
+                    requests += req
+                    FeedPage(items = listOf(sampleMediaItem(SiteId.IWARA, "s_${req.page}", req.mediaKind ?: MediaKind.VIDEO)), hasMore = false)
+                },
+            )
+
+            // Simulates toSiteFeedRoute(FeedRequest(... image, page 3, VIEWS sort, tags a+b)).
+            val vm = SiteFeedViewModel(
+                route = RavenRoute.SiteFeed(
+                    siteId = SiteId.IWARA.value,
+                    section = "images",
+                    scope = SearchScope.ALL.name,
+                    sort = FeedSort.VIEWS.name,
+                    page = 3,
+                    mediaKind = MediaKind.PHOTO.name,
+                    includeTags = listOf("a", "b"),
+                ),
+                siteRegistry = SiteRegistry(listOf(plugin)),
+                preferencesRepository = harness.preferencesRepository,
+                blockedTermsRepository = harness.blockedTermsRepository,
+                historyRepository = harness.historyRepository,
+                shelfRepository = harness.shelfRepository,
+                subscriptionRepository = harness.subscriptionRepository,
+                browsePositionRepository = harness.browsePositionRepository,
+                dispatchers = harness.dispatchers,
+            )
+
+            vm.uiState.test {
+                advanceUntilIdle()
+                val first = requests.first()
+                assertEquals(FeedSort.VIEWS, first.sort)
+                assertEquals(3, first.page)
+                assertEquals(MediaKind.PHOTO, first.mediaKind)
+                assertEquals(listOf("a", "b"), first.advancedFilters.includeTags)
+                assertEquals(MediaKind.PHOTO, expectMostRecentItem().effectiveMediaKind)
+                cancelAndIgnoreRemainingEvents()
+            }
+        }
+
+    @Test
     fun `SiteFunctionsViewModel aggregates site-scoped counts and updates language and reader mode`() =
         runTest(mainDispatcherRule.dispatcher) {
             val harness = BrowseTestHarness(mainDispatcherRule.dispatcher)

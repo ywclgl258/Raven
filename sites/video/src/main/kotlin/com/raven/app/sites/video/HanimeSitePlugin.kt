@@ -30,11 +30,16 @@ import com.raven.app.core.sitespi.HtmlUrlCleaner
 import com.raven.app.core.sitespi.HttpClientAdapter
 import com.raven.app.core.sitespi.JsExtractor
 import com.raven.app.core.sitespi.LinkResolver
+import com.raven.app.core.sitespi.RequestSessionScope
 import com.raven.app.core.sitespi.ResolvedLink
 import com.raven.app.core.sitespi.SearchSource
+import com.raven.app.core.sitespi.SiteHttpMethod
+import com.raven.app.core.sitespi.SiteHttpRequest
 import com.raven.app.core.sitespi.SitePlugin
+import com.raven.app.core.sitespi.SiteRequestKind
 import com.raven.app.core.sitespi.SiteSessionStore
 import com.raven.app.core.sitespi.VideoSource
+import com.raven.app.core.sitespi.formatCookieHeader
 import com.raven.app.core.sitespi.suspendRunCatching
 import java.util.Locale
 import kotlinx.coroutines.async
@@ -172,28 +177,34 @@ class HanimeSitePlugin(
             if (trimmedEmail.isBlank() || password.isEmpty()) {
                 throw SiteException.AuthRequired("请填写邮箱和密码", siteId = SiteId.HANIME1)
             }
+            // Candidate handshake runs fully ISOLATED: every hop carries only the cookies we have
+            // collected ourselves, and no Set-Cookie reaches the vault. A failed or half-completed
+            // login therefore cannot bump the auth epoch, evict the live session, or leave a
+            // foreign account's cookies cached for the next PAGE/API request.
+            val candidate = LinkedHashMap<String, String>()
+            seedBotManagementCookies(candidate)
+
             val loginUrl = "$BASE_URL/login"
-            val getResp = http.getText(
-                url = loginUrl,
-                siteId = SiteId.HANIME1,
-                allowCache = false,
+            val getResp = http.execute(
+                SiteHttpRequest(
+                    url = loginUrl,
+                    siteId = SiteId.HANIME1,
+                    kind = SiteRequestKind.PAGE,
+                    headers = candidateHeaders(candidate),
+                    allowCache = false,
+                    allowRetry = false,
+                    sessionScope = RequestSessionScope.ISOLATED,
+                ),
             )
             val loginHtml = VideoSiteSupport.ensureSuccess(getResp, SiteId.HANIME1, checkChallenge = true)
+            candidate.putAll(VideoSiteSupport.extractSetCookies(getResp))
+
             val token = Jsoup.parse(loginHtml)
                 .selectFirst("input[name=_token]")
                 ?.attr("value")
                 ?.takeIf { it.isNotBlank() }
                 ?: throw SiteException.ParseError("无法读取登录令牌，站点可能要求浏览器验证", siteId = SiteId.HANIME1)
 
-            val cookies = LinkedHashMap<String, String>()
-            cookies.putAll(sessionStore.getCookies(SiteId.HANIME1))
-            cookies.putAll(VideoSiteSupport.extractSetCookies(getResp))
-
-            val postHeaders = if (cookies.isNotEmpty()) {
-                mapOf("Cookie" to VideoSiteSupport.formatCookieHeader(cookies))
-            } else {
-                emptyMap()
-            }
             val postResp = http.postForm(
                 url = loginUrl,
                 fields = linkedMapOf(
@@ -202,25 +213,26 @@ class HanimeSitePlugin(
                     "password" to password,
                 ),
                 siteId = SiteId.HANIME1,
-                headers = postHeaders,
+                headers = candidateHeaders(candidate),
                 followRedirects = true,
+                sessionScope = RequestSessionScope.ISOLATED,
             )
             if (postResp.code >= 400) {
                 throw VideoSiteSupport.toSiteException(postResp, SiteId.HANIME1)
             }
-            cookies.putAll(VideoSiteSupport.extractSetCookies(postResp))
+            candidate.putAll(VideoSiteSupport.extractSetCookies(postResp))
 
-            val verifyHeaders = if (cookies.isNotEmpty()) {
-                mapOf("Cookie" to VideoSiteSupport.formatCookieHeader(cookies))
-            } else {
-                emptyMap()
-            }
             // Laravel convention on hanime1: an authenticated GET /login returns HTTP 404.
-            val verifyResp = http.getText(
-                url = loginUrl,
-                siteId = SiteId.HANIME1,
-                headers = verifyHeaders,
-                allowCache = false,
+            val verifyResp = http.execute(
+                SiteHttpRequest(
+                    url = loginUrl,
+                    siteId = SiteId.HANIME1,
+                    kind = SiteRequestKind.PAGE,
+                    headers = candidateHeaders(candidate),
+                    allowCache = false,
+                    allowRetry = false,
+                    sessionScope = RequestSessionScope.ISOLATED,
+                ),
             )
             if (verifyResp.code != 404) {
                 if (verifyResp.code == 403 || verifyResp.code == 429 || verifyResp.code >= 500) {
@@ -228,22 +240,43 @@ class HanimeSitePlugin(
                 }
                 throw SiteException.AuthRequired("邮箱或密码错误，或站点要求完成验证", siteId = SiteId.HANIME1)
             }
-            val merged = LinkedHashMap<String, String>(cookies)
-            merged.putAll(sessionStore.getCookies(SiteId.HANIME1))
-            merged.putAll(VideoSiteSupport.extractSetCookies(postResp))
-            merged.putAll(VideoSiteSupport.extractSetCookies(verifyResp))
-            if (merged.isNotEmpty()) {
-                sessionStore.saveCookies(SiteId.HANIME1, merged)
-            }
-            sessionStore.saveUsername(SiteId.HANIME1, trimmedEmail)
-            sessionStore.saveSecret(SiteId.HANIME1, SESSION_MARKER_KEY, "1")
-            persistAccountUserId(sessionStore, extractUserId(verifyResp.bodyText()))
+            candidate.putAll(VideoSiteSupport.extractSetCookies(verifyResp))
+
+            // Verified. Persist ONLY the verified candidate set in one atomic snapshot, replacing any
+            // cookies belonging to the previous account, and record identity in the same write.
+            val userId = extractUserId(verifyResp.bodyText())
+            sessionStore.storeSessionSnapshot(
+                siteId = SiteId.HANIME1,
+                cookies = candidate,
+                secrets = buildMap<String, String?> {
+                    put(SESSION_MARKER_KEY, "1")
+                    put(HANIME_USER_ID_KEY, userId?.takeIf { it.isNotBlank() })
+                    put(HANIME_ACCOUNT_EMAIL_KEY, trimmedEmail)
+                },
+                bumpEpoch = true,
+            )
             return AuthState(
                 isAuthenticated = true,
                 username = trimmedEmail,
                 epoch = sessionStore.authEpoch(SiteId.HANIME1),
             )
         }
+
+        /**
+         * Bot-management cookies (`cf_clearance` / `__cf_bm`) are host-scoped anti-automation
+         * tokens, not account identity, and are required to reach the login page at all. Nothing
+         * account-identifying (`PHPSESSID`, `laravel_session`, `XSRF-TOKEN`) is ever replayed.
+         */
+        private fun seedBotManagementCookies(target: MutableMap<String, String>) {
+            val stored = sessionStore.getCookies(SiteId.HANIME1)
+            for (name in BOT_MANAGEMENT_COOKIES) {
+                stored[name]?.takeIf { it.isNotBlank() }?.let { target[name] = it }
+            }
+        }
+
+        private fun candidateHeaders(candidate: Map<String, String>): Map<String, String> =
+            if (candidate.isEmpty()) emptyMap()
+            else mapOf("Cookie" to formatCookieHeader(candidate))
 
         override suspend fun logout() {
             sessionStore.clearSite(SiteId.HANIME1)
@@ -252,6 +285,10 @@ class HanimeSitePlugin(
         /**
          * WebView / manual cookie import path. Verifies the imported session against the site
          * before persisting so an expired or invalid cookie set cannot masquerade as signed in.
+         *
+         * This is an *account identity* check, not a status-code check: hanime1 serves its
+         * anonymous homepage with HTTP 200 too, so a bare "200 OK" proves nothing. A signed-in
+         * page renders the header's `/user/<uid>` link; an anonymous page never does.
          */
         override suspend fun importCookies(cookies: Map<String, String>): AuthState {
             if (cookies.isEmpty() || !hasHanimeSessionCookie(cookies)) {
@@ -260,11 +297,19 @@ class HanimeSitePlugin(
                     siteId = SiteId.HANIME1,
                 )
             }
-            val verifyResp = http.getText(
-                url = "$BASE_URL/",
-                siteId = SiteId.HANIME1,
-                headers = mapOf("Cookie" to VideoSiteSupport.formatCookieHeader(cookies)),
-                allowCache = false,
+            // Candidate verification is ISOLATED: only these cookies are presented, and nothing the
+            // probe returns may be merged into (or epoch-bump) the live session bucket.
+            val verifyResp = http.execute(
+                SiteHttpRequest(
+                    url = "$BASE_URL/",
+                    siteId = SiteId.HANIME1,
+                    kind = SiteRequestKind.PAGE,
+                    headers = candidateHeaders(cookies),
+                    allowCookies = false,
+                    allowCache = false,
+                    allowRetry = false,
+                    sessionScope = RequestSessionScope.ISOLATED,
+                ),
             )
             if (verifyResp.code == 403 || verifyResp.code == 429 || verifyResp.code >= 500) {
                 throw VideoSiteSupport.toSiteException(verifyResp, SiteId.HANIME1)
@@ -272,9 +317,30 @@ class HanimeSitePlugin(
             if (verifyResp.code != 200) {
                 throw SiteException.AuthRequired("Hanime1 会话验证失败（HTTP ${verifyResp.code}）", siteId = SiteId.HANIME1)
             }
-            sessionStore.replaceCookies(SiteId.HANIME1, cookies)
-            sessionStore.saveSecret(SiteId.HANIME1, SESSION_MARKER_KEY, "1")
-            persistAccountUserId(sessionStore, extractUserId(verifyResp.bodyText()))
+            val body = verifyResp.bodyText()
+            if (VideoSiteSupport.isChallengeResponse(verifyResp, body)) {
+                throw SiteException.Forbidden(
+                    isChallenge = true,
+                    message = "Hanime1 验证被浏览器挑战拦截，请稍后重试",
+                    siteId = SiteId.HANIME1,
+                )
+            }
+            val accountUserId = extractUserId(body)
+                ?: throw SiteException.AuthRequired(
+                    "Hanime1 返回的是匿名首页（HTTP 200），该 Cookie 未登录任何账号，请重新登录",
+                    siteId = SiteId.HANIME1,
+                )
+            val previousEmail = sessionStore.getSecret(SiteId.HANIME1, HANIME_ACCOUNT_EMAIL_KEY)
+            sessionStore.storeSessionSnapshot(
+                siteId = SiteId.HANIME1,
+                cookies = cookies,
+                secrets = buildMap<String, String?> {
+                    put(SESSION_MARKER_KEY, "1")
+                    put(HANIME_USER_ID_KEY, accountUserId)
+                    previousEmail?.takeIf { it.isNotBlank() }?.let { put(HANIME_ACCOUNT_EMAIL_KEY, it) }
+                },
+                bumpEpoch = true,
+            )
             return AuthState(
                 isAuthenticated = true,
                 username = sessionStore.getUsername(SiteId.HANIME1),
@@ -283,11 +349,13 @@ class HanimeSitePlugin(
         }
 
         override suspend fun currentAuthState(): AuthState {
-            // WebView login writes cookies only (no marker), credential login writes the marker.
-            // Either path counts as signed in so both entry points stay consistent.
-            val hasMarker = sessionStore.getSecret(SiteId.HANIME1, SESSION_MARKER_KEY) == "1"
+            // Signed-in state requires a verifiable account identity. Anonymous visitors also carry
+            // PHPSESSID / cf_clearance, so the presence of a session cookie alone means nothing.
             val hasSessionCookie = hasHanimeSessionCookie(sessionStore.getCookies(SiteId.HANIME1))
-            val isAuthenticated = hasMarker || hasSessionCookie
+            val hasAccountIdentity = !sessionStore.getSecret(SiteId.HANIME1, HANIME_USER_ID_KEY).isNullOrBlank() ||
+                !sessionStore.getSecret(SiteId.HANIME1, HANIME_ACCOUNT_EMAIL_KEY).isNullOrBlank()
+            val hasMarker = sessionStore.getSecret(SiteId.HANIME1, SESSION_MARKER_KEY) == "1"
+            val isAuthenticated = hasSessionCookie && hasAccountIdentity && hasMarker
             return AuthState(
                 isAuthenticated = isAuthenticated,
                 username = if (isAuthenticated) sessionStore.getUsername(SiteId.HANIME1) else null,
@@ -399,6 +467,17 @@ class HanimeSitePlugin(
 
         /** Numeric Hanime1 account id parsed from the header's `/user/<uid>` link. */
         private const val HANIME_USER_ID_KEY = "hanime_user_id"
+
+        /** Email that owns the current session; lets a later candidate login replace, not merge. */
+        private const val HANIME_ACCOUNT_EMAIL_KEY = "hanime_account_email"
+
+        /**
+         * Anti-automation cookies that must ride along on a candidate login handshake. They are
+         * host/scraper tokens, never account identity, so replaying them is safe while `PHPSESSID`
+         * and `laravel_session` never are.
+         */
+        private val BOT_MANAGEMENT_COOKIES: Set<String> = setOf("cf_clearance", "__cf_bm", "_cfuvid")
+
         private val USER_ID_REGEX = Regex("/user/(\\d+)")
 
         private val videoHrefRegex = Regex("[?&]v=(\\d+)")

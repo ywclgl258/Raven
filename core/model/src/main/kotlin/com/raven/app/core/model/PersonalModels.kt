@@ -142,6 +142,7 @@ data class ShelfItem(
     val completed: Boolean = false,
     val durationSeconds: Int? = null,
     val pageCount: Int? = null,
+    val completionChangedAt: Long? = null,
 ) {
     val compositeKey: String get() = "${siteId.value}:$mediaId"
 }
@@ -430,5 +431,32 @@ data class RavenBackupPayload(
         const val NATIVE_MAGIC: String = "RVNBK01"
         const val LEGACY_R34V_MAGIC: String = "R34VBK01"
         const val MAX_PLAINTEXT_BYTES: Int = 16 * 1024 * 1024
+
+        // Canonical collection bounds shared by `BackupValidator` (reject on import/export) and
+        // `BackupMerger` (trim the merged union before it is written). A restore that accepts an
+        // incoming payload must therefore always produce a payload that exports again — the
+        // "restore then immediately export" regression depends on these bounds agreeing.
+        const val MAX_SHELVES: Int = 1_000
+        const val MAX_ITEMS_PER_SHELF: Int = 50_000
+        const val MAX_SMART_SHELVES: Int = 1_000
+        const val MAX_PAGE_BOOKMARKS: Int = 50_000
+        const val MAX_TIME_BOOKMARKS: Int = 5_000
+        const val MAX_IMAGE_FAVORITES: Int = 20_000
+        const val MAX_SAVED_SEARCHES: Int = 1_000
+        const val MAX_INBOX_ITEMS: Int = 10_000
+        const val MAX_CUSTOM_TAG_TRANSLATIONS: Int = 50_000
+        const val MAX_SEARCH_HISTORY_PER_SITE: Int = 30
+        // Per-site caps. Watch/reading progress use the 500-per-site DAO prune, so merging keeps
+        // that independent.
+        const val MAX_FAVORITES_PER_SITE: Int = 50_000
+        const val MAX_SUBSCRIPTIONS_PER_SITE: Int = 5_000
+        const val MAX_BLOCKED_PER_SITE: Int = 10_000
+
+        // Editorial bounds: writers (tag editor, legacy adapter) clamp to these so data that is
+        // already in the app never trips the backup validator on the next export.
+        const val MAX_TAG_CHINESE_NAME_LENGTH: Int = 200
+        const val MAX_TAG_SLUG_LENGTH: Int = 200
+        const val MAX_TAG_NAMESPACE_LENGTH: Int = 64
+        const val MAX_TAG_INTRO_LENGTH: Int = 2_048
     }
 }

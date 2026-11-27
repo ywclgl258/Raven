@@ -39,6 +39,7 @@ import com.raven.app.core.common.AppDispatchers
 import com.raven.app.core.common.BlockedTermExcludeInjection
 import com.raven.app.core.common.ContentFilter
 import com.raven.app.core.common.TagDictionary
+import com.raven.app.core.database.model.AppSettings
 import com.raven.app.core.database.model.BrowsePosition
 import com.raven.app.core.database.model.ShelfWithSummary
 import com.raven.app.core.database.repository.BlockedTermsRepository
@@ -162,15 +163,27 @@ class SiteFeedViewModel(
         it.name.equals(route.scope, ignoreCase = true)
     } ?: SearchScope.ALL
     private val querySlug: String? = route.query?.trim()?.takeIf { it.isNotEmpty() }
+    // Share-link fidelity: honor the route's persisted sort / starting page / media kind / tags.
+    private val initialSort: FeedSort = route.sort
+        ?.let { name -> FeedSort.entries.firstOrNull { it.name.equals(name, ignoreCase = true) } }
+        ?: FeedSort.DEFAULT
+    private val initialPage: Int = (route.page ?: 1).coerceAtLeast(1)
+    private val routeMediaKind: MediaKind? = route.mediaKind
+        ?.let { name -> MediaKind.entries.firstOrNull { it.name.equals(name, ignoreCase = true) } }
+    private val routeIncludeTags: List<String> = route.includeTags.map { it.trim() }.filter { it.isNotEmpty() }
     private val canSubscribe: Boolean =
         querySlug != null && scope in setOf(SearchScope.TAG, SearchScope.AUTHOR, SearchScope.CHARACTER)
 
-    private val selectedSort = MutableStateFlow(FeedSort.DEFAULT)
+    private val selectedSort = MutableStateFlow(initialSort)
     private val networkState = MutableStateFlow(SiteFeedNetworkState())
 
     private var loadJob: Job? = null
     private var paginateJob: Job? = null
     private var browsePositionJob: Job? = null
+    // Only the first network load consumes the share link's starting page; later reloads go to page 1.
+    private var initialPageConsumed: Boolean = false
+    // Live settings snapshot used by scroll-time persistence to read `incognitoMode` synchronously.
+    private val latestSettings = MutableStateFlow(AppSettings())
     private val shelfController = BrowseShelfController(
         shelfRepository = shelfRepository,
         scope = viewModelScope,
@@ -270,7 +283,7 @@ class SiteFeedViewModel(
             (!route.section.isNullOrBlank() && spec.id == route.section) ||
                 (!route.category.isNullOrBlank() && spec.category == route.category)
         }
-        val effectiveKind = matchedSection?.mediaKind ?: descriptor?.primaryKind ?: MediaKind.VIDEO
+        val effectiveKind = routeMediaKind ?: matchedSection?.mediaKind ?: descriptor?.primaryKind ?: MediaKind.VIDEO
 
         val filteredItems = net.rawItems
             .filter { item ->
@@ -345,6 +358,9 @@ class SiteFeedViewModel(
                 .collect { (sort, lang) ->
                     triggerLoad(sort = sort, language = lang, isRefresh = false)
                 }
+        }
+        viewModelScope.launch {
+            preferencesRepository.settings.collect { latestSettings.value = it }
         }
     }
 
@@ -474,6 +490,9 @@ class SiteFeedViewModel(
         val targetId = siteId ?: return
         val cleanId = workId.trim()
         if (cleanId.isEmpty()) return
+        // Incognito pauses browse progress persistence.
+        if (latestSettings.value.incognitoMode) return
+        val clampedPage = throughPage.coerceAtLeast(1)
         val key = "feed:${targetId.value}:${route.section.orEmpty()}:${route.category.orEmpty()}:${querySlug.orEmpty()}"
         browsePositionJob?.cancel()
         browsePositionJob = viewModelScope.launch {
@@ -483,7 +502,7 @@ class SiteFeedViewModel(
                     positionKey = key,
                     siteId = targetId,
                     workId = cleanId,
-                    throughPage = throughPage.coerceAtLeast(1),
+                    throughPage = clampedPage,
                     updatedAt = 0L,
                 ),
             )
@@ -523,23 +542,27 @@ class SiteFeedViewModel(
                     }
                 }
 
+                // A share-link first load starts on its requested page; later sort/language changes
+                // reset to page 1 so pagination stays monotonic.
+                val startPage = if (!isRefresh && !initialPageConsumed) initialPage else 1
                 val request = buildRequest(
                     sort = sort,
                     language = language,
-                    page = 1,
+                    page = startPage,
                     cursor = null,
                     effectiveBlockedTerms = withContext(dispatchers.io) {
                         resolveEffectiveBlockedTerms()
                     },
                 )
                 val page = withContext(dispatchers.io) { executeFeedOrSearch(targetPlugin, request) }
+                initialPageConsumed = true
                 networkState.value = SiteFeedNetworkState(
                     isLoading = false,
                     isRefreshing = false,
                     authGateRequired = false,
                     rawItems = page.items.distinctBy { it.compositeKey },
                     serverTitle = page.title,
-                    currentPage = 1,
+                    currentPage = startPage,
                     nextPage = page.nextPage,
                     nextCursor = page.nextCursor,
                     hasMore = page.hasMore,
@@ -598,7 +621,7 @@ class SiteFeedViewModel(
         // Sites like nhentai drop blocked works server-side only via `excludeTags`, and their
         // listing payloads carry no tags, so client ContentFilter cannot match. Inject there too.
         val filters = BlockedTermExcludeInjection.apply(
-            AdvancedSearchFilters(),
+            AdvancedSearchFilters(includeTags = routeIncludeTags),
             effectiveBlockedTerms,
             tagDictionary,
         )
@@ -612,7 +635,8 @@ class SiteFeedViewModel(
             cursor = cursor,
             query = querySlug,
             scope = scope,
-            mediaKind = matchedSection?.mediaKind,
+            // A share link's media kind wins over the section default (Iwara images vs videos).
+            mediaKind = routeMediaKind ?: matchedSection?.mediaKind,
             advancedFilters = filters,
         )
     }

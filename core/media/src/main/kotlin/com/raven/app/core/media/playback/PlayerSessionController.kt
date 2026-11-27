@@ -6,6 +6,7 @@ import android.app.ActivityManager
 import android.content.Context
 import android.net.Uri
 import android.util.Rational
+import androidx.core.net.toUri
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
@@ -986,7 +987,7 @@ class PlayerSessionController(
             artworkUrl.startsWith("https://", ignoreCase = true) ||
             artworkUrl.startsWith("file://", ignoreCase = true)
         ) {
-            runCatching { Uri.parse(artworkUrl) }.getOrNull()?.let { builder.setArtworkUri(it) }
+            runCatching { artworkUrl.toUri() }.getOrNull()?.let { builder.setArtworkUri(it) }
         }
         return builder.build()
     }

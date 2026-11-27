@@ -145,6 +145,24 @@ class ReaderCoreTest {
         }
 
     @Test
+    fun `visible page overlapping prefetch starts a single decode`() = runTest {
+        val loaded = mutableListOf<Int>()
+        val buffer = ReaderBuffer(
+            pageNumbers = (1..6).toList(), scope = this, byteSizeOf = { 1L }, prefetchAhead = 1,
+        ) { page, _ ->
+            loaded += page
+            page
+        }
+        buffer.updateWindow(1)
+        advanceUntilIdle()
+        // Page 2 is already loaded. Page 3 is both visible and the next prefetch.
+        buffer.updateWindow(2, setOf(2, 3))
+        advanceUntilIdle()
+        assertEquals(listOf(1, 2, 3), loaded)
+        buffer.close()
+    }
+
+    @Test
     fun `reader buffer enforces Semaphore(2) max concurrency limit`() = runTest {
         val inFlight = AtomicInteger(0)
         val peakConcurrency = AtomicInteger(0)

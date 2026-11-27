@@ -7,6 +7,7 @@ import com.raven.app.core.common.AppDispatchers
 import com.raven.app.core.common.CustomAppDispatchers
 import com.raven.app.core.common.TagDictionary
 import com.raven.app.core.database.DatabaseTransactionRunner
+import com.raven.app.core.database.dao.BackupRestoreJournalDao
 import com.raven.app.core.database.dao.BlockedTermDao
 import com.raven.app.core.database.dao.FavoriteDao
 import com.raven.app.core.database.dao.ImageFavoriteDao
@@ -26,6 +27,7 @@ import com.raven.app.core.database.dao.TimeBookmarkDao
 import com.raven.app.core.database.dao.UpdateInboxDao
 import com.raven.app.core.database.dao.WatchProgressDao
 import com.raven.app.core.database.datastore.SettingsDataStore
+import com.raven.app.core.database.entity.BackupRestoreJournalEntity
 import com.raven.app.core.database.entity.BlockedTermEntity
 import com.raven.app.core.database.entity.FavoriteEntity
 import com.raven.app.core.database.entity.ImageFavoriteEntity
@@ -278,7 +280,7 @@ internal class FakeShelfItemDao : ShelfItemDao {
             map.values.toList()
         }
     }
-    override suspend fun updateCompleted(shelfId: String, siteId: String, mediaId: String, completed: Boolean) = Unit
+    override suspend fun updateCompleted(shelfId: String, siteId: String, mediaId: String, completed: Boolean, changedAt: Long) = Unit
     override suspend fun updatePosition(shelfId: String, siteId: String, mediaId: String, position: Int) = Unit
     override suspend fun delete(shelfId: String, siteId: String, mediaId: String) {
         rows.update { list -> list.filterNot { it.shelfId == shelfId && it.siteId == siteId && it.mediaId == mediaId } }
@@ -338,6 +340,7 @@ internal class FakeTimeBookmarkDao : TimeBookmarkDao {
     override fun observeByMedia(siteId: String, mediaId: String): Flow<List<TimeBookmarkEntity>> =
         rows.map { list -> list.filter { it.siteId == siteId && it.mediaId == mediaId } }
     override suspend fun getAll(): List<TimeBookmarkEntity> = rows.value
+    override suspend fun getById(id: String): TimeBookmarkEntity? = rows.value.firstOrNull { it.id == id }
     override suspend fun upsert(entity: TimeBookmarkEntity) = upsertAll(listOf(entity))
     override suspend fun upsertAll(entities: List<TimeBookmarkEntity>) {
         rows.update { current ->
@@ -563,6 +566,13 @@ internal class FakeReaderPreferencesDao : ReaderPreferencesDao {
     override suspend fun deleteAll() { rows.value = emptyList() }
 }
 
+internal class FakeBackupRestoreJournalDao : BackupRestoreJournalDao {
+    var row: BackupRestoreJournalEntity? = null
+    override suspend fun get(): BackupRestoreJournalEntity? = row
+    override suspend fun put(entry: BackupRestoreJournalEntity) { row = entry }
+    override suspend fun clear() { row = null }
+}
+
 internal class FakeTagTranslationDao : TagTranslationDao {
     private val rows = MutableStateFlow<List<TagTranslationEntity>>(emptyList())
     override fun observeBySource(source: TagTranslationSource): Flow<List<TagTranslationEntity>> =
@@ -659,6 +669,7 @@ internal class FakeDatabaseBundle(
     val readerPreferencesDao = FakeReaderPreferencesDao()
     val tagTranslationDao = FakeTagTranslationDao()
     val mediaTagCacheDao = FakeMediaTagCacheDao()
+    val backupRestoreJournalDao = FakeBackupRestoreJournalDao()
 
     val preferencesRepository = PreferencesRepository(
         settingsDataStore = settingsDataStore,
@@ -702,6 +713,8 @@ internal class FakeDatabaseBundle(
         settingsDataStore = settingsDataStore,
         transactionRunner = ImmediateTransactionRunner,
         tagTranslationDao = tagTranslationDao,
+        tagDictionaryRepository = tagDictionaryRepository,
+        backupRestoreJournalDao = backupRestoreJournalDao,
         clock = { 1_730_000_000_000L },
     )
 }

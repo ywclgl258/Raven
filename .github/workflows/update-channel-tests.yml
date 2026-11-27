@@ -1,0 +1,66 @@
+name: Raven Update Channel Gate
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - 'deploy/update-server/**'
+      - 'release.properties'
+  pull_request:
+    branches: [ main ]
+    paths:
+      - 'deploy/update-server/**'
+      - 'release.properties'
+  workflow_dispatch:
+
+concurrency:
+  group: raven-update-channel-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  publisher-tests:
+    name: Publisher Validation & Atomicity Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # The publisher refuses to run without the official Android SDK tools; the runner image ships
+      # them, so publishing validation is covered exactly as it runs in production.
+      - name: Verify Android SDK tools are available
+        run: |
+          set -euo pipefail
+          SDK_ROOT="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}"
+          echo "ANDROID_SDK_ROOT=$SDK_ROOT" >> "$GITHUB_ENV"
+          BUILD_TOOLS=$(ls -d "$SDK_ROOT"/build-tools/* | sort -V | tail -1)
+          echo "RAVEN_TEST_BUILD_TOOLS=$BUILD_TOOLS" >> "$GITHUB_ENV"
+          "$BUILD_TOOLS/apksigner" version
+          "$BUILD_TOOLS/aapt2" version
+          java -version
+
+      - name: Publisher gate tests
+        run: python3 -m unittest discover -s deploy/update-server/tests -v
+
+      - name: Fail-closed when SDK tools are missing
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/raven-empty-root/public /tmp/raven-fixtures
+          python3 - <<'PY'
+          import zipfile
+          with zipfile.ZipFile('/tmp/raven-fixtures/candidate.apk', 'w') as archive:
+              archive.writestr('assets/payload.bin', b'0' * 4096)
+          PY
+          if python3 deploy/update-server/publish.py \
+              --apk /tmp/raven-fixtures/candidate.apk \
+              --release-properties release.properties \
+              --web-root /tmp/raven-empty-root/public \
+              --apksigner /nonexistent/apksigner \
+              --aapt2 /nonexistent/aapt2 >/tmp/raven-out.txt 2>&1; then
+            echo "publisher accepted input without SDK tools"; exit 1
+          fi
+          grep -q rejected /tmp/raven-out.txt
+          if [ -n "$(find /tmp/raven-empty-root -type f)" ]; then
+            echo "publisher wrote files under the web root despite rejecting"; exit 1
+          fi

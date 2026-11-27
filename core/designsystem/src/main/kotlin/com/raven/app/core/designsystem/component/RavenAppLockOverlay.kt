@@ -81,8 +81,8 @@ import kotlinx.coroutines.launch
  */
 @Composable
 fun RavenAppLockOverlay(
-    onSubmitPin: (String) -> Boolean = { false },
     modifier: Modifier = Modifier,
+    onSubmitPin: (String) -> Boolean = { false },
     errorMessage: String? = null,
     lockoutSecondsRemaining: Int = 0,
     onBiometricClick: (() -> Unit)? = null,

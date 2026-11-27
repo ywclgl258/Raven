@@ -8,6 +8,7 @@ import com.raven.app.core.common.ContentFilter
 import com.raven.app.core.common.MediaDateParser
 import com.raven.app.core.common.TagDictionary
 import com.raven.app.core.common.TagSuggestion
+import com.raven.app.core.database.model.AppSettings
 import com.raven.app.core.database.model.ShelfWithSummary
 import com.raven.app.core.database.repository.BlockedTermsRepository
 import com.raven.app.core.database.repository.DownloadStateRepository
@@ -168,6 +169,13 @@ data class SearchUiState(
         get() = query.isNotBlank() || !advancedFilters.isEmpty
 }
 
+private fun requestLanguage(plugin: SitePlugin, input: SearchInputState, siteLanguage: ComicLanguage): ComicLanguage {
+    val supported = plugin.descriptor.hasCapability(SiteCapability.LANGUAGE_FILTER) ||
+        AdvancedFilterField.LANGUAGE in plugin.searchSource?.supportedFilters.orEmpty()
+    if (!supported) return ComicLanguage.ALL
+    return input.advancedFilters.siteLanguages[plugin.id] ?: input.languageOverride ?: siteLanguage
+}
+
 private data class SearchInputState(
     val mode: SearchMode = SearchMode.SINGLE_SITE,
     val query: String = "",
@@ -318,6 +326,24 @@ class SearchViewModel(
     private val crossSearchSemaphore = Semaphore(permits = MAX_CONCURRENT_CROSS_SITE_SEARCHES)
     private val crossSitesMutex = Mutex()
 
+    /**
+     * Site supplied by the originating screen (e.g. gallery detail opened from a library shelf).
+     * Single-site search and history must use it instead of the ambient active site, otherwise
+     * a search started from site B's work runs against site A.
+     */
+    private val sourceSiteId: SiteId? = initialRoute.sourceSiteId
+        ?.trim()
+        ?.takeIf { it.isNotEmpty() }
+        ?.let { runCatching { SiteId.of(it) }.getOrNull() }
+
+    /** Set when the user explicitly picks a site in Search, which must win over [sourceSiteId]. */
+    private val manualSiteOverride = MutableStateFlow<SiteId?>(null)
+
+    private fun resolveSearchSiteId(settings: AppSettings, selectedSiteId: SiteId? = manualSiteOverride.value): SiteId {
+        val preferred = selectedSiteId ?: sourceSiteId ?: settings.activeSiteId
+        return resolveActiveSiteId(preferred)
+    }
+
     private val inputState = MutableStateFlow(
         SearchInputState(
             mode = if (initialRoute.crossSite) SearchMode.CROSS_SITE else SearchMode.SINGLE_SITE,
@@ -331,6 +357,11 @@ class SearchViewModel(
     private var singlePaginateJob: Job? = null
     private var crossSearchJob: Job? = null
     private val crossPerSiteJobs = mutableMapOf<SiteId, Job>()
+    /**
+     * Monotonic intent generation. Bumped on every submit/clear so a stale prepare phase (settings
+     * fetch, history write) that finishes late cannot start a request or cancel a newer one.
+     */
+    private var searchGeneration: Long = 0L
     private val discoveryCache = ConcurrentHashMap<SiteId, SiteDiscoverySnapshot>()
     private val shelfController = BrowseShelfController(
         shelfRepository = shelfRepository,
@@ -341,8 +372,7 @@ class SearchViewModel(
     val shelfPickerShelves: StateFlow<List<ShelfWithSummary>> get() = shelfController.shelves
     val inspectedShelfIds: StateFlow<Set<String>> get() = shelfController.inspectedShelfIds
 
-    private val activeSiteIdFlow = preferencesRepository.settings
-        .map { resolveActiveSiteId(it.activeSiteId) }
+    private val activeSiteIdFlow = combine(preferencesRepository.settings, manualSiteOverride, ::resolveSearchSiteId)
         .distinctUntilChanged()
 
     private val cachedTagsFlow = mediaTagCacheRepository?.observeAllTags() ?: flowOf(emptyMap())
@@ -436,7 +466,8 @@ class SearchViewModel(
         dbContextFlow,
     ) { settings, inputAndDiscovery, single, cross, db ->
         val (input, discovery) = inputAndDiscovery
-        val activeSiteId = resolveActiveSiteId(settings.activeSiteId)
+        // A search launched from a gallery's site targets that site, not the ambient active one.
+        val activeSiteId = resolveSearchSiteId(settings)
         val activePlugin = siteRegistry.get(activeSiteId)
         val activeDescriptor = activePlugin?.descriptor
         val searchSource = activePlugin?.searchSource
@@ -673,6 +704,8 @@ class SearchViewModel(
 
     fun selectActiveSite(siteId: SiteId) {
         if (siteRegistry.get(siteId) == null) return
+        // An explicit pick overrides any gallery-derived source site for this search session.
+        manualSiteOverride.value = siteId
         singleSearchJob?.cancel()
         singlePaginateJob?.cancel()
         singleSiteState.value = SingleSiteResultState(siteId = siteId)
@@ -723,6 +756,8 @@ class SearchViewModel(
     }
 
     fun clearQuery() {
+        // Bump generation first so any in-flight prepare phase is invalidated before we reset state.
+        searchGeneration++
         singleSearchJob?.cancel()
         singlePaginateJob?.cancel()
         crossSearchJob?.cancel()
@@ -928,6 +963,7 @@ class SearchViewModel(
             if (siteRegistry.get(siteId) == null) {
                 submitSearch(overrideMode = SearchMode.SINGLE_SITE)
             } else {
+                manualSiteOverride.value = siteId
                 singleSiteState.value = SingleSiteResultState(siteId = siteId)
                 viewModelScope.launch {
                     preferencesRepository.selectActiveSiteAndRecordOpen(siteId)
@@ -945,7 +981,7 @@ class SearchViewModel(
 
     fun clearSiteHistory() {
         viewModelScope.launch {
-            val siteId = resolveActiveSiteId(preferencesRepository.currentSettings().activeSiteId)
+            val siteId = resolveSearchSiteId(preferencesRepository.currentSettings())
             searchHistoryRepository.clearSite(siteId)
             searchHistoryRepository.clearSite(SiteId.GLOBAL)
         }
@@ -955,7 +991,7 @@ class SearchViewModel(
         val input = inputState.value
         viewModelScope.launch {
             val settings = preferencesRepository.currentSettings()
-            val activeSiteId = resolveActiveSiteId(settings.activeSiteId)
+            val activeSiteId = resolveSearchSiteId(settings)
             val activeSite = siteRegistry.get(activeSiteId)?.descriptor
             val selectedCross = settings.crossSearchSiteIds
                 .filter { it in searchableIdSet }
@@ -1016,6 +1052,7 @@ class SearchViewModel(
 
         viewModelScope.launch {
             if (targetMode == SearchMode.SINGLE_SITE && validSites.size == 1) {
+                manualSiteOverride.value = validSites.first()
                 preferencesRepository.setActiveSiteId(validSites.first())
             } else if (targetMode == SearchMode.CROSS_SITE) {
                 preferencesRepository.setCrossSearchSiteIds(validSites)
@@ -1026,7 +1063,9 @@ class SearchViewModel(
                     query = savedSearch.query,
                     scope = savedSearch.scope,
                     sort = savedSearch.sort,
-                    languageOverride = savedSearch.language,
+                    languageOverride = savedSearch.language.takeUnless {
+                        it == ComicLanguage.ALL && savedSearch.filters.siteLanguages.isNotEmpty()
+                    },
                     advancedFilters = savedSearch.filters,
                     crossSiteFilterSiteId = null,
                 )
@@ -1082,9 +1121,12 @@ class SearchViewModel(
 
         inputState.update { it.copy(submittedQuery = trimmedQuery, crossSiteFilterSiteId = null) }
 
+        val generation = ++searchGeneration
         viewModelScope.launch {
             val settings = preferencesRepository.currentSettings()
-            val activeSiteId = overrideSingleSiteId ?: resolveActiveSiteId(settings.activeSiteId)
+            // A newer submit or a clear happened while we were reading settings: abandon silently.
+            if (generation != searchGeneration) return@launch
+            val activeSiteId = overrideSingleSiteId ?: resolveSearchSiteId(settings)
             val selectedCross = overrideCrossSiteIds ?: settings.crossSearchSiteIds
                 .filter { it in searchableIdSet }
                 .ifEmpty { searchableDescriptors.map { it.id } }
@@ -1093,6 +1135,9 @@ class SearchViewModel(
             if (trimmedQuery.isNotEmpty() && !settings.incognitoMode) {
                 searchHistoryRepository.recordSearch(historySiteId, trimmedQuery, currentInput.scope)
             }
+            // Re-check after the suspending history write, then hand the generation to the worker so
+            // it cannot be mistaken for the latest intent once it actually starts the request.
+            if (generation != searchGeneration) return@launch
 
             when (mode) {
                 SearchMode.SINGLE_SITE -> runSingleSiteSearch(
@@ -1100,11 +1145,13 @@ class SearchViewModel(
                     query = trimmedQuery,
                     inputSnapshot = currentInput,
                     siteLanguage = settings.languageFor(activeSiteId),
+                    generation = generation,
                 )
                 SearchMode.CROSS_SITE -> runCrossSiteSearch(
                     targetSiteIds = selectedCross,
                     query = trimmedQuery,
                     requestedSort = currentInput.sort.takeUnless { it == FeedSort.DEFAULT } ?: FeedSort.RELEVANCE,
+                    generation = generation,
                 )
             }
         }
@@ -1218,11 +1265,7 @@ class SearchViewModel(
             val result = crossSearchSemaphore.withPermit {
                 try {
                     val settings = preferencesRepository.currentSettings()
-                    val lang = if (plugin.descriptor.hasCapability(SiteCapability.LANGUAGE_FILTER)) {
-                        settings.languageFor(siteId)
-                    } else {
-                        ComicLanguage.ALL
-                    }
+                    val lang = requestLanguage(plugin, inputState.value, settings.languageFor(siteId))
                     val effectiveBlocked = blockedTermsRepository.observeEffectiveTermsBySite(siteId).first()
                     val crossFilters = buildServerExcludeFilters(
                         plugin = plugin,
@@ -1284,10 +1327,14 @@ class SearchViewModel(
         query: String,
         inputSnapshot: SearchInputState,
         siteLanguage: ComicLanguage,
+        generation: Long = searchGeneration,
     ) {
+        // A stale caller must not cancel the current job nor overwrite the newer result state.
+        if (generation != searchGeneration) return
         singleSearchJob?.cancel()
         singlePaginateJob?.cancel()
         singleSearchJob = viewModelScope.launch {
+            if (generation != searchGeneration) return@launch
             val plugin = siteRegistry.get(targetSiteId)
             val searchSource = plugin?.searchSource
             if (plugin == null || searchSource == null) {
@@ -1331,6 +1378,8 @@ class SearchViewModel(
                     effectiveBlockedTerms = effectiveBlocked,
                 )
                 val page = withContext(dispatchers.io) { searchSource.search(request) }
+                // A newer submit/clear may have landed while the network call was running.
+                if (generation != searchGeneration) return@launch
                 singleSiteState.value = SingleSiteResultState(
                     siteId = targetSiteId,
                     isLoading = false,
@@ -1362,7 +1411,10 @@ class SearchViewModel(
         targetSiteIds: List<SiteId>,
         query: String,
         requestedSort: FeedSort,
+        generation: Long = searchGeneration,
     ) {
+        // A stale caller must not cancel current jobs nor seed buckets for a superseded intent.
+        if (generation != searchGeneration) return
         crossSearchJob?.cancel()
         cancelAllCrossSiteJobs()
 
@@ -1390,6 +1442,7 @@ class SearchViewModel(
         )
 
         crossSearchJob = viewModelScope.launch {
+            if (generation != searchGeneration) return@launch
             coroutineScope {
                 plugins.map { plugin ->
                     async {
@@ -1400,7 +1453,10 @@ class SearchViewModel(
                             page = 1,
                             cursor = null,
                         )
-                        updateCrossBucket(plugin.id) { bucket }
+                        // Skip publishing results from a superseded generation.
+                        if (generation == searchGeneration) {
+                            updateCrossBucket(plugin.id) { bucket }
+                        }
                     }
                 }.awaitAll()
             }
@@ -1440,11 +1496,7 @@ class SearchViewModel(
                 }
 
                 val settings = preferencesRepository.currentSettings()
-                val language = if (plugin.descriptor.hasCapability(SiteCapability.LANGUAGE_FILTER)) {
-                    settings.languageFor(plugin.id)
-                } else {
-                    ComicLanguage.ALL
-                }
+                val language = requestLanguage(plugin, inputState.value, settings.languageFor(plugin.id))
                 val effectiveBlocked = blockedTermsRepository.observeEffectiveTermsBySite(plugin.id).first()
                 val crossFilters = buildServerExcludeFilters(
                     plugin = plugin,
@@ -1506,13 +1558,7 @@ class SearchViewModel(
         } else {
             supportedScopes.firstOrNull() ?: SearchScope.ALL
         }
-        val supportsLang = plugin.descriptor.hasCapability(SiteCapability.LANGUAGE_FILTER) ||
-            AdvancedFilterField.LANGUAGE in (searchSource?.supportedFilters ?: emptySet())
-        val effectiveLanguage = if (supportsLang) {
-            inputSnapshot.languageOverride ?: siteLanguage
-        } else {
-            ComicLanguage.ALL
-        }
+        val effectiveLanguage = requestLanguage(plugin, inputSnapshot, siteLanguage)
         val nativeSorts = resolveNativeSearchSorts(plugin, effectiveScope)
         val requestedSort = if (inputSnapshot.sort == FeedSort.DEFAULT) nativeSorts.first() else inputSnapshot.sort
         val effectiveSort = resolveCompatibleServerSort(nativeSorts, requestedSort)

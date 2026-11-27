@@ -5,6 +5,7 @@ import com.raven.app.core.database.model.AppSettings
 import com.raven.app.core.security.PrivacyLockStore
 import com.raven.app.core.security.VaultCipher
 import com.raven.app.core.security.VaultStorage
+import com.raven.app.feature.settings.AppLockSessionCoordinator
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.UnconfinedTestDispatcher

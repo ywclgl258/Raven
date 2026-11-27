@@ -26,6 +26,7 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 
 enum class DownloadStatusTab(val label: String) {
@@ -700,78 +701,51 @@ class DownloadsViewModel(
             return
         }
         inspectJob?.cancel()
-        inspectJob = viewModelScope.launch(dispatchers.io) {
-            controls.update {
-                it.copy(
-                    integrityState = IntegrityAuditDialogState(
-                        item = item,
-                        isChecking = true,
-                    ),
+        val checking = IntegrityAuditDialogState(item = item, isChecking = true)
+        controls.update { it.copy(integrityState = checking) }
+        inspectJob = viewModelScope.launch {
+            val result = try {
+                val audit = withContext(dispatchers.io) { downloadGateway.inspectIntegrity(item.id) }
+                checking.copy(
+                    isChecking = false,
+                    audit = audit,
+                    errorMessage = if (audit == null) "未找到本地图集记录，无法执行完整性检查" else null,
                 )
-            }
-            try {
-                val audit = downloadGateway.inspectIntegrity(item.id)
-                controls.update {
-                    it.copy(
-                        integrityState = IntegrityAuditDialogState(
-                            item = item,
-                            isChecking = false,
-                            audit = audit,
-                            errorMessage = if (audit == null) "未找到本地图集记录，无法执行完整性检查" else null,
-                        ),
-                    )
-                }
             } catch (ce: CancellationException) {
                 throw ce
-            } catch (error: Throwable) {
-                controls.update {
-                    it.copy(
-                        integrityState = IntegrityAuditDialogState(
-                            item = item,
-                            isChecking = false,
-                            errorMessage = error.message ?: "检查完整性失败",
-                        ),
-                    )
-                }
+            } catch (error: Exception) {
+                checking.copy(isChecking = false, errorMessage = error.message ?: "检查完整性失败")
             }
+            controls.update { if (it.integrityState == checking) it.copy(integrityState = result) else it }
         }
     }
 
     fun repairGallery(item: DownloadItem) {
-        viewModelScope.launch(dispatchers.io) {
-            controls.update { current ->
-                current.copy(
-                    integrityState = current.integrityState?.copy(isRepairing = true),
-                )
-            }
+        val sheet = controls.value.integrityState ?: return
+        if (sheet.item.id != item.id || sheet.isRepairing || sheet.isChecking) return
+        val repairing = sheet.copy(isRepairing = true)
+        controls.update { it.copy(integrityState = repairing) }
+        viewModelScope.launch {
             try {
-                val updated = downloadGateway.repair(item.id)
-                controls.update {
-                    it.copy(
-                        integrityState = null,
-                        message = if (updated != null) {
-                            "已将缺失或损坏页加入修复队列"
-                        } else {
-                            "未检测到可修复的任务"
-                        },
-                    )
+                val updated = withContext(dispatchers.io) { downloadGateway.repair(item.id) }
+                val message = if (updated != null) "已将缺失或损坏页加入修复队列" else "未检测到可修复的任务"
+                controls.update { current ->
+                    if (current.integrityState === repairing) current.copy(integrityState = null, message = message)
+                    else current
                 }
             } catch (ce: CancellationException) {
                 throw ce
-            } catch (error: Throwable) {
+            } catch (error: Exception) {
                 controls.update { current ->
-                    current.copy(
-                        integrityState = current.integrityState?.copy(
-                            isRepairing = false,
-                            errorMessage = error.message ?: "触发修复失败",
-                        ),
-                    )
+                    if (current.integrityState !== repairing) current
+                    else current.copy(integrityState = sheet.copy(errorMessage = error.message ?: "触发修复失败"))
                 }
             }
         }
     }
 
     fun dismissIntegritySheet() {
+        inspectJob?.cancel()
         controls.update { it.copy(integrityState = null) }
     }
 

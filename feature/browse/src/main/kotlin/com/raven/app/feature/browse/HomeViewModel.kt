@@ -6,6 +6,7 @@ import com.raven.app.core.common.AppDispatchers
 import com.raven.app.core.common.BlockedTermExcludeInjection
 import com.raven.app.core.common.ContentFilter
 import com.raven.app.core.common.TagDictionary
+import com.raven.app.core.database.model.AppSettings
 import com.raven.app.core.database.model.BrowsePosition
 import com.raven.app.core.database.model.ShelfWithSummary
 import com.raven.app.core.database.repository.BlockedTermsRepository
@@ -145,6 +146,10 @@ class HomeViewModel(
     private val feedState = MutableStateFlow(HomeFeedLoadState())
     private val showSiteSwitchTutorial = MutableStateFlow(false)
     private val dismissedRestoreKey = MutableStateFlow<String?>(null)
+
+    // Snapshot of the live settings so scroll-time calls can read `incognitoMode` synchronously
+    // instead of resolving it after the debounce (which could belong to a different site).
+    private val appSettingsSnapshot = MutableStateFlow(AppSettings())
 
     private var loadJob: Job? = null
     private var paginateJob: Job? = null
@@ -382,7 +387,14 @@ class HomeViewModel(
 
     init {
         observeActiveSiteAndLoad()
+        observeAppSettingsSnapshot()
         evaluateFirstRunTutorial()
+    }
+
+    private fun observeAppSettingsSnapshot() {
+        viewModelScope.launch {
+            preferencesRepository.settings.collect { appSettingsSnapshot.value = it }
+        }
     }
 
     private fun observeActiveSiteAndLoad() {
@@ -583,20 +595,26 @@ class HomeViewModel(
     ) {
         val cleanWorkId = workId.trim()
         if (cleanWorkId.isEmpty()) return
+        // Incognito promises "pause saving history, search and browse progress". Resolve the flag
+        // synchronously so a mode toggle or site switch during the debounce cannot slip a write in.
+        val settings = appSettingsSnapshot.value
+        if (settings.incognitoMode) return
+        // Capture site + language at scroll time: waiting until the debounce fires lets a rapid
+        // site switch pair this work id with the *new* site's key (cross-site contamination).
+        val siteId = resolveActiveSiteId(settings.activeSiteId)
+        val supportsLang = siteRegistry.get(siteId)?.descriptor?.hasCapability(SiteCapability.LANGUAGE_FILTER) == true
+        val language = if (supportsLang) settings.languageFor(siteId) else ComicLanguage.ALL
+        val key = homePositionKey(siteId, language)
+        val clampedPage = throughPage.coerceAtLeast(1)
         browsePositionJob?.cancel()
         browsePositionJob = viewModelScope.launch {
             delay(BROWSE_POSITION_DEBOUNCE_MS)
-            val settings = preferencesRepository.currentSettings()
-            val siteId = resolveActiveSiteId(settings.activeSiteId)
-            val supportsLang = siteRegistry.get(siteId)?.descriptor?.hasCapability(SiteCapability.LANGUAGE_FILTER) == true
-            val language = if (supportsLang) settings.languageFor(siteId) else ComicLanguage.ALL
-            val key = homePositionKey(siteId, language)
             browsePositionRepository.save(
                 BrowsePosition(
                     positionKey = key,
                     siteId = siteId,
                     workId = cleanWorkId,
-                    throughPage = throughPage.coerceAtLeast(1),
+                    throughPage = clampedPage,
                     shelfId = shelfId,
                     updatedAt = 0L,
                 ),

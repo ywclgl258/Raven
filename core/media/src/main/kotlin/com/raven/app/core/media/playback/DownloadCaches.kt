@@ -28,6 +28,7 @@ import com.raven.app.core.media.storage.StorageLayout
 import com.raven.app.core.media.storage.StorageRootManager
 import com.raven.app.core.model.SiteId
 import com.raven.app.core.model.StorageLocation
+import java.io.ByteArrayOutputStream
 import java.io.Closeable
 import java.io.File
 import kotlinx.coroutines.CoroutineScope
@@ -199,7 +200,22 @@ class DownloadCaches(
             check(length <= 0L || previousLength <= 0L || length == previousLength) {
                 "同一视频的缓存长度不一致，已停止迁移"
             }
-            for (span in source.getCachedSpans(key).toList()) {
+            // Verify bytes, not just length: an equal-length but differing target must be replaced.
+            val sourceBytes = if (length > 0L) readCachedBytes(source, key, length) else null
+            if (length > 0L && previousLength == length && sourceBytes != null) {
+                val targetBytes = runCatching { readCachedBytes(target, key, length) }.getOrNull()
+                if (targetBytes != null && targetBytes.contentEquals(sourceBytes)) {
+                    copiedBytes += source.getCachedSpans(key).sumOf { it.length.coerceAtLeast(0L) }
+                    onProgress(copiedBytes, totalBytes)
+                    // metadata still applied below
+                } else {
+                    runCatching { target.removeResource(key) }
+                }
+            }
+            val alreadyEqual = length > 0L && previousLength == length && sourceBytes != null &&
+                runCatching { readCachedBytes(target, key, length) }.getOrNull()?.contentEquals(sourceBytes) == true
+            val spans = if (alreadyEqual) emptyList() else source.getCachedSpans(key).toList()
+            for (span in spans) {
                 if (Thread.currentThread().isInterrupted) throw InterruptedException("Migration cancelled")
                 val spec = DataSpec.Builder()
                     .setUri("https://raven.local/cache-copy")
@@ -207,7 +223,25 @@ class DownloadCaches(
                     .setPosition(span.position)
                     .setLength(span.length)
                     .build()
-                CacheWriter(destination.createDataSource(), spec, null, null).cache()
+                var spanError: Throwable? = null
+                val worker = Thread {
+                    try {
+                        CacheWriter(destination.createDataSource(), spec, null, null).cache()
+                    } catch (t: Throwable) {
+                        spanError = t
+                    }
+                }
+                worker.start()
+                while (worker.isAlive) {
+                    if (Thread.currentThread().isInterrupted) {
+                        worker.interrupt()
+                        worker.join(5_000)
+                        throw InterruptedException("Migration cancelled")
+                    }
+                    Thread.sleep(25)
+                }
+                worker.join()
+                spanError?.let { throw it }
                 copiedBytes += span.length.coerceAtLeast(0L)
                 onProgress(copiedBytes, totalBytes)
             }
@@ -226,6 +260,33 @@ class DownloadCaches(
                 ContentMetadataMutations.setRedirectedUri(mutations, it)
             }
             target.applyContentMetadataMutations(key, mutations)
+        }
+    }
+
+    private fun readCachedBytes(cache: SimpleCache, key: String, length: Long): ByteArray {
+        val factory = CacheDataSource.Factory()
+            .setCache(cache)
+            .setCacheWriteDataSinkFactory(null)
+            .setUpstreamDataSourceFactory(null)
+        val source = factory.createDataSource()
+        return try {
+            val spec = DataSpec.Builder()
+                .setUri("https://raven.local/cache-verify")
+                .setKey(key)
+                .setPosition(0L)
+                .setLength(length)
+                .build()
+            source.open(spec)
+            val out = ByteArrayOutputStream()
+            val buffer = ByteArray(64 * 1024)
+            while (true) {
+                val n = source.read(buffer, 0, buffer.size)
+                if (n == C.RESULT_END_OF_INPUT) break
+                if (n > 0) out.write(buffer, 0, n)
+            }
+            out.toByteArray()
+        } finally {
+            runCatching { source.close() }
         }
     }
 

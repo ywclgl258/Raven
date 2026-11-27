@@ -134,6 +134,7 @@ class SearchViewModelTest {
                     id = SiteId.R34V,
                     displayName = "R34V",
                     primaryKind = MediaKind.VIDEO,
+                    supportedFilters = setOf(AdvancedFilterField.LANGUAGE),
                     defaultHost = "rule34video.com",
                 ),
                 searchHandler = { req ->
@@ -145,6 +146,7 @@ class SearchViewModelTest {
                     id = SiteId.NHENTAI,
                     displayName = "nHentai",
                     primaryKind = MediaKind.COMIC,
+                    supportedFilters = setOf(AdvancedFilterField.LANGUAGE),
                     defaultHost = "nhentai.net",
                 ),
                 searchHandler = { req ->
@@ -183,12 +185,17 @@ class SearchViewModelTest {
                 advanceUntilIdle()
                 assertEquals(SearchMode.SINGLE_SITE, expectMostRecentItem().mode)
 
-                vm.applySavedSearch(saved)
+                harness.preferencesRepository.setSiteLanguage(SiteId.R34V, ComicLanguage.JAPANESE)
+                vm.applySavedSearch(saved.copy(filters = saved.filters.copy(
+                    siteLanguages = mapOf(SiteId.NHENTAI to ComicLanguage.CHINESE),
+                )))
                 advanceUntilIdle()
                 val restored = expectMostRecentItem()
                 assertEquals(SearchMode.CROSS_SITE, restored.mode)
                 assertEquals("glasses", restored.query)
                 assertTrue(restored.hasSearchedCrossSite)
+                assertEquals(ComicLanguage.JAPANESE, p1.searchRequests.last().language)
+                assertEquals(ComicLanguage.CHINESE, p2.searchRequests.last().language)
                 assertEquals(setOf("r_glasses", "n_glasses"), restored.crossSiteMediaItems.map { it.id }.toSet())
 
                 cancelAndIgnoreRemainingEvents()
@@ -1157,6 +1164,7 @@ class SearchViewModelTest {
             harness.searchHistoryRepository.recordSearch(SiteId.GLOBAL, "cross restore", SearchScope.ALL)
 
             val vm = SearchViewModel(
+                initialRoute = RavenRoute.Search(sourceSiteId = SiteId.R34V.value),
                 siteRegistry = SiteRegistry(listOf(r34, nhentai)),
                 preferencesRepository = harness.preferencesRepository,
                 searchHistoryRepository = harness.searchHistoryRepository,
@@ -1180,6 +1188,25 @@ class SearchViewModelTest {
                 assertEquals("comic restore", single.submittedQuery)
                 assertTrue(single.hasSearchedSingleSite)
                 assertEquals("comic restore", nhentai.searchRequests.last().query)
+
+                vm.updateQuery("follow-up")
+                vm.submitSearch()
+                advanceUntilIdle()
+                assertEquals("follow-up", nhentai.searchRequests.last().query)
+
+                vm.saveCurrentSearch("follow-up")
+                advanceUntilIdle()
+                val recipe = expectMostRecentItem().savedSearches.single()
+                assertEquals(listOf(SiteId.NHENTAI), recipe.siteIds)
+                vm.selectActiveSite(SiteId.R34V)
+                advanceUntilIdle()
+                vm.applySavedSearch(recipe)
+                advanceUntilIdle()
+                assertEquals(SiteId.NHENTAI, expectMostRecentItem().activeSite?.id)
+                vm.updateQuery("after recipe")
+                vm.submitSearch()
+                advanceUntilIdle()
+                assertEquals("after recipe", nhentai.searchRequests.last().query)
 
                 val globalEntry = single.searchHistory.first { it.siteId == SiteId.GLOBAL }
                 vm.selectHistoryEntry(globalEntry)
@@ -1226,5 +1253,84 @@ class SearchViewModelTest {
                 listOf("site b"),
                 harness.searchHistoryRepository.observeBySite(SiteId.NHENTAI, limit = 20).first().map { it.query },
             )
+        }
+
+    @Test
+    fun `gallery-sourced single-site search targets source site instead of active site`() =
+        runTest(mainDispatcherRule.dispatcher) {
+            val harness = BrowseTestHarness(mainDispatcherRule.dispatcher)
+            val siteA = FakeSitePlugin(
+                descriptor = SiteDescriptor(SiteId.R34V, "R34V", primaryKind = MediaKind.VIDEO, defaultHost = "r34.example"),
+                searchHandler = { req -> FeedPage(items = listOf(sampleMediaItem(SiteId.R34V, "a_${req.query}", MediaKind.VIDEO))) },
+            )
+            val siteB = FakeSitePlugin(
+                descriptor = SiteDescriptor(SiteId.NHENTAI, "nHentai", primaryKind = MediaKind.VIDEO, defaultHost = "nh.example"),
+                searchHandler = { req -> FeedPage(items = listOf(sampleMediaItem(SiteId.NHENTAI, "b_${req.query}", MediaKind.VIDEO))) },
+            )
+            // Site A is active, but the search originates from site B's gallery detail.
+            harness.preferencesRepository.setActiveSiteId(SiteId.R34V)
+            val vm = SearchViewModel(
+                initialRoute = RavenRoute.Search(initialQuery = "tagB", crossSite = false, sourceSiteId = SiteId.NHENTAI.value),
+                siteRegistry = SiteRegistry(listOf(siteA, siteB)),
+                preferencesRepository = harness.preferencesRepository,
+                searchHistoryRepository = harness.searchHistoryRepository,
+                subscriptionRepository = harness.subscriptionRepository,
+                blockedTermsRepository = harness.blockedTermsRepository,
+                historyRepository = harness.historyRepository,
+                shelfRepository = harness.shelfRepository,
+                dispatchers = harness.dispatchers,
+            )
+
+            vm.uiState.test {
+                advanceUntilIdle()
+                // Initial query auto-submits; only site B must receive it.
+                assertTrue(siteB.searchRequests.any { it.query == "tagB" })
+                assertTrue(siteA.searchRequests.none { it.query == "tagB" })
+                // History is recorded against site B, not the ambient active site A.
+                assertEquals(
+                    listOf("tagB"),
+                    harness.searchHistoryRepository.observeBySite(SiteId.NHENTAI, limit = 20).first().map { it.query },
+                )
+                assertTrue(harness.searchHistoryRepository.observeBySite(SiteId.R34V, limit = 20).first().isEmpty())
+                cancelAndIgnoreRemainingEvents()
+            }
+        }
+
+    @Test
+    fun `stale request that lands after clear does not surface results`() =
+        runTest(mainDispatcherRule.dispatcher) {
+            val harness = BrowseTestHarness(mainDispatcherRule.dispatcher)
+            val r34 = FakeSitePlugin(
+                descriptor = SiteDescriptor(SiteId.R34V, "R34V", primaryKind = MediaKind.VIDEO, defaultHost = "r34.example"),
+                searchHandler = { req ->
+                    delay(200)
+                    FeedPage(items = listOf(sampleMediaItem(SiteId.R34V, "res_${req.query}", MediaKind.VIDEO)))
+                },
+            )
+            harness.preferencesRepository.setActiveSiteId(SiteId.R34V)
+            val vm = SearchViewModel(
+                siteRegistry = SiteRegistry(listOf(r34)),
+                preferencesRepository = harness.preferencesRepository,
+                searchHistoryRepository = harness.searchHistoryRepository,
+                subscriptionRepository = harness.subscriptionRepository,
+                blockedTermsRepository = harness.blockedTermsRepository,
+                historyRepository = harness.historyRepository,
+                shelfRepository = harness.shelfRepository,
+                dispatchers = harness.dispatchers,
+            )
+
+            vm.uiState.test {
+                advanceUntilIdle()
+                vm.updateQuery("old query")
+                vm.submitSearch()
+                // Clear before the 200ms response arrives.
+                vm.clearQuery()
+                advanceUntilIdle()
+
+                val cleared = expectMostRecentItem()
+                assertEquals("", cleared.query)
+                assertTrue(cleared.singleSiteItems.isEmpty())
+                cancelAndIgnoreRemainingEvents()
+            }
         }
 }

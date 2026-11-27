@@ -227,34 +227,16 @@ fun ReaderScreen(
         }
     }
 
+    val exportPicker = rememberExportDocumentPicker { prepared, uri, tree ->
+        viewModel.completeSafExport(prepared, uri, tree, context.contentResolver)
+    }
     // Export, Share, and Sequential Queue side-effect events
     LaunchedEffect(viewModel, navigator) {
         viewModel.events.collect { event ->
             when (event) {
                 is ReaderEvent.ScrollToPage -> Unit // Handled by active mode viewport
-                is ReaderEvent.RequestSaveDocument -> {
-                    navigator.launchSaveDocument(
-                        suggestedFileName = event.suggestedFileName,
-                        mimeType = event.mimeType,
-                    ) { uri ->
-                        viewModel.completeSafExport(
-                            prepared = event.prepared,
-                            targetUri = uri,
-                            isTree = false,
-                            contentResolver = context.contentResolver,
-                        )
-                    }
-                }
-                is ReaderEvent.RequestOpenDocumentTree -> {
-                    navigator.launchOpenDocumentTree { treeUri ->
-                        viewModel.completeSafExport(
-                            prepared = event.prepared,
-                            targetUri = treeUri,
-                            isTree = true,
-                            contentResolver = context.contentResolver,
-                        )
-                    }
-                }
+                is ReaderEvent.RequestSaveDocument -> exportPicker(event.prepared, false)
+                is ReaderEvent.RequestOpenDocumentTree -> exportPicker(event.prepared, true)
                 is ReaderEvent.RequestShareExport -> {
                     val authority = navigator.fileProviderAuthority ?: "${context.packageName}.fileprovider"
                     runCatching {
@@ -504,8 +486,8 @@ fun ReaderScreen(
             modifier = Modifier.align(Alignment.BottomEnd),
         ) {
             ReaderStatusBar(
-                currentPage = uiState.currentPage,
-                totalPages = uiState.totalPages,
+                currentPage = uiState.displayCurrentPage,
+                totalPages = uiState.displayTotalPages,
                 progressPercent = uiState.progressPercent,
                 autoPageIntervalSeconds = uiState.autoPageIntervalSeconds,
             )
@@ -791,13 +773,14 @@ fun ReaderScreen(
         }
         ReaderSheet.BOOKMARKS -> {
             ReaderBookmarksSheet(
-                currentPage = uiState.currentPage,
+                currentPage = uiState.displayCurrentPage,
                 isCurrentPageBookmarked = uiState.isCurrentPageBookmarked,
                 bookmarks = uiState.pageBookmarks,
                 onToggleCurrentPageBookmark = { viewModel.toggleCurrentPageBookmark() },
                 onJumpToBookmark = { bookmark ->
                     viewModel.jumpToPage(
                         page = bookmark.page,
+                        chapterId = bookmark.mediaId,
                         scrollOffsetPx = bookmark.scrollOffsetPx,
                         closeOverlays = true,
                     )
@@ -899,6 +882,16 @@ private sealed interface StripFeedEntry {
     }
 }
 
+private fun resolveStripIndex(entries: List<StripFeedEntry>, chapterId: String?, page: Int): Int {
+    return entries.indexOfFirst { entry ->
+        when (entry) {
+            is StripFeedEntry.PrimaryPage -> (chapterId == null || entry.chapterId == chapterId) && entry.pageNumber == page
+            is StripFeedEntry.AppendedPage -> (chapterId == null || entry.chapterId == chapterId) && entry.pageNumber == page
+            else -> false
+        }
+    }
+}
+
 @Composable
 private fun StripReaderViewport(
     uiState: ReaderUiState,
@@ -970,11 +963,11 @@ private fun StripReaderViewport(
     }
 
     // Programmatic jump-to-page handler.
-    LaunchedEffect(events, pageNumbers) {
+    LaunchedEffect(events) {
         events.collect { event ->
             if (event is ReaderEvent.ScrollToPage) {
-                val idx = pageNumbers.indexOf(event.page)
-                if (idx in pageNumbers.indices) {
+                val idx = resolveStripIndex(currentEntries, event.chapterId, event.page)
+                if (idx >= 0) {
                     doubleTapAnimJob?.cancel()
                     zoom = ReaderGeometry.MIN_ZOOM
                     pan = PanOffset.ZERO

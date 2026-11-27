@@ -409,7 +409,7 @@ fun SiteAccountScreenContent(
                     item(key = "account_logout_section") {
                         RavenGroupedSection(
                             title = "会话管理",
-                            footer = "退出登录仅清除 ${site.displayName} 的会话数据，不会影响其他已登录站点。",
+                            footer = "退出后需要重新登录的站点：${uiState.logoutSiteNames}。",
                         ) {
                             RavenGroupedRow(
                                 title = "退出 ${site.displayName} 账号",

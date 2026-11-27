@@ -1,11 +1,13 @@
 package com.raven.app.core.network
 
+import com.raven.app.core.model.SiteId
 import okhttp3.Dns
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -203,5 +205,115 @@ class MediaRedirectCacheTest {
             origin.shutdown()
             cdn.shutdown()
         }
+    }
+
+    @Test
+    fun `cached signed CDN URL is not replayed after logout because the epoch moved`() {
+        val origin = MockWebServer()
+        val cdn = MockWebServer()
+        origin.start()
+        cdn.start()
+        try {
+            var epoch = 7L
+            val cache = MediaRedirectCache(
+                eligible = { true },
+                accountResolver = { SiteId.R34V },
+                credentialEpochProvider = { epoch },
+            )
+            val client = OkHttpClient.Builder()
+                .dns(object : Dns {
+                    override fun lookup(hostname: String): List<InetAddress> =
+                        if (hostname == "cdn.example" || hostname == "cdn2.example") {
+                            listOf(InetAddress.getLoopbackAddress())
+                        } else {
+                            Dns.SYSTEM.lookup(hostname)
+                        }
+                })
+                .addInterceptor(cache.interceptor)
+                .addNetworkInterceptor(cache.networkInterceptor)
+                .build()
+
+            val cdnUrl = "http://cdn.example:${cdn.port}/signed-account-A.mp4"
+            val freshUrl = "http://cdn2.example:${cdn.port}/signed-account-B.mp4"
+            origin.enqueue(MockResponse().setResponseCode(302).setHeader("Location", cdnUrl))
+            origin.enqueue(MockResponse().setResponseCode(302).setHeader("Location", freshUrl))
+            cdn.enqueue(MockResponse().setResponseCode(200).setBody("account-A-stream"))
+            cdn.enqueue(MockResponse().setResponseCode(200).setBody("account-B-stream"))
+            val originUrl = origin.url("/get-file/1").toString()
+
+            assertEquals("account-A-stream", fetchBody(client, originUrl))
+            assertEquals(cdnUrl, cache.getCachedRedirect(originUrl)?.toString())
+
+            // Logout/login bumps the epoch: the signed URL minted for account A must not be reused.
+            epoch = 8L
+            assertEquals("account-B-stream", fetchBody(client, originUrl))
+            assertEquals(2, origin.requestCount)
+            assertEquals(freshUrl, cache.getCachedRedirect(originUrl)?.toString())
+        } finally {
+            origin.shutdown()
+            cdn.shutdown()
+        }
+    }
+
+    @Test
+    fun `invalidateForSite drops every entry for that account only`() {
+        val origin = MockWebServer()
+        val cdn = MockWebServer()
+        origin.start()
+        cdn.start()
+        try {
+            val cache = MediaRedirectCache(
+                eligible = { true },
+                accountResolver = { SiteId.R34V },
+                credentialEpochProvider = { 0L },
+            )
+            val client = OkHttpClient.Builder()
+                .dns(object : Dns {
+                    override fun lookup(hostname: String): List<InetAddress> =
+                        listOf(InetAddress.getLoopbackAddress())
+                })
+                .addInterceptor(cache.interceptor)
+                .addNetworkInterceptor(cache.networkInterceptor)
+                .build()
+
+            val r34Url = origin.url("/get-file/1").toString()
+            origin.enqueue(MockResponse().setResponseCode(302).setHeader("Location", "http://cdn.example:${cdn.port}/a"))
+            cdn.enqueue(MockResponse().setResponseCode(200).setBody("a"))
+            fetchBody(client, r34Url)
+            assertNotNull(cache.getCachedRedirect(r34Url))
+
+            cache.invalidateForSite(SiteId.R34V)
+            assertNull("R34V entry must be dropped on account switch", cache.getCachedRedirect(r34Url))
+        } finally {
+            origin.shutdown()
+            cdn.shutdown()
+        }
+    }
+
+    @Test
+    fun `vault epoch move drives cache invalidation through the binding`() {
+        val vault = com.raven.app.core.security.SessionVault(
+            com.raven.app.core.security.SoftwareAesGcmVaultCipher(),
+            com.raven.app.core.security.InMemoryVaultStorage(),
+        )
+        val cache = MediaRedirectCache(
+            eligible = { true },
+            accountResolver = { SiteId.R34V },
+            credentialEpochProvider = { vault.authEpoch(it) },
+        )
+        val invoked = java.util.concurrent.atomic.AtomicReference<SiteId?>()
+        vault.addAccountChangeListener { invoked.set(it) }
+
+        vault.saveCookies(SiteId.R34V, mapOf("sid" to "a"))
+        assertEquals("An account change must be signalled for every observed epoch move", SiteId.R34V, invoked.get())
+
+        // A no-op renewal must not fire the signal (it would thrash caches on every keep-alive).
+        invoked.set(null)
+        vault.saveCookies(SiteId.R34V, mapOf("sid" to "a"))
+        assertNull(invoked.get())
+
+        // EH/EX share one account: the signal is delivered under the account identity.
+        vault.saveCookies(SiteId.EXHENTAI, mapOf("ipb_member_id" to "1"))
+        assertEquals(SiteId.EHENTAI, invoked.get())
     }
 }

@@ -169,6 +169,11 @@ class DownloadsViewModelTest {
             awaitItem()
             advanceUntilIdle()
 
+            vm.inspectIntegrity(comic)
+            vm.dismissIntegritySheet()
+            advanceUntilIdle()
+            assertNull(vm.uiState.value.integrityState)
+
             // Inspect integrity -> exposes audit in integrityState
             vm.inspectIntegrity(comic)
             advanceUntilIdle()

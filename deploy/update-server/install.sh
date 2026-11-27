@@ -25,7 +25,17 @@ rm -rf /etc/nginx-ai/raven-update
 }
 
 install -d -m 0755 "$WEB_ROOT/raven/releases/assets"
+install -d -m 0755 "$WEB_ROOT/../.raven-update-state"
 install -m 0644 "$SCRIPT_DIR/nginx-raven-update.conf" /etc/nginx-ai/sites/raven-update.conf
+
+# Publishing is delegated to the official Android SDK tools (apksigner + aapt2). This installer
+# only serves files, so it warns instead of hard-failing when the SDK is absent: the publisher
+# itself refuses to run without them (see README.md §1).
+SDK_BIN=$(command -v apksigner || true)
+if [[ -z "$SDK_BIN" ]]; then
+    printf 'WARNING: apksigner not found on PATH. publish.py will refuse to publish until\n' >&2
+    printf '         Android SDK build-tools are installed and ANDROID_HOME is exported.\n' >&2
+fi
 
 # Validate the full instance config before signalling it. Abort without reload on failure.
 /usr/sbin/nginx -t -c "$NGINX_CONF" -p /etc/nginx-ai

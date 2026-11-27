@@ -412,6 +412,11 @@ class SettingsDataStore(
      */
     suspend fun exportPortableSettings(): Map<String, String> {
         val current = readPersistedSettings()
+        val legacyPortable = runCatching {
+            dataStore.data.first()[Keys.LEGACY_PORTABLE_SETTINGS]
+                ?.let { json.decodeFromString(MapSerializer(String.serializer(), String.serializer()), it) }
+                .orEmpty()
+        }.getOrDefault(emptyMap())
         return buildMap {
             put(KEY_ACTIVE_SITE_ID, current.activeSiteId.value)
             current.startupDefaultSiteId?.value?.let { put(KEY_STARTUP_DEFAULT_SITE_ID, it) }
@@ -431,6 +436,7 @@ class SettingsDataStore(
             put(KEY_AUTO_UPDATE_CHECK, current.autoUpdateCheck.toString())
             put(KEY_TAG_DICT_AUTO_SYNC, current.tagDictAutoSync.toString())
             put(KEY_BLOCK_TAGS_GLOBALLY, current.blockTagsGlobally.toString())
+            legacyPortable.forEach { (k, v) -> put(k, v) }
         }
     }
 
@@ -442,16 +448,64 @@ class SettingsDataStore(
         settingsMap: Map<String, String>,
         siteLanguages: Map<SiteId, ComicLanguage>,
     ) {
-        dataStore.edit { prefs ->
-            applyPortableEntries(prefs, settingsMap)
-            siteLanguages.forEach { (siteId, language) ->
-                val key = Keys.siteLanguage(siteId)
-                if (language == ComicLanguage.ALL) {
-                    prefs.remove(key)
-                } else {
-                    prefs[key] = language.name
+        dataStore.edit { prefs -> applyBackupEntries(prefs, settingsMap, siteLanguages) }
+    }
+
+    /**
+     * Applies a restore's settings snapshot. Used both for the normal path and for replaying a
+     * journal left behind by an interrupted restore, so the two can never diverge.
+     */
+    suspend fun commitBackupSettings(
+        settingsMap: Map<String, String>,
+        siteLanguages: Map<SiteId, ComicLanguage>,
+    ) {
+        dataStore.edit { prefs -> applyBackupEntries(prefs, settingsMap, siteLanguages) }
+    }
+
+    private fun applyBackupEntries(
+        prefs: MutablePreferences,
+        settingsMap: Map<String, String>,
+        siteLanguages: Map<SiteId, ComicLanguage>,
+    ) {
+        applyPortableEntries(prefs, settingsMap)
+        applyLegacyPortableEntries(prefs, settingsMap)
+        siteLanguages.forEach { (siteId, language) ->
+            val key = Keys.siteLanguage(siteId)
+            if (language == ComicLanguage.ALL) {
+                prefs.remove(key)
+            } else {
+                prefs[key] = language.name
+            }
+        }
+    }
+
+    /**
+     * Keeps legacy portable keys (subscription order / auto download) opaquely with value/name
+     * validation, since Raven has no native live equivalent for them. Shared by every restore
+     * entry point so a replay never drops them.
+     */
+    private fun applyLegacyPortableEntries(prefs: MutablePreferences, settingsMap: Map<String, String>) {
+        val legacyPortable = linkedMapOf<String, String>()
+        settingsMap["auto_download"]?.let { raw ->
+            raw.toBooleanStrictOrNull()?.let { legacyPortable["auto_download"] = it.toString() }
+        }
+        settingsMap.forEach { (key, value) ->
+            if (key.startsWith("legacy_subscription_order_")) {
+                val sitePart = key.removePrefix("legacy_subscription_order_")
+                if (sitePart.isNotBlank() && sitePart.all { it.isLetterOrDigit() || it == '-' || it == '_' } &&
+                    value in setOf("SUBSCRIBED", "INTERLEAVED", "TITLE")
+                ) {
+                    legacyPortable[key] = value
                 }
             }
+        }
+        if (legacyPortable.isEmpty()) {
+            prefs.remove(Keys.LEGACY_PORTABLE_SETTINGS)
+        } else {
+            prefs[Keys.LEGACY_PORTABLE_SETTINGS] = json.encodeToString(
+                MapSerializer(String.serializer(), String.serializer()),
+                legacyPortable,
+            )
         }
     }
 
@@ -671,6 +725,7 @@ class SettingsDataStore(
         val APP_LOCK_TIMEOUT_SECONDS = intPreferencesKey(KEY_APP_LOCK_TIMEOUT_SECONDS)
         val INCOGNITO_MODE = booleanPreferencesKey(KEY_INCOGNITO_MODE)
         val WEBDAV_LAST_SYNC_AT = longPreferencesKey(KEY_WEBDAV_LAST_SYNC_AT)
+        val LEGACY_PORTABLE_SETTINGS = stringPreferencesKey(KEY_LEGACY_PORTABLE_SETTINGS)
 
         fun siteLanguage(siteId: SiteId): Preferences.Key<String> =
             stringPreferencesKey("$SITE_LANGUAGE_PREFIX${siteId.value}")
@@ -727,6 +782,7 @@ class SettingsDataStore(
         const val KEY_APP_LOCK_TIMEOUT_SECONDS: String = "app_lock_timeout_seconds"
         const val KEY_INCOGNITO_MODE: String = "incognito_mode"
         const val KEY_WEBDAV_LAST_SYNC_AT: String = "webdav_last_sync_at"
+        const val KEY_LEGACY_PORTABLE_SETTINGS: String = "legacy_portable_settings"
 
         /** Keys safe to include in encrypted cross-device backups (never device paths/credentials). */
         val PORTABLE_BACKUP_KEYS: Set<String> = setOf(

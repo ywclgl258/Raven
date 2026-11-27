@@ -102,7 +102,7 @@ class StartupUpdateCheckTest {
             downloadClient = OkHttpClient(),
             updatesDir = updatesDir,
             signatureVerifier = object : ApkSignatureVerifier {
-                override fun verify(apkFile: File) = Unit
+                override fun verify(apkFile: File, releaseTag: String) = Unit
             },
             stateStore = FileUpdateStateStore(File(updatesDir, "state.json")),
             releasesApiBaseUrlOverride = server.url("/repos/raven/releases").toString(),

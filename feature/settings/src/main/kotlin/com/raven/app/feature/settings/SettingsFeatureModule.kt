@@ -5,7 +5,7 @@ import com.raven.app.core.media.download.DownloadCoordinator
 import com.raven.app.core.media.storage.DuplicateSource
 import com.raven.app.core.media.storage.LocalLibraryImporter
 import com.raven.app.core.model.RavenRoute
-import com.raven.app.core.network.NetworkQualifiers
+import com.raven.app.core.network.RavenOkHttpPool
 import java.io.File
 import org.koin.android.ext.koin.androidContext
 import org.koin.core.module.Module
@@ -42,8 +42,8 @@ val settingsFeatureModule: Module = module {
         val updatesDir = File(appContext.cacheDir, "updates")
         RavenUpdater(
             appInfo = info,
-            metadataClient = get(NetworkQualifiers.API),
-            downloadClient = get(NetworkQualifiers.IMAGE),
+            metadataClient = get<RavenOkHttpPool>().externalApiClient,
+            downloadClient = get<RavenOkHttpPool>().externalDownloadClient,
             updatesDir = updatesDir,
             signatureVerifier = get(),
             stateStore = FileUpdateStateStore(
@@ -58,7 +58,7 @@ val settingsFeatureModule: Module = module {
         val appContext = androidContext()
         val info = getOrNull<RavenAppInfo>() ?: RavenAppInfo.fromContext(appContext)
         EhTagTranslationSyncer(
-            apiClient = get(NetworkQualifiers.API),
+            apiClient = get<RavenOkHttpPool>().externalApiClient,
             tagDictionaryRepository = get(),
             preferencesRepository = get(),
             appInfo = info,
@@ -70,7 +70,7 @@ val settingsFeatureModule: Module = module {
         val appContext = androidContext()
         val info = getOrNull<RavenAppInfo>() ?: RavenAppInfo.fromContext(appContext)
         WebDavSyncClient(
-            apiClient = get(NetworkQualifiers.API),
+            apiClient = get<RavenOkHttpPool>().externalApiClient,
             backupDataRepository = get(),
             backupCodec = get(),
             backupValidator = get(),

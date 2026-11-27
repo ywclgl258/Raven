@@ -8,6 +8,7 @@ import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.core.withInfiniteAnimationFrameNanos
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -23,7 +24,6 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
-import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.CornerRadius
@@ -133,7 +133,7 @@ fun RavenBloubPresence(
         }
         var lastNanos = 0L
         while (isActive) {
-            withFrameNanos { now ->
+            withInfiniteAnimationFrameNanos { now ->
                 if (lastNanos != 0L) {
                     val dt = ((now - lastNanos) / 1_000_000_000f).coerceIn(0f, 0.05f)
                     frameTimeSec.floatValue += dt
@@ -411,7 +411,7 @@ fun RavenBloubLoadingIndicator(
         }
         var lastNanos = 0L
         while (isActive) {
-            withFrameNanos { now ->
+            withInfiniteAnimationFrameNanos { now ->
                 if (lastNanos != 0L) {
                     val dt = ((now - lastNanos) / 1_000_000_000f).coerceIn(0f, 0.05f)
                     frameTimeSec.floatValue += dt

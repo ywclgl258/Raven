@@ -459,9 +459,9 @@ internal class InMemoryShelfItemDao : ShelfItemDao {
         }
     }
     override suspend fun upsertAll(entities: List<ShelfItemEntity>) = entities.forEach { upsert(it) }
-    override suspend fun updateCompleted(shelfId: String, siteId: String, mediaId: String, completed: Boolean) {
+    override suspend fun updateCompleted(shelfId: String, siteId: String, mediaId: String, completed: Boolean, changedAt: Long) {
         rows.update { list ->
-            list.map { if (it.shelfId == shelfId && it.siteId == siteId && it.mediaId == mediaId) it.copy(completed = completed) else it }
+            list.map { if (it.shelfId == shelfId && it.siteId == siteId && it.mediaId == mediaId) it.copy(completed = completed, completionChangedAt = changedAt) else it }
         }
     }
     override suspend fun updatePosition(shelfId: String, siteId: String, mediaId: String, position: Int) {

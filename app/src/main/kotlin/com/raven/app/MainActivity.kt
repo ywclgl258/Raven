@@ -1,7 +1,6 @@
 package com.raven.app
 
 import android.Manifest
-import android.app.Activity
 import android.app.ActivityOptions
 import android.content.ClipData
 import android.content.Intent
@@ -13,7 +12,6 @@ import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.CancellationSignal
-import android.os.SystemClock
 import android.view.KeyEvent
 import android.view.WindowManager
 import android.widget.Toast
@@ -23,54 +21,37 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.annotation.RequiresApi
-import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.EnterTransition
-import androidx.compose.animation.ExitTransition
-import androidx.compose.animation.core.tween
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
-import androidx.compose.animation.scaleIn
-import androidx.compose.animation.scaleOut
-import androidx.compose.foundation.background
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Modifier
 import androidx.core.content.ContextCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.navigation.compose.rememberNavController
 import com.raven.app.core.database.model.AppSettings
 import com.raven.app.core.database.repository.PreferencesRepository
 import com.raven.app.core.database.repository.SubscriptionRepository
 import com.raven.app.core.designsystem.component.LocalRavenImageRequestDecorator
-import com.raven.app.core.designsystem.component.RavenAppLockOverlay
-import com.raven.app.core.designsystem.theme.LocalMotionReduced
-import com.raven.app.core.designsystem.theme.LocalRavenColors
-import com.raven.app.core.designsystem.theme.RavenMotion
 import com.raven.app.core.designsystem.theme.RavenTheme
 import com.raven.app.core.model.RavenRoute
 import com.raven.app.core.model.SiteId
 import com.raven.app.core.network.ravenImageRequestDecorator
-import com.raven.app.core.security.PrivacyLockStore
 import com.raven.app.core.sitespi.SiteRegistry
 import com.raven.app.feature.player.PlayerLaunchArgs
+import com.raven.app.feature.settings.AppLockSessionCoordinator
+import com.raven.app.feature.settings.RavenPrivacyGate
 import com.raven.app.feature.settings.RavenUpdateInstaller
 import com.raven.app.feature.settings.auth.SiteAuthActivity
 import java.io.File
-import kotlinx.coroutines.delay
 import org.koin.android.ext.android.inject
 
 /**
  * Primary single-top Activity hosting the entire Raven adaptive navigation shell, Type-Safe
- * 25-route [NavHost], incoming `ACTION_SEND` URL resolver sheet, SAF document contracts,
+ * 25-route [NavHost], incoming `ACTION_SEND` URL resolver sheet,
  * FileProvider sharing, APK installer handoff, and Reader window/hardware-key controls.
  */
 class MainActivity : ComponentActivity(), MainActivityHostActions {
@@ -78,53 +59,24 @@ class MainActivity : ComponentActivity(), MainActivityHostActions {
     private val siteRegistry: SiteRegistry by inject()
     private val preferencesRepository: PreferencesRepository by inject()
     private val subscriptionRepository: SubscriptionRepository by inject()
-    private val privacyLockStore: PrivacyLockStore by inject()
     private val appLockCoordinator: AppLockSessionCoordinator by inject()
 
     private var pendingNavigationRoute by mutableStateOf<RavenRoute?>(null)
     private var pendingSharedLink by mutableStateOf<SharedLinkPrompt?>(null)
 
-    private var pendingCreateDocumentCallback: ((Uri?) -> Unit)? = null
-    private var pendingOpenDocumentCallback: ((Uri?) -> Unit)? = null
-    private var pendingOpenTreeCallback: ((Uri?) -> Unit)? = null
     private var pendingInstallApk: File? = null
 
     private var volumeKeyHandler: ((up: Boolean, isLongPress: Boolean) -> Boolean)? = null
     private var volumeKeyConsumedDown: Boolean = false
     private var volumeLongPressTriggered: Boolean = false
 
-    private val createDocumentLauncher = registerForActivityResult(
-        ActivityResultContracts.StartActivityForResult(),
-    ) { result ->
-        val callback = pendingCreateDocumentCallback
-        pendingCreateDocumentCallback = null
-        val uri = if (result.resultCode == Activity.RESULT_OK) result.data?.data else null
-        callback?.invoke(uri)
-    }
-
-    private val openDocumentLauncher = registerForActivityResult(
-        ActivityResultContracts.OpenDocument(),
-    ) { uri ->
-        val callback = pendingOpenDocumentCallback
-        pendingOpenDocumentCallback = null
-        callback?.invoke(uri)
-    }
-
-    private val openDocumentTreeLauncher = registerForActivityResult(
-        ActivityResultContracts.OpenDocumentTree(),
-    ) { uri ->
-        val callback = pendingOpenTreeCallback
-        pendingOpenTreeCallback = null
-        callback?.invoke(uri)
-    }
-
     private val unknownSourcesLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult(),
     ) {
-        val apk = pendingInstallApk
-        pendingInstallApk = null
-        if (apk != null && apk.isFile && RavenUpdateInstaller.canRequestPackageInstalls(this)) {
-            startApkInstaller(apk)
+        if (RavenUpdateInstaller.canRequestPackageInstalls(this)) {
+            resumePendingInstall()
+        } else {
+            pendingInstallApk = null
         }
     }
 
@@ -136,11 +88,13 @@ class MainActivity : ComponentActivity(), MainActivityHostActions {
         get() = "$packageName.fileprovider"
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
         enableEdgeToEdge(
             statusBarStyle = SystemBarStyle.dark(AndroidColor.TRANSPARENT),
             navigationBarStyle = SystemBarStyle.dark(AndroidColor.TRANSPARENT),
         )
         super.onCreate(savedInstanceState)
+        pendingInstallApk = savedInstanceState?.getString(STATE_INSTALL_APK)?.let(::File)
         DisplayRefreshRateController.applyHighRefreshRate(this, allowVideoFrameRateMatching = false)
 
         if (savedInstanceState == null) {
@@ -158,17 +112,9 @@ class MainActivity : ComponentActivity(), MainActivityHostActions {
             )
             val startupUpdate by StartupUpdateNotifier.latestUpdate.collectAsStateWithLifecycle()
             val lockState by appLockCoordinator.state.collectAsStateWithLifecycle()
-            val hasStoredPin = remember { privacyLockStore.hasPin() }
-            val awaitingInitialLockDecision = loadedSettings == null && hasStoredPin && !lockState.lockInitialized
-
-            LaunchedEffect(loadedSettings) {
-                val realSettings = loadedSettings ?: return@LaunchedEffect
-                appLockCoordinator.onSettingsLoaded(realSettings)
-            }
-
-            LaunchedEffect(startupUpdate?.release?.tagName, lockState.isLocked, awaitingInitialLockDecision) {
+            LaunchedEffect(startupUpdate?.release?.tagName, lockState.isLocked, lockState.lockInitialized) {
                 val available = startupUpdate ?: return@LaunchedEffect
-                if (lockState.isLocked || awaitingInitialLockDecision) return@LaunchedEffect
+                if (lockState.isLocked || !lockState.lockInitialized) return@LaunchedEffect
                 Toast.makeText(
                     this@MainActivity,
                     "发现新版本 ${available.release.tagName}，可在设置中查看",
@@ -176,27 +122,11 @@ class MainActivity : ComponentActivity(), MainActivityHostActions {
                 ).show()
             }
 
-            LaunchedEffect(appSettings.privacyScreenSecure) {
-                if (appSettings.privacyScreenSecure) {
+            LaunchedEffect(loadedSettings?.privacyScreenSecure) {
+                if (loadedSettings?.privacyScreenSecure != false) {
                     window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
                 } else {
                     window.clearFlags(WindowManager.LayoutParams.FLAG_SECURE)
-                }
-            }
-
-            var lockoutSecondsRemaining by remember { mutableIntStateOf(0) }
-            LaunchedEffect(lockState.isLocked, lockState.lockoutUntilElapsedMs) {
-                while (lockState.isLocked && lockState.lockoutUntilElapsedMs > 0L) {
-                    val remainingMs = (lockState.lockoutUntilElapsedMs - SystemClock.elapsedRealtime()).coerceAtLeast(0L)
-                    lockoutSecondsRemaining = ((remainingMs + 999L) / 1_000L).toInt()
-                    if (remainingMs <= 0L) {
-                        appLockCoordinator.onLockoutExpired()
-                        break
-                    }
-                    delay(1_000L)
-                }
-                if (lockState.lockoutUntilElapsedMs <= 0L) {
-                    lockoutSecondsRemaining = 0
                 }
             }
 
@@ -207,90 +137,48 @@ class MainActivity : ComponentActivity(), MainActivityHostActions {
                 CompositionLocalProvider(
                     LocalRavenImageRequestDecorator provides ::ravenImageRequestDecorator,
                 ) {
-                    val colors = LocalRavenColors.current
-                    val motionReduced = LocalMotionReduced.current
-                    val showLockOverlay = lockState.isLocked && appSettings.appLockEnabled && privacyLockStore.hasPin()
-                    Box(modifier = Modifier.fillMaxSize()) {
-                        if (!awaitingInitialLockDecision) {
-                            RavenAppShell(
-                                siteRegistry = siteRegistry,
-                                hostActions = this@MainActivity,
-                                unreadInboxCount = unreadCount,
-                                isIncognito = appSettings.incognitoMode,
-                                isAppLocked = showLockOverlay,
-                                pendingNavigationRoute = pendingNavigationRoute,
-                                onConsumeNavigationRoute = { pendingNavigationRoute = null },
-                                pendingSharedLink = pendingSharedLink,
-                                onDismissSharedLink = { pendingSharedLink = null },
-                            )
-                        } else {
-                            Box(modifier = Modifier.fillMaxSize().background(colors.canvas))
-                        }
-
-                        AnimatedVisibility(
-                            visible = showLockOverlay,
-                            enter = if (motionReduced) {
-                                EnterTransition.None
-                            } else {
-                                fadeIn(
-                                    animationSpec = tween(
-                                        durationMillis = 180,
-                                        easing = RavenMotion.HarmonyDecelerationEasing,
-                                    ),
-                                ) + scaleIn(
-                                    initialScale = 1.03f,
-                                    animationSpec = tween(
-                                        durationMillis = 220,
-                                        easing = RavenMotion.HarmonyDecelerationEasing,
-                                    ),
-                                )
-                            },
-                            exit = if (motionReduced) {
-                                ExitTransition.None
-                            } else {
-                                fadeOut(
-                                    animationSpec = tween(
-                                        durationMillis = 180,
-                                        easing = RavenMotion.HarmonyDecelerationEasing,
-                                    ),
-                                ) + scaleOut(
-                                    targetScale = 0.97f,
-                                    animationSpec = tween(
-                                        durationMillis = 200,
-                                        easing = RavenMotion.HarmonyDecelerationEasing,
-                                    ),
-                                )
-                            },
-                        ) {
-                            RavenAppLockOverlay(
-                                onSubmitPinAsync = { candidate ->
-                                    appLockCoordinator.verifyPin(candidate)
-                                },
-                                errorMessage = lockState.errorMessage,
-                                lockoutSecondsRemaining = lockoutSecondsRemaining,
-                                onBiometricClick = if (
-                                    Build.VERSION.SDK_INT >= Build.VERSION_CODES.P &&
-                                    canOfferBiometricUnlock()
-                                ) {
-                                    { triggerBiometricUnlock() }
-                                } else {
-                                    null
-                                },
-                            )
-                        }
+                    val navController = rememberNavController()
+                    RavenPrivacyGate(
+                        coordinator = appLockCoordinator,
+                        onBiometricClick = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P && canOfferBiometricUnlock()) {
+                            { triggerBiometricUnlock() }
+                        } else null,
+                    ) {
+                        LaunchedEffect(Unit) { resumePendingInstall() }
+                        RavenAppShell(
+                            siteRegistry = siteRegistry,
+                            hostActions = this@MainActivity,
+                            unreadInboxCount = unreadCount,
+                            isIncognito = appSettings.incognitoMode,
+                            navController = navController,
+                            pendingNavigationRoute = pendingNavigationRoute,
+                            onConsumeNavigationRoute = { pendingNavigationRoute = null },
+                            pendingSharedLink = pendingSharedLink,
+                            onDismissSharedLink = { pendingSharedLink = null },
+                        )
                     }
                 }
             }
         }
     }
 
+    override fun onSaveInstanceState(outState: Bundle) {
+        outState.putString(STATE_INSTALL_APK, pendingInstallApk?.absolutePath)
+        super.onSaveInstanceState(outState)
+    }
+
     override fun onResume() {
         super.onResume()
         DisplayRefreshRateController.applyHighRefreshRate(this, allowVideoFrameRateMatching = false)
-        val apk = pendingInstallApk
-        if (apk != null && apk.isFile && RavenUpdateInstaller.canRequestPackageInstalls(this)) {
+        resumePendingInstall()
+    }
+
+    private fun resumePendingInstall() {
+        val apk = pendingInstallApk ?: return
+        val lock = appLockCoordinator.state.value
+        if (lock.lockInitialized && !lock.isLocked && RavenUpdateInstaller.canRequestPackageInstalls(this)) {
             pendingInstallApk = null
-            startApkInstaller(apk)
+            if (apk.isFile) startApkInstaller(apk)
         }
     }
 
@@ -431,45 +319,6 @@ class MainActivity : ComponentActivity(), MainActivityHostActions {
         }
     }
 
-    override fun launchSaveDocument(
-        suggestedFileName: String,
-        mimeType: String,
-        onResult: (Uri?) -> Unit,
-    ) {
-        pendingCreateDocumentCallback = onResult
-        val intent = Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
-            addCategory(Intent.CATEGORY_OPENABLE)
-            type = mimeType.ifBlank { "application/octet-stream" }
-            putExtra(Intent.EXTRA_TITLE, suggestedFileName)
-        }
-        runCatching {
-            createDocumentLauncher.launch(intent)
-        }.onFailure {
-            pendingCreateDocumentCallback = null
-            onResult(null)
-        }
-    }
-
-    override fun launchOpenDocument(onResult: (Uri?) -> Unit) {
-        pendingOpenDocumentCallback = onResult
-        runCatching {
-            openDocumentLauncher.launch(arrayOf("*/*"))
-        }.onFailure {
-            pendingOpenDocumentCallback = null
-            onResult(null)
-        }
-    }
-
-    override fun launchOpenDocumentTree(onResult: (Uri?) -> Unit) {
-        pendingOpenTreeCallback = onResult
-        runCatching {
-            openDocumentTreeLauncher.launch(null)
-        }.onFailure {
-            pendingOpenTreeCallback = null
-            onResult(null)
-        }
-    }
-
     override fun shareFiles(uris: List<Uri>, mimeType: String, subject: String) {
         if (uris.isEmpty()) return
         val resolvedMime = mimeType.ifBlank { "image/*" }
@@ -572,5 +421,9 @@ class MainActivity : ComponentActivity(), MainActivityHostActions {
             return true
         }
         return super.onKeyUp(keyCode, event)
+    }
+
+    private companion object {
+        const val STATE_INSTALL_APK = "pending_install_apk"
     }
 }

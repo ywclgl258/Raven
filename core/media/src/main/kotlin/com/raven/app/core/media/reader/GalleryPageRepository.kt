@@ -6,6 +6,7 @@ import android.graphics.BitmapFactory
 import androidx.core.graphics.scale
 import com.raven.app.core.common.AppDispatchers
 import com.raven.app.core.common.DefaultAppDispatchers
+import com.raven.app.core.media.storage.AtomicFiles
 import com.raven.app.core.media.storage.DiskSidecarRecord
 import com.raven.app.core.media.storage.DuplicateBookCandidate
 import com.raven.app.core.media.storage.DuplicateSource
@@ -503,6 +504,9 @@ class GalleryPageRepository(
             )
         } catch (ce: CancellationException) {
             throw ce
+        } catch (limited: SiteException.RateLimited) {
+            // The host asked us to wait. Refreshing the page link would immediately retry it.
+            throw limited
         } catch (error: Exception) {
             if (!forceReload && !knownPageUrl.isNullOrBlank()) {
                 forgetCachedPageLink(item.siteId, item.url, pageIndex, knownPageUrl)
@@ -728,7 +732,7 @@ class GalleryPageRepository(
 
         val canonicalPageUrl = initialPageUrl ?: finalPage.pageUrl
         val normalizedPage = finalPage.copy(pageUrl = canonicalPageUrl)
-        val key = readingCacheKey(canonicalPageUrl, preferOriginal)
+        val key = readingCacheKey(canonicalPageUrl, normalizedPage.index, preferOriginal)
         val imageFile = File(cacheDir, "$key.image")
         val metaFile = File(cacheDir, "$key.page.json")
         runCatching {
@@ -834,7 +838,9 @@ class GalleryPageRepository(
 
         val canonicalPageUrl = existingLink ?: finalPage.pageUrl
         val normalized = finalPage.copy(pageUrl = canonicalPageUrl)
-        val key = StorageRootManager.sha256Hex(canonicalPageUrl.substringBefore('?'))
+        // Key includes the page number: plugins such as 瓜子漫画 append the page index after `?`,
+        // so hashing only the query-stripped URL made every page of a chapter share one file.
+        val key = pageFileKey(normalized.pageUrl, normalized.index)
         atomicWriteBytes(File(folder, "$key.image"), bytes)
         atomicWriteBytes(
             File(folder, "$key.page.json"),
@@ -935,6 +941,9 @@ class GalleryPageRepository(
         } else {
             diskBook.selection.takeIf { it.isNotEmpty() && audit.validPages.toSet().containsAll(it) }.orEmpty()
         }
+        // A selective download never writes the `complete` marker, yet every picked page can be on
+        // disk. Reporting it as PAUSED made the user re-run a finished task.
+        val selectionComplete = !isWhole && intactSelection.isNotEmpty()
         val item = diskBook.detail.item
         val kind = if (item.kind == MediaKind.PHOTO) DownloadKind.PHOTO else DownloadKind.COMIC
         val updatedAt = folder.listFiles().orEmpty().maxOfOrNull { it.lastModified() } ?: System.currentTimeMillis()
@@ -949,10 +958,17 @@ class GalleryPageRepository(
             completedPages = audit.validPages.size,
             bytes = audit.totalBytes,
             updatedAt = updatedAt,
-            status = if (isWhole) DownloadStatus.COMPLETED else DownloadStatus.PAUSED,
-            detail = if (isWhole) "" else "已保存 ${audit.validPages.size} / ${audit.totalPages} 页",
+            status = if (isWhole || selectionComplete) DownloadStatus.COMPLETED else DownloadStatus.PAUSED,
+            detail = if (isWhole || selectionComplete) {
+                ""
+            } else {
+                "已保存 ${audit.validPages.size} / ${audit.totalPages} 页"
+            },
             sourceRoot = sourceRoot,
             intactSelection = intactSelection,
+            // Reported even when incomplete so a reinstall keeps the user's picked range instead
+            // of silently widening the task to the whole book.
+            declaredSelection = diskBook.selection,
         )
     }
 
@@ -1085,6 +1101,7 @@ class GalleryPageRepository(
         } catch (ce: CancellationException) {
             throw ce
         } catch (cause: SiteException) {
+            if (cause is SiteException.RateLimited) throw cause
             val reloadUrl = gallerySource.reloadUrlOnError(cause, currentPage)
                 ?.takeIf { it.isNotBlank() }
                 ?: throw cause
@@ -1165,7 +1182,11 @@ class GalleryPageRepository(
                     401 -> SiteException.AuthRequired("图片需要登录访问 (HTTP 401)", siteId = siteId)
                     403 -> SiteException.Forbidden(isChallenge = false, message = "图片访问被拒绝 (HTTP 403)", siteId = siteId)
                     404, 410 -> SiteException.NotFound("图片已被移除 (HTTP ${res.code})", siteId = siteId)
-                    429 -> SiteException.RateLimited(retryAfterSeconds = retryAfter, message = "图片请求过于频繁 (HTTP 429)", siteId = siteId)
+                    429, 503 -> SiteException.RateLimited(
+                        retryAfterSeconds = retryAfter,
+                        message = "图片服务暂时不可用 (HTTP ${res.code})",
+                        siteId = siteId,
+                    )
                     509 -> SiteException.QuotaExceeded("原站图片配额已用尽 (HTTP 509)", siteId = siteId)
                     else -> SiteException.Network("图片读取失败：HTTP ${res.code}", siteId = siteId)
                 }
@@ -1319,18 +1340,13 @@ class GalleryPageRepository(
 
     private fun atomicWriteBytes(target: File, bytes: ByteArray) {
         val parent = target.parentFile ?: throw GalleryStorageException("无效的文件路径：${target.path}")
-        val temp = File(parent, "${target.name}.${System.nanoTime()}.part")
         try {
             check(parent.isDirectory || parent.mkdirs()) { "无法创建目录：${parent.path}" }
-            temp.writeBytes(bytes)
-            if (!temp.renameTo(target)) {
-                if (target.exists()) target.delete()
-                check(temp.renameTo(target)) { "无法原子写入文件：${target.name}" }
-            }
+            // Never delete the previous copy before the new bytes are published: a refused rename
+            // would otherwise leave neither the old nor the new page behind.
+            AtomicFiles.writeBytes(target, bytes)
         } catch (e: Exception) {
             throw GalleryStorageException(e.message ?: "无法保存图页文件", e)
-        } finally {
-            temp.delete()
         }
     }
 
@@ -1386,8 +1402,26 @@ class GalleryPageRepository(
                 "complete   整本下载完成标记\n\n" +
                 "把整个文件夹放回 Raven/comics/<站点>/ 之下，应用重装后可自动识别恢复。"
 
-        private fun readingCacheKey(pageUrl: String, preferOriginal: Boolean): String =
+        private fun readingCacheKey(pageUrl: String, pageIndex: Int, preferOriginal: Boolean): String =
+            StorageRootManager.sha256Hex("${pageUrl.substringBefore('?')}#$pageIndex|orig=$preferOriginal")
+
+        /**
+         * Stable per-page file key. The page index is part of the key because some plugins encode
+         * the page only in the query string, which [substringBefore] strips; two pages of the same
+         * chapter therefore hashed to one file and the later write silently replaced the earlier.
+         */
+        internal fun pageFileKey(pageUrl: String, pageIndex: Int): String =
+            StorageRootManager.sha256Hex("${pageUrl.substringBefore('?')}#$pageIndex")
+
+        private fun legacyReadingCacheKey(pageUrl: String, preferOriginal: Boolean): String =
             StorageRootManager.sha256Hex("${pageUrl.substringBefore('?')}|orig=$preferOriginal")
+
+        /**
+         * Legacy key without the page index, kept only so downloads created before this fix keep
+         * resolving. Never written to.
+         */
+        private fun legacyPageFileKey(pageUrl: String): String =
+            StorageRootManager.sha256Hex(pageUrl.substringBefore('?'))
 
         private fun <T> readJsonFile(
             file: File,
@@ -1410,11 +1444,28 @@ class GalleryPageRepository(
             preferOriginal: Boolean? = null,
         ): SavedPageFile? = runCatching {
             if (pageUrl.isBlank()) return null
-            val key = if (preferOriginal != null) {
-                readingCacheKey(pageUrl, preferOriginal)
-            } else {
-                StorageRootManager.sha256Hex(pageUrl.substringBefore('?'))
+            val candidates = buildList {
+                // Current layout: page index is part of the key and of the preference variant.
+                if (expectedIndex != null) {
+                    add(if (preferOriginal != null) readingCacheKey(pageUrl, expectedIndex, preferOriginal) else pageFileKey(pageUrl, expectedIndex))
+                }
+                // Legacy layouts written before the page index was part of the key.
+                if (preferOriginal != null) add(legacyReadingCacheKey(pageUrl, preferOriginal))
+                add(legacyPageFileKey(pageUrl))
+            }.distinct()
+            for (key in candidates) {
+                readSavedPageAt(folder, pageUrl, expectedIndex, json, key)?.let { return it }
             }
+            null
+        }.getOrNull()
+
+        private fun readSavedPageAt(
+            folder: File,
+            pageUrl: String,
+            expectedIndex: Int?,
+            json: Json,
+            key: String,
+        ): SavedPageFile? = runCatching {
             val metaFile = File(folder, "$key.page.json")
             val meta = readJsonFile(metaFile, SavedPageMeta.serializer(), MAX_PAGE_JSON_BYTES, json) ?: return null
             if (meta.page.pageUrl != pageUrl ||

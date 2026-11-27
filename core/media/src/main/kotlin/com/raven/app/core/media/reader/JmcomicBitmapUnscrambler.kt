@@ -7,6 +7,7 @@ import android.graphics.Canvas
 import android.graphics.Paint
 import android.graphics.Rect
 import android.os.Build
+import androidx.core.graphics.createBitmap
 import com.raven.app.core.model.GalleryPage
 import com.raven.app.core.sitespi.ImageUnscrambler
 import com.raven.app.core.sitespi.JmcomicStripMath
@@ -65,7 +66,7 @@ class JmcomicBitmapUnscrambler {
                 "图页尺寸或分条参数无效 (${width}x$height, strips=$stripCount)"
             }
             val slices = unscrambler.computeSlicePlan(height, stripCount)
-            val rendered = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+            val rendered = createBitmap(width, height, Bitmap.Config.ARGB_8888)
             try {
                 val canvas = Canvas(rendered)
                 for (slice in slices) {
@@ -124,7 +125,7 @@ class JmcomicBitmapUnscrambler {
                 inSampleSize = ImageStructureValidator.computeThumbnailSampleSize(longEdge, targetSizePx)
             }
             val slices = unscrambler.computeSlicePlan(height, stripCount)
-            val rendered = Bitmap.createBitmap(targetWidth, targetHeight, Bitmap.Config.ARGB_8888)
+            val rendered = createBitmap(targetWidth, targetHeight, Bitmap.Config.ARGB_8888)
             try {
                 val canvas = Canvas(rendered)
                 val paint = Paint(Paint.FILTER_BITMAP_FLAG)

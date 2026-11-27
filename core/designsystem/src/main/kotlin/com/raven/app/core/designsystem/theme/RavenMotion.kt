@@ -121,6 +121,10 @@ object RavenMotion {
     const val AMBIENT_GLOW_MAX_ALPHA: Float = RavenColors.AMBIENT_GLOW_MAX_ALPHA
     val DefaultFrostBlurRadius: Dp = 18.dp
 
+    // Scale changes by only a few percent. The default 0.01 threshold visibly truncates the tail.
+    internal val pressScaleSpring = spring(stiffness = 620f, dampingRatio = 0.92f, visibilityThreshold = 0.0004f)
+    internal val releaseScaleSpring = spring(stiffness = 380f, dampingRatio = 0.82f, visibilityThreshold = 0.0004f)
+
     /** HarmonyOS Design official Friction curve `(0.2, 0.0, 0.1, 1.0)` for route, modal, sheet, and tab transitions. */
     val HarmonyDecelerationEasing: CubicBezierEasing = CubicBezierEasing(0.2f, 0.0f, 0.1f, 1.0f)
 
@@ -399,6 +403,7 @@ private class RavenSpringPressNode(
         }
         val target = if (isPressed) pressedScale else 1f
         val reducedMotion = currentValueOf(LocalMotionReduced)
+        val previousVelocity = scaleAnim.velocity
         animationJob?.cancel()
         animationJob = coroutineScope.launch {
             if (reducedMotion) {
@@ -406,11 +411,8 @@ private class RavenSpringPressNode(
             } else {
                 scaleAnim.animateTo(
                     targetValue = target,
-                    animationSpec = if (isPressed) {
-                        RavenMotion.responsiveSpringSpec()
-                    } else {
-                        RavenMotion.interactiveSpringSpec()
-                    },
+                    initialVelocity = previousVelocity,
+                    animationSpec = if (isPressed) RavenMotion.pressScaleSpring else RavenMotion.releaseScaleSpring,
                 )
             }
         }
@@ -527,6 +529,10 @@ private class RavenInteractiveLightNode(
     private var cachedShape: Shape? = null
     private var cachedOutline: Outline? = null
     private var cachedClipPath: Path? = null
+    private var cachedGlow: Brush? = null
+    private var cachedGlowOrigin = Offset.Unspecified
+    private var cachedGlowRadius = 0f
+    private var cachedGlowColor = Color.Unspecified
 
     override val shouldAutoInvalidate: Boolean get() = false
 
@@ -674,17 +680,21 @@ private class RavenInteractiveLightNode(
             )
         }
         val radius = maxOf(size.width, size.height).coerceAtLeast(1f) * 0.9f
+        if (cachedGlow == null || cachedGlowOrigin != resolvedOrigin || cachedGlowRadius != radius || cachedGlowColor != glowColor) {
+            cachedGlow = Brush.radialGradient(
+                colors = listOf(glowColor.copy(alpha = 1f), glowColor.copy(alpha = 0.30f), Color.Transparent),
+                center = resolvedOrigin,
+                radius = radius,
+            )
+            cachedGlowOrigin = resolvedOrigin
+            cachedGlowRadius = radius
+            cachedGlowColor = glowColor
+        }
+        val glow = cachedGlow ?: return
         clipPath(clipOutlinePath) {
             drawCircle(
-                brush = Brush.radialGradient(
-                    colors = listOf(
-                        glowColor.copy(alpha = clampedGlowAlpha),
-                        glowColor.copy(alpha = clampedGlowAlpha * 0.30f),
-                        Color.Transparent,
-                    ),
-                    center = resolvedOrigin,
-                    radius = radius,
-                ),
+                brush = glow,
+                alpha = clampedGlowAlpha,
                 radius = radius,
                 center = resolvedOrigin,
             )

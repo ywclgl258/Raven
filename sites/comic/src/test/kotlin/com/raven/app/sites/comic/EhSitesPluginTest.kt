@@ -382,6 +382,63 @@ class EhSitesPluginTest {
     }
 
     @Test
+    fun `exhentai tags in-flight list with the shared EHENTAI account epoch`() = runTest {
+        val http = FakeHttpClientAdapter()
+        val store = InMemorySiteSessionStore()
+        // A fresh import lands in the shared E-Hentai bucket, not in EXHENTAI's own record.
+        store.saveCookies(
+            SiteId.EHENTAI,
+            mapOf("ipb_member_id" to "42", "ipb_pass_hash" to "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+        )
+        val sharedEpoch = store.authEpoch(SiteId.EHENTAI)
+        assertTrue(sharedEpoch > 0L)
+        assertEquals(sharedEpoch, store.authEpoch(SiteId.EXHENTAI))
+
+        var taggedEpoch: Long? = null
+        var taggedSiteId: SiteId? = null
+        http.onMatch({ req -> req.url.startsWith("https://exhentai.org/") }) { req ->
+            taggedEpoch = req.authEpoch
+            taggedSiteId = req.siteId
+            FakeHttpClientAdapter.htmlResponse(req.url, sampleFeedHtml("exhentai.org"))
+        }
+        val ex = ExhentaiSitePlugin(http, store)
+
+        // The freshly imported session must NOT cancel the list: the tag equals the account epoch.
+        val page = ex.feedSource!!.loadFeed(FeedRequest(SiteId.EXHENTAI))
+        assertEquals(2, page.items.size)
+
+        // Regression (review P1): the tag the plugin attaches and the value the network layer checks
+        // must be the SAME counter. The request is tagged EXHENTAI while the vault stores EHENTAI;
+        // both must resolve to one shared epoch, else the very first post-import list is cancelled.
+        assertEquals(SiteId.EXHENTAI, taggedSiteId)
+        assertEquals(store.authEpoch(taggedSiteId!!), taggedEpoch)
+        assertEquals(sharedEpoch, taggedEpoch)
+
+        // A real account switch moves the shared epoch, so the same tag no longer verifies.
+        store.clearSite(SiteId.EHENTAI)
+        store.saveCookies(
+            SiteId.EHENTAI,
+            mapOf("ipb_member_id" to "99", "ipb_pass_hash" to "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"),
+        )
+        assertTrue(store.authEpoch(SiteId.EXHENTAI) > sharedEpoch)
+        assertTrue("stale tag must no longer match after a switch", taggedEpoch != store.authEpoch(SiteId.EXHENTAI))
+    }
+
+    @Test
+    fun `eh and ex resolve one shared authEpoch so host choice never diverges`() {
+        val store = InMemorySiteSessionStore()
+        store.saveCookies(
+            SiteId.EHENTAI,
+            mapOf("ipb_member_id" to "7", "ipb_pass_hash" to "cccccccccccccccccccccccccccccccc"),
+        )
+        val sharedEpoch = store.authEpoch(SiteId.EHENTAI)
+        assertTrue(sharedEpoch > 0L)
+        assertEquals(sharedEpoch, store.authEpoch(SiteId.EXHENTAI))
+        assertEquals(sharedEpoch, store.authEpoch(SiteId.EXHENTAI.accountId))
+        assertEquals(sharedEpoch, store.authEpoch(SiteId.EHENTAI.accountId))
+    }
+
+    @Test
     fun `ehentai formats multi-word and namespaced excludeTags safely alongside non-empty query`() = runTest {
         val http = FakeHttpClientAdapter()
         val store = InMemorySiteSessionStore()

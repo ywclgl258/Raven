@@ -6,6 +6,7 @@ import com.raven.app.core.database.dao.TagTranslationDao
 import com.raven.app.core.database.entity.TagTranslationEntity
 import com.raven.app.core.database.mapper.toDomain
 import com.raven.app.core.database.model.TagDictionaryStats
+import com.raven.app.core.model.RavenBackupPayload
 import com.raven.app.core.model.TagTranslationEntry
 import com.raven.app.core.model.TagTranslationSource
 import kotlinx.coroutines.flow.Flow
@@ -77,11 +78,13 @@ class TagDictionaryRepository(
 
         tagTranslationDao.upsert(
             TagTranslationEntity(
-                namespace = normalizedNs,
-                rawSlug = normalizedSlug,
+                // Clamped to the backup-export bounds: the editor must not be able to persist a
+                // translation that would later make the whole backup fail validation.
+                namespace = normalizedNs.take(RavenBackupPayload.MAX_TAG_NAMESPACE_LENGTH),
+                rawSlug = normalizedSlug.take(RavenBackupPayload.MAX_TAG_SLUG_LENGTH),
                 source = TagTranslationSource.USER_CUSTOM,
-                chineseName = trimmedZh,
-                intro = intro.trim(),
+                chineseName = trimmedZh.take(RavenBackupPayload.MAX_TAG_CHINESE_NAME_LENGTH),
+                intro = intro.trim().take(RavenBackupPayload.MAX_TAG_INTRO_LENGTH),
                 updatedAt = clock(),
             ),
         )

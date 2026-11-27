@@ -52,6 +52,8 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
@@ -123,6 +125,7 @@ data class ReaderUiState(
     val activeStripChapterId: String? = null,
     val activeStripChapterTitle: String? = null,
     val activeStripChapterPage: Int? = null,
+    val activeStripChapterOffsetPx: Int = 0,
     val activeStripChapterTotalPages: Int? = null,
     val showReaderTutorial: Boolean = false,
     val preferences: ReaderPreferences = ReaderPreferences(),
@@ -138,6 +141,7 @@ data class ReaderUiState(
     val slideshowOrder: SlideshowOrder = SlideshowOrder.SEQUENTIAL,
     val pageBookmarks: List<PageBookmark> = emptyList(),
     val imageFavoritePages: Set<Int> = emptySet(),
+    val thumbnailPageBookmarks: List<PageBookmark> = emptyList(),
     val queueSession: PlaybackQueueSession? = null,
     val showQueueNextCard: Boolean = false,
     val previousChapter: MediaItem? = null,
@@ -195,11 +199,14 @@ data class ReaderUiState(
     val currentSheetPages: List<Int>
         get() = spreadNavigator?.sheetFor(currentPage) ?: listOf(currentPage)
 
+    val displayMediaId: String
+        get() = if (preferences.mode == ReaderMode.STRIP) activeStripChapterId ?: mediaId else mediaId
+
     val isCurrentPageBookmarked: Boolean
-        get() = pageBookmarks.any { it.page == currentPage }
+        get() = pageBookmarks.any { it.mediaId == displayMediaId && it.page == displayCurrentPage }
 
     val isCurrentPageImageFavorited: Boolean
-        get() = currentPage in imageFavoritePages
+        get() = displayCurrentPage in imageFavoritePages
 
     val isCurrentPageRenderReady: Boolean
         get() {
@@ -209,7 +216,7 @@ data class ReaderUiState(
         }
 
     val progressPercent: Int
-        get() = if (totalPages <= 0) 0 else ((currentPage.toFloat() / totalPages.toFloat()) * 100f).toInt().coerceIn(0, 100)
+        get() = if (displayTotalPages <= 0) 0 else (displayCurrentPage * 100L / displayTotalPages).coerceIn(0L, 100L).toInt()
 
     /** Effective window brightness (`-1f` = follow system, `0f..1f` = explicit override). */
     val effectiveBrightnessFloat: Float
@@ -228,6 +235,7 @@ sealed interface ReaderEvent {
     data class ScrollToPage(
         val page: Int,
         val scrollOffsetPx: Int = 0,
+        val chapterId: String? = null,
     ) : ReaderEvent
 
     data class RequestSaveDocument(
@@ -365,6 +373,8 @@ class ReaderViewModel(
     private var chapterAdvanceJob: Job? = null
     private var appendNextChapterJob: Job? = null
     private var appendedProgressSaveJob: Job? = null
+    // Latest appended-chapter anchor awaiting the debounce; flushed on early exit / onCleared.
+    private var pendingAppendedProgress: PendingAppendedProgress? = null
     private val appendedChapterBuffers: MutableMap<String, ReaderBuffer<LoadedReaderPage>> = ConcurrentHashMap()
     private val appendedChapterCollectJobs: MutableMap<String, Job> = ConcurrentHashMap()
     private val appendedChapterRatios: MutableMap<String, MutableMap<Int, Float>> = ConcurrentHashMap()
@@ -394,8 +404,40 @@ class ReaderViewModel(
 
     init {
         observePreferencesAndBookmarks()
+        observeBookmarksForActiveChapter()
+        observeFirstChapterBookmarks()
         observeQueueSession()
         loadGallery()
+    }
+
+    private fun observeFirstChapterBookmarks() {
+        if (isInvalidSiteId) return
+        viewModelScope.launch(dispatchers.main) {
+            bookmarkRepository.observePageBookmarks(siteId, mediaId).collectLatest { bookmarks ->
+                _uiState.update { it.copy(thumbnailPageBookmarks = bookmarks) }
+            }
+        }
+    }
+
+    private fun observeBookmarksForActiveChapter() {
+        if (isInvalidSiteId) return
+        viewModelScope.launch(dispatchers.main) {
+            _uiState.map { it.displayMediaId }.distinctUntilChanged().collectLatest { id ->
+                combine(
+                    bookmarkRepository.observePageBookmarks(siteId, id),
+                    bookmarkRepository.observeImageFavoritesForMedia(siteId, id),
+                ) { bookmarks, imageFavorites ->
+                    Pair(bookmarks, imageFavorites.mapTo(linkedSetOf()) { it.pageIndex })
+                }.collectLatest { (bookmarks, imageFavoritePages) ->
+                    _uiState.update { state ->
+                        if (state.displayMediaId != id) state else state.copy(
+                            pageBookmarks = bookmarks,
+                            imageFavoritePages = imageFavoritePages,
+                        )
+                    }
+                }
+            }
+        }
     }
 
     private fun observePreferencesAndBookmarks() {
@@ -442,17 +484,13 @@ class ReaderViewModel(
                 preferencesRepository.observeBookReaderPreferences(siteId, mediaId),
                 preferencesRepository.observeSiteReaderPreferences(siteId),
                 preferencesRepository.observeGlobalReaderPreferences(),
-                bookmarkRepository.observePageBookmarks(siteId, mediaId),
-                bookmarkRepository.observeImageFavoritesForMedia(siteId, mediaId),
-            ) { bookOverride, siteOverride, globalDefault, bookmarks, imageFavorites ->
+            ) { bookOverride, siteOverride, globalDefault ->
                 val effective = bookOverride
                     ?: siteOverride?.copy(mediaId = mediaId)
                     ?: globalDefault.copy(siteId = siteId, mediaId = mediaId)
                 ReaderMetadataSnapshot(
                     effective = effective,
                     isPerBookOverride = bookOverride != null,
-                    bookmarks = bookmarks,
-                    imageFavoritePages = imageFavorites.mapTo(linkedSetOf()) { it.pageIndex },
                 )
             }.collectLatest { snapshot ->
                 val nextPreferOriginal = supportsOriginalImages && snapshot.effective.preferOriginalImages
@@ -462,8 +500,6 @@ class ReaderViewModel(
                     state.copy(
                         preferences = snapshot.effective,
                         isPerBookOverride = snapshot.isPerBookOverride,
-                        pageBookmarks = snapshot.bookmarks,
-                        imageFavoritePages = snapshot.imageFavoritePages,
                     )
                 }
 
@@ -926,6 +962,7 @@ class ReaderViewModel(
                         activeStripChapterId = null,
                         activeStripChapterTitle = null,
                         activeStripChapterPage = null,
+                        activeStripChapterOffsetPx = 0,
                         activeStripChapterTotalPages = null,
                     )
                 }
@@ -944,6 +981,7 @@ class ReaderViewModel(
                         activeStripChapterId = chapter.mediaId,
                         activeStripChapterTitle = chapter.title,
                         activeStripChapterPage = safePage,
+                        activeStripChapterOffsetPx = scrollOffsetPx.coerceAtLeast(0),
                         activeStripChapterTotalPages = chapter.pageNumbers.size,
                     )
                 }
@@ -999,6 +1037,18 @@ class ReaderViewModel(
         page: Int,
         scrollOffsetPx: Int,
     ) {
+        // Remember the newest appended-chapter anchor so an early exit (before the debounce elapses)
+        // can still flush it instead of only persisting the first chapter's stale position.
+        pendingAppendedProgress = PendingAppendedProgress(
+            mediaId = chapter.mediaId,
+            url = chapter.url,
+            title = chapter.title,
+            coverUrl = chapter.detail.item.coverUrl,
+            kind = chapter.detail.item.kind,
+            page = page,
+            totalPages = chapter.pageNumbers.size.coerceAtLeast(1),
+            scrollOffsetPx = scrollOffsetPx,
+        )
         appendedProgressSaveJob?.cancel()
         appendedProgressSaveJob = viewModelScope.launch(dispatchers.io) {
             delay(PROGRESS_SAVE_DEBOUNCE_MS)
@@ -1013,7 +1063,35 @@ class ReaderViewModel(
                 totalPages = chapter.pageNumbers.size.coerceAtLeast(1),
                 scrollOffsetPx = scrollOffsetPx,
             )
+            pendingAppendedProgress = null
         }
+    }
+
+    private data class PendingAppendedProgress(
+        val mediaId: String,
+        val url: String,
+        val title: String,
+        val coverUrl: String,
+        val kind: com.raven.app.core.model.MediaKind,
+        val page: Int,
+        val totalPages: Int,
+        val scrollOffsetPx: Int,
+    )
+
+    /** Persists the pending appended-chapter anchor synchronously; safe under cancellation. */
+    private suspend fun flushPendingAppendedProgress() {
+        val pending = pendingAppendedProgress ?: return
+        persistProgressEntity(
+            siteId = siteId,
+            mediaId = pending.mediaId,
+            url = pending.url,
+            title = pending.title,
+            coverUrl = pending.coverUrl,
+            kind = pending.kind,
+            currentPage = pending.page,
+            totalPages = pending.totalPages,
+            scrollOffsetPx = pending.scrollOffsetPx,
+        )
     }
 
     fun completeReaderTutorial() {
@@ -1255,11 +1333,31 @@ class ReaderViewModel(
         page: Int,
         scrollOffsetPx: Int = 0,
         closeOverlays: Boolean = false,
+        chapterId: String = mediaId,
     ) {
         val state = _uiState.value
+        val safeOffset = scrollOffsetPx.coerceAtLeast(0)
+        if (chapterId != mediaId) {
+            if (state.preferences.mode != ReaderMode.STRIP || chapterId != state.displayMediaId) return
+            val activeChapter = state.appendedChapters.firstOrNull { it.mediaId == chapterId } ?: return
+            val target = nearestPageIn(activeChapter.pageNumbers, page)
+            _uiState.update {
+                it.copy(
+                    activeStripChapterPage = target,
+                    activeStripChapterOffsetPx = safeOffset,
+                    activeSheet = if (closeOverlays) ReaderSheet.NONE else it.activeSheet,
+                    activeQuickPanel = if (closeOverlays) ReaderQuickPanel.NONE else it.activeQuickPanel,
+                )
+            }
+            val buffer = appendedChapterBuffers[activeChapter.mediaId]
+            buffer?.updateWindow(page = target, visible = setOf(target))
+            _events.tryEmit(ReaderEvent.ScrollToPage(page = target, scrollOffsetPx = safeOffset, chapterId = activeChapter.mediaId))
+            scheduleAppendedChapterProgressSave(chapter = activeChapter, page = target, scrollOffsetPx = safeOffset)
+            return
+        }
+
         if (state.pageNumbers.isEmpty()) return
         val target = nearestPageIn(state.pageNumbers, page)
-        val safeOffset = scrollOffsetPx.coerceAtLeast(0)
 
         _uiState.update {
             it.copy(
@@ -1272,7 +1370,7 @@ class ReaderViewModel(
         }
         val visible = _uiState.value.currentSheetPages.toSet()
         readerBuffer?.updateWindow(page = target, visible = visible)
-        _events.tryEmit(ReaderEvent.ScrollToPage(page = target, scrollOffsetPx = safeOffset))
+        _events.tryEmit(ReaderEvent.ScrollToPage(page = target, scrollOffsetPx = safeOffset, chapterId = mediaId))
         scheduleProgressSave(page = target, scrollOffsetPx = safeOffset)
         maybeTriggerQueueCompletion(target)
     }
@@ -1610,28 +1708,75 @@ class ReaderViewModel(
 
     // ---- Bookmarks & Single-Image Favorites ----
 
+    /**
+     * Resolves the chapter that currently owns the viewport. In continuous STRIP mode the user can
+     * scroll into an appended serial chapter; every page-scoped action (bookmark, image favorite,
+     * share/export) must target *that* chapter's mediaId and pages, not the initially opened one.
+     */
+    private data class ActivePageContext(
+        val mediaId: String,
+        val url: String,
+        val title: String,
+        val coverUrl: String,
+        val detail: GalleryDetail,
+        val page: Int,
+        val totalPages: Int,
+        val bufferState: ReaderBufferState<LoadedReaderPage>,
+    )
+
+    private fun resolveActivePageContext(state: ReaderUiState, fallbackDetail: GalleryDetail): ActivePageContext {
+        val chapterId = state.activeStripChapterId
+        val chapter = if (state.preferences.mode == ReaderMode.STRIP && chapterId != null) {
+            state.appendedChapters.firstOrNull { it.mediaId == chapterId }
+        } else {
+            null
+        }
+        return if (chapter != null) {
+            ActivePageContext(
+                mediaId = chapter.mediaId,
+                url = chapter.url,
+                title = chapter.title,
+                coverUrl = chapter.detail.item.coverUrl,
+                detail = chapter.detail,
+                page = state.activeStripChapterPage ?: state.currentPage,
+                totalPages = chapter.pageNumbers.size.coerceAtLeast(1),
+                bufferState = chapter.bufferState,
+            )
+        } else {
+            ActivePageContext(
+                mediaId = mediaId,
+                url = fallbackDetail.item.url,
+                title = fallbackDetail.item.title,
+                coverUrl = fallbackDetail.item.coverUrl,
+                detail = fallbackDetail,
+                page = state.currentPage,
+                totalPages = state.totalPages.coerceAtLeast(1),
+                bufferState = state.bufferState,
+            )
+        }
+    }
+
     fun toggleCurrentPageBookmark(note: String = "") {
         val state = _uiState.value
         val detail = state.detail ?: return
-        val item = detail.item
-        val page = state.currentPage
+        val ctx = resolveActivePageContext(state, detail)
         viewModelScope.launch(dispatchers.io) {
             val added = bookmarkRepository.togglePageBookmark(
                 PageBookmark(
                     id = "",
                     siteId = siteId,
-                    mediaId = mediaId,
-                    url = item.url,
-                    title = item.title,
-                    coverUrl = item.coverUrl,
-                    page = page,
-                    totalPages = state.totalPages,
-                    scrollOffsetPx = state.stripScrollOffsetPx,
+                    mediaId = ctx.mediaId,
+                    url = ctx.url,
+                    title = ctx.title,
+                    coverUrl = ctx.coverUrl,
+                    page = ctx.page,
+                    totalPages = ctx.totalPages,
+                    scrollOffsetPx = if (ctx.mediaId == mediaId) state.stripScrollOffsetPx else state.activeStripChapterOffsetPx,
                     note = note.trim(),
                     createdAt = clock(),
                 ),
             )
-            emitSnackbar(if (added) "已添加第 $page 页书签" else "已取消第 $page 页书签")
+            emitSnackbar(if (added) "已添加第 ${ctx.page} 页书签" else "已取消第 ${ctx.page} 页书签")
         }
     }
 
@@ -1645,24 +1790,25 @@ class ReaderViewModel(
     fun toggleCurrentPageImageFavorite() {
         val state = _uiState.value
         val detail = state.detail ?: return
-        val page = state.currentPage
-        val loadedPage = state.bufferState.pages[page]?.page
-        val detailPage = detail.pages.firstOrNull { it.index == page }
+        val ctx = resolveActivePageContext(state, detail)
+        val page = ctx.page
+        val loadedPage = ctx.bufferState.pages[page]?.page
+        val detailPage = ctx.detail.pages.firstOrNull { it.index == page }
         val pageUrl = loadedPage?.pageUrl?.takeIf(String::isNotBlank)
             ?: detailPage?.pageUrl?.takeIf(String::isNotBlank)
-            ?: detail.item.url
+            ?: ctx.url
         val imageUrl = loadedPage?.imageUrl?.takeIf(String::isNotBlank)
             ?: detailPage?.imageUrl?.takeIf(String::isNotBlank)
             ?: detailPage?.thumbUrl?.takeIf(String::isNotBlank)
-            ?: detail.item.coverUrl
+            ?: ctx.coverUrl
 
         viewModelScope.launch(dispatchers.io) {
             val added = bookmarkRepository.toggleImageFavorite(
                 ImageFavorite(
                     id = "",
                     siteId = siteId,
-                    mediaId = mediaId,
-                    mediaTitle = detail.item.title,
+                    mediaId = ctx.mediaId,
+                    mediaTitle = ctx.title,
                     pageUrl = pageUrl,
                     imageUrl = imageUrl,
                     pageIndex = page,
@@ -1676,8 +1822,12 @@ class ReaderViewModel(
     // ---- Export & Share (GalleryExporter) ----
 
     fun exportCurrentPage(mode: ExportMode) {
-        val page = _uiState.value.currentPage
-        exportPages(pages = listOf(page), mode = mode)
+        val state = _uiState.value
+        val detail = state.detail ?: return
+        // In STRIP mode the visible page may belong to an appended chapter; export must use that
+        // chapter's detail/pages/source so the exported bytes match the image on screen.
+        val ctx = resolveActivePageContext(state, detail)
+        exportPages(pages = listOf(ctx.page), mode = mode, followActiveChapter = true)
     }
 
     fun exportCbz(rawRangeInput: String? = null) {
@@ -1695,13 +1845,21 @@ class ReaderViewModel(
                 return
             }
         }
-        exportPages(pages = targetPages, mode = ExportMode.CBZ)
+        // Whole-gallery archive: page numbers come from the opened gallery, never an appended one.
+        exportPages(pages = targetPages, mode = ExportMode.CBZ, followActiveChapter = false)
     }
 
-    fun exportPages(pages: List<Int>, mode: ExportMode) {
+    fun exportPages(
+        pages: List<Int>,
+        mode: ExportMode,
+        followActiveChapter: Boolean = false,
+    ) {
         val state = _uiState.value
         val detail = state.detail ?: return
         if (state.isExporting) return
+        // The current-page path follows the on-screen appended chapter; range/gallery exports keep
+        // the opened gallery's detail because their page numbers refer to it.
+        val ctx = if (followActiveChapter) resolveActivePageContext(state, detail) else null
 
         val unique = pages.distinct().sorted()
         if (unique.isEmpty()) {
@@ -1719,17 +1877,25 @@ class ReaderViewModel(
             _uiState.update { it.copy(isExporting = true, exportStatusText = "正在$actionName…") }
             try {
                 val preferOriginal = supportsOriginalImages && state.preferences.preferOriginalImages
+                // Non-following exports use the opened gallery's detail and root.
+                val exportDetail = ctx?.detail ?: detail
+                val exportSourceRoot = if (ctx != null && ctx.mediaId != mediaId) {
+                    state.appendedChapters.firstOrNull { it.mediaId == ctx.mediaId }?.sourceRoot
+                        ?: state.sourceRoot
+                } else {
+                    state.sourceRoot
+                }
                 val prepared = exportGateway.prepare(
-                    title = detail.item.title,
+                    title = exportDetail.item.title,
                     pages = unique,
                     mode = mode,
                     loadPageBytes = { pageIndex ->
                         pageLoader.loadOriginalBytes(
-                            detail = detail,
+                            detail = exportDetail,
                             pageIndex = pageIndex,
                             preferOriginal = preferOriginal,
                             offlineOnly = offlineOnly,
-                            sourceRoot = state.sourceRoot,
+                            sourceRoot = exportSourceRoot,
                         )
                     },
                     onProgress = { text ->
@@ -1742,7 +1908,7 @@ class ReaderViewModel(
                         _events.emit(
                             ReaderEvent.RequestShareExport(
                                 prepared = prepared,
-                                subject = "${detail.item.title} - 第 ${unique.first()} 页",
+                                subject = "${exportDetail.item.title} - 第 ${unique.first()} 页",
                             ),
                         )
                     }
@@ -1923,8 +2089,18 @@ class ReaderViewModel(
     fun flushProgress() {
         progressSaveJob?.cancel()
         progressSaveJob = null
+        appendedProgressSaveJob?.cancel()
         val state = _uiState.value
         val detail = state.detail ?: return
+        val scope = persistenceScope ?: viewModelScope
+        // The appended chapter's pending write must always be flushed: on fast exit the delayed
+        // job is cancelled and the first chapter's page would be the only thing persisted.
+        if (pendingAppendedProgress != null) {
+            scope.launch(dispatchers.io + NonCancellable) {
+                flushPendingAppendedProgress()
+                pendingAppendedProgress = null
+            }
+        }
         if (!hasDirtyProgress && lastSavedPage == state.currentPage && lastSavedOffsetPx == state.stripScrollOffsetPx) {
             return
         }
@@ -1932,7 +2108,6 @@ class ReaderViewModel(
         val offset = state.stripScrollOffsetPx
         val total = state.totalPages.coerceAtLeast(1)
         val item = detail.item
-        val scope = persistenceScope ?: viewModelScope
         scope.launch(dispatchers.io + NonCancellable) {
             persistProgressEntity(
                 siteId = siteId,
@@ -1952,9 +2127,12 @@ class ReaderViewModel(
     suspend fun flushProgressNow() {
         progressSaveJob?.cancel()
         progressSaveJob = null
+        appendedProgressSaveJob?.cancel()
         val state = _uiState.value
         if (state.detail == null) return
         withContext(dispatchers.io + NonCancellable) {
+            flushPendingAppendedProgress()
+            pendingAppendedProgress = null
             persistProgressInternal(
                 page = state.currentPage,
                 scrollOffsetPx = state.stripScrollOffsetPx,
@@ -2054,8 +2232,6 @@ class ReaderViewModel(
     private data class ReaderMetadataSnapshot(
         val effective: ReaderPreferences,
         val isPerBookOverride: Boolean,
-        val bookmarks: List<PageBookmark>,
-        val imageFavoritePages: Set<Int>,
     )
 
     companion object {

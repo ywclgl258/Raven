@@ -182,6 +182,7 @@ class PlayerViewModel(
     private var lastSavedCompleted: Boolean = false
     private var lastHandledEndedKey: String? = null
     private var queueSwitchInFlightFromKey: String? = null
+    private var backgroundSleepTimerJob: Job? = null
 
     private val dictRevisionFlow = tagDictionaryRepository?.observeRevision() ?: flowOf(0L)
 
@@ -378,6 +379,9 @@ class PlayerViewModel(
      * `repeatOnLifecycle(Lifecycle.State.STARTED)` in Compose — zero background idle polling).
      */
     suspend fun runForegroundTicker() = coroutineScope {
+        // STARTED owns deadline evaluation again; the ON_STOP fallback watcher must stand down.
+        onForegroundResumed()
+
         val loopAndPositionJob = launch {
             while (isActive) {
                 val engine = playback.state.value
@@ -427,14 +431,28 @@ class PlayerViewModel(
     fun onBackgrounded(isInPipMode: Boolean) {
         val target = activeTarget.value
         val keepBackgroundAudio = latestAppSettings.value.backgroundAudioPlayback
-        if (!isInPipMode && !keepBackgroundAudio && playback.state.value.isPlaying) {
+        val playingWhenLeaving = playback.state.value.isPlaying
+        if (!isInPipMode && !keepBackgroundAudio && playingWhenLeaving) {
             playback.pause()
         }
+        // With background audio (or PiP) the foreground ticker is cancelled by ON_STOP while
+        // playback keeps running, so the sleep deadline needs its own armed job.
+        armBackgroundSleepTimer(playbackContinuesInBackground = isInPipMode || (keepBackgroundAudio && playingWhenLeaving))
         if (target != null) {
             (applicationScope ?: fallbackFlushScope).launch {
                 runCatching { persistWatchProgressInternal(target, force = true) }
             }
         }
+    }
+
+    /**
+     * Called whenever the foreground ticker (re)starts, i.e. the screen is back in `STARTED`.
+     * The foreground `stallAndSleepJob` owns deadline evaluation from here on, so the background
+     * fallback must be disarmed to avoid two competing evaluators.
+     */
+    fun onForegroundResumed() {
+        backgroundSleepTimerJob?.cancel()
+        backgroundSleepTimerJob = null
     }
 
     // ---- Transport Controls ----
@@ -563,12 +581,12 @@ class PlayerViewModel(
 
     // ---- A-B Loop ----
 
-    fun setLoopA(positionMs: Long = playback.currentPositionMs()) {
+    fun setLoopA(positionMs: Long = currentPlaybackPositionMs()) {
         val updated = playback.setLoopStart(positionMs)
         postNotice("已设 A 点 ${RavenFormatters.formatDurationMs(updated.startMs)}")
     }
 
-    fun setLoopB(positionMs: Long = playback.currentPositionMs()): Boolean {
+    fun setLoopB(positionMs: Long = currentPlaybackPositionMs()): Boolean {
         return try {
             val updated = playback.setLoopEnd(positionMs)
             postNotice(
@@ -619,6 +637,8 @@ class PlayerViewModel(
 
     fun cancelSleepTimer() {
         if (localState.value.sleepTimerDeadlineElapsedMs == null) return
+        backgroundSleepTimerJob?.cancel()
+        backgroundSleepTimerJob = null
         localState.update {
             it.copy(
                 sleepTimerDeadlineElapsedMs = null,
@@ -627,6 +647,36 @@ class PlayerViewModel(
             )
         }
         postNotice("已取消睡眠定时")
+    }
+
+    /**
+     * Arms a background-resilient deadline watcher.
+     *
+     * The foreground `stallAndSleepJob` is bound to `repeatOnLifecycle(STARTED)` and therefore
+     * stops the moment the player is backgrounded. With background audio (or PiP) playback keeps
+     * running, so without this watcher the deadline could pass entirely unnoticed until the user
+     * returns to the screen. Uses the same injectable monotonic clock as [evaluateSleepTimerTick]
+     * and is disarmed by [onForegroundResumed] to avoid two competing evaluators.
+     */
+    private fun armBackgroundSleepTimer(playbackContinuesInBackground: Boolean) {
+        backgroundSleepTimerJob?.cancel()
+        backgroundSleepTimerJob = null
+        if (!playbackContinuesInBackground) return
+        if (localState.value.sleepTimerDeadlineElapsedMs == null) return
+        backgroundSleepTimerJob = (applicationScope ?: fallbackFlushScope).launch {
+            while (isActive) {
+                val deadline = localState.value.sleepTimerDeadlineElapsedMs ?: break
+                val remaining = deadline - elapsedRealtimeMs()
+                if (remaining <= 0L) {
+                    // `evaluateSleepTimerTick` pauses ExoPlayer and starts a persist launch, both
+                    // of which must run on the application thread. Re-read the clock inside the hop
+                    // so the expiry decision is not based on a timestamp captured before dispatch.
+                    withContext(dispatchers.main) { evaluateSleepTimerTick(elapsedRealtimeMs()) }
+                    break
+                }
+                delay(remaining.coerceAtMost(BACKGROUND_SLEEP_TIMER_POLL_MS))
+            }
+        }
     }
 
     /**
@@ -891,7 +941,7 @@ class PlayerViewModel(
     fun addTimeBookmark(
         label: String,
         groupName: String = "",
-        positionMs: Long = playback.currentPositionMs(),
+        positionMs: Long = currentPlaybackPositionMs(),
     ) {
         val item = currentMediaItem() ?: return
         val durationMs = currentEffectiveDurationMs()
@@ -1729,7 +1779,7 @@ class PlayerViewModel(
         if (engine.siteId != target.siteId || engine.mediaId != target.mediaId) return null
 
         val detail = localState.value.detail
-        val rawPos = playback.currentPositionMs().coerceAtLeast(0L)
+        val rawPos = readPlayerPositionMs()
         val durationMs = engine.durationMs.takeIf { it > 0L }
             ?: detail?.item?.durationSeconds?.takeIf { it > 0 }?.let { it * 1_000L }
             ?: 0L
@@ -1770,13 +1820,41 @@ class PlayerViewModel(
             runCatching { preferencesRepository.currentSettings().incognitoMode }.getOrDefault(false)
         if (incognito) return
 
-        val snapshot = buildWatchProgressSnapshot(target, force) ?: return
+        // ExoPlayer only allows position reads from its application thread (main looper). Every
+        // flush here can arrive from `applicationScope` / the fallback IO scope (pause, ON_STOP,
+        // sleep expiry), so the snapshot is always built on main first.
+        val snapshot = withContext(dispatchers.main) {
+            buildWatchProgressSnapshot(target, force)
+        } ?: return
         withContext(NonCancellable) {
-            historyRepository.saveWatchProgress(snapshot)
+            withContext(dispatchers.io) {
+                historyRepository.saveWatchProgress(snapshot)
+            }
         }
-        lastSavedCompositeKey = target.compositeKey
-        lastSavedPositionMs = snapshot.positionMs
-        lastSavedCompleted = snapshot.completed
+        withContext(dispatchers.main) {
+            lastSavedCompositeKey = target.compositeKey
+            lastSavedPositionMs = snapshot.positionMs
+            lastSavedCompleted = snapshot.completed
+        }
+    }
+
+    /**
+     * Authoritative player position for UI actions that capture a timestamp (time bookmark,
+     * scrubbing start, A-B loop label). [progressState] is a `WhileSubscribed` flow: once the
+     * controls overlay leaves composition its value freezes, so it must never be used to stamp UI
+     * state. Callers are Compose click handlers, i.e. already on the application thread.
+     */
+    fun currentPlaybackPositionMs(): Long = readPlayerPositionMs()
+
+    /**
+     * Reads the live position, falling back to the last engine snapshot when the direct read is
+     * unavailable (player released / not yet attached). Returning a stale-but-real position beats
+     * dropping the save entirely, which is what the previous swallowed-exception path did.
+     */
+    private fun readPlayerPositionMs(): Long {
+        val direct = runCatching { playback.currentPositionMs() }.getOrNull()
+        val fallback = playback.state.value.positionMs
+        return (direct ?: fallback).coerceAtLeast(0L)
     }
 
     private fun updateSitePlaybackPreferences(transform: (PlaybackPreferences) -> PlaybackPreferences) {
@@ -2092,6 +2170,12 @@ class PlayerViewModel(
         const val PROGRESS_SAVE_INTERVAL_MS: Long = 5_000L
         const val AUTO_CONTINUE_COUNTDOWN_MS: Long = 5_000L
         const val PROGRESS_SAVE_DELTA_MS: Long = 2_000L
+        /**
+         * Upper bound for a single background sleep-timer wait. Chunking the wait keeps the
+         * deadline re-checked against the injectable clock so a cancelled/replaced timer can never
+         * leave a stray pause behind; the exclusive end condition still fires exactly on deadline.
+         */
+        const val BACKGROUND_SLEEP_TIMER_POLL_MS: Long = 15_000L
         const val MIN_SLEEP_MINUTES: Int = 1
         const val MAX_SLEEP_MINUTES: Int = 180
         val SLEEP_TIMER_PRESETS_MINUTES: List<Int> = listOf(5, 15, 30, 60)

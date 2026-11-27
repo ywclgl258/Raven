@@ -75,6 +75,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -118,7 +119,11 @@ import com.raven.app.core.media.playback.PlayerSessionController
 import com.raven.app.core.model.TagRef
 import com.raven.app.core.model.TimeBookmark
 import com.raven.app.core.model.VideoStream
+import kotlinx.coroutines.delay
 import kotlin.math.roundToInt
+
+/** Label refresh cadence for the A-B sheet's live "current position" readout. */
+private const val AB_LOOP_LABEL_REFRESH_MS: Long = 500L
 
 /**
  * Single active modal bottom sheet host for [VideoPlayerScreen].
@@ -170,6 +175,15 @@ internal fun PlayerSheetHost(
     onCastToDevice: (LanCastDevice) -> Unit = {},
     onStopCast: () -> Unit = {},
     onLaunchSystemExternalPlayer: () -> Boolean = { false },
+    /**
+     * Authoritative live playback position. [uiState] is the structural state whose
+     * `positionMs` is intentionally zeroed; anything that stamps a timestamp (bookmark capture,
+     * A-B loop label) must read the real position through this provider instead.
+     *
+     * Deliberately has no default: falling back to `uiState.positionMs` is exactly the bug this
+     * parameter exists to prevent, so the compiler must force every caller to wire it up.
+     */
+    currentPositionMsProvider: () -> Long,
 ) {
     when (activeSheet) {
         null -> Unit
@@ -196,7 +210,7 @@ internal fun PlayerSheetHost(
                 onRequestPip()
             },
             onOpenAddBookmark = {
-                onSwitchSheet(PlayerSheet.BookmarkEditor(initialPositionMs = uiState.positionMs))
+                onSwitchSheet(PlayerSheet.BookmarkEditor(initialPositionMs = currentPositionMsProvider()))
             },
             onOpenDownload = { onSwitchSheet(PlayerSheet.Download) },
             onOpenExternalPlayers = { onSwitchSheet(PlayerSheet.ExternalPlayers) },
@@ -227,6 +241,7 @@ internal fun PlayerSheetHost(
 
         PlayerSheet.AbLoop -> PlayerAbLoopSheet(
             uiState = uiState,
+            currentPositionMsProvider = currentPositionMsProvider,
             onDismiss = onDismiss,
             onSetLoopA = onSetLoopA,
             onSetLoopB = onSetLoopB,
@@ -786,6 +801,7 @@ private fun PlayerQualitySheet(
 @Composable
 private fun PlayerAbLoopSheet(
     uiState: PlayerUiState,
+    currentPositionMsProvider: () -> Long,
     onDismiss: () -> Unit,
     onSetLoopA: () -> Unit,
     onSetLoopB: () -> Unit,
@@ -793,7 +809,15 @@ private fun PlayerAbLoopSheet(
     onClearLoop: () -> Unit,
 ) {
     val loop = uiState.loopRange
-    val currentLabel = RavenFormatters.formatDurationMs(uiState.positionMs)
+    // `uiState.positionMs` is zeroed by the structural (WhileSubscribed) state, so it reads 00:00
+    // whenever the controls have been hidden. Track the live position reactively instead.
+    val livePositionMs by produceState(initialValue = currentPositionMsProvider()) {
+        while (true) {
+            value = currentPositionMsProvider()
+            delay(AB_LOOP_LABEL_REFRESH_MS)
+        }
+    }
+    val currentLabel = RavenFormatters.formatDurationMs(livePositionMs)
 
     RavenBottomSheet(
         onDismissRequest = onDismiss,

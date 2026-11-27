@@ -176,6 +176,12 @@ internal class FakePlayerPlaybackPort(
     var nextStallDowngradeStream: VideoStream? = null
     var released: Boolean = false
 
+    /**
+     * Simulates ExoPlayer's thread assertion (`currentPosition` throws when read off the
+     * application thread) so the ViewModel's position-read fallback can be verified.
+     */
+    var failDirectPositionReads: Boolean = false
+
     override fun currentPlayer(): ExoPlayer? = null
 
     override fun loadOnline(
@@ -399,7 +405,12 @@ internal class FakePlayerPlaybackPort(
         _state.update { it.copy(lastNotice = null) }
     }
 
-    override fun currentPositionMs(): Long = _state.value.positionMs
+    override fun currentPositionMs(): Long {
+        if (failDirectPositionReads) {
+            throw IllegalStateException("currentPosition must be read on the application thread")
+        }
+        return _state.value.positionMs
+    }
 
     override fun syncSnapshot(clearError: Boolean) {
         if (clearError) {
@@ -801,7 +812,7 @@ internal class InMemoryShelfItemDao : ShelfItemDao {
         }
     }
     override suspend fun upsertAll(entities: List<ShelfItemEntity>) = entities.forEach { upsert(it) }
-    override suspend fun updateCompleted(shelfId: String, siteId: String, mediaId: String, completed: Boolean) = Unit
+    override suspend fun updateCompleted(shelfId: String, siteId: String, mediaId: String, completed: Boolean, changedAt: Long) = Unit
     override suspend fun updatePosition(shelfId: String, siteId: String, mediaId: String, position: Int) = Unit
     override suspend fun delete(shelfId: String, siteId: String, mediaId: String) {
         rows.update { list -> list.filterNot { it.shelfId == shelfId && it.siteId == siteId && it.mediaId == mediaId } }
@@ -925,6 +936,7 @@ internal class InMemoryTimeBookmarkDao : TimeBookmarkDao {
     override fun observeByMedia(siteId: String, mediaId: String) =
         rows.map { it.filter { e -> e.siteId == siteId && e.mediaId == mediaId }.sortedBy { e -> e.positionMs } }
     override suspend fun getAll() = rows.value
+    override suspend fun getById(id: String) = rows.value.firstOrNull { it.id == id }
     override suspend fun upsert(entity: TimeBookmarkEntity) {
         rows.update { list -> list.filterNot { it.id == entity.id } + entity }
     }

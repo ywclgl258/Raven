@@ -239,4 +239,208 @@ class SiteCookieJarTest {
         jar.saveFromResponse("https://rule34video.com/".toHttpUrl(), listOf(cookie))
         assertTrue(jar.loadForRequest("https://rule34video.com/".toHttpUrl()).isEmpty())
     }
+
+    // ---------------------------------------------------------------------------------------------
+    // NET-09: a response that completes AFTER logout must never restore the cleared session.
+    // ---------------------------------------------------------------------------------------------
+
+    private fun futureCookie(name: String, value: String, host: String): Cookie = Cookie.Builder()
+        .name(name)
+        .value(value)
+        .hostOnlyDomain(host)
+        .path("/")
+        .secure()
+        .build()
+
+    @Test
+    fun `delayed Set-Cookie that arrives after logout does not restore the cleared session`() {
+        val (jar, vault, _) = newJar()
+        val host = "rule34video.com"
+        jar.saveFromResponse("https://$host/login/".toHttpUrl(), listOf(futureCookie("PHPSESSID", "old", host)))
+
+        // 1. Request leaves while logged in: the scope captures the current epoch.
+        val dispatchEpoch = vault.authEpoch(SiteId.R34V)
+        val scopedWrite = SiteCookieEpochScope.runScoped(SiteId.R34V, dispatchEpoch, host) {
+            // 2. Logout completes BEFORE the server releases its Set-Cookie (user pressed logout).
+            jar.clearSite(SiteId.R34V)
+            // 3. Server releases the response cookie carrying the OLD session.
+            jar.saveFromResponse(
+                "https://$host/login/".toHttpUrl(),
+                listOf(futureCookie("PHPSESSID", "late-restored", host)),
+            )
+        }
+        assertEquals(Unit, scopedWrite)
+
+        // The late cookie must not resurrect anything, sealed or plain, and the epoch moved on.
+        assertTrue(vault.getCookies(SiteId.R34V).isEmpty())
+        assertNull(vault.getSecret(SiteId.R34V, SiteCookieJar.JAR_SECRET_KEY))
+        val cookies = jar.loadForRequest("https://$host/latest-updates/".toHttpUrl())
+        assertTrue("Late Set-Cookie resurrected the cleared session: $cookies", cookies.isEmpty())
+        assertTrue(vault.authEpoch(SiteId.R34V) > dispatchEpoch)
+    }
+
+    @Test
+    fun `delayed Set-Cookie after re-login under a new epoch is rejected too`() {
+        val (jar, vault, _) = newJar()
+        val host = "rule34video.com"
+        jar.saveFromResponse("https://$host/".toHttpUrl(), listOf(futureCookie("PHPSESSID", "account-A", host)))
+        val epochA = vault.authEpoch(SiteId.R34V)
+
+        // Account B signs in while request A is still in flight.
+        jar.clearSite(SiteId.R34V)
+        val epochB = vault.authEpoch(SiteId.R34V)
+        SiteCookieEpochScope.runScoped(SiteId.R34V, epochB, host) {
+            jar.saveFromResponse("https://$host/login/".toHttpUrl(), listOf(futureCookie("PHPSESSID", "account-B", host)))
+        }
+
+        // Only now does request A's response land, still carrying epoch A.
+        SiteCookieEpochScope.runScoped(SiteId.R34V, epochA, host) {
+            jar.saveFromResponse("https://$host/".toHttpUrl(), listOf(futureCookie("PHPSESSID", "account-A-late", host)))
+        }
+
+        val map = jar.loadForRequest("https://$host/".toHttpUrl()).associate { it.name to it.value }
+        assertEquals("account-B", map["PHPSESSID"])
+    }
+
+    @Test
+    fun `two concurrent same-URL requests completing out of order each keep their own epoch pairing`() {
+        val (jar, vault, _) = newJar()
+        val host = "rule34video.com"
+        jar.saveFromResponse("https://$host/".toHttpUrl(), listOf(futureCookie("PHPSESSID", "first", host)))
+        val oldEpoch = vault.authEpoch(SiteId.R34V)
+
+        val releaseOld = java.util.concurrent.CountDownLatch(1)
+        val newDone = java.util.concurrent.CountDownLatch(1)
+        val staleCookiesSeen = java.util.concurrent.atomic.AtomicReference<List<Cookie>>()
+
+        // Call A leaves under the old epoch and is held in flight.
+        val threadA = Thread {
+            SiteCookieEpochScope.runScoped(SiteId.R34V, oldEpoch, host) {
+                newDone.await()
+                jar.saveFromResponse(
+                    "https://$host/".toHttpUrl(),
+                    listOf(futureCookie("PHPSESSID", "stale-A", host)),
+                )
+            }
+        }
+        threadA.start()
+
+        // Call B leaves after a logout/login and completes FIRST.
+        jar.clearSite(SiteId.R34V)
+        val newEpoch = vault.authEpoch(SiteId.R34V)
+        SiteCookieEpochScope.runScoped(SiteId.R34V, newEpoch, host) {
+            jar.saveFromResponse("https://$host/login/".toHttpUrl(), listOf(futureCookie("PHPSESSID", "fresh-B", host)))
+        }
+        newDone.countDown()
+        releaseOld.countDown()
+        threadA.join()
+
+        val map = jar.loadForRequest("https://$host/".toHttpUrl()).associate { it.name to it.value }
+        assertEquals("fresh-B", map["PHPSESSID"])
+        assertNull(staleCookiesSeen.get())
+    }
+
+    @Test
+    fun `identical renewal Set-Cookie does not bump the epoch or invalidate in-flight requests`() {
+        val (jar, vault, _) = newJar()
+        val host = "rule34video.com"
+        val cookie = futureCookie("PHPSESSID", "unchanged", host)
+        jar.saveFromResponse("https://$host/login/".toHttpUrl(), listOf(cookie))
+        val epochAfterLogin = vault.authEpoch(SiteId.R34V)
+
+        repeat(3) {
+            // Same name + value, only the expiry is refreshed (typical session keep-alive).
+            jar.saveFromResponse("https://$host/".toHttpUrl(), listOf(cookie))
+        }
+
+        assertEquals(epochAfterLogin, vault.authEpoch(SiteId.R34V))
+        assertEquals("unchanged", jar.loadForRequest("https://$host/".toHttpUrl()).single { it.name == "PHPSESSID" }.value)
+    }
+
+    @Test
+    fun `cookie value rotation through Set-Cookie updates the jar without bumping the epoch`() {
+        val (jar, vault, _) = newJar()
+        val host = "rule34video.com"
+        jar.saveFromResponse("https://$host/login/".toHttpUrl(), listOf(futureCookie("PHPSESSID", "v1", host)))
+        val epochV1 = vault.authEpoch(SiteId.R34V)
+
+        // Session rotation / analytics cookies change all the time. Bumping the epoch here would
+        // cancel every in-flight authenticated request, so auth mutations bump only through
+        // AuthProvider.login / importCookies / logout -> SiteSessionStore primitives.
+        jar.saveFromResponse("https://$host/".toHttpUrl(), listOf(futureCookie("PHPSESSID", "v2", host)))
+
+        assertEquals("v2", jar.loadForRequest("https://$host/".toHttpUrl()).single { it.name == "PHPSESSID" }.value)
+        assertEquals(epochV1, vault.authEpoch(SiteId.R34V))
+    }
+
+    @Test
+    fun `expired cookie is tombstoned and never resurrected from the plain summary`() {
+        var now = 1_000_000L
+        val storage = InMemoryVaultStorage()
+        val vault = SessionVault(SoftwareAesGcmVaultCipher(), storage)
+        val jar = SiteCookieJar(sessionStore = vault, siteRegistry = registry, clockMs = { now })
+        val host = "rule34video.com"
+
+        jar.saveFromResponse(
+            "https://$host/login/".toHttpUrl(),
+            listOf(
+                Cookie.Builder().name("PHPSESSID").value("dead").hostOnlyDomain(host).path("/")
+                    .expiresAt(now + 60_000L).build(),
+                Cookie.Builder().name("keep").value("alive").hostOnlyDomain(host).path("/")
+                    .expiresAt(now + 10L * 60_000L).build(),
+            ),
+        )
+        // Plain summary still carries the value (it has no expiry dimension).
+        assertEquals("dead", vault.getCookies(SiteId.R34V)["PHPSESSID"])
+
+        // Advance past the session cookie's expiry: it must disappear and stay gone.
+        now += 120_000L
+        val afterExpiry = jar.loadForRequest("https://$host/".toHttpUrl()).associate { it.name to it.value }
+        assertNull("Expired cookie was resurrected from the plain summary", afterExpiry["PHPSESSID"])
+        assertEquals("alive", afterExpiry["keep"])
+
+        // A second read must not bring it back either.
+        assertNull(jar.loadForRequest("https://$host/".toHttpUrl()).firstOrNull { it.name == "PHPSESSID" })
+    }
+
+    @Test
+    fun `E-Hentai and ExHentai share one cookie bucket and one auth epoch`() {
+        val (jar, vault, _) = newJar()
+        val ehEpoch = vault.authEpoch(SiteId.EHENTAI)
+        jar.saveFromResponse(
+            "https://exhentai.org/".toHttpUrl(),
+            listOf(
+                Cookie.Builder().name("ipb_member_id").value("4242").domain("exhentai.org").path("/").secure().build(),
+                Cookie.Builder().name("igneous").value("shared").domain("exhentai.org").path("/").secure().build(),
+            ),
+        )
+        // Written through the EX host, visible through EH and EX, one shared bucket, one epoch.
+        assertEquals("4242", vault.getCookies(SiteId.EHENTAI)["ipb_member_id"])
+        assertEquals("4242", vault.getCookies(SiteId.EXHENTAI)["ipb_member_id"])
+        assertEquals(vault.authEpoch(SiteId.EHENTAI), vault.authEpoch(SiteId.EXHENTAI))
+        assertTrue(vault.authEpoch(SiteId.EHENTAI) >= ehEpoch)
+
+        // Clearing EX clears the shared session; clearing EH does the same to EX.
+        jar.clearSite(SiteId.EXHENTAI)
+        assertTrue(vault.getCookies(SiteId.EHENTAI).isEmpty())
+        assertTrue(jar.loadForRequest("https://e-hentai.org/".toHttpUrl())
+            .none { it.name == "ipb_member_id" })
+        assertTrue(jar.loadForRequest("https://exhentai.org/".toHttpUrl())
+            .none { it.name == "ipb_member_id" })
+    }
+
+    @Test
+    fun `ISOLATED request scope never reads or writes the site cookie bucket`() {
+        val (jar, vault, _) = newJar()
+        val host = "hanime1.me"
+        jar.saveFromResponse("https://$host/login".toHttpUrl(), listOf(futureCookie("PHPSESSID", "live-session", host)))
+        val epochBefore = vault.authEpoch(SiteId.HANIME1)
+
+        // A candidate login handshake runs in RequestSessionScope.ISOLATED: SiteHttpClient picks a
+        // NO_COOKIES client and the jar is never consulted, so the response's Set-Cookie cannot reach
+        // the vault. Verified at pool level in SiteHttpClientTest; here assert the jar stays untouched.
+        assertNull(SiteCookieEpochScope.epochFor(SiteId.HANIME1))
+        assertEquals("live-session", vault.getCookies(SiteId.HANIME1)["PHPSESSID"])
+        assertEquals(epochBefore, vault.authEpoch(SiteId.HANIME1))
+    }
 }

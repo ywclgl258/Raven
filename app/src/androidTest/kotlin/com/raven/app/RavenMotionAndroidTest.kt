@@ -19,6 +19,7 @@ import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import androidx.compose.ui.test.hasAnyAncestor
 import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.hasText
+import androidx.compose.ui.test.isSelected
 import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithTag
@@ -66,6 +67,27 @@ class RavenMotionAndroidTest {
         compose.onNodeWithText(labels.first()).assertIsSelected()
         compose.onNodeWithText(labels.last()).performScrollTo().assertIsDisplayed().performClick()
         compose.onNodeWithText(labels.last()).assertIsSelected()
+    }
+
+    @Test
+    fun switchingTabsDoesNotRecomposeLabelsDuringMotion() {
+        val labels = listOf("全部", "等待", "完成")
+        val selected = mutableStateOf(labels.first())
+        var labelReads = 0
+        compose.setContent {
+            MaterialTheme {
+                RavenSegmentedTabs(labels, selected.value, { label -> labelReads++; label }, { selected.value = it })
+            }
+        }
+        compose.mainClock.autoAdvance = false
+        compose.onNodeWithText(labels.last()).performClick()
+        compose.mainClock.advanceTimeBy(48)
+        val before = compose.runOnIdle { labelReads }
+        compose.mainClock.advanceTimeBy(112)
+        compose.runOnIdle { assertEquals("标签内容应在动画帧之间保持稳定", before, labelReads) }
+        compose.onNodeWithText(labels[1]).performClick()
+        compose.mainClock.autoAdvance = true
+        compose.onNodeWithText(labels[1]).assertIsSelected()
     }
 
     @Test
@@ -163,7 +185,10 @@ class RavenMotionNavigationAndroidTest {
         compose.onNodeWithTag("nav_library").performClick()
         waitForTag("library_hub_tabs")
         val localTab = hasAnyAncestor(hasTestTag("library_hub_tabs")) and hasText("本地", substring = true)
-        compose.onNode(localTab).performClick().assertIsSelected()
+        compose.onNode(localTab).performClick()
+        compose.waitUntil(timeoutMillis = 5_000) {
+            compose.onAllNodes(localTab and isSelected()).fetchSemanticsNodes().isNotEmpty()
+        }
         compose.onNodeWithTag("hub_open_downloads").performClick()
         waitForTag("downloads_screen")
         compose.onNodeWithText("需处理 ", substring = true).performClick().assertIsSelected()

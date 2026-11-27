@@ -84,6 +84,20 @@ class LocalLibraryImporter(
         refreshBooksSnapshot()
     }
 
+    /**
+     * Drops `incoming-*` staging folders left by a process kill during an earlier import. They are
+     * never listed as books but kept occupying space until this runs.
+     */
+    fun reclaimOrphanedImportStaging(
+        nowMs: Long = clockMs(),
+        minAgeMs: Long = OrphanedImportStaging.MIN_ORPHAN_AGE_MS,
+    ): OrphanedImportStaging.ReclaimResult {
+        val result = runCatching { OrphanedImportStaging.reclaim(libraryRoot, nowMs, minAgeMs) }
+            .getOrDefault(OrphanedImportStaging.ReclaimResult(0, 0L))
+        if (result.removedFolders > 0) refreshBooksSnapshot()
+        return result
+    }
+
     fun refreshBooksSnapshot(): List<LocalBook> {
         val loaded = listBooks()
         _books.value = loaded
@@ -92,7 +106,7 @@ class LocalLibraryImporter(
 
     fun listBooks(): List<LocalBook> =
         libraryRoot.listFiles().orEmpty()
-            .filter { it.isDirectory && !it.name.startsWith("incoming-") }
+            .filter { it.isDirectory && !it.name.startsWith(OrphanedImportStaging.PREFIX) }
             .mapNotNull { getBook(it.name) }
             .sortedByDescending { it.importedAt }
 
@@ -421,7 +435,13 @@ class LocalLibraryImporter(
             check(copied > 0L) { "所选视频没有内容" }
 
             val id = digest.digest().toHexString()
-            getBook(id)?.let { return@withContext it }
+            val existingVideo = getBook(id)
+            if (existingVideo != null) {
+                if (isLocalVideoComplete(existingVideo.id)) {
+                    return@withContext existingVideo
+                }
+                runCatching { safeDeleteDirectory(bookFolder(existingVideo.id)) }
+            }
 
             onProgress("正在生成首帧缩略图…")
             val thumbFileName = if (videoThumbExtractor != null) THUMB_FILE_NAME else THUMB_JPEG_FILE_NAME
@@ -534,7 +554,13 @@ class LocalLibraryImporter(
                 }
             }
             val id = digest.digest().toHexString()
-            getBook(id)?.let { return it }
+            val existingComic = getBook(id)
+            if (existingComic != null) {
+                if (isLocalComicComplete(existingComic.id)) {
+                    return existingComic
+                }
+                runCatching { safeDeleteDirectory(bookFolder(existingComic.id)) }
+            }
 
             // Two-pass rename prevents collisions between archive indices and sorted indices.
             sorted.forEachIndexed { index, (_, file) ->

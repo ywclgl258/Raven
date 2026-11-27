@@ -294,8 +294,9 @@ class ShelfRepository(
     ) {
         transactionRunner {
             val shelf = shelfDao.getById(shelfId) ?: return@transactionRunner
-            shelfItemDao.updateCompleted(shelfId, siteId.value, mediaId, completed)
-            shelfDao.updateModifiedAt(shelfId, nextModifiedAt(shelf.modifiedAt))
+            val changedAt = nextModifiedAt(shelf.modifiedAt)
+            shelfItemDao.updateCompleted(shelfId, siteId.value, mediaId, completed, changedAt)
+            shelfDao.updateModifiedAt(shelfId, changedAt)
         }
     }
 

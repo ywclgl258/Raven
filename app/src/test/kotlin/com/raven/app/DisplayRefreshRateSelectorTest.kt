@@ -2,6 +2,7 @@ package com.raven.app
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -47,6 +48,82 @@ class DisplayRefreshRateSelectorTest {
         )
         assertEquals(mode144, chosen)
     }
+
+    @Test
+    fun `user peak of 90Hz selects 90 not 120 and keeps the current resolution`() {
+        val fhd60 = mode(1, 60f)
+        val fhd90 = mode(2, 90f)
+        val fhd120 = mode(3, 120f)
+        val qhd144 = DisplayModeCandidate(4, 1440, 3200, 144f)
+
+        val chosen = DisplayRefreshRateController.selectOptimalHighRefreshMode(
+            current = fhd60,
+            supported = listOf(fhd60, fhd90, fhd120, qhd144),
+            maxPreferredHz = 90f,
+        )
+        assertEquals(fhd90, chosen)
+    }
+
+    @Test
+    fun `battery saver and a 60Hz user peak clear the forced mode`() {
+        assertEquals(
+            0f,
+            DisplayRefreshRateController.resolvePreferredRefreshCapHz(
+                batterySaver = true,
+                systemPeakHz = 120f,
+            ),
+            0.01f,
+        )
+        assertEquals(
+            0f,
+            DisplayRefreshRateController.resolvePreferredRefreshCapHz(
+                batterySaver = false,
+                systemPeakHz = 60f,
+            ),
+            0.01f,
+        )
+        assertNull(
+            DisplayRefreshRateController.selectOptimalHighRefreshMode(
+                current = mode(1, 60f),
+                supported = listOf(mode(1, 60f), mode(3, 120f)),
+                maxPreferredHz = 0f,
+            ),
+        )
+    }
+
+    @Test
+    fun `missing or higher system peak does not raise the app cap or change resolution`() {
+        assertEquals(
+            120f,
+            DisplayRefreshRateController.resolvePreferredRefreshCapHz(
+                batterySaver = false,
+                systemPeakHz = 120f,
+            ),
+            0.01f,
+        )
+        assertEquals(
+            144f,
+            DisplayRefreshRateController.resolvePreferredRefreshCapHz(
+                batterySaver = false,
+                systemPeakHz = Float.NaN,
+            ),
+            0.01f,
+        )
+        val qhd90 = DisplayModeCandidate(8, 1440, 3200, 90f)
+        val chosen = DisplayRefreshRateController.selectOptimalHighRefreshMode(
+            current = qhd90,
+            supported = listOf(qhd90, mode(3, 120f)),
+            maxPreferredHz = 144f,
+        )
+        assertEquals(qhd90, chosen)
+    }
+
+    private fun mode(id: Int, refreshRate: Float) = DisplayModeCandidate(
+        modeId = id,
+        physicalWidth = 1080,
+        physicalHeight = 2400,
+        refreshRate = refreshRate,
+    )
 
     @Test
     fun `isHighRefreshDisplay identifies 90Hz and 120Hz panels cleanly`() {

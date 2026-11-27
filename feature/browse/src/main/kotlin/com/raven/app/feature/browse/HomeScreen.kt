@@ -346,14 +346,18 @@ private fun CinemaVideoHome(
     val coroutineScope = rememberCoroutineScope()
     val pullState = rememberPullToRefreshState()
 
-    val isScrolled by remember {
+    // Keyed on `listState` so switching sites (which rebuilds the state via `key(activeSite.id)`)
+    // never leaves the top bar bound to the previous site's scroll position.
+    val isScrolled by remember(listState) {
         derivedStateOf {
             listState.firstVisibleItemIndex > 0 || listState.firstVisibleItemScrollOffset > 36
         }
     }
 
-    // Infinite scroll trigger when approaching bottom of primary stream
-    LaunchedEffect(listState, uiState.hasMore, uiState.isLoadingMore, uiState.primaryItems.size) {
+    // Infinite scroll trigger when approaching bottom of primary stream.
+    // Suppressed while a pagination error is showing so a failed page cannot be re-requested on
+    // every effect restart; only the footer's explicit retry may try again.
+    LaunchedEffect(listState, uiState.hasMore, uiState.isLoadingMore, uiState.paginationErrorMessage, uiState.primaryItems.size) {
         snapshotFlow {
             val total = listState.layoutInfo.totalItemsCount
             val lastVisible = listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0
@@ -362,24 +366,32 @@ private fun CinemaVideoHome(
             .distinctUntilChanged()
             .filter { it }
             .collect {
-                if (uiState.hasMore && !uiState.isLoadingMore) {
+                if (uiState.hasMore && !uiState.isLoadingMore && uiState.paginationErrorMessage == null) {
                     onLoadNextPage()
                 }
             }
     }
 
-    // Persist browse position anchor when scrolling through primary video stream
+    // Persist browse position anchor when scrolling through primary video stream.
+    // Resolve the anchor from the LazyColumn item *key* instead of `firstVisibleItemIndex`: the list
+    // index counts the hero banner, tutorial, restored-anchor banner, continue-watching shelf,
+    // ranked shelves and the section header, so a raw index would select the wrong flat item.
     val currentPrimaryItems by rememberUpdatedState(uiState.primaryItems)
     val currentPageNum by rememberUpdatedState(uiState.currentPage)
     LaunchedEffect(listState, activeSite.id) {
-        snapshotFlow { listState.firstVisibleItemIndex }
+        snapshotFlow {
+            listState.layoutInfo.visibleItemsInfo
+                .firstOrNull { (it.key as? String)?.startsWith("vrow_") == true }
+                ?.key as? String
+        }
             .distinctUntilChanged()
-            .collect { firstIdx ->
-                val itemsList = currentPrimaryItems
-                val anchor = itemsList.getOrNull(firstIdx.coerceIn(0, (itemsList.size - 1).coerceAtLeast(0)))
-                if (anchor != null && firstIdx > 0) {
-                    onSaveBrowsePosition(anchor.id, currentPageNum, "latest")
-                }
+            .collect { rowKey ->
+                if (rowKey == null) return@collect
+                // Key shape is "vrow_<rowIdx>_<firstItemCompositeKey>" where compositeKey is
+                // "site:id". Match by suffix so IDs containing underscores stay unambiguous.
+                val anchor = currentPrimaryItems.firstOrNull { rowKey.endsWith("_${it.compositeKey}") }
+                    ?: return@collect
+                onSaveBrowsePosition(anchor.id, currentPageNum, "latest")
             }
     }
 
@@ -794,8 +806,9 @@ private fun GalleryMasonryHome(
             }
     }
 
-    // Infinite scroll trigger
-    LaunchedEffect(gridState, uiState.hasMore, uiState.isLoadingMore, uiState.primaryItems.size) {
+    // Infinite scroll trigger. Suppressed while a pagination error is showing so the failed page is
+    // not re-requested on every recomposition arrow; only the footer retry button requests again.
+    LaunchedEffect(gridState, uiState.hasMore, uiState.isLoadingMore, uiState.paginationErrorMessage, uiState.primaryItems.size) {
         snapshotFlow {
             val total = gridState.layoutInfo.totalItemsCount
             val lastVisible = gridState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0
@@ -804,24 +817,31 @@ private fun GalleryMasonryHome(
             .distinctUntilChanged()
             .filter { it }
             .collect {
-                if (uiState.hasMore && !uiState.isLoadingMore) {
+                if (uiState.hasMore && !uiState.isLoadingMore && uiState.paginationErrorMessage == null) {
                     onLoadNextPage()
                 }
             }
     }
 
-    // Browse position persistence
+    // Browse position persistence.
+    // Masonry uses `primaryItems` as its only media items, but the grid is offset by the resume
+    // card, the continue-reading shelf and the restored-anchor banner which are all full-span items.
+    // Reading the visible item key keeps the saved anchor aligned with the actual work.
     val currentGalleryItems by rememberUpdatedState(uiState.primaryItems)
     val currentGalleryPage by rememberUpdatedState(uiState.currentPage)
     LaunchedEffect(gridState, activeSite.id) {
-        snapshotFlow { gridState.firstVisibleItemIndex }
+        snapshotFlow {
+            gridState.layoutInfo.visibleItemsInfo
+                .firstNotNullOfOrNull { info -> (info.key as? String)?.takeIf { it.isNotEmpty() } }
+        }
             .distinctUntilChanged()
-            .collect { firstIdx ->
-                val itemsList = currentGalleryItems
-                val anchor = itemsList.getOrNull(firstIdx.coerceIn(0, (itemsList.size - 1).coerceAtLeast(0)))
-                if (anchor != null && firstIdx > 0) {
-                    onSaveBrowsePosition(anchor.id, currentGalleryPage, "")
-                }
+            .collect { itemKey ->
+                if (itemKey == null) return@collect
+                // Staggered-grid item keys are `MediaItem.compositeKey` ("site:id"); chrome rows
+                // (resume card, continue-reading shelf, restored-anchor banner, footer) use keys
+                // that never collide with a composite key, so a non-match simply skips the save.
+                val anchor = currentGalleryItems.firstOrNull { it.compositeKey == itemKey } ?: return@collect
+                onSaveBrowsePosition(anchor.id, currentGalleryPage, "")
             }
     }
 

@@ -11,6 +11,8 @@ import com.raven.app.core.sitespi.HttpClientAdapter
 import com.raven.app.core.sitespi.SiteHttpMethod
 import com.raven.app.core.sitespi.SiteHttpRequest
 import com.raven.app.core.sitespi.SiteHttpResponse
+import com.raven.app.core.sitespi.RequestSessionScope
+import com.raven.app.core.sitespi.SiteAuthCancelledException
 import com.raven.app.core.sitespi.SiteRegistry
 import com.raven.app.core.sitespi.SiteRequestKind
 import com.raven.app.core.sitespi.SiteSessionStore
@@ -142,6 +144,13 @@ object SiteHttpErrorMapper {
 
     fun fromThrowable(error: Throwable, siteId: SiteId? = null): SiteException {
         if (error is SiteException) return error
+        // Interceptor-level cancellation (e.g. an authEpoch guard inside `decorateRequestHeaders`)
+        // surfaces as IOException so OkHttp's dispatcher does not cancel the whole call and lose
+        // the failure semantics. Unwrap it back into the typed Cancelled exception here.
+        if (error is SiteAuthCancelledException) {
+            return SiteException.Cancelled(error.message.orEmpty(), siteId = siteId ?: error.siteId, cause = error)
+        }
+        findSiteExceptionCause(error)?.let { return it }
         if (isTlsFailure(error)) {
             return SiteException.TlsError(
                 message = "TLS 安全连接失败：${error.message.orEmpty()}",
@@ -154,6 +163,17 @@ object SiteHttpErrorMapper {
             siteId = siteId,
             cause = error,
         )
+    }
+
+    private fun findSiteExceptionCause(error: Throwable): SiteException? {
+        var current: Throwable? = error.cause
+        var depth = 0
+        while (current != null && current !== error && depth < 8) {
+            if (current is SiteException) return current
+            current = current.cause
+            depth++
+        }
+        return null
     }
 
     fun isTlsFailure(error: Throwable): Boolean {
@@ -295,7 +315,6 @@ class SiteHttpClient(
         val serverMs = retryAfterSeconds?.coerceAtLeast(0L)?.times(1_000L)
         return (serverMs ?: defaultMs).coerceAtMost(MAX_RATE_LIMIT_COOLDOWN_MS)
     }
-
     /**
      * Executes [request] and throws a typed [SiteException] (`RateLimited`, `AuthRequired`,
      * `Forbidden`, `NotFound`, `QuotaExceeded`, `Network`) if the HTTP response is non-2xx
@@ -317,10 +336,14 @@ class SiteHttpClient(
 
     private fun verifyAuthEpoch(expectedEpoch: Long?, siteId: SiteId?) {
         if (expectedEpoch == null || siteId == null) return
-        val current = sessionStore.authEpoch(siteId)
+        // Shared accounts (EH/EX) write to ONE bucket, so the guard must compare against the
+        // account identity. Comparing EXHENTAI against its own (never-mutated) counter would
+        // silently let a post-logout EX request through.
+        val accountId = siteId.accountId
+        val current = sessionStore.authEpoch(accountId)
         if (current != expectedEpoch) {
             throw SiteException.Cancelled(
-                message = "会话状态已变更 (${siteId.value}: expected=$expectedEpoch, actual=$current)",
+                message = "会话状态已变更 (${accountId.value}: expected=$expectedEpoch, actual=$current)",
                 siteId = siteId,
             )
         }
@@ -341,7 +364,11 @@ class SiteHttpClient(
         request.rangeHeader?.takeIf { it.isNotBlank() }?.let { range ->
             builder.header("Range", range)
         }
-        if (!request.allowCache) {
+        // Account-scoped requests (authEpoch present) must never be answered from the shared
+        // OkHttp response cache: that cache is keyed by URL only, so a personalized PAGE/API body
+        // fetched for account A would otherwise be replayed to account B or after a logout.
+        // Plugin-level `allowCache = false` is honoured as well.
+        if (!request.allowCache || request.authEpoch != null) {
             builder.cacheControl(CacheControl.Builder().noCache().noStore().build())
         }
 

@@ -46,7 +46,6 @@ import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
-import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
@@ -63,6 +62,7 @@ import com.raven.app.core.designsystem.theme.RavenFeedbackEffect
 import com.raven.app.core.designsystem.theme.RavenLayout
 import com.raven.app.core.designsystem.theme.RavenMotion
 import com.raven.app.core.designsystem.theme.RavenShapes
+import com.raven.app.core.designsystem.theme.rememberRavenWindowSize
 
 /**
  * Base HarmonyOS modal dialog shell:
@@ -83,9 +83,9 @@ fun RavenDialog(
     val feedback = LocalRavenFeedback.current
     val reduceTransparency = LocalReduceTransparency.current
     val motionReduced = LocalMotionReduced.current
-    val configuration = LocalConfiguration.current
-    val dialogWidth = RavenLayout.computeDialogWidth(configuration.screenWidthDp)
-    val maxHeight = (configuration.screenHeightDp * RavenLayout.DIALOG_MAX_HEIGHT_FRACTION).dp
+    val windowSize = rememberRavenWindowSize()
+    val dialogWidth = RavenLayout.computeDialogWidth(windowSize.widthDp)
+    val maxHeight = (windowSize.heightDp * RavenLayout.DIALOG_MAX_HEIGHT_FRACTION).dp
     val borderColor = if (reduceTransparency) colors.outlineSubtle else colors.hairline
     val enterProgress = remember(motionReduced) { Animatable(if (motionReduced) 1f else 0f) }
 

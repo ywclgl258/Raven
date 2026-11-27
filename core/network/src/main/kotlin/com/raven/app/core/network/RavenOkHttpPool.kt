@@ -1,8 +1,10 @@
 package com.raven.app.core.network
 
+import com.raven.app.core.sitespi.RequestSessionScope
 import com.raven.app.core.sitespi.SiteHttpRequest
 import com.raven.app.core.sitespi.SiteRegistry
 import com.raven.app.core.sitespi.SiteRequestKind
+import com.raven.app.core.sitespi.SiteSessionStore
 import okhttp3.Cache
 import okhttp3.ConnectionPool
 import okhttp3.CookieJar
@@ -30,6 +32,7 @@ class RavenOkHttpPool(
     val mediaRedirectCache: MediaRedirectCache,
     val peerTracker: PeerTracker,
     siteRegistryProvider: () -> SiteRegistry,
+    sessionStoreProvider: () -> SiteSessionStore,
 ) {
     private val httpCache: Cache? = cacheDir?.let { Cache(it, HTTP_CACHE_SIZE_BYTES) }
 
@@ -41,7 +44,28 @@ class RavenOkHttpPool(
         .eventListenerFactory(peerTracker.eventListenerFactory())
         .build()
 
+    // Update and backup requests use the same transport pool but carry no site session or decorators.
+    val externalApiClient: OkHttpClient = sharedBase.newBuilder()
+        .connectTimeout(5, TimeUnit.SECONDS)
+        .readTimeout(15, TimeUnit.SECONDS)
+        .callTimeout(25, TimeUnit.SECONDS)
+        .followSslRedirects(false)
+        .build()
+
+    val externalDownloadClient: OkHttpClient = externalApiClient.newBuilder()
+        .readTimeout(30, TimeUnit.SECONDS)
+        .callTimeout(0, TimeUnit.SECONDS)
+        .build()
+
     private val credentialGuard = CrossHostCredentialGuardInterceptor(siteRegistryProvider)
+
+    /**
+     * Outermost application interceptor on every cookie-bearing client: captures the account
+     * auth epoch before the call leaves so [SiteCookieJar.saveFromResponse] can reject a
+     * `Set-Cookie` that races a logout (NET-09). Must stay FIRST in the interceptor list — OkHttp's
+     * application chain (and therefore its cookie JarBridge callbacks) runs inside it.
+     */
+    private val cookieEpochGuard = SiteCookieEpochInterceptor(sessionStoreProvider, siteRegistryProvider)
 
     /** Standard HTML/document browsing client (5s connect, 12s read, 25s call, 32 MiB HTTP cache). */
     val pageClient: OkHttpClient = sharedBase.newBuilder()
@@ -50,6 +74,7 @@ class RavenOkHttpPool(
         .callTimeout(25, TimeUnit.SECONDS)
         .cookieJar(cookieJar)
         .cache(httpCache)
+        .addInterceptor(cookieEpochGuard)
         .addInterceptor(SiteRequestHeaderInterceptor(SiteRequestKind.PAGE, siteRegistryProvider))
         .addNetworkInterceptor(credentialGuard)
         .build()
@@ -61,6 +86,7 @@ class RavenOkHttpPool(
         .callTimeout(25, TimeUnit.SECONDS)
         .cookieJar(cookieJar)
         .cache(httpCache)
+        .addInterceptor(cookieEpochGuard)
         .addInterceptor(SiteRequestHeaderInterceptor(SiteRequestKind.API, siteRegistryProvider))
         .addNetworkInterceptor(credentialGuard)
         .build()
@@ -75,6 +101,7 @@ class RavenOkHttpPool(
         .callTimeout(0, TimeUnit.SECONDS)
         .cookieJar(cookieJar)
         .cache(null)
+        .addInterceptor(cookieEpochGuard)
         .addInterceptor(SiteRequestHeaderInterceptor(SiteRequestKind.IMAGE, siteRegistryProvider))
         .addInterceptor(SiteImageTransportUnwrapInterceptor(siteRegistryProvider))
         .addNetworkInterceptor(credentialGuard)
@@ -90,6 +117,7 @@ class RavenOkHttpPool(
         .callTimeout(0, TimeUnit.SECONDS)
         .cookieJar(cookieJar)
         .cache(null)
+        .addInterceptor(cookieEpochGuard)
         .addInterceptor(mediaRedirectCache.interceptor)
         .addNetworkInterceptor(mediaRedirectCache.networkInterceptor)
         .addInterceptor(SiteRequestHeaderInterceptor(SiteRequestKind.MEDIA, siteRegistryProvider))
@@ -206,41 +234,59 @@ class RavenOkHttpPool(
 
     /**
      * Selects the exact pre-built [OkHttpClient] matching [request] without allocating any client.
+     *
+     * [RequestSessionScope.ISOLATED] requests always take a `NO_COOKIES` variant: the cookie jar
+     * must neither supply nor absorb credentials for a candidate login handshake.
      */
-    fun clientFor(request: SiteHttpRequest): OkHttpClient = when (request.kind) {
-        SiteRequestKind.PROBE -> if (request.followRedirects) probeFollowRedirectsClient else probeClient
-        SiteRequestKind.MEDIA -> when {
-            !request.followRedirects && !request.allowCookies -> mediaNoCookieNoRedirectClient
-            !request.followRedirects -> mediaNoRedirectClient
-            !request.allowCookies -> mediaNoCookieClient
-            else -> mediaClient
-        }
-        SiteRequestKind.IMAGE -> when {
-            !request.followRedirects && !request.allowCookies -> imageNoCookieNoRedirectClient
-            !request.followRedirects -> imageNoRedirectClient
-            !request.allowCookies -> imageNoCookieClient
-            else -> imageClient
-        }
-        SiteRequestKind.API -> when {
-            !request.followRedirects && !request.allowCookies -> apiNoCookieNoRedirectClient
-            !request.followRedirects -> apiNoRedirectClient
-            !request.allowCookies && !request.allowRetry -> apiNoCookieNoRetryClient
-            !request.allowCookies -> apiNoCookieClient
-            !request.allowRetry -> apiNoRetryClient
-            else -> apiClient
-        }
-        SiteRequestKind.PAGE -> when {
-            !request.followRedirects && !request.allowCookies -> pageNoCookieNoRedirectClient
-            !request.followRedirects -> pageNoRedirectClient
-            !request.allowCookies && !request.allowRetry -> pageNoCookieNoRetryClient
-            !request.allowCookies -> pageNoCookieClient
-            !request.allowRetry -> pageNoRetryClient
-            else -> pageClient
+    fun clientFor(request: SiteHttpRequest): OkHttpClient {
+        val allowCookies = request.allowCookies && request.sessionScope == RequestSessionScope.SITE
+        return when (request.kind) {
+            SiteRequestKind.PROBE -> if (request.followRedirects) probeFollowRedirectsClient else probeClient
+            SiteRequestKind.MEDIA -> when {
+                !request.followRedirects && !allowCookies -> mediaNoCookieNoRedirectClient
+                !request.followRedirects -> mediaNoRedirectClient
+                !allowCookies -> mediaNoCookieClient
+                else -> mediaClient
+            }
+            SiteRequestKind.IMAGE -> when {
+                !request.followRedirects && !allowCookies -> imageNoCookieNoRedirectClient
+                !request.followRedirects -> imageNoRedirectClient
+                !allowCookies -> imageNoCookieClient
+                else -> imageClient
+            }
+            SiteRequestKind.API -> when {
+                !request.followRedirects && !allowCookies -> apiNoCookieNoRedirectClient
+                !request.followRedirects -> apiNoRedirectClient
+                !allowCookies && !request.allowRetry -> apiNoCookieNoRetryClient
+                !allowCookies -> apiNoCookieClient
+                !request.allowRetry -> apiNoRetryClient
+                else -> apiClient
+            }
+            SiteRequestKind.PAGE -> when {
+                !request.followRedirects && !allowCookies -> pageNoCookieNoRedirectClient
+                !request.followRedirects -> pageNoRedirectClient
+                !allowCookies && !request.allowRetry -> pageNoCookieNoRetryClient
+                !allowCookies -> pageNoCookieClient
+                !request.allowRetry -> pageNoRetryClient
+                else -> pageClient
+            }
         }
     }
 
     fun evictIdleConnections() {
         connectionPool.evictAll()
+    }
+
+    /**
+     * Drops every cached PAGE/API response body.
+     *
+     * The OkHttp cache is keyed by URL only, so it cannot distinguish "this page rendered for
+     * account A" from "for account B". On any account change (login / logout / import) full
+     * eviction is the safe action; account-scoped requests additionally bypass the cache entirely
+     * (see `SiteHttpClient.buildOkHttpRequest`).
+     */
+    fun evictHttpCache() {
+        httpCache?.evictAll()
     }
 
     companion object {

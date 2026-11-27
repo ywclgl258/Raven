@@ -173,7 +173,13 @@ class StorageMigrationViewModel(
                         progress = null,
                         lastResult = result,
                         errorMessage = null,
-                        infoMessage = "SHA-256 完整性校验全部通过。下次冷启动应用后将自动切换至公共目录，应用内原始文件已安全保留。",
+                        // Only claim what the migration actually verified: page payloads and
+                        // sidecars pass SHA-256 here, Media3 spans are checked by the cache owner.
+                        infoMessage = if (result.videoCachesVerified) {
+                            "SHA-256 完整性校验全部通过。下次冷启动应用后将自动切换至公共目录，应用内原始文件已安全保留。"
+                        } else {
+                            "图集与索引文件已通过 SHA-256 校验；视频缓存由下载缓存自查。下次冷启动应用后将自动切换至公共目录，应用内原始文件已安全保留。"
+                        },
                     )
                 }
             } catch (ce: CancellationException) {

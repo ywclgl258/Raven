@@ -339,4 +339,32 @@ class SettingsDataStoreTest {
             snap.sortMediaKindsByUsage(descriptors),
         )
     }
+
+    @Test
+    fun `applyBackupSettings preserves and reexports validated legacy keys`() = runTest {
+        val settingsStore = SettingsDataStore(InMemoryPreferencesDataStore())
+        settingsStore.applyBackupSettings(
+            settingsMap = mapOf(
+                "legacy_subscription_order_r34v" to "INTERLEAVED",
+                "auto_download" to "true",
+            ),
+            siteLanguages = emptyMap(),
+        )
+        val exported = settingsStore.exportPortableSettings()
+        assertEquals("INTERLEAVED", exported["legacy_subscription_order_r34v"])
+        assertEquals("true", exported["auto_download"])
+
+        // Invalid entries are dropped, not persisted.
+        settingsStore.applyBackupSettings(
+            settingsMap = mapOf(
+                "legacy_subscription_order_r34v" to "NOT_A_MODE",
+                "auto_download" to "not-a-bool",
+                "legacy_subscription_order_bad site" to "TITLE",
+            ),
+            siteLanguages = emptyMap(),
+        )
+        val exported2 = settingsStore.exportPortableSettings()
+        assertNull(exported2["legacy_subscription_order_r34v"])
+        assertNull(exported2["auto_download"])
+    }
 }

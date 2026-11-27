@@ -4,11 +4,11 @@ import android.Manifest
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
-import android.net.Uri
 import android.os.Build
 import android.os.Environment
 import android.provider.Settings
 import androidx.core.content.ContextCompat
+import androidx.core.net.toUri
 import com.raven.app.core.common.AppDispatchers
 import com.raven.app.core.common.DefaultAppDispatchers
 import com.raven.app.core.database.datastore.SettingsDataStore
@@ -17,7 +17,6 @@ import com.raven.app.core.model.DownloadStatus
 import com.raven.app.core.model.SiteId
 import com.raven.app.core.model.StorageLocation
 import java.io.File
-import java.io.FileOutputStream
 import java.io.IOException
 import java.security.MessageDigest
 import java.util.Locale
@@ -73,6 +72,10 @@ data class StorageStartupResult(
 
 /**
  * Outcome of SHA-256 verified migration from PRIVATE to SHARED storage.
+ *
+ * [videoCachesVerified] is kept separate because Media3 cache spans are copied by the cache owner,
+ * not by this file walker. Reporting "all SHA-256 verified" while a cache span was never
+ * re-hashed made the UI claim more than the migration actually proved.
  */
 data class StorageMigrationResult(
     val copiedFiles: Int,
@@ -80,6 +83,7 @@ data class StorageMigrationResult(
     val totalBytes: Long,
     val pendingLocation: StorageLocation,
     val summary: String,
+    val videoCachesVerified: Boolean = false,
 )
 
 /**
@@ -106,6 +110,8 @@ data class DiskSidecarRecord(
     val versionCode: Int = 0,
     @Transient val sourceRoot: String = "",
     @Transient val intactSelection: List<Int> = emptyList(),
+    /** Pages the user explicitly picked, even when not all of them are on disk yet. */
+    @Transient val declaredSelection: List<Int> = emptyList(),
 ) {
     val compositeDownloadId: String
         get() = if (kind == DownloadKind.VIDEO) {
@@ -363,7 +369,7 @@ class StorageRootManager(
     fun permissionIntent(): Intent? {
         val appContext = context?.applicationContext ?: return null
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return null
-        val packageUri = Uri.parse("package:${appContext.packageName}")
+        val packageUri = "package:${appContext.packageName}".toUri()
         val appSpecific = Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION, packageUri)
         return appSpecific.takeIf { it.resolveActivity(appContext.packageManager) != null }
             ?: Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION)
@@ -709,10 +715,9 @@ class StorageRootManager(
                 check(temp.length() == src.length() && srcDigest.digest().contentEquals(verifiedTemp)) {
                     "${src.name} SHA-256 校验不一致"
                 }
-                if (!temp.renameTo(dst)) {
-                    if (dst.exists()) dst.delete()
-                    check(temp.renameTo(dst)) { "无法写入迁移文件：${dst.path}" }
-                }
+                // Publish without deleting the previous destination first: a refused rename keeps
+                // the old copy (and restores it) instead of leaving neither version on disk.
+                AtomicFiles.publish(temp, dst)
                 copiedCount += 1
             } catch (e: IOException) {
                 throw IOException("${src.name} 复制失败，下载位置未切换：${e.message}", e)
@@ -731,12 +736,16 @@ class StorageRootManager(
         requestDeferredSwitch(StorageLocation.SHARED)
 
         val mb = doneBytes / (1024L * 1024L)
+        // Page payloads and sidecars were re-hashed above; Media3 spans are the cache owner's
+        // responsibility, so their verification is reported separately instead of implied.
         StorageMigrationResult(
             copiedFiles = copiedCount,
             skippedFiles = skippedCount,
             totalBytes = doneBytes,
             pendingLocation = StorageLocation.SHARED,
-            summary = "已复制 $copiedCount 个文件（跳过 $skippedCount 个），共 $mb MB；重启后生效，应用内原文件保留",
+            summary = "已复制并校验 $copiedCount 个文件（跳过 $skippedCount 个），共 $mb MB；" +
+                "视频缓存由下载缓存自查，重启后生效，应用内原文件保留",
+            videoCachesVerified = false,
         )
     }
 
@@ -771,21 +780,13 @@ class StorageRootManager(
         renameFile: (from: File, to: File) -> Boolean = { from, to -> from.renameTo(to) },
     ) {
         if (runCatching { target.isFile && target.readText() == text }.getOrDefault(false)) return
-        val parent = checkNotNull(target.parentFile) { "Invalid sidecar path: ${target.path}" }
-        check(parent.isDirectory || parent.mkdirs()) { "无法创建索引目录：${parent.path}" }
-        val temp = File(parent, "${target.name}.${System.nanoTime()}.part")
+        // renameTo maps to an atomic replacement on Android/Linux. When the platform refuses it,
+        // AtomicFiles moves the previous valid sidecar aside and restores it on failure instead of
+        // deleting the destination first (which would lose the only recoverable copy).
         try {
-            FileOutputStream(temp).use { output ->
-                output.write(text.toByteArray(Charsets.UTF_8))
-                output.fd.sync()
-            }
-            // renameTo maps to an atomic replacement on Android/Linux. If the platform refuses
-            // the replacement, keep the previous valid sidecar instead of deleting it first.
-            if (!renameFile(temp, target)) {
-                throw IOException("无法写入下载索引：${target.name}")
-            }
-        } finally {
-            temp.delete()
+            AtomicFiles.writeText(target, text, renameFile)
+        } catch (e: IOException) {
+            throw IOException("无法写入下载索引：${target.name}", e)
         }
     }
 

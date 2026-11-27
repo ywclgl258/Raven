@@ -598,7 +598,7 @@ class GalleryDownloadEngine(
         val targetRetryAt = task.retryAtEpochMs ?: return
         val delayMs = (targetRetryAt - clockMs()).coerceAtLeast(0L)
         context?.let { appContext ->
-            runCatching { GalleryRetryWakeupWorker.schedule(appContext, delayMs) }
+            runCatching { GalleryRetryWakeupWorker.schedule(appContext, task.id, delayMs) }
         }
         val job = applicationScope.launch(dispatchers.io, start = CoroutineStart.LAZY) {
             delay(delayMs)

@@ -1,6 +1,5 @@
 package com.raven.app.feature.settings
 
-import android.net.Uri
 import com.raven.app.core.model.SiteId
 import java.io.File
 import java.text.SimpleDateFormat
@@ -10,7 +9,7 @@ import java.util.Locale
 /**
  * Decoupled navigation and platform activity callback contract for `:feature:settings`.
  * `:app` wires this to Type-Safe Navigation Compose (`NavController`), `SiteAuthActivity`,
- * Storage Access Framework document launchers, and APK installer handoff.
+ * and APK installer handoff.
  */
 interface SettingsNavigator {
     fun openSiteFunctions(siteId: SiteId)
@@ -28,15 +27,6 @@ interface SettingsNavigator {
     fun openDuplicateScanner()
 
     fun launchWebViewAuth(siteId: SiteId)
-
-    fun launchCreateBackupDocument(
-        suggestedFileName: String = SettingsExportDefaults.defaultBackupFileName(),
-        onDocumentCreated: (Uri?) -> Unit,
-    )
-
-    fun launchOpenBackupDocument(
-        onDocumentOpened: (Uri?) -> Unit,
-    )
 
     fun openAppUpdateInstaller(apkFile: File)
 

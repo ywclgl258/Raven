@@ -31,6 +31,30 @@ interface ReaderNavigator {
         coverUrl: String = "",
     )
 
+    /**
+     * Mixed gallery→video queue hand-off. Defaults keep single-item hosts source-compatible; a
+     * queue-aware host overrides this to preserve [offlineOnly] and [queueToken] so a video reached
+     * from a gallery queue stays offline and can continue along the same queue instead of reloading
+     * online metadata.
+     */
+    fun openQueueVideo(
+        siteId: SiteId,
+        mediaId: String,
+        url: String,
+        title: String,
+        coverUrl: String,
+        offlineOnly: Boolean,
+        queueToken: String,
+    ) {
+        openVideo(
+            siteId = siteId,
+            mediaId = mediaId,
+            url = url,
+            title = title,
+            coverUrl = coverUrl,
+        )
+    }
+
     fun openTagFeed(
         siteId: SiteId,
         tag: TagRef,
@@ -44,10 +68,14 @@ interface ReaderNavigator {
     /**
      * Opens unified Search pre-filled with the tag's canonical slug (raw label fallback),
      * either on the active site or across all searchable sites.
+     *
+     * [sourceSiteId] is the site that owns the tag. Single-site search must target it (not the
+     * ambient active site) so a gallery opened from the library still searches its own site.
      */
     fun openTagSearch(
         tag: TagRef,
         crossSite: Boolean,
+        sourceSiteId: SiteId? = null,
     )
 
     /**
@@ -57,6 +85,7 @@ interface ReaderNavigator {
     fun openAuthorSearch(
         author: AuthorRef,
         crossSite: Boolean,
+        sourceSiteId: SiteId? = null,
     )
 
     fun openSiteAccount(siteId: SiteId)
@@ -70,16 +99,6 @@ interface ReaderNavigator {
     fun setReaderBrightness(value: Float)
 
     fun setKeepScreenOn(enabled: Boolean)
-
-    fun launchSaveDocument(
-        suggestedFileName: String,
-        mimeType: String,
-        onResult: (Uri?) -> Unit,
-    )
-
-    fun launchOpenDocumentTree(
-        onResult: (Uri?) -> Unit,
-    )
 
     fun shareFiles(
         uris: List<Uri>,
@@ -119,12 +138,16 @@ fun ReaderNavigator.openQueueItem(
     offlineOnly: Boolean,
 ) {
     if (item.kind.isVideo) {
-        openVideo(
+        // Use the queue-aware overload so the video inherits the offline flag and queue token the
+        // gallery branch passes. The plain `openVideo` drops both and would re-query online data.
+        openQueueVideo(
             siteId = item.siteId,
             mediaId = item.id,
             url = item.url,
             title = item.title,
             coverUrl = item.coverUrl,
+            offlineOnly = offlineOnly,
+            queueToken = queueToken,
         )
     } else {
         openReader(

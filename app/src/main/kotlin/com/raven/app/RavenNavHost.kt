@@ -117,37 +117,45 @@ import org.koin.core.parameter.parametersOf
  * Supplies the missing detail parent for readers opened from resume cards, history or deep links.
  * A matching detail already on top is reused so normal detail -> reader navigation stays unchanged.
  */
+internal fun readerWorkId(mediaId: String): String = mediaId.substringBefore(':')
+
 internal fun readerParentDetail(
     currentDetail: RavenRoute.GalleryDetail?,
     reader: RavenRoute.Reader,
 ): RavenRoute.GalleryDetail? {
+    val workId = readerWorkId(reader.mediaId)
+    // If the current detail is already the work root, reuse it (no parent inserted).
     if (currentDetail != null &&
         currentDetail.siteId == reader.siteId &&
-        currentDetail.mediaId == reader.mediaId &&
+        currentDetail.mediaId == workId &&
         currentDetail.offlineOnly == reader.offlineOnly
     ) {
         return null
     }
+    // Otherwise insert the work-level detail so Back returns to the whole work's
+    // detail page instead of a single chapter's detail page (avoids nesting).
     return RavenRoute.GalleryDetail(
         siteId = reader.siteId,
-        mediaId = reader.mediaId,
+        mediaId = workId,
         url = reader.url,
         offlineOnly = reader.offlineOnly,
     )
 }
 
 /** Search destination used by Gallery Detail tag actions; canonical slug is preferred over translations. */
-internal fun tagSearchRoute(tag: TagRef, crossSite: Boolean): RavenRoute.Search =
+internal fun tagSearchRoute(tag: TagRef, crossSite: Boolean, sourceSiteId: SiteId? = null): RavenRoute.Search =
     RavenRoute.Search(
         initialQuery = tag.slug.trim().ifBlank { tag.label.trim() }.takeIf { it.isNotEmpty() },
         crossSite = crossSite,
+        sourceSiteId = sourceSiteId?.value,
     )
 
 /** Search destination used by Gallery Detail author taps and long-press actions. */
-internal fun authorSearchRoute(author: AuthorRef, crossSite: Boolean): RavenRoute.Search =
+internal fun authorSearchRoute(author: AuthorRef, crossSite: Boolean, sourceSiteId: SiteId? = null): RavenRoute.Search =
     RavenRoute.Search(
         initialQuery = author.name.trim().ifBlank { author.id.trim() }.takeIf { it.isNotEmpty() },
         crossSite = crossSite,
+        sourceSiteId = sourceSiteId?.value,
     )
 
 internal data class ReaderNavigationPlan(
@@ -175,7 +183,7 @@ internal fun planReaderNavigation(
     }
     val matchesPrevious = previousDetail != null &&
         previousDetail.siteId == targetReader.siteId &&
-        previousDetail.mediaId == targetReader.mediaId &&
+        readerWorkId(previousDetail.mediaId) == readerWorkId(targetReader.mediaId) &&
         previousDetail.offlineOnly == targetReader.offlineOnly
     if (matchesPrevious) {
         return ReaderNavigationPlan(
@@ -189,7 +197,7 @@ internal fun planReaderNavigation(
         popStaleParentDetail = previousDetail != null,
         insertParentDetail = RavenRoute.GalleryDetail(
             siteId = targetReader.siteId,
-            mediaId = targetReader.mediaId,
+            mediaId = readerWorkId(targetReader.mediaId),
             url = targetReader.url,
             offlineOnly = targetReader.offlineOnly,
         ),
@@ -208,9 +216,6 @@ interface MainActivityHostActions {
     fun setReaderBrightness(value: Float)
     fun setKeepScreenOn(enabled: Boolean)
     fun registerVolumeKeyHandler(handler: ((up: Boolean, isLongPress: Boolean) -> Boolean)?)
-    fun launchSaveDocument(suggestedFileName: String, mimeType: String, onResult: (Uri?) -> Unit)
-    fun launchOpenDocument(onResult: (Uri?) -> Unit)
-    fun launchOpenDocumentTree(onResult: (Uri?) -> Unit)
     fun shareFiles(uris: List<Uri>, mimeType: String, subject: String)
     fun openAppUpdateInstaller(apkFile: File)
 }
@@ -239,7 +244,6 @@ fun RavenAppShell(
     onDismissSharedLink: () -> Unit,
     modifier: Modifier = Modifier,
     isIncognito: Boolean = false,
-    isAppLocked: Boolean = false,
     navController: NavHostController = rememberNavController(),
 ) {
     val navBackStackEntry by navController.currentBackStackEntryAsState()
@@ -325,8 +329,7 @@ fun RavenAppShell(
     }
 
     // Consume incoming return-from-PlayerActivity or deep route intents cleanly after unlock.
-    LaunchedEffect(pendingNavigationRoute, isAppLocked) {
-        if (isAppLocked) return@LaunchedEffect
+    LaunchedEffect(pendingNavigationRoute) {
         val target = pendingNavigationRoute ?: return@LaunchedEffect
         if (target is RavenRoute.Reader) {
             navigateReaderRoute(target)
@@ -617,6 +620,30 @@ fun RavenAppShell(
                 )
             }
 
+            // Mixed gallery→video queue: preserve the offline flag and queue token so the player
+            // does not re-query online metadata and can continue along the same queue.
+            override fun openQueueVideo(
+                siteId: SiteId,
+                mediaId: String,
+                url: String,
+                title: String,
+                coverUrl: String,
+                offlineOnly: Boolean,
+                queueToken: String,
+            ) {
+                hostActions.launchPlayer(
+                    PlayerLaunchArgs(
+                        siteId = siteId,
+                        mediaId = mediaId,
+                        url = url,
+                        title = title,
+                        coverUrl = coverUrl,
+                        offlineOnly = offlineOnly,
+                        queueToken = queueToken,
+                    ),
+                )
+            }
+
             override fun openGallery(
                 siteId: SiteId,
                 mediaId: String,
@@ -654,18 +681,17 @@ fun RavenAppShell(
                 )
             }
 
-            override fun openTagSearch(tag: TagRef, crossSite: Boolean) {
-                navController.navigate(tagSearchRoute(tag, crossSite)) {
+            override fun openTagSearch(tag: TagRef, crossSite: Boolean, sourceSiteId: SiteId?) {
+                navController.navigate(tagSearchRoute(tag, crossSite, sourceSiteId)) {
                     launchSingleTop = true
                 }
             }
 
-            override fun openAuthorSearch(author: AuthorRef, crossSite: Boolean) {
-                navController.navigate(authorSearchRoute(author, crossSite)) {
+            override fun openAuthorSearch(author: AuthorRef, crossSite: Boolean, sourceSiteId: SiteId?) {
+                navController.navigate(authorSearchRoute(author, crossSite, sourceSiteId)) {
                     launchSingleTop = true
                 }
             }
-
             override fun openSiteAccount(siteId: SiteId) {
                 navController.navigate(RavenRoute.SiteAccount(siteId = siteId.value)) {
                     launchSingleTop = true
@@ -682,18 +708,6 @@ fun RavenAppShell(
 
             override fun setKeepScreenOn(enabled: Boolean) {
                 hostActions.setKeepScreenOn(enabled)
-            }
-
-            override fun launchSaveDocument(
-                suggestedFileName: String,
-                mimeType: String,
-                onResult: (Uri?) -> Unit,
-            ) {
-                hostActions.launchSaveDocument(suggestedFileName, mimeType, onResult)
-            }
-
-            override fun launchOpenDocumentTree(onResult: (Uri?) -> Unit) {
-                hostActions.launchOpenDocumentTree(onResult)
             }
 
             override fun shareFiles(uris: List<Uri>, mimeType: String, subject: String) {
@@ -744,21 +758,6 @@ fun RavenAppShell(
 
             override fun launchWebViewAuth(siteId: SiteId) {
                 hostActions.launchWebViewAuth(siteId)
-            }
-
-            override fun launchCreateBackupDocument(
-                suggestedFileName: String,
-                onDocumentCreated: (Uri?) -> Unit,
-            ) {
-                hostActions.launchSaveDocument(
-                    suggestedFileName = suggestedFileName,
-                    mimeType = com.raven.app.feature.settings.SettingsExportDefaults.BACKUP_MIME_TYPE,
-                    onResult = onDocumentCreated,
-                )
-            }
-
-            override fun launchOpenBackupDocument(onDocumentOpened: (Uri?) -> Unit) {
-                hostActions.launchOpenDocument(onDocumentOpened)
             }
 
             override fun openAppUpdateInstaller(apkFile: File) {

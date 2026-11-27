@@ -1,6 +1,8 @@
 package com.raven.app.core.designsystem.component
 
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.snap
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -20,7 +22,7 @@ import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Text
+import androidx.compose.foundation.text.BasicText
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -45,7 +47,6 @@ import com.raven.app.core.designsystem.theme.RavenFeedbackEffect
 import com.raven.app.core.designsystem.theme.RavenMotion
 import com.raven.app.core.designsystem.theme.RavenShapes
 import com.raven.app.core.designsystem.theme.tabular
-import kotlin.math.abs
 
 private val SegmentInset = 3.dp
 
@@ -73,9 +74,10 @@ fun <T> RavenSegmentedTabs(
     val selectedIndex = items.indexOf(selectedItem).coerceAtLeast(0)
     val indicatorIndex by animateFloatAsState(
         targetValue = selectedIndex.toFloat(),
-        animationSpec = tween(
-            durationMillis = if (motionReduced) 0 else RavenMotion.TAB_TRANSITION_DURATION_MS,
-            easing = RavenMotion.HarmonyDecelerationEasing,
+        animationSpec = if (motionReduced) snap() else spring(
+            dampingRatio = 0.92f,
+            stiffness = 560f,
+            visibilityThreshold = 0.001f,
         ),
         label = "ravenSegmentedTabsIndicator",
     )
@@ -146,13 +148,18 @@ fun <T> RavenSegmentedTabs(
                             .padding(horizontal = 8.dp, vertical = 10.dp),
                         contentAlignment = Alignment.Center,
                     ) {
-                        val position = if (motionReduced) selectedIndex.toFloat() else indicatorIndex
-                        val emphasis = (1f - abs(position - index)).coerceIn(0f, 1f)
-                        Text(
+                        val emphasis by animateFloatAsState(
+                            targetValue = if (selected) 1f else 0f,
+                            animationSpec = if (motionReduced) snap() else tween(150, easing = RavenMotion.HarmonyStandardEasing),
+                            label = "ravenSegmentLabel",
+                        )
+                        BasicText(
                             text = labelProvider(item),
-                            style = MaterialTheme.typography.labelLarge.tabular().copy(fontWeight = FontWeight.SemiBold),
-                            color = lerp(colors.inkSecondary, colors.inkPrimary, emphasis),
-                            textAlign = TextAlign.Center,
+                            style = MaterialTheme.typography.labelLarge.tabular().copy(
+                                fontWeight = FontWeight.SemiBold,
+                                textAlign = TextAlign.Center,
+                            ),
+                            color = { lerp(colors.inkSecondary, colors.inkPrimary, emphasis) },
                             maxLines = 2,
                             overflow = TextOverflow.Ellipsis,
                         )

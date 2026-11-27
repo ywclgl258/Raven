@@ -425,7 +425,11 @@ fun VideoPlayerScreen(
                 isLocked = uiState.isLocked,
                 durationMs = uiState.effectiveDurationMs,
                 currentPositionMs = uiState.positionMs,
-                currentPositionMsProvider = { viewModel.progressState.value.positionMs },
+                // `uiState.positionMs` is structurally zeroed and `progressState` is a
+                // WhileSubscribed flow that freezes once the controls leave composition (4.5s auto
+                // hide). A swipe that starts from a frozen/zero value would jump wildly, so the
+                // gesture start must read the live player position instead.
+                currentPositionMsProvider = { viewModel.currentPlaybackPositionMs() },
                 sensitivitySeconds = uiState.playbackPreferences.gestureSensitivitySeconds,
                 currentBrightnessProvider = { currentBrightness },
                 currentVolumeRatioProvider = { readMediaVolumeRatio(audioManager) },
@@ -574,7 +578,9 @@ fun VideoPlayerScreen(
             onToggleFavorite = { viewModel.toggleFavorite() },
             onOpenDownloadSheet = { activeSheet = PlayerSheet.Download },
             onOpenAddBookmark = {
-                activeSheet = PlayerSheet.BookmarkEditor(initialPositionMs = viewModel.progressState.value.positionMs)
+                activeSheet = PlayerSheet.BookmarkEditor(
+                    initialPositionMs = viewModel.currentPlaybackPositionMs(),
+                )
             },
             onShareClick = {
                 shareVideoText(context, uiState.title, uiState.url)
@@ -758,6 +764,7 @@ fun VideoPlayerScreen(
             onCastToDevice = { device -> viewModel.castCurrentVideo(device) },
             onStopCast = { viewModel.stopCast() },
             onLaunchSystemExternalPlayer = { viewModel.launchSystemExternalPlayer() },
+            currentPositionMsProvider = { viewModel.currentPlaybackPositionMs() },
         )
     }
 }
@@ -767,12 +774,12 @@ fun VideoPlayerScreen(
 private fun Media3PlayerSurface(
     player: ExoPlayer?,
     keepScreenOn: Boolean,
+    modifier: Modifier = Modifier,
     isVideoFrameReady: Boolean = true,
     videoRecoveryGeneration: Long = 0L,
     resizeMode: VideoResizeMode = VideoResizeMode.FIT,
     motionReduced: Boolean = false,
     transformProvider: () -> Pair<Float, Offset> = { 1f to Offset.Zero },
-    modifier: Modifier = Modifier,
 ) {
     val targetResizeMode = when (resizeMode) {
         VideoResizeMode.FIT -> AspectRatioFrameLayout.RESIZE_MODE_FIT

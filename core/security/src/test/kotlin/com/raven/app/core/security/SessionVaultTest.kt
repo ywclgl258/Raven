@@ -4,6 +4,7 @@ import com.raven.app.core.model.SiteId
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
@@ -30,6 +31,9 @@ class SessionVaultTest {
         vault.saveSecret(SiteId.IWARA, "refreshToken", "iwara-refresh-secret-777")
 
         vault.saveCookies(SiteId.EHENTAI, mapOf("ipb_member_id" to "123456", "ipb_pass_hash" to "eh-passhash-secret-666"))
+        // E-Hentai and ExHentai are ONE login, so this writes into the same encrypted account record.
+        // A cookie set on either hostname must stay visible from both, and the shared record is stored
+        // exactly once (no per-host duplicate ciphertext).
         vault.saveCookies(
             SiteId.EXHENTAI,
             mapOf(
@@ -40,8 +44,10 @@ class SessionVaultTest {
         )
 
         // Verify raw persisted storage contains ZERO plaintext secrets, usernames, or cookie names/values
+        // 5 auth-capable sites -> 4 encrypted records: EH and EX share the `ehentai` account record.
         val rawDump = storage.snapshotRawEntries().values.joinToString("\n")
-        assertEquals(5, storage.snapshotRawEntries().size)
+        assertEquals(4, storage.snapshotRawEntries().size)
+        assertNull(storage.getString(SessionVault.storageKey(SiteId.EXHENTAI))?.takeIf { it.isNotBlank() })
         val sensitiveLiterals = listOf(
             "PHPSESSID",
             "r34-sess-secret-999",
@@ -70,8 +76,12 @@ class SessionVaultTest {
         assertEquals("eyJhbGciOiJIUzI1NiJ9.iwara-jwt-payload", vault.getBearerToken(SiteId.IWARA))
         assertEquals("iwara_user_secret", vault.getUsername(SiteId.IWARA))
         assertEquals("iwara-refresh-secret-777", vault.getSecret(SiteId.IWARA, "refreshToken"))
-        assertEquals("eh-passhash-secret-666", vault.getCookies(SiteId.EHENTAI)["ipb_pass_hash"])
+        // Shared EH/EX account bucket: the later write wins for overwritten names, and every name
+        // (including `igneous`, only ever written via the EX host) is readable through BOTH ids.
+        assertEquals("ex-passhash-secret-555", vault.getCookies(SiteId.EHENTAI)["ipb_pass_hash"])
         assertEquals("ex-igneous-secret-444", vault.getCookies(SiteId.EXHENTAI)["igneous"])
+        assertEquals("ex-igneous-secret-444", vault.getCookies(SiteId.EHENTAI)["igneous"])
+        assertEquals("654321", vault.getCookies(SiteId.EXHENTAI)["ipb_member_id"])
     }
 
     @Test
@@ -172,5 +182,101 @@ class SessionVaultTest {
         val restartedInstance = SessionVault(cipher, storage)
         assertEquals("persisted-sess", restartedInstance.getCookies(SiteId.R34V)["PHPSESSID"])
         assertEquals("dynamic-salt-v2", restartedInstance.getSecret(SiteId.IWARA, "salt"))
+    }
+
+    @Test
+    fun `EH and EX share one encrypted record one epoch and one cleared state`() {
+        val (vault, storage) = newVault()
+        vault.saveCookies(SiteId.EXHENTAI, mapOf("ipb_member_id" to "4242", "igneous" to "ig"))
+        // Written through EX, readable through both, and only ONE sealed record exists for the account.
+        assertEquals("4242", vault.getCookies(SiteId.EHENTAI)["ipb_member_id"])
+        assertEquals(vault.authEpoch(SiteId.EHENTAI), vault.authEpoch(SiteId.EXHENTAI))
+        assertEquals(1, storage.snapshotRawEntries().size)
+
+        vault.evictMemoryCache()
+        assertEquals("ig", vault.getCookies(SiteId.EHENTAI)["igneous"])
+
+        vault.clearSite(SiteId.EXHENTAI)
+        assertTrue(vault.getCookies(SiteId.EHENTAI).isEmpty())
+        assertTrue(vault.getCookies(SiteId.EXHENTAI).isEmpty())
+    }
+
+    @Test
+    fun `compare-and-write refuses a stale snapshot after logout so a cleared session cannot be restored`() {
+        val (vault, _) = newVault()
+        vault.saveCookies(SiteId.IWARA, mapOf("sid" to "logged-in"))
+        val dispatchEpoch = vault.authEpoch(SiteId.IWARA)
+
+        // Logout lands while the response is in flight.
+        vault.clearSite(SiteId.IWARA)
+        val epochAfterLogout = vault.authEpoch(SiteId.IWARA)
+        assertTrue(epochAfterLogout > dispatchEpoch)
+
+        // The late Set-Cookie is applied with the epoch captured at dispatch -> must be refused.
+        val written = vault.storeSessionSnapshotIfEpoch(
+            siteId = SiteId.IWARA,
+            expectedEpoch = dispatchEpoch,
+            cookies = mapOf("sid" to "resurrected"),
+            secrets = mapOf("jar" to "stale"),
+        )
+        assertFalse(written)
+        assertTrue(vault.getCookies(SiteId.IWARA).isEmpty())
+        assertNull(vault.getSecret(SiteId.IWARA, "jar"))
+        assertEquals(epochAfterLogout, vault.authEpoch(SiteId.IWARA))
+    }
+
+    @Test
+    fun `compare-and-write succeeds for the current epoch and does not bump unless asked`() {
+        val (vault, _) = newVault()
+        vault.saveCookies(SiteId.IWARA, mapOf("sid" to "v1"))
+        val epoch = vault.authEpoch(SiteId.IWARA)
+        assertTrue(
+            vault.storeSessionSnapshotIfEpoch(
+                siteId = SiteId.IWARA,
+                expectedEpoch = epoch,
+                cookies = mapOf("sid" to "v2"),
+                secrets = mapOf("jar" to "encoded"),
+            ),
+        )
+        // Credential refresh is not an auth mutation: the epoch must stay stable for in-flight calls.
+        assertEquals(epoch, vault.authEpoch(SiteId.IWARA))
+        assertEquals("v2", vault.getCookies(SiteId.IWARA)["sid"])
+        assertEquals("encoded", vault.getSecret(SiteId.IWARA, "jar"))
+    }
+
+    @Test
+    fun `identical cookie renewal is a no-op and does not bump the epoch`() {
+        val (vault, _) = newVault()
+        vault.saveCookies(SiteId.IWARA, mapOf("sid" to "same", "other" to "x"))
+        val epoch = vault.authEpoch(SiteId.IWARA)
+        vault.saveCookies(SiteId.IWARA, mapOf("sid" to "same"))
+        assertEquals(epoch, vault.authEpoch(SiteId.IWARA))
+        // A genuine value change still bumps.
+        vault.saveCookies(SiteId.IWARA, mapOf("sid" to "changed"))
+        assertTrue(vault.authEpoch(SiteId.IWARA) > epoch)
+    }
+
+    @Test
+    fun `legacy per-host ExHentai record is absorbed into and migrated out of the shared account record`() {
+        val cipher = SoftwareAesGcmVaultCipher()
+        val storage = InMemoryVaultStorage()
+        val vault = SessionVault(cipher, storage)
+
+        // Simulate a build that wrote an EX-only record under its own id.
+        val legacy = SessionVault(cipher, storage)
+        // Write the record with EX-only storage key by using an EX id that is not an alias of EH.
+        val exOnlyCipher = cipher
+        val legacyPayload = legacy.seal(
+            """{"cookies":{"ipb_member_id":"9001"},"secrets":{}}""",
+            associatedData = SessionVault.aadFor(SiteId.EXHENTAI),
+        )
+        storage.putString(SessionVault.storageKey(SiteId.EXHENTAI), legacyPayload)
+
+        // Reading through EH finds the legacy EX record, then writes it under the account key
+        // and removes the leftover per-host ciphertext.
+        assertEquals("9001", vault.getCookies(SiteId.EHENTAI)["ipb_member_id"])
+        vault.saveCookies(SiteId.EHENTAI, mapOf("igneous" to "fresh"))
+        assertNull(storage.getString(SessionVault.storageKey(SiteId.EXHENTAI)))
+        assertNotNull(storage.getString(SessionVault.storageKey(SiteId.EHENTAI)))
     }
 }

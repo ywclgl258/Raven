@@ -126,6 +126,51 @@ class IwaraSitePluginTest {
     }
 
     @Test
+    fun `iwara rejects a stale authEpoch at the decorator and surfaces it as Cancelled`() = runTest {
+        val store = InMemorySiteSessionStore()
+        store.saveBearerToken(SiteId.IWARA, "jwt_v1", "alice")
+        val plugin = IwaraSitePlugin(FakeHttpClientAdapter(), store)
+        val epoch = store.authEpoch(SiteId.IWARA)
+
+        // A request tagged with the current epoch is decorated normally.
+        val ok = plugin.authProvider.decorateRequestHeaders(
+            SiteHttpRequest(
+                url = "https://apiq.iwara.tv/subscriptions/videos",
+                siteId = SiteId.IWARA,
+                authEpoch = epoch,
+            ),
+            host = "apiq.iwara.tv",
+        )
+        assertEquals("Bearer jwt_v1", ok["Authorization"])
+
+        // The account switches mid-flight: a tag from the old epoch must be refused.
+        store.clearSite(SiteId.IWARA)
+        store.saveBearerToken(SiteId.IWARA, "jwt_v2", "bob")
+        assertTrue(store.authEpoch(SiteId.IWARA) > epoch)
+        var thrown: Throwable? = null
+        try {
+            plugin.authProvider.decorateRequestHeaders(
+                SiteHttpRequest(
+                    url = "https://apiq.iwara.tv/subscriptions/videos",
+                    siteId = SiteId.IWARA,
+                    authEpoch = epoch,
+                ),
+                host = "apiq.iwara.tv",
+            )
+        } catch (e: Throwable) {
+            thrown = e
+        }
+        assertTrue("stale epoch must be Cancelled, got $thrown", thrown is SiteException.Cancelled)
+
+        // Untagged requests (public media/API reads) are never cancelled by an account switch.
+        val untagged = plugin.authProvider.decorateRequestHeaders(
+            SiteHttpRequest(url = "https://i.iwara.tv/image/1/a.png", siteId = SiteId.IWARA),
+            host = "i.iwara.tv",
+        )
+        assertNull(untagged["Authorization"])
+    }
+
+    @Test
     fun `iwara X-Version SHA-1 and dynamic salt hot-extraction fallback on missing Source`() = runTest {
         val fakeHttp = FakeHttpClientAdapter()
         val store = InMemorySiteSessionStore()

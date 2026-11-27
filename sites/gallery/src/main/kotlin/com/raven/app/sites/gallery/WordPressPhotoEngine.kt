@@ -189,24 +189,16 @@ class WordPressPhotoEngine(
             )
         }
 
-        val contentPageCount = extractContentPageCount(firstDoc)
+        val contentPageCount = validatedContentPageCount(firstDoc, canonical)
         val pages: List<GalleryPage>
         if (firstExtracted.images.isNotEmpty()) {
             cacheContentPage(canonical, 1, firstExtracted.images, firstExtracted.thumbs)
+            // Capacity is the *validated* count, never the raw site claim (bounded by MAX_CONTENT_PAGES).
             val imagesByPage = LinkedHashMap<Int, List<String>>(contentPageCount)
             val thumbsByPage = LinkedHashMap<Int, List<String?>>(contentPageCount)
             val sizes = ArrayList<Int>(contentPageCount)
             val fetchedExtras = if (contentPageCount > 1) {
-                val semaphore = Semaphore(3)
-                coroutineScope {
-                    (2..contentPageCount).map { contentPage ->
-                        async {
-                            semaphore.withPermit {
-                                contentPage to loadAndCacheContentPage(canonical, contentPage, forceReload = false)
-                            }
-                        }
-                    }.awaitAll()
-                }.toMap()
+                fetchContentPagesInBatches(canonical, contentPageCount)
             } else {
                 emptyMap()
             }
@@ -627,6 +619,55 @@ class WordPressPhotoEngine(
                 ?: PAGE_NUMBER_ATTR_REGEX.find(href)?.groupValues?.get(1)?.toIntOrNull()
                 ?: anchor.text().trim().replace(",", "").toIntOrNull()
         }.filter { it > 0 }.maxOrNull()
+    }
+
+    /**
+     * Clamps a site-claimed content-page count to [MAX_CONTENT_PAGES] so a hostile or corrupted
+     * pagination node can never drive unbounded array allocation or coroutine fan-out.
+     *
+     * A claim of 0 or a negative value is rejected outright instead of pre-allocating; a page with
+     * no pager node already reports 1, so the returned value is always in `1..MAX_CONTENT_PAGES`.
+     */
+    fun validatedContentPageCount(doc: Document, canonical: String): Int {
+        val claimed = extractContentPageCount(doc)
+        if (claimed < 1) {
+            throw SiteException.ParseError(
+                message = "${descriptor.displayName} reported an invalid content page count ($claimed): $canonical",
+                siteId = siteId,
+            )
+        }
+        return claimed.coerceAtMost(MAX_CONTENT_PAGES)
+    }
+
+    /**
+     * Fetches content pages `2..count` in fixed-size waves instead of creating every page task at
+     * once. Each wave is bounded by [CONTENT_PAGE_BATCH_SIZE] coroutines and every page object is
+     * only materialised when that wave starts, so peak memory tracks the batch, not the claim.
+     */
+    private suspend fun fetchContentPagesInBatches(
+        canonical: String,
+        contentPageCount: Int,
+    ): Map<Int, ExtractedImages> {
+        val semaphore = Semaphore(CONTENT_PAGE_CONCURRENCY)
+        val result = LinkedHashMap<Int, ExtractedImages>(contentPageCount)
+        for (windowStart in 2..contentPageCount step CONTENT_PAGE_BATCH_SIZE) {
+            val windowEnd = (windowStart + CONTENT_PAGE_BATCH_SIZE - 1).coerceAtMost(contentPageCount)
+            val batch = coroutineScope {
+                // Launch the whole wave BEFORE awaiting any of it: mapping `.awaitAll()` over a single
+                // async (previous form) awaited each page inline, serialising the wave and making the
+                // semaphore pointless.
+                val deferreds = (windowStart..windowEnd).map { contentPage ->
+                    async {
+                        semaphore.withPermit {
+                            contentPage to loadAndCacheContentPage(canonical, contentPage, forceReload = false)
+                        }
+                    }
+                }
+                deferreds.awaitAll()
+            }
+            batch.forEach { (contentPage, extracted) -> result[contentPage] = extracted }
+        }
+        return result
     }
 
     fun extractContentPageCount(doc: Document): Int = when (val spec = config.imageSpec) {
@@ -1111,6 +1152,18 @@ class WordPressPhotoEngine(
 
     companion object {
         private const val MAX_SPARSE_WALK_PAGES = 64
+
+        /**
+         * Hard ceiling on site-claimed content pagination. WordPress photo posts in practice stay
+         * well under 30 pages; anything above this is a corrupted/hostile pager node.
+         */
+        internal const val MAX_CONTENT_PAGES = 32
+
+        /** Coroutines per wave; keeps peak live page objects bounded while saturating the 3-slot semaphore. */
+        private const val CONTENT_PAGE_BATCH_SIZE = 6
+
+        /** Concurrent in-flight content-page requests (network politeness ceiling). */
+        private const val CONTENT_PAGE_CONCURRENCY = 3
 
         private val PAGE_NUMBER_ATTR_REGEX = Regex("(?:page/|query-3-page=|paged=\"?)(\\d+)")
         private val GENERIC_TITLE_SUFFIX_REGEX = Regex("\\s*[-|–—]\\s*[^-|–—]*$")

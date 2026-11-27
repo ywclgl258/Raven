@@ -568,6 +568,71 @@ class HomeViewModelTest {
         }
 
     @Test
+    fun `incognito mode skips browse position persistence`() =
+        runTest(mainDispatcherRule.dispatcher) {
+            val harness = BrowseTestHarness(mainDispatcherRule.dispatcher)
+            val (registry, _, _) = buildRegistry()
+            val vm = HomeViewModel(
+                siteRegistry = registry,
+                preferencesRepository = harness.preferencesRepository,
+                blockedTermsRepository = harness.blockedTermsRepository,
+                historyRepository = harness.historyRepository,
+                favoriteRepository = harness.favoriteRepository,
+                shelfRepository = harness.shelfRepository,
+                browsePositionRepository = harness.browsePositionRepository,
+                dispatchers = harness.dispatchers,
+            )
+            vm.uiState.test {
+                advanceUntilIdle()
+                harness.preferencesRepository.setIncognitoMode(true)
+                advanceUntilIdle()
+
+                vm.saveBrowsePosition(workId = "v3", throughPage = 3, shelfId = "latest")
+                advanceUntilIdle()
+                val positions = harness.browsePositionRepository.observeAll().first()
+                assertTrue(positions.isEmpty())
+                cancelAndIgnoreRemainingEvents()
+            }
+        }
+
+    @Test
+    fun `browse position captures site at scroll time so a mid-debounce switch cannot cross sites`() =
+        runTest(mainDispatcherRule.dispatcher) {
+            val harness = BrowseTestHarness(mainDispatcherRule.dispatcher)
+            val (registry, _, _) = buildRegistry()
+            val vm = HomeViewModel(
+                siteRegistry = registry,
+                preferencesRepository = harness.preferencesRepository,
+                blockedTermsRepository = harness.blockedTermsRepository,
+                historyRepository = harness.historyRepository,
+                favoriteRepository = harness.favoriteRepository,
+                shelfRepository = harness.shelfRepository,
+                browsePositionRepository = harness.browsePositionRepository,
+                dispatchers = harness.dispatchers,
+            )
+            vm.uiState.test {
+                advanceUntilIdle()
+                val r34vKey = HomeViewModel.homePositionKey(SiteId.R34V, ComicLanguage.ALL)
+                val nhentaiKey = HomeViewModel.homePositionKey(SiteId.NHENTAI, ComicLanguage.ALL)
+
+                // Save on the active R34V site, then switch to nHentai before the debounce fires.
+                vm.saveBrowsePosition(workId = "v-old", throughPage = 2, shelfId = "")
+                advanceTimeBy(50L)
+                harness.preferencesRepository.selectActiveSiteAndRecordOpen(SiteId.NHENTAI)
+                advanceTimeBy(BROWSE_POSITION_DEBOUNCE_MS + 100L)
+                advanceUntilIdle()
+
+                val positions = harness.browsePositionRepository.observeAll().first()
+                // Only the original site gets the entry; the new active site must not inherit it.
+                val r34v = positions.firstOrNull { it.positionKey == r34vKey }
+                assertEquals("v-old", r34v?.workId)
+                assertEquals(2, r34v?.throughPage)
+                assertNull(positions.firstOrNull { it.positionKey == nhentaiKey })
+                cancelAndIgnoreRemainingEvents()
+            }
+        }
+
+    @Test
     fun `setStartupDefaultSiteId persists custom startup site without changing current active site and resets cleanly`() =
         runTest(mainDispatcherRule.dispatcher) {
             val harness = BrowseTestHarness(mainDispatcherRule.dispatcher)

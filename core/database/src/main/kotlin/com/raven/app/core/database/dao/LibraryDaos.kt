@@ -130,11 +130,11 @@ interface ShelfItemDao {
     @Query(
         """
         UPDATE shelf_items
-        SET completed = :completed
+        SET completed = :completed, completion_changed_at = :changedAt
         WHERE shelf_id = :shelfId AND site_id = :siteId AND media_id = :mediaId
         """,
     )
-    suspend fun updateCompleted(shelfId: String, siteId: String, mediaId: String, completed: Boolean)
+    suspend fun updateCompleted(shelfId: String, siteId: String, mediaId: String, completed: Boolean, changedAt: Long)
 
     @Query(
         """

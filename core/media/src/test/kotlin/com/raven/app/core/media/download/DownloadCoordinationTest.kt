@@ -467,7 +467,7 @@ class DownloadCoordinationTest {
 
                 // Corrupt page 2 on disk and run integrity audit
                 val bookDir = pageRepo.bookFolder(SiteId.NHENTAI, "999", storage.layout())
-                val p2Key = StorageRootManager.sha256Hex("https://nhentai.net/g/999/2/")
+                val p2Key = GalleryPageRepository.pageFileKey("https://nhentai.net/g/999/2/", 2)
                 File(bookDir, "$p2Key.image").writeBytes(TestMediaFixtures.truncatedPng())
 
                 val auditBefore = engine.inspect(queued.id)
@@ -680,6 +680,12 @@ class DownloadCoordinationTest {
                 assertTrue(repo.readingCacheBytes() > 0L)
                 repo.clearAllReadingCaches()
                 assertEquals(0L, repo.readingCacheBytes())
+                for (code in listOf(429, 503)) {
+                    server.enqueue(MockResponse().setResponseCode(code).setHeader("Retry-After", 120))
+                    val error = runCatching { repo.loadOriginalPage(detail, pageIndex = 1) }.exceptionOrNull()
+                    assertTrue("HTTP $code: $error", error is SiteException.RateLimited)
+                    assertEquals(120L, (error as SiteException.RateLimited).retryAfterSeconds)
+                }
             } finally {
                 server.shutdown()
             }

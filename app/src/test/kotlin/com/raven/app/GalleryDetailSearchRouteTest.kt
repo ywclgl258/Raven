@@ -2,6 +2,7 @@ package com.raven.app
 
 import com.raven.app.core.model.AuthorRef
 import com.raven.app.core.model.RavenRoute
+import com.raven.app.core.model.SiteId
 import com.raven.app.core.model.TagRef
 import org.junit.Assert.assertEquals
 import org.junit.Test
@@ -49,6 +50,26 @@ class GalleryDetailSearchRouteTest {
         assertEquals(
             RavenRoute.Search(initialQuery = "solo female", crossSite = true),
             tagSearchRoute(tag, crossSite = true),
+        )
+    }
+
+    @Test
+    fun galleryTagSearchCarriesSourceSiteSoNonActiveSiteIsTargeted() {
+        val tag = TagRef(slug = "blonde", label = "金发")
+
+        assertEquals(
+            RavenRoute.Search(initialQuery = "blonde", crossSite = false, sourceSiteId = SiteId.IWARA.value),
+            tagSearchRoute(tag, crossSite = false, sourceSiteId = SiteId.IWARA),
+        )
+    }
+
+    @Test
+    fun galleryAuthorSearchCarriesSourceSiteSoNonActiveSiteIsTargeted() {
+        val author = AuthorRef(id = "a-1", name = "Alice")
+
+        assertEquals(
+            RavenRoute.Search(initialQuery = "Alice", crossSite = false, sourceSiteId = SiteId.NHENTAI.value),
+            authorSearchRoute(author, crossSite = false, sourceSiteId = SiteId.NHENTAI),
         )
     }
 }

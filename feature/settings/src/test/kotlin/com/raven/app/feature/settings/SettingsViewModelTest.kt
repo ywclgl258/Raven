@@ -114,6 +114,7 @@ class SettingsViewModelTest {
             mediaRedirectCache = MediaRedirectCache(eligible = { false }, rateLimitLog = rateLimitLog),
             peerTracker = peerTracker,
             siteRegistryProvider = { registry },
+            sessionStoreProvider = { sessionStore },
         )
         val siteHttpClient = SiteHttpClient(
             okHttpPool = okHttpPool,
@@ -145,7 +146,7 @@ class SettingsViewModelTest {
             downloadClient = okHttpPool.imageClient,
             updatesDir = updatesDir,
             signatureVerifier = object : ApkSignatureVerifier {
-                override fun verify(apkFile: File) = Unit
+                override fun verify(apkFile: File, releaseTag: String) = Unit
             },
             stateStore = InMemoryUpdateStateStore(),
             dispatchers = mainDispatcherRule.appDispatchers,

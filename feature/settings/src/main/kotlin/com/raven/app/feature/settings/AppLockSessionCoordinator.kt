@@ -1,4 +1,4 @@
-package com.raven.app
+package com.raven.app.feature.settings
 
 import android.app.Activity
 import android.app.Application

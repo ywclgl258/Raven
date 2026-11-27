@@ -1,6 +1,7 @@
 package com.raven.app.feature.reader
 
 import app.cash.turbine.test
+import com.raven.app.core.media.reader.ExportMode
 import com.raven.app.core.media.reader.OfflineGallerySnapshot
 import com.raven.app.core.model.ComicLanguage
 import com.raven.app.core.model.FeedPage
@@ -10,12 +11,14 @@ import com.raven.app.core.model.HomeFeed
 import com.raven.app.core.model.MediaItem
 import com.raven.app.core.model.MediaKind
 import com.raven.app.core.model.RavenRoute
+import com.raven.app.core.model.ReaderMode
 import com.raven.app.core.model.SiteId
 import com.raven.app.core.sitespi.FeedSource
 import com.raven.app.core.sitespi.SitePlugin
 import com.raven.app.core.sitespi.SiteRegistry
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
@@ -272,6 +275,140 @@ class SerialChapterNavigationTest {
         assertEquals("parent-comic", receivedRequest?.category)
         assertEquals(1, receivedRequest?.page)
     }
+
+    @Test
+    fun `scrolling into appended chapter targets its own mediaId for bookmark and image favorite`() =
+        runTest(mainDispatcherRule.dispatcher) {
+            val harness = ReaderTestHarness(mainDispatcherRule.dispatcher, tempFolder.newFolder())
+            val chapters = chapters()
+            val viewModel = reader(
+                harness = harness,
+                detail = serialDetail(chapters.first(), pageCount = 2),
+                persistenceScope = backgroundScope,
+                chapterLoader = SerialChapterLoader { _, _ -> chapters },
+                extraDetails = mapOf(chapters[1].id to serialDetail(chapters[1], pageCount = 3)),
+            )
+            advanceUntilIdle()
+            viewModel.setReadingMode(ReaderMode.STRIP)
+
+            viewModel.onStripEndReached()
+            advanceUntilIdle()
+            assertEquals(listOf(chapters[1].id), viewModel.uiState.value.appendedChapters.map { it.mediaId })
+            viewModel.onStripViewportProgress(
+                anchorChapterId = chapters[1].id,
+                anchorPage = 2,
+                visiblePagesByChapter = mapOf(chapters[1].id to setOf(2)),
+                scrollOffsetPx = 320,
+                remainingItemsToBottom = 8,
+            )
+            advanceUntilIdle()
+
+            viewModel.toggleCurrentPageBookmark()
+            advanceUntilIdle()
+            val bookmarks = harness.bookmarkRepository.observePageBookmarks().first()
+            assertEquals(1, bookmarks.size)
+            assertEquals(chapters[1].id, bookmarks.single().mediaId)
+            assertEquals(2, bookmarks.single().page)
+            assertEquals(320, bookmarks.single().scrollOffsetPx)
+            assertEquals(66, viewModel.uiState.value.progressPercent)
+
+            viewModel.toggleCurrentPageImageFavorite()
+            advanceUntilIdle()
+            val favorites = harness.bookmarkRepository
+                .observeImageFavoritesForMedia(SiteId.MANGACOPY, chapters[1].id)
+                .first()
+            assertEquals(1, favorites.size)
+            assertEquals(2, favorites.single().pageIndex)
+            assertTrue(viewModel.uiState.value.isCurrentPageBookmarked)
+            assertTrue(viewModel.uiState.value.isCurrentPageImageFavorited)
+            assertTrue(viewModel.uiState.value.thumbnailPageBookmarks.isEmpty())
+
+            val bookmark = bookmarks.single()
+            viewModel.events.test {
+                viewModel.jumpToPage(bookmark.page, bookmark.scrollOffsetPx, chapterId = bookmark.mediaId)
+                assertEquals(ReaderEvent.ScrollToPage(2, 320, chapters[1].id), awaitItem())
+                viewModel.jumpToPage(2)
+                assertEquals(ReaderEvent.ScrollToPage(2, 0, chapters.first().id), awaitItem())
+                cancelAndIgnoreRemainingEvents()
+            }
+            viewModel.onStripViewportProgress(chapters.first().id, 2, mapOf(chapters.first().id to setOf(2)), 0, 8)
+            advanceUntilIdle()
+            assertFalse(viewModel.uiState.value.isCurrentPageBookmarked)
+            assertFalse(viewModel.uiState.value.isCurrentPageImageFavorited)
+        }
+
+    @Test
+    fun `exporting current page inside appended chapter exports a single page`() =
+        runTest(mainDispatcherRule.dispatcher) {
+            val harness = ReaderTestHarness(mainDispatcherRule.dispatcher, tempFolder.newFolder())
+            val chapters = chapters()
+            val viewModel = reader(
+                harness = harness,
+                detail = serialDetail(chapters.first(), pageCount = 2),
+                persistenceScope = backgroundScope,
+                chapterLoader = SerialChapterLoader { _, _ -> chapters },
+                extraDetails = mapOf(chapters[1].id to serialDetail(chapters[1], pageCount = 3)),
+            )
+            advanceUntilIdle()
+            viewModel.setReadingMode(ReaderMode.STRIP)
+            viewModel.onStripEndReached()
+            advanceUntilIdle()
+            viewModel.onStripViewportProgress(
+                anchorChapterId = chapters[1].id,
+                anchorPage = 2,
+                visiblePagesByChapter = mapOf(chapters[1].id to setOf(2)),
+                scrollOffsetPx = 320,
+                remainingItemsToBottom = 8,
+            )
+            advanceUntilIdle()
+
+            viewModel.events.test {
+                viewModel.exportCurrentPage(ExportMode.SAVE_IMAGES)
+                advanceUntilIdle()
+                val event = awaitItem()
+                val prepared = when (event) {
+                    is ReaderEvent.RequestShareExport -> event.prepared
+                    is ReaderEvent.RequestSaveDocument -> event.prepared
+                    is ReaderEvent.RequestOpenDocumentTree -> event.prepared
+                    else -> error("unexpected event $event")
+                }
+                assertEquals(1, prepared.files.size)
+                cancelAndIgnoreRemainingEvents()
+            }
+        }
+
+    @Test
+    fun `fast exit before debounce flushes the appended chapter's latest position`() =
+        runTest(mainDispatcherRule.dispatcher) {
+            val harness = ReaderTestHarness(mainDispatcherRule.dispatcher, tempFolder.newFolder())
+            val chapters = chapters()
+            val viewModel = reader(
+                harness = harness,
+                detail = serialDetail(chapters.first(), pageCount = 2),
+                persistenceScope = backgroundScope,
+                chapterLoader = SerialChapterLoader { _, _ -> chapters },
+                extraDetails = mapOf(chapters[1].id to serialDetail(chapters[1], pageCount = 3)),
+            )
+            advanceUntilIdle()
+            viewModel.setReadingMode(ReaderMode.STRIP)
+            viewModel.onStripEndReached()
+            advanceUntilIdle()
+            // Viewport moves into chapter 2, page 2 — but we exit before the 750ms debounce elapses.
+            viewModel.onStripViewportProgress(
+                anchorChapterId = chapters[1].id,
+                anchorPage = 2,
+                visiblePagesByChapter = mapOf(chapters[1].id to setOf(2)),
+                scrollOffsetPx = 640,
+                remainingItemsToBottom = 8,
+            )
+            viewModel.flushProgressNow()
+
+            val progress = harness.historyRepository
+                .observeReadingProgress(SiteId.MANGACOPY, chapters[1].id)
+                .first()
+            assertEquals(2, progress?.currentPage)
+            assertEquals(640, progress?.scrollOffsetPx)
+        }
 
     private fun reader(
         harness: ReaderTestHarness,

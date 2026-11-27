@@ -518,17 +518,23 @@ class EhSharedEngine(
     }
 
     private suspend fun fetchHtml(url: String, allowCache: Boolean = true): String {
+        // The epoch MUST come from the shared account bucket (`accountId`), never from the host
+        // identity: importing credentials writes EHENTAI's record, while a feed read is tagged
+        // EXHENTAI. Capturing and comparing the same account-scoped counter keeps an in-flight
+        // list request valid after import, and still cancels it when the account really switches.
+        val expectedEpoch = sessionStore.authEpoch(accountSiteId)
         val response = try {
             httpClient.getText(
                 url = url,
                 siteId = siteId,
                 kind = SiteRequestKind.PAGE,
                 allowCache = allowCache,
-                authEpoch = sessionStore.authEpoch(accountSiteId),
+                authEpoch = expectedEpoch,
             )
         } catch (e: CancellationException) {
             throw e
         } catch (e: SiteException) {
+            if (e is SiteException.Cancelled) throw e
             if (requiresAuthGate && e is SiteException.Forbidden && !e.isChallenge) {
                 throw SiteException.AuthRequired(
                     message = "ExHentai 会话已失效或需要官方验证，请重新登录",

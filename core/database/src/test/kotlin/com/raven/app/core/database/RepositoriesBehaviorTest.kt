@@ -335,6 +335,7 @@ class RepositoriesBehaviorTest {
             readerPreferencesDao = db.readerPreferences,
             settingsDataStore = settingsStore,
             transactionRunner = db.transactionRunner,
+            backupRestoreJournalDao = db.backupRestoreJournal,
             clock = { 50_000L },
         )
 
@@ -392,6 +393,7 @@ class RepositoriesBehaviorTest {
                         throw IOException("simulated disk full")
                     }
             },
+            backupRestoreJournalDao = db.backupRestoreJournal,
             clock = { 70_000L },
         )
         val rollbackAttempt = runCatching {
@@ -447,6 +449,7 @@ class RepositoriesBehaviorTest {
             readerPreferencesDao = db.readerPreferences,
             settingsDataStore = SettingsDataStore(InMemoryPreferencesDataStore()),
             transactionRunner = gatedTransactionRunner,
+            backupRestoreJournalDao = db.backupRestoreJournal,
         )
 
         val restore = async(start = CoroutineStart.UNDISPATCHED) {
@@ -554,6 +557,8 @@ class RepositoriesBehaviorTest {
                 transactionRunner = db.transactionRunner,
                 clock = clock,
                 tagTranslationDao = db.tagTranslations,
+                tagDictionaryRepository = tagDictRepo,
+                backupRestoreJournalDao = db.backupRestoreJournal,
             )
             val exported = backupRepo.exportPayload(appVersion = "1.1.0")
             assertEquals(1, exported.customTagTranslations.size)
@@ -589,8 +594,12 @@ class RepositoriesBehaviorTest {
                     ),
                 ),
             )
-            assertEquals(1, subRepo.observeInbox().first().size)
+            val inboxItem = subRepo.observeInbox().first().single()
             subRepo.unsubscribe(SiteId.R34V, "3d", SearchScope.TAG)
+            assertTrue(subRepo.observeInbox().first().isEmpty())
+            assertTrue(subRepo.toggleSubscription(sub))
+            subRepo.upsertInboxItems(listOf(inboxItem))
+            assertFalse(subRepo.toggleSubscription(sub))
             assertTrue(subRepo.observeInbox().first().isEmpty())
         }
 }

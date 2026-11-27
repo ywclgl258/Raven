@@ -11,12 +11,15 @@ import com.raven.app.core.security.SessionVault
 import com.raven.app.core.security.SoftwareAesGcmVaultCipher
 import com.raven.app.core.sitespi.AuthMode
 import com.raven.app.core.sitespi.AuthProvider
+import com.raven.app.core.sitespi.RequestSessionScope
 import com.raven.app.core.sitespi.SiteHttpRequest
 import com.raven.app.core.sitespi.SiteHttpResponse
+import com.raven.app.core.sitespi.SiteAuthCancelledException
 import com.raven.app.core.sitespi.SitePlugin
 import com.raven.app.core.sitespi.SiteRegistry
 import com.raven.app.core.sitespi.SiteRequestKind
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.runTest
 import okhttp3.ConnectionPool
 import okhttp3.CookieJar
@@ -27,6 +30,7 @@ import okhttp3.mockwebserver.MockWebServer
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertThrows
@@ -116,6 +120,7 @@ class SiteHttpClientTest {
             mediaRedirectCache = mediaRedirectCache,
             peerTracker = peerTracker,
             siteRegistryProvider = { registry },
+            sessionStoreProvider = { vault },
         )
         val hostPacer = HostPacer(clockMs = pacerClockMs, delayFn = pacerDelayFn)
         val client = SiteHttpClient(
@@ -150,7 +155,31 @@ class SiteHttpClientTest {
     )
 
     @Test
-    fun `all 5 pre-built OkHttpClients share ONE ConnectionPool Dispatcher Dns and ProxySelector`() {
+    fun `external clients follow redirects without reading or writing site credentials`() {
+        val stack = buildTestStack()
+        val cookies = mapOf("session" to "before")
+        stack.vault.replaceCookies(SiteId.IWARA, cookies)
+        stack.vault.saveBearerToken(SiteId.IWARA, "account-token")
+        MockWebServer().use { server ->
+            server.start()
+            val initial = server.url("/latest").newBuilder().host("api.github.com").build()
+            val redirected = initial.newBuilder().host("www.iwara.tv").build()
+            for (client in listOf(stack.pool.externalApiClient, stack.pool.externalDownloadClient)) {
+                server.enqueue(MockResponse().setResponseCode(302).setHeader("Location", redirected.toString()))
+                server.enqueue(MockResponse().setHeader("Set-Cookie", "session=changed; Path=/"))
+                client.newCall(okhttp3.Request.Builder().url(initial).build()).execute().use { assertTrue(it.isSuccessful) }
+                repeat(2) {
+                    val sent = server.takeRequest()
+                    assertNull(sent.getHeader("Cookie"))
+                    assertNull(sent.getHeader("Authorization"))
+                }
+                assertEquals(cookies, stack.vault.getCookies(SiteId.IWARA))
+            }
+        }
+    }
+
+    @Test
+    fun `pre-built clients share one transport pool dispatcher DNS and proxy selector`() {
         val stack = buildTestStack()
         val clients = listOf(
             stack.pool.pageClient,
@@ -158,6 +187,8 @@ class SiteHttpClientTest {
             stack.pool.imageClient,
             stack.pool.mediaClient,
             stack.pool.probeClient,
+            stack.pool.externalApiClient,
+            stack.pool.externalDownloadClient,
         )
         for (c in clients) {
             assertSame(stack.pool.connectionPool, c.connectionPool)
@@ -369,6 +400,111 @@ class SiteHttpClientTest {
     }
 
     @Test
+    fun `end-to-end late Set-Cookie after logout cannot restore the session through real OkHttp`() = runTest {
+        val server = MockWebServer()
+        server.start()
+        try {
+            val stack = buildTestStack()
+            stack.vault.saveCookies(SiteId.IWARA, mapOf("session" to "logged-in"))
+
+            // The response is released only after logout has fully completed: the classic NET-09 race.
+            val logoutDone = java.util.concurrent.CountDownLatch(1)
+            val requestSent = java.util.concurrent.CountDownLatch(1)
+            server.dispatcher = object : okhttp3.mockwebserver.Dispatcher() {
+                override fun dispatch(request: okhttp3.mockwebserver.RecordedRequest): MockResponse {
+                    requestSent.countDown()
+                    logoutDone.await(10, TimeUnit.SECONDS)
+                    return if (request.path == "/after-logout") {
+                        MockResponse().setResponseCode(200).setHeader("Set-Cookie", "session=resurrected; Path=/")
+                    } else {
+                        MockResponse().setResponseCode(200).setBody("anonymous")
+                    }
+                }
+            }
+            val apiBase = "http://www.iwara.tv:${server.port}"
+
+            var lateResponse: SiteHttpResponse? = null
+            var lateError: Throwable? = null
+            val worker = Thread {
+                try {
+                    lateResponse = runBlocking {
+                        stack.client.execute(
+                            SiteHttpRequest(url = "$apiBase/after-logout", siteId = SiteId.IWARA, kind = SiteRequestKind.PAGE),
+                        )
+                    }
+                } catch (t: Throwable) {
+                    lateError = t
+                }
+            }
+            worker.start()
+
+            // Wait until the request has left the device: its dispatch epoch is already captured.
+            assertTrue("Request never reached the server", requestSent.await(10, TimeUnit.SECONDS))
+            stack.vault.clearSite(SiteId.IWARA)
+            val epochAfterLogout = stack.vault.authEpoch(SiteId.IWARA)
+            logoutDone.countDown()
+            worker.join(10_000)
+            assertNull("In-flight request should still succeed: $lateError", lateError)
+            assertNotNull(lateResponse)
+
+            // Logout stands: neither the plain summary nor the sealed jar regained the session.
+            assertTrue("Late Set-Cookie restored the cleared session", stack.vault.getCookies(SiteId.IWARA).isEmpty())
+            assertEquals(epochAfterLogout, stack.vault.authEpoch(SiteId.IWARA))
+
+            // A following request goes out unauthenticated and the session stays logged out.
+            val next = stack.client.execute(
+                SiteHttpRequest(url = "$apiBase/next", siteId = SiteId.IWARA, kind = SiteRequestKind.PAGE),
+            )
+            assertEquals("anonymous", next.bodyText())
+            assertTrue(stack.vault.getCookies(SiteId.IWARA).isEmpty())
+        } finally {
+            server.shutdown()
+        }
+    }
+
+    @Test
+    fun `ISOLATED probe sends only candidate cookies and never persists response Set-Cookie`() = runTest {
+        val server = MockWebServer()
+        server.start()
+        try {
+            val stack = buildTestStack()
+            // Live session that must remain untouched by the candidate handshake.
+            stack.vault.replaceCookies(SiteId.IWARA, mapOf("session" to "live-account"))
+            val epochBefore = stack.vault.authEpoch(SiteId.IWARA)
+
+            val base = "http://www.iwara.tv:${server.port}"
+            server.enqueue(
+                MockResponse()
+                    .setResponseCode(200)
+                    .setHeader("Set-Cookie", "session=candidate-account; Path=/")
+                    .setBody("verify"),
+            )
+
+            val response = stack.client.execute(
+                SiteHttpRequest(
+                    url = "$base/login-candidate",
+                    siteId = SiteId.IWARA,
+                    kind = SiteRequestKind.PAGE,
+                    headers = mapOf("Cookie" to "session=candidate-account"),
+                    allowCookies = false,
+                    allowRetry = false,
+                    sessionScope = RequestSessionScope.ISOLATED,
+                ),
+            )
+            assertEquals("verify", response.bodyText())
+
+            val request = server.takeRequest(5, TimeUnit.SECONDS)!!
+            // Exactly the candidate cookie — no site jar decoration on top of it.
+            assertEquals("session=candidate-account", request.getHeader("Cookie"))
+            // The candidate response never reached the vault: live session and epoch intact.
+            assertEquals("live-account", stack.vault.getCookies(SiteId.IWARA)["session"])
+            assertEquals(epochBefore, stack.vault.authEpoch(SiteId.IWARA))
+        } finally {
+            server.shutdown()
+        }
+    }
+
+    @Test
     fun `Ipv4FirstDns orders IPv4 ahead of IPv6 stably`() {
         val v6a = InetAddress.getByName("2001:db8::1")
         val v4a = InetAddress.getByName("93.184.216.34")
@@ -493,6 +629,197 @@ class SiteHttpClientTest {
         assertSame(stack.pool.connectionPool, stack.pool.lanClient.connectionPool)
         assertFalse(stack.pool.lanClient.followRedirects)
         assertSame(CookieJar.NO_COOKIES, stack.pool.lanClient.cookieJar)
+    }
+
+    @Test
+    fun `ISOLATED scope selects a no-cookie client so a candidate handshake never touches the jar`() {
+        val stack = buildTestStack()
+        for (kind in listOf(SiteRequestKind.PAGE, SiteRequestKind.API, SiteRequestKind.IMAGE, SiteRequestKind.MEDIA)) {
+            val isolated = stack.pool.clientFor(
+                SiteHttpRequest(
+                    url = "https://www.iwara.tv/x",
+                    siteId = SiteId.IWARA,
+                    kind = kind,
+                    allowCookies = true,
+                    sessionScope = RequestSessionScope.ISOLATED,
+                ),
+            )
+            assertSame("kind=$kind must bypass the site cookie jar", CookieJar.NO_COOKIES, isolated.cookieJar)
+        }
+        // SITE scope keeps the jar.
+        val normal = stack.pool.clientFor(
+            SiteHttpRequest(url = "https://www.iwara.tv/x", siteId = SiteId.IWARA, kind = SiteRequestKind.PAGE),
+        )
+        assertSame(stack.pool.cookieJar, normal.cookieJar)
+    }
+
+    @Test
+    fun `interceptor-level Iwara epoch cancellation surfaces as SiteException Cancelled and a safe IOException`() = runTest {
+        val server = MockWebServer()
+        server.start()
+        try {
+            val stack = buildTestStack()
+            stack.vault.saveBearerToken(SiteId.IWARA, "jwt", "alice")
+            val epochAtDispatch = stack.vault.authEpoch(SiteId.IWARA)
+
+            // Session switches between dispatch and the header-decoration step.
+            stack.vault.clearSite(SiteId.IWARA)
+
+            val base = "http://apiq.iwara.tv:${server.port}"
+            var caught: Throwable? = null
+            try {
+                stack.client.execute(
+                    SiteHttpRequest(
+                        url = "$base/subscriptions/videos",
+                        siteId = SiteId.IWARA,
+                        kind = SiteRequestKind.API,
+                        authEpoch = epochAtDispatch,
+                    ),
+                )
+            } catch (t: Throwable) {
+                caught = t
+            }
+            assertTrue("Expected SiteException.Cancelled, got $caught", caught is SiteException.Cancelled)
+            assertEquals(0, server.requestCount)
+
+            // Raw mapping: an interceptor that throws inside the chain must not escape as a
+            // non-IOException. SiteAuthCancelledException IS an IOException, and the mapper turns
+            // it back into the typed cancellation.
+            val raw = SiteAuthCancelledException("Iwara 会话已切换", siteId = SiteId.IWARA)
+            assertTrue("SiteAuthCancelledException must be an IOException", raw is IOException)
+            val mapped = SiteHttpErrorMapper.fromThrowable(raw, SiteId.IWARA)
+            assertTrue(mapped is SiteException.Cancelled)
+            assertEquals("Iwara 会话已切换", mapped.message)
+            assertEquals(SiteId.IWARA, (mapped as SiteException.Cancelled).siteId)
+        } finally {
+            server.shutdown()
+        }
+    }
+
+    @Test
+    fun `account-scoped PAGE and API requests never replay the shared HTTP cache across account change`() = runTest {
+        val server = MockWebServer()
+        server.start()
+        try {
+            var cachedNowMs = 1_700_000_000_000L
+            val cacheDir = java.nio.file.Files.createTempDirectory("raven-http-cache").toFile()
+            try {
+                val stack = buildTestStack()
+                // A cache-bearing pool, mirroring production (32 MiB disk cache).
+                val cachedPool = RavenOkHttpPool(
+                    cacheDir = cacheDir,
+                    connectionPool = stack.pool.connectionPool,
+                    dispatcher = stack.pool.dispatcher,
+                    dns = stack.pool.dns,
+                    proxySelector = stack.pool.proxySelector,
+                    cookieJar = stack.pool.cookieJar,
+                    mediaRedirectCache = stack.pool.mediaRedirectCache,
+                    peerTracker = PeerTracker(),
+                    siteRegistryProvider = { stack.registry },
+                    sessionStoreProvider = { stack.vault },
+                )
+                val cachedClient = SiteHttpClient(
+                    okHttpPool = cachedPool,
+                    hostPacer = HostPacer(clockMs = { cachedNowMs }),
+                    sessionStore = stack.vault,
+                    networkMonitor = stack.networkMonitor,
+                    rateLimitLog = stack.rateLimitLog,
+                    siteRegistry = stack.registry,
+                    dispatchers = CustomAppDispatchers(Dispatchers.IO),
+                )
+
+                stack.vault.saveCookies(SiteId.IWARA, mapOf("session" to "account-A"))
+                val base = "http://www.iwara.tv:${server.port}"
+                server.enqueue(
+                    MockResponse()
+                        .setResponseCode(200)
+                        .setHeader("Cache-Control", "max-age=600")
+                        .setHeader("ETag", "\"a\"")
+                        .setBody("body-for-account-A"),
+                )
+                val epochA = stack.vault.authEpoch(SiteId.IWARA)
+                val ra = cachedClient.execute(
+                    SiteHttpRequest(
+                        url = "$base/subscriptions",
+                        siteId = SiteId.IWARA,
+                        kind = SiteRequestKind.PAGE,
+                        authEpoch = epochA,
+                    ),
+                )
+                assertEquals("body-for-account-A", ra.bodyText())
+
+                // Account switch: logout then login as B.
+                stack.vault.clearSite(SiteId.IWARA)
+                stack.vault.saveCookies(SiteId.IWARA, mapOf("session" to "account-B"))
+                val epochB = stack.vault.authEpoch(SiteId.IWARA)
+
+                server.enqueue(
+                    MockResponse()
+                        .setResponseCode(200)
+                        .setHeader("Cache-Control", "max-age=600")
+                        .setBody("body-for-account-B"),
+                )
+                val rb = cachedClient.execute(
+                    SiteHttpRequest(
+                        url = "$base/subscriptions",
+                        siteId = SiteId.IWARA,
+                        kind = SiteRequestKind.PAGE,
+                        authEpoch = epochB,
+                    ),
+                )
+                assertEquals("body-for-account-B", rb.bodyText())
+                assertEquals("Second account must hit the network, not the shared cache", 2, server.requestCount)
+                cachedNowMs += 1_000L
+            } finally {
+                cacheDir.deleteRecursively()
+            }
+        } finally {
+            server.shutdown()
+        }
+    }
+
+    @Test
+    fun `evictHttpCache drops cached bodies so a later unauthenticated request refetches`() = runTest {
+        val server = MockWebServer()
+        server.start()
+        try {
+            val cacheDir = java.nio.file.Files.createTempDirectory("raven-http-cache-evict").toFile()
+            try {
+                val stack = buildTestStack()
+                val pool = RavenOkHttpPool(
+                    cacheDir = cacheDir,
+                    connectionPool = stack.pool.connectionPool,
+                    dispatcher = stack.pool.dispatcher,
+                    dns = stack.pool.dns,
+                    proxySelector = stack.pool.proxySelector,
+                    cookieJar = stack.pool.cookieJar,
+                    mediaRedirectCache = stack.pool.mediaRedirectCache,
+                    peerTracker = PeerTracker(),
+                    siteRegistryProvider = { stack.registry },
+                    sessionStoreProvider = { stack.vault },
+                )
+                val base = "http://www.iwara.tv:${server.port}"
+                server.enqueue(
+                    MockResponse().setResponseCode(200)
+                        .setHeader("Cache-Control", "max-age=600")
+                        .setBody("v1"),
+                )
+                // Anonymously cacheable request (no authEpoch) -> may be stored.
+                pool.pageClient.newCall(okhttp3.Request.Builder().url("$base/page").build()).execute().use {
+                    assertEquals("v1", it.body!!.string())
+                }
+                pool.evictHttpCache()
+                server.enqueue(MockResponse().setResponseCode(200).setBody("v2"))
+                pool.pageClient.newCall(okhttp3.Request.Builder().url("$base/page").build()).execute().use {
+                    assertEquals("v2", it.body!!.string())
+                }
+                assertEquals(2, server.requestCount)
+            } finally {
+                cacheDir.deleteRecursively()
+            }
+        } finally {
+            server.shutdown()
+        }
     }
 
     @Test

@@ -6,6 +6,7 @@ import coil3.ImageLoader
 import coil3.PlatformContext
 import coil3.SingletonImageLoader
 import com.raven.app.core.common.AppDispatchers
+import com.raven.app.core.database.repository.BackupDataRepository
 import com.raven.app.core.database.repository.PreferencesRepository
 import com.raven.app.core.database.repository.TagDictionaryRepository
 import com.raven.app.core.media.download.DownloadCoordinator
@@ -13,6 +14,7 @@ import com.raven.app.core.media.storage.StorageRootManager
 import com.raven.app.core.network.ApplicationScope
 import com.raven.app.core.network.NetworkMonitor
 import com.raven.app.core.sitespi.SiteRegistry
+import com.raven.app.feature.settings.AppLockSessionCoordinator
 import com.raven.app.feature.settings.EhTagTranslationSyncer
 import com.raven.app.feature.settings.RavenUpdater
 import com.raven.app.feature.settings.UpdateCheckOutcome
@@ -50,7 +52,8 @@ class RavenApplication : Application(), SingletonImageLoader.Factory {
         SingletonImageLoader.setSafe(this)
 
         val koin = getKoin()
-        koin.get<AppLockSessionCoordinator>().attach(this)
+        val lockCoordinator = koin.get<AppLockSessionCoordinator>()
+        lockCoordinator.attach(this)
         val networkMonitor = koin.get<NetworkMonitor>()
         runCatching { networkMonitor.start() }
             .onFailure { Log.w(TAG, "Failed to start NetworkMonitor", it) }
@@ -64,6 +67,10 @@ class RavenApplication : Application(), SingletonImageLoader.Factory {
         val preferencesRepository = koin.get<PreferencesRepository>()
         val siteRegistry = koin.get<SiteRegistry>()
         val updater = koin.get<RavenUpdater>()
+
+        applicationScope.launch(dispatchers.main) {
+            preferencesRepository.settings.collect(lockCoordinator::onSettingsLoaded)
+        }
 
         applicationScope.launch(dispatchers.io) {
             runCatching {
@@ -84,6 +91,13 @@ class RavenApplication : Application(), SingletonImageLoader.Factory {
                 .onFailure { Log.w(TAG, "Failed to start DownloadCoordinator", it) }
             runCatching { RavenBackgroundMaintenanceWorker.schedulePeriodic(this@RavenApplication) }
                 .onFailure { Log.w(TAG, "Failed to schedule periodic background maintenance", it) }
+        }
+
+        applicationScope.launch(dispatchers.io) {
+            // Finish a restore interrupted between its Room commit and its settings write before
+            // anything reads AppSettings, so the app never boots with restored data + stale settings.
+            runCatching { koin.get<BackupDataRepository>().recoverPendingSettings() }
+                .onFailure { Log.w(TAG, "Failed to recover pending backup restore settings", it) }
         }
 
         applicationScope.launch(dispatchers.io) {

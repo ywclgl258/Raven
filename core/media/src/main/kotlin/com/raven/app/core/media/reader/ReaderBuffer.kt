@@ -174,7 +174,7 @@ class ReaderBuffer<T : Any>(
 
     private fun scheduleLocked(number: Int, force: Boolean, prefetch: Boolean): Job? {
         if (disposed) return null
-        if (activeJobs[number]?.isActive == true) return null
+        if (number in activeJobs) return null
         if (!force && (number in loadedPages || number in pageErrors || (prefetch && number in evictedInCurrentAnchor))) {
             return null
         }
@@ -185,7 +185,7 @@ class ReaderBuffer<T : Any>(
                 ensureActive()
                 val ratio = aspectRatioOf(result)?.takeIf { it.isFinite() && it > 0f }
                 synchronized(stateLock) {
-                    if (disposed) return@launch
+                    if (disposed || activeJobs[number] !== coroutineContext[Job]) return@launch
                     if (ratio != null) sharedRatios[number] = ratio
                     loadedPages[number] = result
                     evictedInCurrentAnchor.remove(number)
@@ -195,7 +195,7 @@ class ReaderBuffer<T : Any>(
                 throw ce
             } catch (error: Throwable) {
                 synchronized(stateLock) {
-                    if (!disposed) {
+                    if (!disposed && activeJobs[number] === coroutineContext[Job]) {
                         pageErrors[number] = error.message?.takeIf(String::isNotBlank) ?: "图页加载失败"
                     }
                 }
