@@ -71,7 +71,10 @@ class RavenDocumentPickerTest {
                     original = it
                     it.openAppUpdateInstaller(apk)
                 }
-                compose.waitUntil(20_000) { automation.rootInActiveWindow?.packageName?.contains("settings") == true }
+                compose.waitUntil(20_000) {
+                    val packageName = automation.rootInActiveWindow?.packageName
+                    packageName != null && packageName != context.packageName
+                }
                 scenario.onActivity { stopped ->
                     val state = android.os.Bundle()
                     instrumentation.callActivityOnSaveInstanceState(stopped, state)
@@ -94,20 +97,35 @@ class RavenDocumentPickerTest {
     private fun waitForSystemSaveButton(timeoutMs: Long = 20_000L): AccessibilityNodeInfo {
         val automation = InstrumentationRegistry.getInstrumentation().uiAutomation
         val deadline = SystemClock.elapsedRealtime() + timeoutMs
+        var lastPackage: String? = null
         while (SystemClock.elapsedRealtime() < deadline) {
             val root = automation.rootInActiveWindow
+            lastPackage = root?.packageName?.toString()
             if (root != null && root.packageName?.contains("documentsui", ignoreCase = true) == true) {
-                val byId = root.findAccessibilityNodeInfosByViewId("android:id/button1")
-                    .firstOrNull { it.isEnabled }
-                if (byId != null) return byId
-                val byText = root.findAccessibilityNodeInfosByText("Save")
-                    .firstOrNull { it.isEnabled && it.isClickable }
-                    ?: root.findAccessibilityNodeInfosByText("保存")
-                        .firstOrNull { it.isEnabled && it.isClickable }
-                if (byText != null) return byText
+                findSaveAction(root)?.let { return it }
             }
             SystemClock.sleep(50)
         }
-        error("System document picker did not show its Save action")
+        error("System document picker did not show its Save action (last package=$lastPackage)")
+    }
+
+    private fun findSaveAction(node: AccessibilityNodeInfo): AccessibilityNodeInfo? {
+        val labels = listOf(
+            node.text?.toString().orEmpty(),
+            node.contentDescription?.toString().orEmpty(),
+        )
+        if (node.isEnabled && labels.any { it.contains("save", ignoreCase = true) || it.contains("保存") }) {
+            if (node.isClickable) return node
+            var parent = node.parent
+            while (parent != null) {
+                if (parent.isClickable) return parent
+                parent = parent.parent
+            }
+        }
+        for (index in 0 until node.childCount) {
+            val child = node.getChild(index) ?: continue
+            findSaveAction(child)?.let { return it }
+        }
+        return null
     }
 }
