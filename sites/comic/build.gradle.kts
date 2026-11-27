@@ -22,6 +22,7 @@ dependencies {
     implementation(project(":core:common"))
 
     implementation(libs.jsoup)
+    compileOnly(libs.jspecify)
     implementation(libs.kotlinx.coroutines.core)
     implementation(libs.kotlinx.serialization.json)
     implementation(platform(libs.koin.bom))

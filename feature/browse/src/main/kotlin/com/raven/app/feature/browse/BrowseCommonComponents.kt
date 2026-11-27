@@ -25,6 +25,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Download
 import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.outlined.LibraryAdd
 import androidx.compose.material.icons.outlined.Lock
@@ -87,6 +88,7 @@ import com.raven.app.core.designsystem.theme.ravenInteractiveLight
 import com.raven.app.core.designsystem.theme.ravenSpringPress
 import com.raven.app.core.designsystem.theme.tabular
 import com.raven.app.core.model.MediaItem
+import com.raven.app.core.model.MediaKind
 import com.raven.app.core.model.Shelf
 import com.raven.app.core.model.ReadingProgress
 import com.raven.app.core.model.SiteDescriptor
@@ -484,6 +486,9 @@ internal fun BrowsePaginationFooter(
 
 /**
  * Single-screen Apple HIG action sheet shown on long-press of any media card.
+ *
+ * Beyond Watch Later / custom shelf / similar-tag actions, hosts can supply Favorite and
+ * Download callbacks. Both are optional so call sites without those facilities keep compiling.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -499,13 +504,20 @@ internal fun MediaCardActionAndShelfHost(
     onToggleShelfMembership: (shelfId: String, item: MediaItem, add: Boolean) -> Unit,
     onCreateShelfAndAdd: (name: String, item: MediaItem) -> Unit,
     onSearchSimilar: ((String) -> Unit)? = null,
+    favoriteKeys: Set<String> = emptySet(),
+    onToggleFavorite: ((MediaItem) -> Unit)? = null,
+    downloadStateByKey: Map<String, MediaCardDownloadState> = emptyMap(),
+    onDownload: ((MediaItem) -> Unit)? = null,
 ) {
     var shelfPickerItem by remember { mutableStateOf<MediaItem?>(null) }
 
     if (targetItem != null) {
+        val downloadKind = resolveMediaCardDownloadKind(targetItem.kind)
+        val downloadState = downloadStateByKey[targetItem.compositeKey] ?: MediaCardDownloadState()
         MediaCardActionSheet(
             item = targetItem,
             isInWatchLater = targetItem.compositeKey in watchLaterKeys,
+            isFavorite = onToggleFavorite != null && targetItem.compositeKey in favoriteKeys,
             onDismiss = onDismiss,
             onOpen = { onOpen(targetItem) },
             onToggleWatchLater = { onToggleWatchLater(targetItem) },
@@ -517,6 +529,11 @@ internal fun MediaCardActionAndShelfHost(
             } else {
                 null
             },
+            onToggleFavorite = onToggleFavorite?.let { toggle -> { toggle(targetItem) } },
+            onDownload = onDownload?.takeIf { downloadKind != null }?.let { enqueue -> { enqueue(targetItem) } },
+            downloadLabel = downloadKind?.actionLabel,
+            downloadSubtitle = downloadState.subtitleFor(downloadKind),
+            downloadIsActive = downloadState.isActive,
             onSearchSimilar = onSearchSimilar,
         )
     }
@@ -551,6 +568,37 @@ internal fun MediaCardActionAndShelfHost(
 
 private val NOOP_CREATE_SHELF: (String, MediaItem) -> Unit = { _, _ -> }
 
+/** Resolved download affordance for a media card long-press action. */
+enum class MediaCardDownloadKind(val actionLabel: String) {
+    VIDEO("下载视频"),
+    GALLERY("下载图集"),
+}
+
+/**
+ * Whether the existing download APIs can service this [MediaKind]. Videos go through
+ * [DownloadCoordinator.enqueueVideoWithPreferredQuality], everything else through
+ * [DownloadCoordinator.enqueueGallery]; both are supported, so this returns non-null for all
+ * current kinds. Returning null for an unknown future kind keeps the row hidden instead of failing.
+ */
+fun resolveMediaCardDownloadKind(kind: MediaKind): MediaCardDownloadKind? = when {
+    kind.isVideo -> MediaCardDownloadKind.VIDEO
+    kind.isGallery -> MediaCardDownloadKind.GALLERY
+    else -> null
+}
+
+/** Download status surfaced in the action sheet for duplicate-enqueue prevention. */
+data class MediaCardDownloadState(
+    val isActive: Boolean = false,
+    val isCompleted: Boolean = false,
+) {
+    fun subtitleFor(kind: MediaCardDownloadKind?): String = when {
+        isCompleted -> "已在本地下载完成"
+        isActive -> "正在下载队列中"
+        kind == MediaCardDownloadKind.GALLERY -> "按默认页码范围加入下载队列"
+        else -> "按偏好清晰度加入下载队列"
+    }
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 internal fun MediaCardActionSheet(
@@ -560,6 +608,12 @@ internal fun MediaCardActionSheet(
     onOpen: () -> Unit,
     onToggleWatchLater: () -> Unit,
     onAddToShelf: (() -> Unit)? = null,
+    onToggleFavorite: (() -> Unit)? = null,
+    onDownload: (() -> Unit)? = null,
+    isFavorite: Boolean = false,
+    downloadLabel: String? = null,
+    downloadSubtitle: String? = null,
+    downloadIsActive: Boolean = false,
     onSearchSimilar: ((String) -> Unit)? = null,
 ) {
     val colors = LocalRavenColors.current
@@ -610,6 +664,45 @@ internal fun MediaCardActionSheet(
                     onDismiss()
                 },
             )
+            if (onToggleFavorite != null) {
+                RavenGroupedDivider(insetWithIcon = true)
+                BrowseMorphGroupedRow(
+                    title = if (isFavorite) "取消收藏" else "收藏作品",
+                    subtitle = if (isFavorite) "当前已在收藏中" else "保存到作品收藏（视频 / 漫画 / 写真）",
+                    iconBadgeModifier = Modifier.ravenBurstFeedback(
+                        trigger = isFavorite,
+                        burstColor = colors.crimson,
+                    ),
+                    leadingIcon = {
+                        RavenMorphToggleIcon(
+                            active = isFavorite,
+                            activeGlyph = RavenMorphIcons.HeartFilled,
+                            inactiveGlyph = RavenMorphIcons.HeartOutline,
+                            activeTint = colors.crimson,
+                            inactiveTint = colors.inkPrimary,
+                            size = 18.dp,
+                            springPreset = MorphSpringPreset.BOUNCY,
+                        )
+                    },
+                    onClick = {
+                        onToggleFavorite()
+                        onDismiss()
+                    },
+                )
+            }
+            if (onDownload != null && downloadLabel != null) {
+                RavenGroupedDivider(insetWithIcon = true)
+                RavenGroupedRow(
+                    title = downloadLabel,
+                    subtitle = downloadSubtitle,
+                    icon = Icons.Outlined.Download,
+                    enabled = !downloadIsActive,
+                    onClick = {
+                        onDownload()
+                        onDismiss()
+                    },
+                )
+            }
             if (onAddToShelf != null) {
                 RavenGroupedDivider(insetWithIcon = true)
                 RavenGroupedRow(
@@ -725,6 +818,58 @@ private fun BrowseMorphGroupedRow(
                 color = colors.inkSecondary,
                 maxLines = 3,
                 overflow = TextOverflow.Ellipsis,
+            )
+        }
+    }
+}
+
+/**
+ * Compact inline banner used to surface favorite/download outcomes from the long-press sheet.
+ * Mirrors the Library feedback banner styling so messages read consistently across features.
+ */
+@Composable
+internal fun BrowseActionMessageBanner(
+    message: String?,
+    onDismiss: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    if (message.isNullOrBlank()) return
+    val colors = LocalRavenColors.current
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 6.dp)
+            .clip(RavenShapes.ControlShape)
+            .background(colors.surface2)
+            .border(0.5.dp, colors.hairline, RavenShapes.ControlShape)
+            .padding(horizontal = 12.dp, vertical = 8.dp)
+            .testTag("browse_action_message"),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Icon(
+            imageVector = Icons.Outlined.Info,
+            contentDescription = null,
+            tint = colors.crimson,
+            modifier = Modifier.size(16.dp),
+        )
+        Text(
+            text = message,
+            style = MaterialTheme.typography.bodySmall,
+            color = colors.inkPrimary,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f),
+        )
+        IconButton(
+            onClick = onDismiss,
+            modifier = Modifier.size(36.dp),
+        ) {
+            Icon(
+                imageVector = Icons.Rounded.Close,
+                contentDescription = "关闭提示",
+                tint = colors.inkTertiary,
+                modifier = Modifier.size(15.dp),
             )
         }
     }

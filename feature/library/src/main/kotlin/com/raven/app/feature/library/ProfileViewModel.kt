@@ -179,7 +179,7 @@ class ProfileViewModel(
         subscriptionRepository.observeSavedSearches(),
         subscriptionRepository.observeUnreadCount(),
         downloadGateway.downloads,
-        favoriteRepository.observeAll(),
+        favoriteRepository.observeMediaFavorites(),
     ) { savedSearches, unreadCount, downloads, favorites ->
         ProfileStatsSnapshot(
             savedSearches = savedSearches,

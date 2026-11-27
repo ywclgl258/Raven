@@ -6,6 +6,7 @@ import androidx.room.OnConflictStrategy
 import androidx.room.Query
 import androidx.room.Upsert
 import com.raven.app.core.database.entity.FavoriteEntity
+import com.raven.app.core.database.entity.MediaLikeEntity
 import com.raven.app.core.database.entity.ShelfEntity
 import com.raven.app.core.database.entity.ShelfItemEntity
 import com.raven.app.core.database.entity.SmartShelfEntity
@@ -178,5 +179,38 @@ interface SmartShelfDao {
     suspend fun deleteById(id: String)
 
     @Query("DELETE FROM smart_shelves")
+    suspend fun deleteAll()
+}
+
+@Dao
+interface MediaLikeDao {
+    @Query("SELECT * FROM media_likes ORDER BY liked_at DESC")
+    fun observeAll(): Flow<List<MediaLikeEntity>>
+
+    @Query("SELECT * FROM media_likes WHERE site_id = :siteId ORDER BY liked_at DESC")
+    fun observeBySite(siteId: String): Flow<List<MediaLikeEntity>>
+
+    @Query("SELECT EXISTS(SELECT 1 FROM media_likes WHERE site_id = :siteId AND media_id = :mediaId)")
+    fun observeExists(siteId: String, mediaId: String): Flow<Boolean>
+
+    @Query("SELECT EXISTS(SELECT 1 FROM media_likes WHERE site_id = :siteId AND media_id = :mediaId)")
+    suspend fun exists(siteId: String, mediaId: String): Boolean
+
+    @Query("SELECT * FROM media_likes ORDER BY liked_at DESC")
+    suspend fun getAll(): List<MediaLikeEntity>
+
+    @Upsert
+    suspend fun upsert(entity: MediaLikeEntity)
+
+    @Upsert
+    suspend fun upsertAll(entities: List<MediaLikeEntity>)
+
+    @Query("DELETE FROM media_likes WHERE site_id = :siteId AND media_id = :mediaId")
+    suspend fun delete(siteId: String, mediaId: String)
+
+    @Query("DELETE FROM media_likes WHERE site_id = :siteId")
+    suspend fun deleteBySite(siteId: String)
+
+    @Query("DELETE FROM media_likes")
     suspend fun deleteAll()
 }

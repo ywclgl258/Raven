@@ -8,11 +8,13 @@ import com.raven.app.core.common.AppDispatchers
 import com.raven.app.core.common.ContentFilter
 import com.raven.app.core.common.PageSelectionParser
 import com.raven.app.core.common.TagDictionary
+import com.raven.app.core.database.domain.LikeRecommendationEngine
 import com.raven.app.core.database.model.ShelfWithSummary
 import com.raven.app.core.database.repository.BlockedTermsRepository
 import com.raven.app.core.database.repository.BookmarkRepository
 import com.raven.app.core.database.repository.FavoriteRepository
 import com.raven.app.core.database.repository.HistoryRepository
+import com.raven.app.core.database.repository.LikeRepository
 import com.raven.app.core.database.repository.MediaTagCacheRepository
 import com.raven.app.core.database.repository.PreferencesRepository
 import com.raven.app.core.database.repository.ShelfRepository
@@ -28,9 +30,12 @@ import com.raven.app.core.model.AuthorRef
 import com.raven.app.core.model.DownloadItem
 import com.raven.app.core.model.DownloadStatus
 import com.raven.app.core.model.FavoriteItem
+import com.raven.app.core.model.FeatureTutorialIds
 import com.raven.app.core.model.FeedRequest
 import com.raven.app.core.model.FavoriteKind
 import com.raven.app.core.model.GalleryDetail
+import com.raven.app.core.model.LikedMedia
+import com.raven.app.core.model.LikedTagWeight
 import com.raven.app.core.model.MediaItem
 import com.raven.app.core.model.MediaKind
 import com.raven.app.core.model.PageBookmark
@@ -106,7 +111,9 @@ data class GalleryDetailUiState(
     /** Reactive site-wide reading history keyed by media/chapter id (one row per work). */
     val readingProgressByMediaId: Map<String, ReadingProgress> = emptyMap(),
     val isFavorite: Boolean = false,
+    val isLiked: Boolean = false,
     val isInWatchLater: Boolean = false,
+    val showDetailTutorial: Boolean = false,
     val shelves: List<ShelfWithSummary> = emptyList(),
     val containingShelfIds: Set<String> = emptySet(),
     val showShelfPicker: Boolean = false,
@@ -225,6 +232,7 @@ class GalleryDetailViewModel(
     private val clock: () -> Long = System::currentTimeMillis,
     private val mediaTagCacheRepository: MediaTagCacheRepository? = null,
     private val tagDictionaryRepository: TagDictionaryRepository? = null,
+    private val likeRepository: LikeRepository? = null,
 ) : ViewModel() {
 
     constructor(
@@ -246,6 +254,7 @@ class GalleryDetailViewModel(
         clock: () -> Long = System::currentTimeMillis,
         mediaTagCacheRepository: MediaTagCacheRepository? = null,
         tagDictionaryRepository: TagDictionaryRepository? = null,
+        likeRepository: LikeRepository? = null,
     ) : this(
         route = route,
         siteRegistry = siteRegistry,
@@ -265,6 +274,7 @@ class GalleryDetailViewModel(
         clock = clock,
         mediaTagCacheRepository = mediaTagCacheRepository,
         tagDictionaryRepository = tagDictionaryRepository,
+        likeRepository = likeRepository,
     )
 
     private val parsedSiteId: SiteId? = runCatching { SiteId.of(route.siteId) }.getOrNull()
@@ -300,10 +310,21 @@ class GalleryDetailViewModel(
     private var loadJob: Job? = null
     private var exportJob: Job? = null
     private var chaptersJob: Job? = null
+    private var similarJob: Job? = null
     private var resumeApplied: Boolean = false
     private val activeMediaId = MutableStateFlow(mediaId)
     @Volatile
     private var latestCachedTagsByKey: Map<String, List<TagRef>> = emptyMap()
+    @Volatile
+    private var latestLikedTagWeights: List<LikedTagWeight> = emptyList()
+    @Volatile
+    private var latestRawSimilarCandidates: List<MediaItem> = emptyList()
+    @Volatile
+    private var latestAuthorCandidateKeys: Set<String> = emptySet()
+    @Volatile
+    private var latestTitleCandidateKeys: Set<String> = emptySet()
+    @Volatile
+    private var latestTagHintKeysByItem: Map<String, Set<String>> = emptyMap()
 
     init {
         observeLocalPersonalState()
@@ -363,6 +384,43 @@ class GalleryDetailViewModel(
             }
         }
 
+        // Observe tutorial flag and local like state + liked tag weights.
+        viewModelScope.launch(dispatchers.main) {
+            preferencesRepository.settings.collectLatest { settings ->
+                _uiState.update {
+                    it.copy(showDetailTutorial = !settings.hasSeenTutorial(FeatureTutorialIds.DETAIL_ACTIONS))
+                }
+            }
+        }
+        likeRepository?.let { likesRepo ->
+            viewModelScope.launch(dispatchers.main) {
+                activeMediaId.flatMapLatest { targetMediaId ->
+                    likesRepo.observeIsLiked(siteId, targetMediaId)
+                }.collectLatest { liked ->
+                    _uiState.update { it.copy(isLiked = liked) }
+                }
+            }
+            viewModelScope.launch(dispatchers.main) {
+                likesRepo.observeTagWeights().collectLatest { weights ->
+                    latestLikedTagWeights = weights
+                    val detail = _uiState.value.detail ?: return@collectLatest
+                    val base = latestRawSimilarCandidates.ifEmpty { detail.related }
+                    if (base.isNotEmpty()) {
+                        _uiState.update { state ->
+                            state.copy(
+                                filteredRelated = rankAndFilterSimilar(
+                                    detail = detail,
+                                    candidates = base,
+                                    blockedTerms = state.blockedTerms,
+                                    cachedTagsByKey = latestCachedTagsByKey,
+                                ),
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
         viewModelScope.launch(dispatchers.main) {
             shelfRepository.observeShelvesWithSummary().collectLatest { shelves ->
                 _uiState.update { it.copy(shelves = shelves) }
@@ -415,14 +473,17 @@ class GalleryDetailViewModel(
                             isBlocked = matchesBlockedTerms(action.tag, snapshot.blockedTerms),
                         )
                     }
-                    val filteredRelated = filterRelatedItems(
-                        raw = state.detail?.related.orEmpty(),
-                        blockedTerms = snapshot.blockedTerms,
-                        cachedTagsByKey = snapshot.cachedTagsByKey,
-                    )
+                    val filteredRelated = state.detail?.let { detail ->
+                        rankAndFilterSimilar(
+                            detail = detail,
+                            candidates = latestRawSimilarCandidates.ifEmpty { detail.related },
+                            blockedTerms = snapshot.blockedTerms,
+                            cachedTagsByKey = snapshot.cachedTagsByKey,
+                        )
+                    } ?: emptyList()
                     state.copy(
                         isFavorite = isWorkFav,
-                        favoritedTagSlugs = favTagSlugs,
+                        favoritedTagSlugs = emptySet(),
                         subscribedTagSlugs = snapshot.subscribedSlugs,
                         blockedTerms = snapshot.blockedTerms,
                         tagDictionaryRevision = snapshot.dictRevision,
@@ -499,12 +560,18 @@ class GalleryDetailViewModel(
                 }.getOrDefault(_uiState.value.isFavorite)
                 cacheDetailTags(snapshot.detail)
 
+                latestRawSimilarCandidates = snapshot.detail.related
+                latestAuthorCandidateKeys = emptySet()
+                latestTitleCandidateKeys = emptySet()
+                latestTagHintKeysByItem = emptyMap()
+
                 _uiState.update {
                     it.copy(
                         isLoading = false,
                         detail = snapshot.detail,
-                        filteredRelated = filterRelatedItems(
-                            raw = snapshot.detail.related,
+                        filteredRelated = rankAndFilterSimilar(
+                            detail = snapshot.detail,
+                            candidates = snapshot.detail.related,
                             blockedTerms = it.blockedTerms,
                             cachedTagsByKey = latestCachedTagsByKey,
                         ),
@@ -518,19 +585,8 @@ class GalleryDetailViewModel(
                         errorMessage = null,
                     )
                 }
-                if (!offlineOnly && snapshot.detail.related.isEmpty()) {
-                    val fallback = fetchSimilarFromMetadata(snapshot.detail)
-                    if (fallback.isNotEmpty() && _uiState.value.detail?.item?.id == resolvedId) {
-                        _uiState.update {
-                            it.copy(
-                                filteredRelated = filterRelatedItems(
-                                    raw = fallback,
-                                    blockedTerms = it.blockedTerms,
-                                    cachedTagsByKey = latestCachedTagsByKey,
-                                ),
-                            )
-                        }
-                    }
+                if (!offlineOnly) {
+                    launchEnhancedSimilarRecommendations(snapshot.detail, resolvedId)
                 }
                 if (!resumeApplied && !offlineOnly) {
                     resumeApplied = true
@@ -601,49 +657,136 @@ class GalleryDetailViewModel(
     }
 
     /**
-     * Plugin-provided `related` is optional. When absent, derive a same-site recommendation set
-     * from the first tag (preferred) or author so every detail page can expose 相似推荐.
+     * Fetches same-author, same-title/series, and high-weight shared-tag candidates on the same site,
+     * merges them with plugin-provided `related`, and ranks strictly by:
+     * 1. Same author -> 2. Same title / series -> 3. High-weight shared tags.
      */
-    private suspend fun fetchSimilarFromMetadata(detail: GalleryDetail): List<MediaItem> {
-        val feed = plugin?.feedSource ?: return emptyList()
-        val tag = detail.tags.firstOrNull() ?: detail.categories.firstOrNull()
-        val tagSlug = tag?.slug?.trim().orEmpty()
-        val authorName = (detail.authors.firstOrNull() ?: detail.item.author)
-            ?.name
-            ?.trim()
-            .orEmpty()
-        val supportedScopes = descriptor?.searchScopes.orEmpty()
-        val requests = buildList {
-            if (tagSlug.isNotEmpty()) {
-                add(
-                    FeedRequest(
-                        siteId = siteId,
-                        query = tagSlug,
-                        scope = if (SearchScope.TAG in supportedScopes) SearchScope.TAG else SearchScope.ALL,
-                        page = 1,
-                    ),
-                )
+    private fun launchEnhancedSimilarRecommendations(
+        detail: GalleryDetail,
+        expectedMediaId: String,
+    ) {
+        similarJob?.cancel()
+        similarJob = viewModelScope.launch(dispatchers.io) {
+            val feed = plugin?.feedSource ?: return@launch
+            val supportedScopes = descriptor?.searchScopes.orEmpty()
+            val merged = LinkedHashMap<String, MediaItem>()
+            detail.related.forEach { merged.putIfAbsent(it.compositeKey, it) }
+
+            val authorKeys = LinkedHashSet<String>()
+            val titleKeys = LinkedHashSet<String>()
+            val tagHints = LinkedHashMap<String, MutableSet<String>>()
+
+            val authorName = (detail.authors.firstOrNull() ?: detail.item.author)
+                ?.name
+                ?.trim()
+                .orEmpty()
+            if (authorName.length >= 2) {
+                val authorScope = if (SearchScope.AUTHOR in supportedScopes) SearchScope.AUTHOR else SearchScope.ALL
+                val authorItems = runCatching {
+                    feed.loadFeed(
+                        FeedRequest(siteId = siteId, query = authorName, scope = authorScope, page = 1),
+                    ).items
+                }.getOrDefault(emptyList())
+                for (item in authorItems.take(12)) {
+                    if (item.compositeKey != detail.item.compositeKey && item.id != expectedMediaId) {
+                        merged.putIfAbsent(item.compositeKey, item)
+                        authorKeys.add(item.compositeKey)
+                    }
+                }
             }
-            if (authorName.isNotEmpty()) {
-                add(
-                    FeedRequest(
-                        siteId = siteId,
-                        query = authorName,
-                        scope = if (SearchScope.AUTHOR in supportedScopes) SearchScope.AUTHOR else SearchScope.ALL,
-                        page = 1,
+
+            val coreTitle = LikeRecommendationEngine.extractCoreTitleQuery(detail.item.title)
+            if (coreTitle.length >= 2 && !coreTitle.equals(authorName, ignoreCase = true)) {
+                val titleItems = runCatching {
+                    feed.loadFeed(
+                        FeedRequest(siteId = siteId, query = coreTitle, scope = SearchScope.ALL, page = 1),
+                    ).items
+                }.getOrDefault(emptyList())
+                for (item in titleItems.take(10)) {
+                    if (item.compositeKey != detail.item.compositeKey && item.id != expectedMediaId) {
+                        merged.putIfAbsent(item.compositeKey, item)
+                        titleKeys.add(item.compositeKey)
+                    }
+                }
+            }
+
+            val sourceTags = (detail.tags + detail.characters + detail.categories + detail.item.tags)
+                .distinctBy { LikeRecommendationEngine.canonicalTagKey(it) }
+            val topTags = LikeRecommendationEngine.selectPrioritizedTags(
+                sourceTags = sourceTags,
+                likedTagWeights = latestLikedTagWeights,
+                limit = 2,
+            )
+            val tagScope = if (SearchScope.TAG in supportedScopes) SearchScope.TAG else SearchScope.ALL
+            for (tag in topTags) {
+                val query = tag.slug.trim().ifEmpty { tag.label.trim() }
+                if (query.isEmpty()) continue
+                val hintKey = LikeRecommendationEngine.canonicalTagKey(tag)
+                val tagItems = runCatching {
+                    feed.loadFeed(
+                        FeedRequest(siteId = siteId, query = query, scope = tagScope, page = 1),
+                    ).items
+                }.getOrDefault(emptyList())
+                for (item in tagItems.take(10)) {
+                    if (item.compositeKey != detail.item.compositeKey && item.id != expectedMediaId) {
+                        merged.putIfAbsent(item.compositeKey, item)
+                        if (hintKey != null) {
+                            tagHints.getOrPut(item.compositeKey) { LinkedHashSet() }.add(hintKey)
+                        }
+                    }
+                }
+            }
+
+            if (_uiState.value.detail?.item?.id != expectedMediaId) return@launch
+            val allCandidates = merged.values.toList()
+            latestRawSimilarCandidates = allCandidates
+            latestAuthorCandidateKeys = authorKeys
+            latestTitleCandidateKeys = titleKeys
+            latestTagHintKeysByItem = tagHints.mapValues { it.value.toSet() }
+
+            _uiState.update { state ->
+                state.copy(
+                    filteredRelated = rankAndFilterSimilar(
+                        detail = detail,
+                        candidates = allCandidates,
+                        blockedTerms = state.blockedTerms,
+                        cachedTagsByKey = latestCachedTagsByKey,
                     ),
                 )
             }
         }
-        for (request in requests) {
-            val items = runCatching { feed.loadFeed(request).items }
-                .getOrDefault(emptyList())
-                .filterNot { it.compositeKey == detail.item.compositeKey || it.id == mediaId }
-                .distinctBy { it.compositeKey }
-                .take(12)
-            if (items.isNotEmpty()) return items
+    }
+
+    private fun rankAndFilterSimilar(
+        detail: GalleryDetail,
+        candidates: List<MediaItem>,
+        blockedTerms: Set<String>,
+        cachedTagsByKey: Map<String, List<TagRef>>,
+    ): List<MediaItem> {
+        val allowed = filterRelatedItems(
+            raw = candidates,
+            blockedTerms = blockedTerms,
+            cachedTagsByKey = cachedTagsByKey,
+        )
+        val authors = buildList {
+            detail.authors.mapTo(this) { it.name }
+            detail.item.author?.name?.let(::add)
         }
-        return emptyList()
+        val sourceTags = detail.tags + detail.characters + detail.categories + detail.item.tags
+        return LikeRecommendationEngine.rankSimilarWorks(
+            sourceTitle = detail.item.title,
+            sourceAuthors = authors,
+            sourceTags = sourceTags,
+            sourceCompositeKey = detail.item.compositeKey,
+            sourceMediaId = detail.item.id,
+            candidates = allowed,
+            likedTagWeights = latestLikedTagWeights,
+            cachedTagsByKey = cachedTagsByKey,
+            tagHintKeysByItem = latestTagHintKeysByItem,
+            authorCandidateKeys = latestAuthorCandidateKeys,
+            titleCandidateKeys = latestTitleCandidateKeys,
+            limit = 18,
+        )
     }
 
 
@@ -787,6 +930,51 @@ class GalleryDetailViewModel(
                 ),
             )
             emitSnackbar(if (added) "已加入稍后看" else "已移出稍后看")
+        }
+    }
+
+    fun toggleLike() {
+        val repo = likeRepository ?: return
+        val detail = _uiState.value.detail ?: return
+        val item = detail.item
+        val allTags = (detail.tags + detail.characters + detail.categories + item.tags)
+            .distinctBy { LikeRecommendationEngine.canonicalTagKey(it) }
+        val authorName = (detail.authors.firstOrNull() ?: item.author)?.name.orEmpty()
+        viewModelScope.launch(dispatchers.io) {
+            val liked = repo.toggle(
+                LikedMedia(
+                    siteId = item.siteId,
+                    mediaId = item.id,
+                    kind = item.kind,
+                    title = item.title,
+                    url = item.url,
+                    coverUrl = item.coverUrl,
+                    authorName = authorName,
+                    tags = allTags,
+                    likedAt = clock(),
+                ),
+            )
+            emitSnackbar(
+                if (liked) {
+                    if (allTags.isNotEmpty()) "已点赞 · 已记录 ${allTags.size} 个标签偏好" else "已点赞"
+                } else {
+                    "已取消点赞"
+                },
+            )
+        }
+    }
+
+    fun completeDetailTutorial() {
+        _uiState.update { it.copy(showDetailTutorial = false) }
+        viewModelScope.launch(dispatchers.io) {
+            preferencesRepository.markTutorialSeen(FeatureTutorialIds.DETAIL_ACTIONS)
+        }
+    }
+
+    fun skipAllTutorials() {
+        _uiState.update { it.copy(showDetailTutorial = false) }
+        viewModelScope.launch(dispatchers.io) {
+            preferencesRepository.markTutorialsSeen(FeatureTutorialIds.ALL)
         }
     }
 

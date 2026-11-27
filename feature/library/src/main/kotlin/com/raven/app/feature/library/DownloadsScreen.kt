@@ -30,10 +30,12 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.lazy.staggeredgrid.LazyVerticalStaggeredGrid
 import androidx.compose.foundation.lazy.staggeredgrid.StaggeredGridCells
 import androidx.compose.foundation.lazy.staggeredgrid.StaggeredGridItemSpan
 import androidx.compose.foundation.lazy.staggeredgrid.items as staggeredItems
+import androidx.compose.foundation.lazy.staggeredgrid.rememberLazyStaggeredGridState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
@@ -85,8 +87,10 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.raven.app.core.designsystem.component.RavenBottomSheet
 import com.raven.app.core.designsystem.component.RavenCrimsonProgressBar
 import com.raven.app.core.designsystem.component.RavenEmptyState
+import com.raven.app.core.designsystem.component.RavenScrollToTopButton
 import com.raven.app.core.designsystem.component.RavenFilterChip
 import com.raven.app.core.designsystem.component.RavenFilterChipRow
+import com.raven.app.core.designsystem.component.RavenSegmentedTabs
 import com.raven.app.core.designsystem.component.RavenFormatters
 import com.raven.app.core.designsystem.component.RavenGroupedDivider
 import com.raven.app.core.designsystem.component.RavenGroupedRow
@@ -370,11 +374,14 @@ private fun DownloadsListContent(
     onOpenGroupManager: () -> Unit,
     onCleanCompleted: () -> Unit,
 ) {
-    LazyColumn(
-        modifier = Modifier.fillMaxSize(),
-        contentPadding = PaddingValues(top = 10.dp, bottom = 28.dp),
-        verticalArrangement = Arrangement.spacedBy(10.dp),
-    ) {
+    val listState = rememberLazyListState()
+    Box(modifier = Modifier.fillMaxSize()) {
+        LazyColumn(
+            state = listState,
+            modifier = Modifier.fillMaxSize(),
+            contentPadding = PaddingValues(top = 10.dp, bottom = 28.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
         if (!uiState.networkPolicy.isConnected) {
             item(key = "dl_net_offline") {
                 DownloadsNetworkPolicyBanners(uiState)
@@ -476,6 +483,13 @@ private fun DownloadsListContent(
                 }
             }
         }
+        }
+        RavenScrollToTopButton(
+            listState = listState,
+            modifier = Modifier
+                .align(Alignment.BottomEnd)
+                .padding(end = 18.dp, bottom = 22.dp),
+        )
     }
 }
 
@@ -489,10 +503,12 @@ private fun DownloadsWaterfallContent(
     onOpenGroupManager: () -> Unit,
     onCleanCompleted: () -> Unit,
 ) {
+    val gridState = rememberLazyStaggeredGridState()
     BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
         val columns = computeCollectionWaterfallColumns(maxWidth.value.toInt())
 
         LazyVerticalStaggeredGrid(
+            state = gridState,
             columns = StaggeredGridCells.Fixed(columns),
             modifier = Modifier
                 .fillMaxSize()
@@ -606,6 +622,12 @@ private fun DownloadsWaterfallContent(
                 }
             }
         }
+        RavenScrollToTopButton(
+            staggeredGridState = gridState,
+            modifier = Modifier
+                .align(Alignment.BottomEnd)
+                .padding(end = 18.dp, bottom = 22.dp),
+        )
     }
 }
 
@@ -770,14 +792,12 @@ private fun DownloadsStatusFilterTabs(
     modifier: Modifier = Modifier,
     horizontalPadding: Dp = 16.dp,
 ) {
-    RavenFilterChipRow(
+    RavenSegmentedTabs(
         items = DownloadStatusTab.entries,
         selectedItem = uiState.selectedTab,
         labelProvider = { tab -> "${tab.label} ${uiState.countForTab(tab)}" },
         onItemSelected = onSelectTab,
-        keyProvider = { it.name },
-        contentPadding = PaddingValues(horizontal = horizontalPadding),
-        modifier = modifier,
+        modifier = modifier.padding(horizontal = horizontalPadding),
     )
 }
 

@@ -66,6 +66,16 @@ class SettingsDataStoreTest {
             assertEquals(listOf(SiteId.NHENTAI), pinnedAfterAdd)
             assertEquals(listOf(SiteId.NHENTAI), awaitItem().pinnedSiteIds)
 
+            settingsStore.setPinnedSiteIds(listOf(SiteId.IWARA, SiteId.NHENTAI, SiteId.IWARA))
+            assertEquals(listOf(SiteId.IWARA, SiteId.NHENTAI), awaitItem().pinnedSiteIds)
+
+            // Dynamic site sorting defaults to true and toggles persist.
+            assertTrue(initial.dynamicSiteSorting)
+            settingsStore.setDynamicSiteSorting(false)
+            assertFalse(awaitItem().dynamicSiteSorting)
+            settingsStore.setDynamicSiteSorting(true)
+            assertTrue(awaitItem().dynamicSiteSorting)
+
             settingsStore.setCrossSearchSiteIds(listOf(SiteId.R34V, SiteId.IWARA, SiteId.R34V))
             assertEquals(listOf(SiteId.R34V, SiteId.IWARA), awaitItem().crossSearchSiteIds)
 

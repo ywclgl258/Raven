@@ -10,6 +10,8 @@ import com.raven.app.core.common.TagDictionary
 import com.raven.app.core.common.TagSuggestion
 import com.raven.app.core.database.model.ShelfWithSummary
 import com.raven.app.core.database.repository.BlockedTermsRepository
+import com.raven.app.core.database.repository.DownloadStateRepository
+import com.raven.app.core.database.repository.FavoriteRepository
 import com.raven.app.core.database.repository.HistoryRepository
 import com.raven.app.core.database.repository.MediaTagCacheRepository
 import com.raven.app.core.database.repository.PreferencesRepository
@@ -43,6 +45,7 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
@@ -267,9 +270,47 @@ class SearchViewModel(
     private val tagDictionary: TagDictionary = TagDictionary.default,
     private val mediaTagCacheRepository: MediaTagCacheRepository? = null,
     private val tagDictionaryRepository: TagDictionaryRepository? = null,
+    favoriteRepository: FavoriteRepository? = null,
+    downloadStateRepository: DownloadStateRepository? = null,
+    downloadEnqueuer: BrowseDownloadEnqueuer? = null,
 ) : ViewModel() {
 
     private val allDescriptors: List<SiteDescriptor> = siteRegistry.allDescriptors()
+
+    /** Optional so existing JVM tests without download fakes keep constructing successfully. */
+    private val mediaActions: BrowseMediaActions? =
+        if (favoriteRepository != null && downloadStateRepository != null && downloadEnqueuer != null) {
+            BrowseMediaActions(
+                favoriteRepository = favoriteRepository,
+                downloadStateRepository = downloadStateRepository,
+                enqueuer = downloadEnqueuer,
+                scope = viewModelScope,
+                ioDispatcher = dispatchers.io,
+            )
+        } else {
+            null
+        }
+
+    val favoriteKeys: StateFlow<Set<String>> = (
+        mediaActions?.favoriteKeysFlow() ?: flowOf(emptySet())
+        ).stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.WhileSubscribed(5_000L),
+        initialValue = emptySet(),
+    )
+
+    // Cross-site results span many sites, so aggregate download state across all of them.
+    val downloadStates: StateFlow<Map<String, MediaCardDownloadState>> = (
+        mediaActions?.downloadStatesFlow(null) ?: flowOf(emptyMap())
+        ).stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.WhileSubscribed(5_000L),
+        initialValue = emptyMap(),
+    )
+
+    val actionMessage: StateFlow<String?> = mediaActions?.messages
+        ?: MutableStateFlow<String?>(null).asStateFlow()
+
     private val searchablePlugins: List<SitePlugin> = siteRegistry.allPlugins().filter { it.searchSource != null }
     private val searchableDescriptors: List<SiteDescriptor> = searchablePlugins.map { it.descriptor }
     private val searchableIdSet: Set<SiteId> = searchableDescriptors.mapTo(HashSet()) { it.id }
@@ -1007,6 +1048,18 @@ class SearchViewModel(
     fun inspectShelfTarget(item: MediaItem?) = shelfController.inspectItem(item)
 
     fun toggleWatchLater(item: MediaItem) = shelfController.toggleWatchLater(item)
+
+    fun toggleFavorite(item: MediaItem) {
+        mediaActions?.toggleFavorite(item)
+    }
+
+    fun downloadMedia(item: MediaItem) {
+        mediaActions?.download(item)
+    }
+
+    fun clearActionMessage() {
+        mediaActions?.clearMessage()
+    }
 
     fun setShelfMembership(shelfId: String, item: MediaItem, add: Boolean) =
         shelfController.setMembership(shelfId, item, add)

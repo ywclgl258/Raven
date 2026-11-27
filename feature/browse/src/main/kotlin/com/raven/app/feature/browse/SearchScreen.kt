@@ -44,6 +44,7 @@ import androidx.compose.foundation.lazy.staggeredgrid.StaggeredGridCells
 import androidx.compose.foundation.lazy.staggeredgrid.StaggeredGridItemSpan
 import androidx.compose.foundation.lazy.staggeredgrid.items
 import androidx.compose.foundation.lazy.staggeredgrid.rememberLazyStaggeredGridState
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowRight
@@ -73,6 +74,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TriStateCheckbox
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
@@ -87,7 +89,6 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
 import androidx.compose.ui.input.nestedscroll.NestedScrollSource
 import androidx.compose.ui.input.nestedscroll.nestedScroll
-import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
@@ -102,6 +103,9 @@ import com.raven.app.core.designsystem.component.RavenBloubPresence
 import com.raven.app.core.designsystem.component.RavenContentCrossfade
 import com.raven.app.core.designsystem.component.RavenEmptyState
 import com.raven.app.core.designsystem.component.RavenErrorState
+import com.raven.app.core.designsystem.component.RavenFeatureTutorialDialog
+import com.raven.app.core.designsystem.component.RavenScrollToTopButton
+import com.raven.app.core.designsystem.component.RavenTutorialStep
 import com.raven.app.core.designsystem.component.RavenFilterChip
 import com.raven.app.core.designsystem.component.RavenFilterChipRow
 import com.raven.app.core.designsystem.component.RavenGalleryCard
@@ -142,6 +146,7 @@ import com.raven.app.core.model.SearchScope
 import com.raven.app.core.model.SiteDescriptor
 import com.raven.app.core.model.SiteId
 import com.raven.app.core.sitespi.SitePlugin
+import kotlinx.coroutines.flow.distinctUntilChanged
 import org.koin.androidx.compose.koinViewModel
 import org.koin.core.parameter.parametersOf
 
@@ -164,6 +169,9 @@ fun SearchScreen(
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val shelves by viewModel.shelfPickerShelves.collectAsStateWithLifecycle()
     val inspectedShelfIds by viewModel.inspectedShelfIds.collectAsStateWithLifecycle()
+    val favoriteKeys by viewModel.favoriteKeys.collectAsStateWithLifecycle()
+    val downloadStates by viewModel.downloadStates.collectAsStateWithLifecycle()
+    val actionMessage by viewModel.actionMessage.collectAsStateWithLifecycle()
 
     SearchScreenContent(
         uiState = uiState,
@@ -172,6 +180,8 @@ fun SearchScreen(
         onSetMode = viewModel::setMode,
         onSelectActiveSite = viewModel::selectActiveSite,
         onTogglePinSite = viewModel::togglePinnedSite,
+        onReorderPinnedSites = viewModel::reorderPinnedSites,
+        onSetDynamicSiteSorting = viewModel::setDynamicSiteSorting,
         onSelectStartupDefaultSite = viewModel::setStartupDefaultSiteId,
         onQueryChange = viewModel::updateQuery,
         onClearQuery = viewModel::clearQuery,
@@ -204,6 +214,14 @@ fun SearchScreen(
         onInspectShelfTarget = viewModel::inspectShelfTarget,
         onToggleShelfMembership = viewModel::setShelfMembership,
         onCreateShelfAndAdd = viewModel::createShelfAndAdd,
+        onCompleteSearchTutorial = viewModel::completeSearchTutorial,
+        onSkipAllTutorials = viewModel::skipAllTutorials,
+        favoriteKeys = favoriteKeys,
+        downloadStates = downloadStates,
+        onToggleFavorite = viewModel::toggleFavorite,
+        onDownloadMedia = viewModel::downloadMedia,
+        actionMessage = actionMessage,
+        onDismissActionMessage = viewModel::clearActionMessage,
         modifier = modifier,
     )
 }
@@ -241,17 +259,26 @@ fun SearchScreenContent(
     onToggleWatchLater: (MediaItem) -> Unit,
     modifier: Modifier = Modifier,
     onSelectStartupDefaultSite: (SiteId?) -> Unit = {},
+    onReorderPinnedSites: (List<SiteId>) -> Unit = {},
+    onSetDynamicSiteSorting: (Boolean) -> Unit = {},
+    favoriteKeys: Set<String> = emptySet(),
+    downloadStates: Map<String, MediaCardDownloadState> = emptyMap(),
+    onToggleFavorite: ((MediaItem) -> Unit)? = null,
+    onDownloadMedia: ((MediaItem) -> Unit)? = null,
+    actionMessage: String? = null,
+    onDismissActionMessage: () -> Unit = {},
     shelves: List<ShelfWithSummary> = emptyList(),
     selectedShelfIds: Set<String> = emptySet(),
     onInspectShelfTarget: (MediaItem?) -> Unit = {},
     onToggleShelfMembership: (shelfId: String, item: MediaItem, add: Boolean) -> Unit = { _, _, _ -> },
     onCreateShelfAndAdd: (name: String, item: MediaItem) -> Unit = { _, _ -> },
     onApplyDateRange: (String?, String?) -> Unit = { _, _ -> },
+    onCompleteSearchTutorial: () -> Unit = {},
+    onSkipAllTutorials: () -> Unit = {},
 ) {
     val colors = LocalRavenColors.current
     val motionReduced = LocalMotionReduced.current
     val feedback = LocalRavenFeedback.current
-    val density = LocalDensity.current
     var showSiteSwitcher by rememberSaveable { mutableStateOf(false) }
     var showSortSheet by rememberSaveable { mutableStateOf(false) }
     var showAdvancedSheet by rememberSaveable { mutableStateOf(false) }
@@ -280,6 +307,10 @@ fun SearchScreenContent(
         SearchMode.SINGLE_SITE -> uiState.hasSearchedSingleSite
         SearchMode.CROSS_SITE -> uiState.hasSearchedCrossSite
     }
+    // Tracks whether the currently rendered result/discovery list is pinned to its absolute top.
+    // Reset on every stage change so a stale "not at top" value from the previous list cannot
+    // keep the header hidden after switching modes or submitting a new query.
+    val resultsAtTop = remember { mutableStateOf(true) }
     LaunchedEffect(
         uiState.mode,
         uiState.hasSearchedSingleSite,
@@ -287,32 +318,31 @@ fun SearchScreenContent(
         uiState.submittedQuery,
     ) {
         controlsVisible = true
+        resultsAtTop.value = true
     }
 
+    // Downward scroll hides the header. Upward scroll deliberately never re-shows it: only the
+    // list reaching its absolute top does (see the LaunchedEffect below). Explicit user intent
+    // (typing, opening filter sheets) shows the header while the list remains at the top.
     val currentHasResults by rememberUpdatedState(hasActiveResults)
-    val hideThresholdPx = with(density) { 24.dp.toPx() }
-    val showThresholdPx = with(density) { 16.dp.toPx() }
-    val autoHideScrollConnection = remember(hideThresholdPx, showThresholdPx) {
+    val autoHideScrollConnection = remember {
         object : NestedScrollConnection {
-            private var accumulatedDy = 0f
-
             override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
                 if (!currentHasResults) return Offset.Zero
-                val dy = available.y
-                if (dy == 0f) return Offset.Zero
-                if ((accumulatedDy > 0f && dy < 0f) || (accumulatedDy < 0f && dy > 0f)) {
-                    accumulatedDy = 0f
-                }
-                accumulatedDy += dy
-                if (accumulatedDy <= -hideThresholdPx && controlsVisible) {
+                if (source != NestedScrollSource.UserInput) return Offset.Zero
+                if (available.y < 0f && controlsVisible) {
                     controlsVisible = false
-                    accumulatedDy = 0f
-                } else if (accumulatedDy >= showThresholdPx && !controlsVisible) {
-                    controlsVisible = true
-                    accumulatedDy = 0f
                 }
                 return Offset.Zero
             }
+        }
+    }
+    LaunchedEffect(resultsAtTop.value) {
+        val atTop = resultsAtTop.value
+        if (SearchControlsVisibility.shouldShow(forcedVisible = false, atAbsoluteTop = atTop)) {
+            controlsVisible = true
+        } else if (controlsVisible) {
+            controlsVisible = false
         }
     }
 
@@ -354,6 +384,12 @@ fun SearchScreenContent(
             .statusBarsPadding()
             .testTag("browse_search_screen"),
     ) {
+        if (actionMessage != null) {
+            BrowseActionMessageBanner(
+                message = actionMessage,
+                onDismiss = onDismissActionMessage,
+            )
+        }
         // Header: Mode toggle pill + Site switcher / Save search button
         Row(
             modifier = Modifier
@@ -658,6 +694,7 @@ fun SearchScreenContent(
                             },
                             onOpenMedia = { navigator.openSearchResultItem(pluginResolver(it.siteId), it) },
                             onLongClickMedia = { actionTargetItem = it },
+                            onAtTopChange = { resultsAtTop.value = it },
                         )
                     }
                     "single_results" -> {
@@ -668,6 +705,7 @@ fun SearchScreenContent(
                             onRetry = onSubmitSearch,
                             onLoadMore = onLoadMoreSingleSite,
                             onItemLongClick = { actionTargetItem = it },
+                            onAtTopChange = { resultsAtTop.value = it },
                         )
                     }
                     else -> {
@@ -683,6 +721,7 @@ fun SearchScreenContent(
                             onLoadMoreSite = onLoadMoreCrossSite,
                             onRetryAll = onSubmitSearch,
                             onItemLongClick = { actionTargetItem = it },
+                            onAtTopChange = { resultsAtTop.value = it },
                         )
                     }
                 }
@@ -697,6 +736,9 @@ fun SearchScreenContent(
             pinnedSiteIds = uiState.pinnedSiteIds,
             siteOpenCounts = uiState.siteOpenCounts,
             startupDefaultSiteId = uiState.startupDefaultSiteId,
+            dynamicSiteSorting = uiState.dynamicSiteSorting,
+            onDynamicSiteSortingChange = onSetDynamicSiteSorting,
+            onReorderPinnedSites = onReorderPinnedSites,
             onSelectStartupDefaultSite = onSelectStartupDefaultSite,
             onSelectSite = onSelectActiveSite,
             onTogglePinSite = onTogglePinSite,
@@ -786,7 +828,33 @@ fun SearchScreenContent(
             onQueryChange(slug)
             onSubmitSearch()
         },
+        favoriteKeys = favoriteKeys,
+        onToggleFavorite = onToggleFavorite,
+        downloadStateByKey = downloadStates,
+        onDownload = onDownloadMedia,
     )
+
+    if (uiState.showSearchTutorial) {
+        RavenFeatureTutorialDialog(
+            featureTitle = "搜索与筛选导览",
+            steps = listOf(
+                RavenTutorialStep(
+                    badge = "单站 / 跨站搜索",
+                    title = "支持中文标签联想与跨站聚合",
+                    description = "输入中文或英文关键词会自动匹配标签词典；切到「跨站搜索」可一次在多个站点并行检索并按站点快速筛选结果。",
+                    icon = Icons.Outlined.Search,
+                ),
+                RavenTutorialStep(
+                    badge = "高级筛选与保存",
+                    title = "支持排序、日期筛选与保存搜索",
+                    description = "搜索栏下方可调整排序、发布时间与高级条件；满意的搜索组合可直接保存，随时回访或追踪新内容。",
+                    icon = Icons.Outlined.DateRange,
+                ),
+            ),
+            onComplete = onCompleteSearchTutorial,
+            onSkipAll = onSkipAllTutorials,
+        )
+    }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -1189,6 +1257,7 @@ private fun SearchDiscoveryPanel(
     onSelectTagSlug: (String) -> Unit,
     onOpenMedia: (MediaItem) -> Unit,
     onLongClickMedia: (MediaItem) -> Unit,
+    onAtTopChange: ((Boolean) -> Unit)? = null,
 ) {
     val colors = LocalRavenColors.current
     val feedback = LocalRavenFeedback.current
@@ -1206,7 +1275,22 @@ private fun SearchDiscoveryPanel(
         return
     }
 
+    val discoveryListState = rememberLazyListState()
+    if (onAtTopChange != null) {
+        val currentCallback by rememberUpdatedState(onAtTopChange)
+        LaunchedEffect(discoveryListState) {
+            snapshotFlow {
+                SearchControlsVisibility.isAtAbsoluteTop(
+                    firstVisibleItemIndex = discoveryListState.firstVisibleItemIndex,
+                    firstVisibleItemScrollOffset = discoveryListState.firstVisibleItemScrollOffset,
+                )
+            }
+                .distinctUntilChanged()
+                .collect { atTop -> currentCallback(atTop) }
+        }
+    }
     LazyColumn(
+        state = discoveryListState,
         contentPadding = PaddingValues(vertical = 14.dp),
         verticalArrangement = Arrangement.spacedBy(20.dp),
         modifier = Modifier
@@ -1542,6 +1626,7 @@ private fun SingleSiteResultsBody(
     onRetry: () -> Unit,
     onLoadMore: () -> Unit,
     onItemLongClick: (MediaItem) -> Unit,
+    onAtTopChange: ((Boolean) -> Unit)? = null,
 ) {
     val activeSite = uiState.activeSite ?: return
 
@@ -1583,7 +1668,22 @@ private fun SingleSiteResultsBody(
                 )
             }
             "directory" -> {
+                val dirListState = rememberLazyListState()
+                if (onAtTopChange != null) {
+                    val currentCallback by rememberUpdatedState(onAtTopChange)
+                    LaunchedEffect(dirListState) {
+                        snapshotFlow {
+                            SearchControlsVisibility.isAtAbsoluteTop(
+                                firstVisibleItemIndex = dirListState.firstVisibleItemIndex,
+                                firstVisibleItemScrollOffset = dirListState.firstVisibleItemScrollOffset,
+                            )
+                        }
+                            .distinctUntilChanged()
+                            .collect { atTop -> currentCallback(atTop) }
+                    }
+                }
                 LazyColumn(
+                    state = dirListState,
                     contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                     modifier = Modifier
@@ -1624,6 +1724,7 @@ private fun SingleSiteResultsBody(
                     onItemClick = { navigator.openSearchResultItem(activePlugin, it) },
                     onItemLongClick = onItemLongClick,
                     onLoadNextPage = onLoadMore,
+                    onAtTopChange = onAtTopChange,
                 )
             }
             else -> {
@@ -1644,6 +1745,7 @@ private fun SingleSiteResultsBody(
                     onItemClick = { navigator.openSearchResultItem(activePlugin, it) },
                     onItemLongClick = onItemLongClick,
                     onLoadNextPage = onLoadMore,
+                    onAtTopChange = onAtTopChange,
                 )
             }
         }
@@ -1702,10 +1804,24 @@ private fun CrossSiteResultsBody(
     onLoadMoreSite: (SiteId) -> Unit,
     onRetryAll: () -> Unit = {},
     onItemLongClick: (MediaItem) -> Unit,
+    onAtTopChange: ((Boolean) -> Unit)? = null,
 ) {
     val colors = LocalRavenColors.current
     val gridState = rememberLazyStaggeredGridState()
     val aspectRatioCache = remember { mutableStateMapOf<String, Float>() }
+    if (onAtTopChange != null) {
+        val currentCallback by rememberUpdatedState(onAtTopChange)
+        LaunchedEffect(gridState) {
+            snapshotFlow {
+                SearchControlsVisibility.isAtAbsoluteTop(
+                    firstVisibleItemIndex = gridState.firstVisibleItemIndex,
+                    firstVisibleItemScrollOffset = gridState.firstVisibleItemScrollOffset,
+                )
+            }
+                .distinctUntilChanged()
+                .collect { atTop -> currentCallback(atTop) }
+        }
+    }
     val siteShortNames = remember(uiState.allSites) {
         uiState.allSites.associate { it.id to it.shortName }
     }
@@ -1895,6 +2011,12 @@ private fun CrossSiteResultsBody(
                             }
                         }
                     }
+                    RavenScrollToTopButton(
+                        staggeredGridState = gridState,
+                        modifier = Modifier
+                            .align(Alignment.BottomEnd)
+                            .padding(end = 18.dp, bottom = 22.dp),
+                    )
                 }
             }
         }

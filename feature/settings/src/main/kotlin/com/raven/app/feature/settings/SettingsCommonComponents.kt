@@ -215,6 +215,8 @@ internal fun SettingsPrimaryButton(
     loading: Boolean = false,
     destructive: Boolean = false,
     icon: ImageVector? = null,
+    success: Boolean = false,
+    failure: Boolean = false,
 ) {
     if (destructive) {
         RavenDangerButton(
@@ -232,6 +234,8 @@ internal fun SettingsPrimaryButton(
             modifier = modifier,
             enabled = enabled,
             loading = loading,
+            success = success,
+            failure = failure,
             variant = RavenPrimaryButtonVariant.Cta,
             leadingIcon = icon,
         )

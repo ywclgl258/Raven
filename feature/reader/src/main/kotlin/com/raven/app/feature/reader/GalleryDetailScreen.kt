@@ -45,6 +45,7 @@ import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items as gridItems
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
@@ -63,6 +64,7 @@ import androidx.compose.material.icons.outlined.Lock
 import androidx.compose.material.icons.outlined.OfflinePin
 import androidx.compose.material.icons.outlined.Person
 import androidx.compose.material.icons.outlined.Search
+import androidx.compose.material.icons.outlined.ThumbUp
 import androidx.compose.material.icons.outlined.Translate
 import androidx.compose.material.icons.outlined.TravelExplore
 import androidx.compose.material.icons.rounded.Check
@@ -71,6 +73,7 @@ import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.RadioButtonUnchecked
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Star
+import androidx.compose.material.icons.rounded.ThumbUp
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -119,8 +122,11 @@ import com.raven.app.core.designsystem.component.RavenBottomSheet
 import com.raven.app.core.designsystem.component.RavenContentCrossfade
 import com.raven.app.core.designsystem.component.RavenCrimsonProgressBar
 import com.raven.app.core.designsystem.component.RavenErrorState
+import com.raven.app.core.designsystem.component.RavenFeatureTutorialDialog
+import com.raven.app.core.designsystem.component.RavenScrollToTopButton
 import com.raven.app.core.designsystem.component.RavenShelfOption
 import com.raven.app.core.designsystem.component.RavenShelfPickerSheet
+import com.raven.app.core.designsystem.component.RavenTutorialStep
 import com.raven.app.core.designsystem.component.RavenFilterChip
 import com.raven.app.core.designsystem.theme.LocalMotionReduced
 import com.raven.app.core.designsystem.theme.RavenMotion
@@ -346,7 +352,7 @@ fun GalleryDetailScreen(
                             onLongPressTag = viewModel::openTagActions,
                             onToggleWatchLater = viewModel::toggleWatchLater,
                             onToggleFavorite = viewModel::toggleFavorite,
-                            onOpenShelfPicker = viewModel::openShelfPicker,
+                            onToggleLike = viewModel::toggleLike,
                             onOpenDownloadSheet = viewModel::openDownloadSheet,
                             onExportCbz = { viewModel.exportCbz() },
                             onDeleteBookmark = viewModel::deleteBookmark,
@@ -486,6 +492,28 @@ fun GalleryDetailScreen(
             onDismiss = viewModel::dismissShelfPicker,
         )
     }
+
+    if (uiState.showDetailTutorial && uiState.detail != null) {
+        RavenFeatureTutorialDialog(
+            featureTitle = "作品详情页导览",
+            steps = listOf(
+                RavenTutorialStep(
+                    badge = "核心操作",
+                    title = "稍后看 · 收藏 · 本地点赞",
+                    description = "「稍后看」直通鸦巢的稍后观看队列；「收藏」仅保存作品本身；「点赞」在本地记录该作品的标签权重，专门用于驱动鸦巢的智能推荐。",
+                    icon = Icons.Rounded.ThumbUp,
+                ),
+                RavenTutorialStep(
+                    badge = "标签菜单",
+                    title = "轻点搜索 · 长按订阅或屏蔽",
+                    description = "轻点任意标签即可按标签检索；长按标签弹出菜单，可订阅该标签的更新动态、复制、编辑中文译名或全局屏蔽。",
+                    icon = Icons.Outlined.Search,
+                ),
+            ),
+            onComplete = viewModel::completeDetailTutorial,
+            onSkipAll = viewModel::skipAllTutorials,
+        )
+    }
 }
 
 @OptIn(ExperimentalLayoutApi::class)
@@ -507,13 +535,14 @@ private fun GalleryDetailContent(
     onLongPressTag: (TagRef) -> Unit,
     onToggleWatchLater: () -> Unit,
     onToggleFavorite: () -> Unit,
-    onOpenShelfPicker: () -> Unit,
+    onToggleLike: () -> Unit,
     onOpenDownloadSheet: () -> Unit,
     onExportCbz: () -> Unit,
     onDeleteBookmark: (String) -> Unit,
     onOpenRelated: (com.raven.app.core.model.MediaItem) -> Unit,
 ) {
     val colors = LocalRavenColors.current
+    val listState = rememberLazyListState()
     val pagesByIndex = remember(detail.pages) { detail.pages.associateBy { it.index } }
     val bookmarkedPages = remember(uiState.pageBookmarks) {
         uiState.pageBookmarks.mapTo(hashSetOf()) { it.page }
@@ -535,6 +564,7 @@ private fun GalleryDetailContent(
         }
 
         LazyColumn(
+            state = listState,
             modifier = Modifier.fillMaxSize(),
             contentPadding = PaddingValues(bottom = 32.dp),
             verticalArrangement = Arrangement.spacedBy(20.dp),
@@ -549,7 +579,7 @@ private fun GalleryDetailContent(
                     onLongPressAuthor = onLongPressAuthor,
                     onToggleWatchLater = onToggleWatchLater,
                     onToggleFavorite = onToggleFavorite,
-                    onOpenShelfPicker = onOpenShelfPicker,
+                    onToggleLike = onToggleLike,
                     onOpenDownloadSheet = onOpenDownloadSheet,
                     onExportCbz = onExportCbz,
                 )
@@ -813,6 +843,14 @@ private fun GalleryDetailContent(
                 }
             }
         }
+
+        RavenScrollToTopButton(
+            listState = listState,
+            modifier = Modifier
+                .align(Alignment.BottomEnd)
+                .navigationBarsPadding()
+                .padding(end = 18.dp, bottom = 22.dp),
+        )
     }
 }
 
@@ -826,7 +864,7 @@ private fun GalleryHeroHeader(
     onLongPressAuthor: (AuthorRef) -> Unit,
     onToggleWatchLater: () -> Unit,
     onToggleFavorite: () -> Unit,
-    onOpenShelfPicker: () -> Unit,
+    onToggleLike: () -> Unit,
     onOpenDownloadSheet: () -> Unit,
     onExportCbz: () -> Unit,
 ) {
@@ -1086,8 +1124,7 @@ private fun GalleryHeroHeader(
             }
         }
 
-        // Frosted Action Bar: Watch Later / Favorite / Shelf / Download / Export CBZ
-        val inCustomShelf = uiState.containingShelfIds.any { it != com.raven.app.core.model.Shelf.WATCH_LATER_ID }
+        // Frosted Action Bar: Watch Later / Favorite / Like / Download / Export CBZ
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -1129,11 +1166,15 @@ private fun GalleryHeroHeader(
                 )
             }
             FrostedHeroActionButton(
-                icon = Icons.Outlined.BookmarkAdd,
-                label = if (inCustomShelf) "已入片单" else "片单",
-                active = inCustomShelf,
-                onClick = onOpenShelfPicker,
-                modifier = Modifier.weight(1f),
+                icon = if (uiState.isLiked) Icons.Rounded.ThumbUp else Icons.Outlined.ThumbUp,
+                label = if (uiState.isLiked) "已点赞" else "点赞",
+                active = uiState.isLiked,
+                feedbackEffect = if (uiState.isLiked) RavenFeedbackEffect.TOGGLE_OFF else RavenFeedbackEffect.FAVORITE,
+                onClick = onToggleLike,
+                modifier = Modifier
+                    .weight(1f)
+                    .ravenBurstFeedback(trigger = uiState.isLiked)
+                    .testTag("gallery_action_like"),
             )
             if (!uiState.isLocal) {
                 val isDownloaded = uiState.isOfflineComplete ||

@@ -36,6 +36,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.raven.app.core.designsystem.component.RavenAnimatedCounter
 import com.raven.app.core.designsystem.component.RavenCrimsonProgressBar
 import com.raven.app.core.designsystem.component.RavenEmptyState
 import com.raven.app.core.designsystem.component.RavenFilterChip
@@ -242,10 +243,11 @@ fun StatsScreen(
                                                 overflow = TextOverflow.Ellipsis,
                                             )
                                         }
-                                        Text(
-                                            text = "${stat.totalInteractions} 项",
-                                            style = MaterialTheme.typography.bodySmall.tabular(),
+                                        RavenAnimatedCounter(
+                                            count = stat.totalInteractions,
+                                            style = MaterialTheme.typography.bodySmall,
                                             color = colors.inkSecondary,
+                                            formatter = { "$it 项" },
                                         )
                                         Icon(
                                             imageVector = Icons.AutoMirrored.Rounded.KeyboardArrowRight,

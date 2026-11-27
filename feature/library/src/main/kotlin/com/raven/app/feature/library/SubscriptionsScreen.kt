@@ -55,12 +55,14 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.raven.app.core.designsystem.component.RavenBottomSheet
 import com.raven.app.core.designsystem.component.RavenCompactMediaRow
 import com.raven.app.core.designsystem.component.RavenEmptyState
+import com.raven.app.core.designsystem.component.RavenFeatureTutorialDialog
 import com.raven.app.core.designsystem.component.RavenFilterChipRow
 import com.raven.app.core.designsystem.component.RavenPrimaryButton
 import com.raven.app.core.designsystem.component.RavenSecondaryButton
 import com.raven.app.core.designsystem.component.RavenStatusPill
 import com.raven.app.core.designsystem.component.RavenStatusTone
 import com.raven.app.core.designsystem.component.RavenTopBar
+import com.raven.app.core.designsystem.component.RavenTutorialStep
 import com.raven.app.core.designsystem.theme.LocalRavenColors
 import com.raven.app.core.designsystem.theme.RavenShapes
 import com.raven.app.core.designsystem.theme.ravenSpringPress
@@ -392,6 +394,28 @@ fun SubscriptionsScreen(
             confirmLabel = "删除订阅",
             onConfirm = { viewModel.deleteSubscriptionGroup(group) },
             onDismiss = { deleteTarget = null },
+        )
+    }
+
+    if (uiState.showSubscriptionsTutorial) {
+        RavenFeatureTutorialDialog(
+            featureTitle = "标签订阅指南",
+            steps = listOf(
+                RavenTutorialStep(
+                    badge = "订阅专用于标签",
+                    title = "长按任意作品标签快速订阅",
+                    description = "「订阅」只针对标签更新（作品请使用「收藏」）。除了在此手动添加，在任意作品详情页长按标签也能一键订阅或取消订阅。",
+                    icon = Icons.Outlined.Subscriptions,
+                ),
+                RavenTutorialStep(
+                    badge = "多站聚合更新",
+                    title = "一键检查全部订阅动态",
+                    description = "同一标签可在多个站点聚合成一条订阅，点击右上角刷新按钮即可自动拉取各站最新作品并汇总到订阅收件箱。",
+                    icon = Icons.Outlined.NotificationsActive,
+                ),
+            ),
+            onComplete = viewModel::completeSubscriptionsTutorial,
+            onSkipAll = viewModel::skipAllTutorials,
         )
     }
 }

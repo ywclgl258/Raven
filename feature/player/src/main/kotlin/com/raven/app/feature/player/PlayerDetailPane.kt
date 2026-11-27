@@ -31,21 +31,23 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.OpenInNew
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.Edit
+import androidx.compose.material.icons.outlined.ThumbUp
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.Block
 import androidx.compose.material.icons.rounded.Cast
-import androidx.compose.material.icons.rounded.CollectionsBookmark
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.ExpandLess
 import androidx.compose.material.icons.rounded.ExpandMore
-import androidx.compose.material.icons.rounded.Favorite
+import androidx.compose.material.icons.rounded.NotificationsActive
 import androidx.compose.material.icons.rounded.Person
 import androidx.compose.material.icons.rounded.Share
 import androidx.compose.material.icons.rounded.SkipNext
+import androidx.compose.material.icons.rounded.ThumbUp
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
@@ -82,6 +84,7 @@ import com.raven.app.core.designsystem.component.RavenCompactMediaRow
 import com.raven.app.core.designsystem.component.RavenFormatters
 import com.raven.app.core.designsystem.component.RavenGroupedDivider
 import com.raven.app.core.designsystem.component.RavenGroupedSection
+import com.raven.app.core.designsystem.component.RavenScrollToTopButton
 import com.raven.app.core.designsystem.component.RavenImage
 import com.raven.app.core.designsystem.component.RavenLoadingSkeleton
 import com.raven.app.core.designsystem.component.RavenMorphIcon
@@ -194,11 +197,12 @@ internal fun PlayerDetailPane(
     onDeleteBookmark: (TimeBookmark) -> Unit,
     onRelatedClick: (MediaItem) -> Unit,
     modifier: Modifier = Modifier,
-    onOpenShelfPicker: () -> Unit = {},
+    onToggleLike: () -> Unit = {},
     onOpenCast: () -> Unit = {},
 ) {
     val colors = LocalRavenColors.current
     val motionReduced = LocalMotionReduced.current
+    val listState = rememberLazyListState()
     var descriptionExpanded by remember(uiState.mediaId) { mutableStateOf(false) }
     var commentsExpanded by remember(uiState.mediaId) { mutableStateOf(false) }
     val maxDurationForLinks = uiState.effectiveDurationMs.takeIf { it > 0L }
@@ -207,15 +211,20 @@ internal fun PlayerDetailPane(
             .distinctBy { "${it.tag.namespace.lowercase()}:${it.tag.slug.lowercase()}" }
     }
 
-    LazyColumn(
+    Box(
         modifier = modifier
             .fillMaxSize()
-            .background(colors.canvas)
-            .navigationBarsPadding()
-            .testTag(PlayerTestTags.PLAYER_DETAIL_PANE),
-        contentPadding = PaddingValues(bottom = 28.dp),
-        verticalArrangement = Arrangement.spacedBy(16.dp),
+            .background(colors.canvas),
     ) {
+        LazyColumn(
+            state = listState,
+            modifier = Modifier
+                .fillMaxSize()
+                .navigationBarsPadding()
+                .testTag(PlayerTestTags.PLAYER_DETAIL_PANE),
+            contentPadding = PaddingValues(bottom = 28.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp),
+        ) {
         // 1. Sequential Queue Next confirmation card
         val queue = uiState.queue
         if (queue != null) {
@@ -289,17 +298,17 @@ internal fun PlayerDetailPane(
             }
         }
 
-        // 3. Action Bar (稍后看 / 收藏 / 下载 / 时间书签 / 分享 / 站外播放)
+        // 3. Action Bar (稍后看 / 收藏 / 点赞 / 下载 / 时间书签 / 分享 / 投屏 / 站外播放)
         item(key = "action_bar") {
             PlayerActionStrip(
                 uiState = uiState,
                 onToggleWatchLater = onToggleWatchLater,
                 onToggleFavorite = onToggleFavorite,
+                onToggleLike = onToggleLike,
                 onOpenDownloadSheet = onOpenDownloadSheet,
                 onOpenAddBookmark = onOpenAddBookmark,
                 onShareClick = onShareClick,
                 onOpenExternalPlayers = onOpenExternalPlayers,
-                onOpenShelfPicker = onOpenShelfPicker,
                 onOpenCast = onOpenCast,
                 modifier = Modifier.padding(horizontal = 16.dp),
             )
@@ -389,7 +398,7 @@ internal fun PlayerDetailPane(
                             color = colors.inkPrimary,
                         )
                         Text(
-                            text = "轻点浏览 · 长按收藏/屏蔽",
+                            text = "轻点浏览 · 长按订阅/屏蔽",
                             style = MaterialTheme.typography.bodySmall,
                             color = colors.inkTertiary,
                         )
@@ -590,6 +599,15 @@ internal fun PlayerDetailPane(
                 }
             }
         }
+        }
+
+        RavenScrollToTopButton(
+            listState = listState,
+            modifier = Modifier
+                .align(Alignment.BottomEnd)
+                .navigationBarsPadding()
+                .padding(end = 18.dp, bottom = 22.dp),
+        )
     }
 }
 
@@ -766,7 +784,7 @@ private fun PlayerActionStrip(
     onOpenAddBookmark: () -> Unit,
     onShareClick: () -> Unit,
     onOpenExternalPlayers: () -> Unit,
-    onOpenShelfPicker: () -> Unit = {},
+    onToggleLike: () -> Unit = {},
     onOpenCast: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
@@ -873,11 +891,15 @@ private fun PlayerActionStrip(
                 .testTag(PlayerTestTags.PLAYER_ACTION_SHARE),
         )
         DetailActionButton(
-            icon = Icons.Rounded.CollectionsBookmark,
-            label = "片单",
-            active = uiState.containingShelfIds.any { it != com.raven.app.core.model.Shelf.WATCH_LATER_ID },
-            onClick = onOpenShelfPicker,
-            modifier = Modifier.weight(1f),
+            icon = if (uiState.isLiked) Icons.Rounded.ThumbUp else Icons.Outlined.ThumbUp,
+            label = if (uiState.isLiked) "已点赞" else "点赞",
+            active = uiState.isLiked,
+            feedbackEffect = if (uiState.isLiked) RavenFeedbackEffect.TOGGLE_OFF else RavenFeedbackEffect.FAVORITE,
+            onClick = onToggleLike,
+            modifier = Modifier
+                .weight(1f)
+                .ravenBurstFeedback(trigger = uiState.isLiked)
+                .testTag("player_action_like"),
         )
         DetailActionButton(
             icon = Icons.Rounded.Cast,
@@ -1015,7 +1037,7 @@ private fun PlayerTagChip(
     val container by animateColorAsState(
         targetValue = when {
             tagDisplay.isBlocked -> colors.error.copy(alpha = 0.14f)
-            tagDisplay.isFavorited -> colors.crimson.copy(alpha = 0.15f)
+            tagDisplay.isSubscribed -> colors.crimson.copy(alpha = 0.15f)
             else -> colors.surface1
         },
         animationSpec = colorSpec,
@@ -1024,7 +1046,7 @@ private fun PlayerTagChip(
     val border by animateColorAsState(
         targetValue = when {
             tagDisplay.isBlocked -> colors.error.copy(alpha = 0.40f)
-            tagDisplay.isFavorited -> colors.crimson.copy(alpha = 0.40f)
+            tagDisplay.isSubscribed -> colors.crimson.copy(alpha = 0.40f)
             else -> colors.hairline
         },
         animationSpec = colorSpec,
@@ -1033,7 +1055,7 @@ private fun PlayerTagChip(
     val textColor by animateColorAsState(
         targetValue = when {
             tagDisplay.isBlocked -> colors.error
-            tagDisplay.isFavorited -> colors.crimson
+            tagDisplay.isSubscribed -> colors.crimson
             else -> colors.inkPrimary
         },
         animationSpec = colorSpec,
@@ -1061,9 +1083,9 @@ private fun PlayerTagChip(
                 tint = colors.error,
                 modifier = Modifier.size(13.dp),
             )
-        } else if (tagDisplay.isFavorited) {
+        } else if (tagDisplay.isSubscribed) {
             Icon(
-                imageVector = Icons.Rounded.Favorite,
+                imageVector = Icons.Rounded.NotificationsActive,
                 contentDescription = null,
                 tint = colors.crimson,
                 modifier = Modifier.size(13.dp),

@@ -16,8 +16,11 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.outlined.BookmarkAdd
@@ -47,6 +50,7 @@ import com.raven.app.core.database.repository.ShelfRepository
 import com.raven.app.core.designsystem.component.RavenCompactMediaRow
 import com.raven.app.core.designsystem.component.RavenEmptyState
 import com.raven.app.core.designsystem.component.RavenFilterChipRow
+import com.raven.app.core.designsystem.component.RavenScrollToTopButton
 import com.raven.app.core.designsystem.component.RavenSearchField
 import com.raven.app.core.designsystem.component.RavenStatusPill
 import com.raven.app.core.designsystem.component.RavenStatusTone
@@ -402,11 +406,14 @@ fun HistoryScreen(
             },
         )
 
-        LazyColumn(
-            modifier = Modifier.weight(1f),
-            contentPadding = PaddingValues(top = 10.dp, bottom = 24.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp),
-        ) {
+        val listState = rememberLazyListState()
+        Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
+            LazyColumn(
+                state = listState,
+                modifier = Modifier.fillMaxSize(),
+                contentPadding = PaddingValues(top = 10.dp, bottom = 24.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
             if (!uiState.message.isNullOrBlank()) {
                 item(key = "hist_msg") {
                     LibraryFeedbackBanner(
@@ -525,6 +532,13 @@ fun HistoryScreen(
                     )
                 }
             }
+            }
+            RavenScrollToTopButton(
+                listState = listState,
+                modifier = Modifier
+                    .align(Alignment.BottomEnd)
+                    .padding(end = 18.dp, bottom = 22.dp),
+            )
         }
 
         val motionReduced = com.raven.app.core.designsystem.theme.LocalMotionReduced.current

@@ -57,6 +57,9 @@ class PreferencesRepository(
     suspend fun togglePinnedSite(siteId: SiteId): List<SiteId> =
         settingsDataStore.togglePinnedSite(siteId)
 
+    suspend fun setDynamicSiteSorting(enabled: Boolean) =
+        settingsDataStore.setDynamicSiteSorting(enabled)
+
     suspend fun setCrossSearchSiteIds(siteIds: List<SiteId>) =
         settingsDataStore.setCrossSearchSiteIds(siteIds)
 
@@ -109,6 +112,13 @@ class PreferencesRepository(
     suspend fun setAutoUpdateCheck(enabled: Boolean) = settingsDataStore.setAutoUpdateCheck(enabled)
 
     suspend fun consumeSiteSwitchTutorial(): Boolean = settingsDataStore.consumeSiteSwitchTutorial()
+
+    suspend fun markTutorialSeen(tutorialId: String) = settingsDataStore.markTutorialSeen(tutorialId)
+
+    suspend fun markTutorialsSeen(tutorialIds: Collection<String>) =
+        settingsDataStore.markTutorialsSeen(tutorialIds)
+
+    suspend fun resetAllTutorials() = settingsDataStore.resetAllTutorials()
 
     suspend fun setTagDictAutoSync(enabled: Boolean) = settingsDataStore.setTagDictAutoSync(enabled)
 

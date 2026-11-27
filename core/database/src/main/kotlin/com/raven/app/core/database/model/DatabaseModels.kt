@@ -49,7 +49,15 @@ data class AppSettings(
     val activeSiteId: SiteId = DEFAULT_ACTIVE_SITE_ID,
     /** `null` keeps the last active site; a value is applied once on process cold start. */
     val startupDefaultSiteId: SiteId? = null,
+    /**
+     * Order of pinned sites. When [dynamicSiteSorting] is off this is also the displayed order.
+     */
     val pinnedSiteIds: List<SiteId> = emptyList(),
+    /**
+     * `true` keeps the usage-frequency ordering (pinned + category groups sorted by visit count).
+     * `false` keeps [pinnedSiteIds] in manual order and category groups in registry order.
+     */
+    val dynamicSiteSorting: Boolean = DEFAULT_DYNAMIC_SITE_SORTING,
     val crossSearchSiteIds: List<SiteId> = emptyList(),
     val siteOpenCounts: Map<SiteId, Int> = emptyMap(),
     val sectionOpenCounts: Map<SiteId, Map<String, Int>> = emptyMap(),
@@ -69,6 +77,7 @@ data class AppSettings(
     val uiSoundEffectsEnabled: Boolean = true,
     val autoUpdateCheck: Boolean = true,
     val siteSwitchTutorialSeen: Boolean = false,
+    val seenTutorials: Set<String> = emptySet(),
     val tagDictAutoSync: Boolean = true,
     val tagDictEtag: String = "",
     val tagDictReleaseTag: String = "",
@@ -99,6 +108,8 @@ data class AppSettings(
         siteExploreFilters[siteId] ?: ExploreFilterState()
 
     fun siteOpenCount(siteId: SiteId): Int = siteOpenCounts[siteId] ?: 0
+
+    fun hasSeenTutorial(tutorialId: String): Boolean = tutorialId in seenTutorials
 
     fun sectionOpenCount(siteId: SiteId, sectionId: String): Int =
         sectionOpenCounts[siteId]?.get(sectionId) ?: 0
@@ -143,6 +154,7 @@ data class AppSettings(
             MediaKind.PHOTO,
         )
         const val DEFAULT_PREFERRED_QUALITY: String = "auto"
+        const val DEFAULT_DYNAMIC_SITE_SORTING: Boolean = true
         const val DEFAULT_PLAYBACK_SPEED: Float = 1.0f
         const val MIN_PLAYBACK_SPEED: Float = 0.25f
         const val MAX_PLAYBACK_SPEED: Float = 3.0f

@@ -605,7 +605,7 @@ fun VideoPlayerScreen(
                     navigator.openGallery(item.siteId, item.id, item.url)
                 }
             },
-            onOpenShelfPicker = { activeSheet = PlayerSheet.ShelfPicker },
+            onToggleLike = viewModel::toggleLike,
             onOpenCast = {
                 viewModel.discoverCastDevices()
                 activeSheet = PlayerSheet.Cast

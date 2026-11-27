@@ -12,12 +12,15 @@ import com.raven.app.core.database.domain.CompletionPolicy
 import com.raven.app.core.database.model.AppSettings
 import com.raven.app.core.database.model.ShelfWithSummary
 import com.raven.app.core.database.repository.BlockedTermsRepository
+import com.raven.app.core.database.domain.LikeRecommendationEngine
 import com.raven.app.core.database.repository.BookmarkRepository
 import com.raven.app.core.database.repository.FavoriteRepository
 import com.raven.app.core.database.repository.HistoryRepository
+import com.raven.app.core.database.repository.LikeRepository
 import com.raven.app.core.database.repository.MediaTagCacheRepository
 import com.raven.app.core.database.repository.PreferencesRepository
 import com.raven.app.core.database.repository.ShelfRepository
+import com.raven.app.core.database.repository.SubscriptionRepository
 import com.raven.app.core.database.repository.TagDictionaryRepository
 import com.raven.app.core.designsystem.component.RavenFormatters
 import com.raven.app.core.media.cast.LanCastDevice
@@ -34,14 +37,18 @@ import com.raven.app.core.model.DownloadItem
 import com.raven.app.core.model.DownloadStatus
 import com.raven.app.core.model.FavoriteItem
 import com.raven.app.core.model.FavoriteKind
+import com.raven.app.core.model.LikedMedia
+import com.raven.app.core.model.LikedTagWeight
 import com.raven.app.core.model.MediaItem
 import com.raven.app.core.model.MediaKind
 import com.raven.app.core.model.PlaybackPreferences
+import com.raven.app.core.model.SearchScope
 import com.raven.app.core.model.Shelf
 import com.raven.app.core.model.ShelfItem
 import com.raven.app.core.model.SiteException
 import com.raven.app.core.model.SiteId
 import com.raven.app.core.model.TagRef
+import com.raven.app.core.model.TagSubscription
 import com.raven.app.core.model.TimeBookmark
 import com.raven.app.core.model.VideoDetail
 import com.raven.app.core.model.VideoStream
@@ -111,7 +118,9 @@ private data class PlayerPersonalBindings(
     val shelves: List<ShelfWithSummary> = emptyList(),
     val containingShelfIds: Set<String> = emptySet(),
     val isFavorite: Boolean = false,
-    val favoriteTagSlugs: Set<String> = emptySet(),
+    val isLiked: Boolean = false,
+    val subscribedTagSlugs: Set<String> = emptySet(),
+    val likedTagWeights: List<LikedTagWeight> = emptyList(),
     val blockedTerms: Set<String> = emptySet(),
     val cachedTagsByKey: Map<String, List<TagRef>> = emptyMap(),
     val timeBookmarks: List<TimeBookmark> = emptyList(),
@@ -144,6 +153,8 @@ class PlayerViewModel(
     private val elapsedRealtimeMs: () -> Long = { SystemClock.elapsedRealtime() },
     private val mediaTagCacheRepository: MediaTagCacheRepository? = null,
     private val tagDictionaryRepository: TagDictionaryRepository? = null,
+    private val likeRepository: LikeRepository? = null,
+    private val subscriptionRepository: SubscriptionRepository? = null,
     private val lanCastManager: LanCastManager? = null,
     private val applicationScope: CoroutineScope? = null,
 ) : ViewModel() {
@@ -178,15 +189,19 @@ class PlayerViewModel(
         if (target == null) {
             flowOf(PlayerPersonalBindings())
         } else {
+            val subscribedTagsFlow: Flow<Set<String>> = subscriptionRepository?.observeSubscriptions(target.siteId)
+                ?.map { list -> list.mapTo(linkedSetOf()) { it.slug.trim().lowercase() } }
+                ?: flowOf(emptySet())
+            val isLikedFlow = likeRepository?.observeIsLiked(target.siteId, target.mediaId) ?: flowOf(false)
+            val likedWeightsFlow = likeRepository?.observeTagWeights() ?: flowOf(emptyList())
             val prefsAndFlags = combine(
                 preferencesRepository.observeEffectivePlaybackPreferences(target.siteId),
                 shelfRepository.observeContainingShelfIds(target.siteId, target.mediaId),
                 shelfRepository.observeShelvesWithSummary(),
                 favoriteRepository.observeIsFavorite(target.siteId, FavoriteKind.VIDEO, target.mediaId),
-                favoriteRepository.observeBySiteAndKind(target.siteId, FavoriteKind.TAG)
-                    .map { list -> list.mapTo(linkedSetOf()) { it.targetId.trim().lowercase() } },
-            ) { prefs, containingIds, allShelves, fav, favTags ->
-                PersonalLeftSlice(prefs, containingIds.toSet(), allShelves, fav, favTags)
+                subscribedTagsFlow,
+            ) { prefs, containingIds, allShelves, fav, subTags ->
+                PersonalLeftSlice(prefs, containingIds.toSet(), allShelves, fav, subTags)
             }
             val cachedTagsFlow = mediaTagCacheRepository?.observeTagsBySite(target.siteId) ?: flowOf(emptyMap())
             val termsBookmarksDownloads = combine(
@@ -197,14 +212,19 @@ class PlayerViewModel(
             ) { blocked, cachedTags, bookmarks, downloads ->
                 Quad(blocked, cachedTags, bookmarks, downloads)
             }
-            combine(prefsAndFlags, termsBookmarksDownloads, dictRevisionFlow) { left, right, dictRevision ->
+            val likeAndDict = combine(isLikedFlow, likedWeightsFlow, dictRevisionFlow) { liked, weights, rev ->
+                Triple(liked, weights, rev)
+            }
+            combine(prefsAndFlags, termsBookmarksDownloads, likeAndDict) { left, right, (liked, weights, dictRevision) ->
                 PlayerPersonalBindings(
                     playbackPreferences = left.prefs,
                     inWatchLater = Shelf.WATCH_LATER_ID in left.containingShelfIds,
                     shelves = left.shelves,
                     containingShelfIds = left.containingShelfIds,
                     isFavorite = left.isFavorite,
-                    favoriteTagSlugs = left.favoriteTagSlugs,
+                    isLiked = liked,
+                    subscribedTagSlugs = left.favoriteTagSlugs,
+                    likedTagWeights = weights,
                     blockedTerms = right.first,
                     cachedTagsByKey = right.second,
                     timeBookmarks = right.third,
@@ -930,27 +950,79 @@ class PlayerViewModel(
         seekTo(bookmark.positionMs)
     }
 
-    // ---- Tag Favorite & Block ----
+    // ---- Local Like & Tag Subscription / Block ----
 
-    fun toggleTagFavorite(tag: TagRef) {
-        val siteId = activeTarget.value?.siteId ?: return
-        val slug = tag.slug.trim().ifBlank { tag.label.trim() }
-        if (slug.isEmpty()) return
+    fun toggleLike() {
+        val repo = likeRepository ?: return
+        val target = activeTarget.value ?: return
+        val detail = localState.value.detail
+        val item = detail?.item
+        val title = item?.title?.takeIf { it.isNotBlank() } ?: target.title.ifBlank { target.mediaId }
+        val url = item?.url?.takeIf { it.isNotBlank() } ?: target.url
+        val cover = item?.coverUrl?.takeIf { it.isNotBlank() } ?: target.coverUrl
+        val authorName = (detail?.authors?.firstOrNull() ?: item?.author)?.name.orEmpty()
+        val allTags = buildList {
+            detail?.tags?.let(::addAll)
+            detail?.characters?.let(::addAll)
+            detail?.categories?.let(::addAll)
+            item?.tags?.let(::addAll)
+        }.distinctBy { LikeRecommendationEngine.canonicalTagKey(it) }
+
         viewModelScope.launch {
-            val added = favoriteRepository.toggle(
-                FavoriteItem(
-                    siteId = siteId,
-                    targetId = slug,
-                    kind = FavoriteKind.TAG,
-                    title = tag.label.ifBlank { slug },
-                    url = tag.url,
-                    addedAt = clockMs(),
+            val liked = repo.toggle(
+                LikedMedia(
+                    siteId = target.siteId,
+                    mediaId = target.mediaId,
+                    kind = MediaKind.VIDEO,
+                    title = title,
+                    url = url,
+                    coverUrl = cover,
+                    authorName = authorName,
+                    tags = allTags,
+                    likedAt = clockMs(),
                 ),
             )
             _sideEffects.tryEmit(
-                PlayerSideEffect.ShowMessage(if (added) "已收藏标签" else "已取消收藏标签"),
+                PlayerSideEffect.ShowMessage(
+                    if (liked) {
+                        if (allTags.isNotEmpty()) "已点赞 · 已记录 ${allTags.size} 个标签偏好" else "已点赞"
+                    } else {
+                        "已取消点赞"
+                    },
+                ),
             )
         }
+    }
+
+    fun toggleTagSubscription(tag: TagRef) {
+        val repo = subscriptionRepository ?: return
+        val siteId = activeTarget.value?.siteId ?: return
+        val slug = tag.slug.trim().ifBlank { tag.label.trim() }
+        if (slug.isEmpty()) return
+        val translated = tagDictionary.translate(tag.slug, tag.namespace)
+            ?: tagDictionary.translate(tag.label, tag.namespace)
+        val label = translated ?: tag.label.ifBlank { slug }
+        viewModelScope.launch {
+            val subscribed = repo.toggleSubscription(
+                TagSubscription(
+                    siteId = siteId,
+                    slug = slug,
+                    label = label,
+                    url = tag.url,
+                    scope = SearchScope.TAG,
+                    createdAt = clockMs(),
+                ),
+            )
+            _sideEffects.tryEmit(
+                PlayerSideEffect.ShowMessage(
+                    if (subscribed) "已订阅标签「$label」" else "已取消订阅标签「$label」",
+                ),
+            )
+        }
+    }
+
+    fun toggleTagFavorite(tag: TagRef) {
+        toggleTagSubscription(tag)
     }
 
     fun toggleTagBlocked(tag: TagRef) {
@@ -1842,7 +1914,7 @@ class PlayerViewModel(
                     tag = tag,
                     displayLabel = translated ?: fallback,
                     translatedLabel = translated,
-                    isFavorited = slug in personal.favoriteTagSlugs,
+                    isSubscribed = slug in personal.subscribedTagSlugs,
                     isBlocked = personal.blockedTerms.any { isMatchingTermForTag(tag, it) },
                 )
             }
@@ -1878,13 +1950,28 @@ class PlayerViewModel(
             null
         }
 
-        val filteredRelated = detail?.related.orEmpty().filter { related ->
+        val allowedRelated = detail?.related.orEmpty().filter { related ->
             ContentFilter.isAllowed(
                 item = related,
                 blockedTerms = personal.blockedTerms,
                 tagDictionary = tagDictionary,
                 extraTags = personal.cachedTagsByKey[related.compositeKey].orEmpty(),
             )
+        }
+        val filteredRelated = if (detail != null && allowedRelated.size > 1) {
+            LikeRecommendationEngine.rankSimilarWorks(
+                sourceTitle = title,
+                sourceAuthors = authors.map { it.name },
+                sourceTags = detail.tags + detail.characters + detail.categories + detail.item.tags,
+                sourceCompositeKey = detail.item.compositeKey,
+                sourceMediaId = detail.item.id,
+                candidates = allowedRelated,
+                likedTagWeights = personal.likedTagWeights,
+                cachedTagsByKey = personal.cachedTagsByKey,
+                limit = 20,
+            )
+        } else {
+            allowedRelated
         }
 
         val combinedNotice = engine.lastNotice ?: local.localNotice
@@ -1950,6 +2037,7 @@ class PlayerViewModel(
             noticeMessage = combinedNotice,
             inWatchLater = personal.inWatchLater,
             isFavorite = personal.isFavorite,
+            isLiked = personal.isLiked,
             downloadStatus = primaryDownload?.status,
             downloadProgress = primaryDownload?.progressFraction ?: 0f,
             isOfflineDownloaded = isDownloaded || engine.isOffline,

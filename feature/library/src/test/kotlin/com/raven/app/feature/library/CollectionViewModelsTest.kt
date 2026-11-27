@@ -47,6 +47,16 @@ class CollectionViewModelsTest {
         harness.favoriteRepository.add(
             FavoriteItem(
                 siteId = SiteId.NHENTAI,
+                targetId = "c1",
+                kind = FavoriteKind.COMIC,
+                title = "Favorite Comic",
+                url = "https://nhentai.net/g/c1/",
+                addedAt = 150L,
+            ),
+        )
+        harness.favoriteRepository.add(
+            FavoriteItem(
+                siteId = SiteId.NHENTAI,
                 targetId = "tag-scifi",
                 kind = FavoriteKind.TAG,
                 title = "Sci-Fi",
@@ -65,7 +75,9 @@ class CollectionViewModelsTest {
         vm.uiState.test {
             awaitItem()
             advanceUntilIdle()
-            assertEquals(2, expectMostRecentItem().items.size)
+            val initialItems = expectMostRecentItem().items
+            assertEquals(2, initialItems.size)
+            assertTrue(initialItems.none { it.kind == FavoriteKind.TAG })
 
             vm.selectKindFilter(FavoriteKindFilter.VIDEO)
             advanceUntilIdle()

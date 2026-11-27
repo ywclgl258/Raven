@@ -64,6 +64,11 @@ val libraryFeatureModule: Module = module {
             localLibraryImporter = get(),
             siteRegistry = get(),
             dispatchers = get(),
+            likeRepository = get(),
+            blockedTermsRepository = get(),
+            mediaTagCacheRepository = get(),
+            preferencesRepository = get(),
+            tagDictionary = getOrNull<TagDictionary>() ?: TagDictionary.default,
         )
     }
 

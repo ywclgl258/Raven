@@ -1087,16 +1087,16 @@ private fun PlayerTagActionsSheet(
                 )
                 RavenGroupedDivider(insetWithIcon = true)
                 PlayerMorphGroupedRow(
-                    title = if (tag.isFavorited) "取消收藏标签" else "收藏标签",
+                    title = if (tag.isSubscribed) "取消订阅标签更新" else "订阅标签更新",
                     iconBadgeModifier = Modifier.ravenBurstFeedback(
-                        trigger = tag.isFavorited,
+                        trigger = tag.isSubscribed,
                         burstColor = colors.crimson,
                     ),
                     leadingIcon = {
                         RavenMorphToggleIcon(
-                            active = tag.isFavorited,
-                            activeGlyph = RavenMorphIcons.HeartFilled,
-                            inactiveGlyph = RavenMorphIcons.HeartOutline,
+                            active = tag.isSubscribed,
+                            activeGlyph = RavenMorphIcons.BellActive,
+                            inactiveGlyph = RavenMorphIcons.BellOutline,
                             activeTint = colors.crimson,
                             inactiveTint = colors.inkPrimary,
                             size = 18.dp,

@@ -130,6 +130,11 @@ class SettingsDataStore(
         return result
     }
 
+    /** Toggles usage-based ordering for the site switcher. Default is `true`. */
+    suspend fun setDynamicSiteSorting(enabled: Boolean) {
+        dataStore.edit { prefs -> prefs[Keys.DYNAMIC_SITE_SORTING] = enabled }
+    }
+
     suspend fun setCrossSearchSiteIds(siteIds: List<SiteId>) {
         val unique = siteIds.distinct()
         dataStore.edit { prefs ->
@@ -373,6 +378,34 @@ class SettingsDataStore(
         return consumed
     }
 
+    suspend fun markTutorialSeen(tutorialId: String) {
+        val clean = tutorialId.trim()
+        if (clean.isEmpty()) return
+        dataStore.edit { prefs ->
+            val current = decodeStringSet(prefs[Keys.SEEN_TUTORIALS])
+            if (clean !in current) {
+                prefs[Keys.SEEN_TUTORIALS] = encodeStringSet(current + clean)
+            }
+        }
+    }
+
+    suspend fun markTutorialsSeen(tutorialIds: Collection<String>) {
+        val cleaned = tutorialIds.map(String::trim).filter(String::isNotEmpty)
+        if (cleaned.isEmpty()) return
+        dataStore.edit { prefs ->
+            val current = decodeStringSet(prefs[Keys.SEEN_TUTORIALS])
+            val merged = current + cleaned
+            prefs[Keys.SEEN_TUTORIALS] = encodeStringSet(merged)
+        }
+    }
+
+    suspend fun resetAllTutorials() {
+        dataStore.edit { prefs ->
+            prefs.remove(Keys.SEEN_TUTORIALS)
+            prefs[Keys.SITE_SWITCH_TUTORIAL_SEEN] = false
+        }
+    }
+
     /**
      * Exports ONLY safe portable user settings for encrypted backups.
      * Never exports device-local storage roots, tutorial flags, credentials, or keys.
@@ -383,6 +416,7 @@ class SettingsDataStore(
             put(KEY_ACTIVE_SITE_ID, current.activeSiteId.value)
             current.startupDefaultSiteId?.value?.let { put(KEY_STARTUP_DEFAULT_SITE_ID, it) }
             put(KEY_PINNED_SITE_IDS, encodeSiteIdList(current.pinnedSiteIds))
+            put(KEY_DYNAMIC_SITE_SORTING, current.dynamicSiteSorting.toString())
             put(KEY_CROSS_SEARCH_SITE_IDS, encodeSiteIdList(current.crossSearchSiteIds))
             put(KEY_TRANSLATE_TAGS, current.translateTags.toString())
             put(KEY_AUTO_FULLSCREEN, current.autoFullscreen.toString())
@@ -435,6 +469,9 @@ class SettingsDataStore(
         }
         settingsMap[KEY_PINNED_SITE_IDS]?.let { raw ->
             prefs[Keys.PINNED_SITE_IDS] = encodeSiteIdList(decodeSiteIdList(raw).distinct())
+        }
+        settingsMap[KEY_DYNAMIC_SITE_SORTING]?.toBooleanStrictOrNull()?.let {
+            prefs[Keys.DYNAMIC_SITE_SORTING] = it
         }
         settingsMap[KEY_CROSS_SEARCH_SITE_IDS]?.let { raw ->
             prefs[Keys.CROSS_SEARCH_SITE_IDS] = encodeSiteIdList(decodeSiteIdList(raw).distinct())
@@ -540,6 +577,8 @@ class SettingsDataStore(
                 ?.takeIf(String::isNotEmpty)
                 ?.let(SiteId::of),
             pinnedSiteIds = decodeSiteIdList(prefs[Keys.PINNED_SITE_IDS]).distinct(),
+            dynamicSiteSorting = prefs[Keys.DYNAMIC_SITE_SORTING]
+                ?: AppSettings.DEFAULT_DYNAMIC_SITE_SORTING,
             crossSearchSiteIds = decodeSiteIdList(prefs[Keys.CROSS_SEARCH_SITE_IDS]).distinct(),
             siteOpenCounts = siteOpenCounts,
             sectionOpenCounts = sectionOpenCounts,
@@ -562,6 +601,7 @@ class SettingsDataStore(
             uiSoundEffectsEnabled = prefs[Keys.UI_SOUND_EFFECTS_ENABLED] ?: true,
             autoUpdateCheck = prefs[Keys.AUTO_UPDATE_CHECK] ?: true,
             siteSwitchTutorialSeen = prefs[Keys.SITE_SWITCH_TUTORIAL_SEEN] ?: false,
+            seenTutorials = decodeStringSet(prefs[Keys.SEEN_TUTORIALS]),
             tagDictAutoSync = prefs[Keys.TAG_DICT_AUTO_SYNC] ?: true,
             tagDictEtag = prefs[Keys.TAG_DICT_ETAG].orEmpty(),
             tagDictReleaseTag = prefs[Keys.TAG_DICT_RELEASE_TAG].orEmpty(),
@@ -592,6 +632,7 @@ class SettingsDataStore(
         val ACTIVE_SITE_ID = stringPreferencesKey(KEY_ACTIVE_SITE_ID)
         val STARTUP_DEFAULT_SITE_ID = stringPreferencesKey(KEY_STARTUP_DEFAULT_SITE_ID)
         val PINNED_SITE_IDS = stringPreferencesKey(KEY_PINNED_SITE_IDS)
+        val DYNAMIC_SITE_SORTING = booleanPreferencesKey(KEY_DYNAMIC_SITE_SORTING)
         val CROSS_SEARCH_SITE_IDS = stringPreferencesKey(KEY_CROSS_SEARCH_SITE_IDS)
         val SITE_OPEN_COUNTS = stringPreferencesKey(KEY_SITE_OPEN_COUNTS)
         val SECTION_OPEN_COUNTS = stringPreferencesKey(KEY_SECTION_OPEN_COUNTS)
@@ -609,6 +650,7 @@ class SettingsDataStore(
         val UI_SOUND_EFFECTS_ENABLED = booleanPreferencesKey(KEY_UI_SOUND_EFFECTS_ENABLED)
         val AUTO_UPDATE_CHECK = booleanPreferencesKey(KEY_AUTO_UPDATE_CHECK)
         val SITE_SWITCH_TUTORIAL_SEEN = booleanPreferencesKey(KEY_SITE_SWITCH_TUTORIAL_SEEN)
+        val SEEN_TUTORIALS = stringPreferencesKey(KEY_SEEN_TUTORIALS)
         val TAG_DICT_AUTO_SYNC = booleanPreferencesKey(KEY_TAG_DICT_AUTO_SYNC)
         val TAG_DICT_ETAG = stringPreferencesKey(KEY_TAG_DICT_ETAG)
         val TAG_DICT_RELEASE_TAG = stringPreferencesKey(KEY_TAG_DICT_RELEASE_TAG)
@@ -644,6 +686,7 @@ class SettingsDataStore(
         const val KEY_ACTIVE_SITE_ID: String = "active_site_id"
         const val KEY_STARTUP_DEFAULT_SITE_ID: String = "startup_default_site_id"
         const val KEY_PINNED_SITE_IDS: String = "pinned_site_ids"
+        const val KEY_DYNAMIC_SITE_SORTING: String = "dynamic_site_sorting"
         const val KEY_CROSS_SEARCH_SITE_IDS: String = "cross_search_site_ids"
         const val KEY_SITE_OPEN_COUNTS: String = "site_open_counts"
         const val KEY_SECTION_OPEN_COUNTS: String = "section_open_counts"
@@ -663,6 +706,7 @@ class SettingsDataStore(
         const val KEY_UI_SOUND_EFFECTS_ENABLED: String = "ui_sound_effects_enabled"
         const val KEY_AUTO_UPDATE_CHECK: String = "auto_update_check"
         const val KEY_SITE_SWITCH_TUTORIAL_SEEN: String = "site_switch_tutorial_seen"
+        const val KEY_SEEN_TUTORIALS: String = "seen_tutorials"
         const val KEY_TAG_DICT_AUTO_SYNC: String = "tag_dict_auto_sync"
         const val KEY_TAG_DICT_ETAG: String = "tag_dict_etag"
         const val KEY_TAG_DICT_RELEASE_TAG: String = "tag_dict_release_tag"
@@ -689,6 +733,7 @@ class SettingsDataStore(
             KEY_ACTIVE_SITE_ID,
             KEY_STARTUP_DEFAULT_SITE_ID,
             KEY_PINNED_SITE_IDS,
+            KEY_DYNAMIC_SITE_SORTING,
             KEY_CROSS_SEARCH_SITE_IDS,
             KEY_TRANSLATE_TAGS,
             KEY_AUTO_FULLSCREEN,
@@ -707,6 +752,19 @@ class SettingsDataStore(
 
         private val json = RavenTypeConverters.json
         private val stringListSerializer = ListSerializer(String.serializer())
+
+        private fun decodeStringSet(raw: String?): Set<String> {
+            if (raw.isNullOrBlank()) return emptySet()
+            return runCatching {
+                json.decodeFromString(stringListSerializer, raw)
+                    .map(String::trim)
+                    .filter(String::isNotEmpty)
+                    .toSet()
+            }.getOrDefault(emptySet())
+        }
+
+        private fun encodeStringSet(values: Set<String>): String =
+            json.encodeToString(stringListSerializer, values.toList().sorted())
         private val siteOpenCountsSerializer = MapSerializer(String.serializer(), Int.serializer())
         private val sectionOpenCountsSerializer = MapSerializer(
             String.serializer(),

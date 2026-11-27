@@ -24,10 +24,12 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.lazy.staggeredgrid.LazyVerticalStaggeredGrid
 import androidx.compose.foundation.lazy.staggeredgrid.StaggeredGridCells
 import androidx.compose.foundation.lazy.staggeredgrid.StaggeredGridItemSpan
 import androidx.compose.foundation.lazy.staggeredgrid.items as staggeredItems
+import androidx.compose.foundation.lazy.staggeredgrid.rememberLazyStaggeredGridState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.outlined.BookmarkAdd
@@ -62,6 +64,7 @@ import com.raven.app.core.database.repository.FavoriteRepository
 import com.raven.app.core.database.repository.ShelfRepository
 import com.raven.app.core.designsystem.component.RavenCompactMediaRow
 import com.raven.app.core.designsystem.component.RavenEmptyState
+import com.raven.app.core.designsystem.component.RavenScrollToTopButton
 import com.raven.app.core.designsystem.component.RavenGalleryCard
 import com.raven.app.core.designsystem.component.RavenFilterChipRow
 import com.raven.app.core.designsystem.component.RavenVideoCard
@@ -94,9 +97,6 @@ enum class FavoriteKindFilter(val label: String, val kind: FavoriteKind?) {
     VIDEO("视频", FavoriteKind.VIDEO),
     COMIC("漫画", FavoriteKind.COMIC),
     PHOTO("写真", FavoriteKind.PHOTO),
-    TAG("标签", FavoriteKind.TAG),
-    AUTHOR("作者", FavoriteKind.AUTHOR),
-    CHARACTER("角色", FavoriteKind.CHARACTER),
 }
 
 data class FavoritesUiState(
@@ -140,7 +140,7 @@ class FavoritesViewModel(
     private val controls = MutableStateFlow(FavoritesControls(siteFilter = initialSiteId))
 
     val uiState: StateFlow<FavoritesUiState> = combine(
-        favoriteRepository.observeAll(),
+        favoriteRepository.observeMediaFavorites(),
         shelfRepository.observeShelvesWithSummary(),
         controls,
     ) { allFavorites, shelves, ctrl ->
@@ -452,11 +452,14 @@ private fun ColumnScope.FavoritesListContent(
     onAddToShelf: (FavoriteItem) -> Unit,
 ) {
     val colors = LocalRavenColors.current
-    LazyColumn(
-        modifier = Modifier.weight(1f),
-        contentPadding = PaddingValues(top = 10.dp, bottom = 24.dp),
-        verticalArrangement = Arrangement.spacedBy(10.dp),
-    ) {
+    val listState = rememberLazyListState()
+    Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
+        LazyColumn(
+            state = listState,
+            modifier = Modifier.fillMaxSize(),
+            contentPadding = PaddingValues(top = 10.dp, bottom = 24.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
         if (!uiState.message.isNullOrBlank()) {
             item(key = "fav_msg") {
                 LibraryFeedbackBanner(
@@ -472,7 +475,7 @@ private fun ColumnScope.FavoritesListContent(
             RavenSearchField(
                 query = uiState.searchQuery,
                 onQueryChange = viewModel::updateSearchQuery,
-                placeholder = "搜索收藏的作品、标签或作者…",
+                placeholder = "搜索收藏的作品或站点…",
                 modifier = Modifier.padding(horizontal = 16.dp),
             )
         }
@@ -639,6 +642,13 @@ private fun ColumnScope.FavoritesListContent(
                 }
             }
         }
+        }
+        RavenScrollToTopButton(
+            listState = listState,
+            modifier = Modifier
+                .align(Alignment.BottomEnd)
+                .padding(end = 18.dp, bottom = 22.dp),
+        )
     }
 }
 
@@ -649,6 +659,7 @@ private fun ColumnScope.FavoritesWaterfallContent(
     navigator: LibraryNavigator,
     onAddToShelf: (FavoriteItem) -> Unit,
 ) {
+    val gridState = rememberLazyStaggeredGridState()
     BoxWithConstraints(
         modifier = Modifier
             .weight(1f)
@@ -656,6 +667,7 @@ private fun ColumnScope.FavoritesWaterfallContent(
     ) {
         val columns = computeCollectionWaterfallColumns(maxWidth.value.toInt())
         LazyVerticalStaggeredGrid(
+            state = gridState,
             columns = StaggeredGridCells.Fixed(columns),
             modifier = Modifier
                 .fillMaxSize()
@@ -678,7 +690,7 @@ private fun ColumnScope.FavoritesWaterfallContent(
                 RavenSearchField(
                     query = uiState.searchQuery,
                     onQueryChange = viewModel::updateSearchQuery,
-                    placeholder = "搜索收藏的作品、标签或作者…",
+                    placeholder = "搜索收藏的作品或站点…",
                 )
             }
 
@@ -754,6 +766,12 @@ private fun ColumnScope.FavoritesWaterfallContent(
                 }
             }
         }
+        RavenScrollToTopButton(
+            staggeredGridState = gridState,
+            modifier = Modifier
+                .align(Alignment.BottomEnd)
+                .padding(end = 18.dp, bottom = 22.dp),
+        )
     }
 }
 

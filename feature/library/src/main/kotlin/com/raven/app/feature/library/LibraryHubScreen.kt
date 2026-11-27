@@ -21,9 +21,13 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.AutoAwesome
@@ -43,8 +47,11 @@ import androidx.compose.material.icons.outlined.Movie
 import androidx.compose.material.icons.outlined.NotificationsActive
 import androidx.compose.material.icons.outlined.PhotoLibrary
 import androidx.compose.material.icons.outlined.PushPin
+import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material.icons.outlined.Subscriptions
+import androidx.compose.material.icons.outlined.ThumbUp
 import androidx.compose.material.icons.outlined.VideoLibrary
+import androidx.compose.material.icons.outlined.WatchLater
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -75,8 +82,12 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.raven.app.core.database.model.ShelfWithSummary
 import com.raven.app.core.designsystem.component.RavenAnimatedCounter
 import com.raven.app.core.designsystem.component.RavenBottomSheet
+import com.raven.app.core.designsystem.component.RavenCompactMediaRow
 import com.raven.app.core.designsystem.component.RavenEmptyState
-import com.raven.app.core.designsystem.component.RavenFilterChipRow
+import com.raven.app.core.designsystem.component.RavenFeatureTutorialDialog
+import com.raven.app.core.designsystem.component.RavenScrollToTopButton
+import com.raven.app.core.designsystem.component.RavenSegmentedTabs
+import com.raven.app.core.designsystem.component.RavenTutorialStep
 import com.raven.app.core.designsystem.component.RavenFormatters
 import com.raven.app.core.designsystem.component.RavenGroupedDivider
 import com.raven.app.core.designsystem.component.RavenGroupedRow
@@ -99,6 +110,7 @@ import com.raven.app.core.media.storage.LocalLibraryImporter
 import com.raven.app.core.model.MediaItem
 import com.raven.app.core.model.MediaKind
 import com.raven.app.core.model.Shelf
+import com.raven.app.core.model.ShelfItem
 import com.raven.app.core.model.SiteId
 import com.raven.app.core.model.SmartShelf
 import com.raven.app.core.model.SmartShelfRule
@@ -137,6 +149,8 @@ fun LibraryHubScreen(
         uiState = uiState,
         navigator = navigator,
         onSelectTab = viewModel::selectTab,
+        onRemoveFromWatchLater = viewModel::removeFromWatchLater,
+        onRefreshSmartRecommendations = { viewModel.refreshSmartRecommendations(force = true) },
         onCreateShelf = viewModel::createShelf,
         onUpdateShelf = viewModel::updateShelf,
         onToggleShelfPinned = viewModel::toggleShelfPinned,
@@ -159,15 +173,20 @@ fun LibraryHubScreen(
         onRemoveLocalBook = viewModel::removeLocalBook,
         onDismissMessage = viewModel::clearMessage,
         onDismissImportStatus = viewModel::clearImportStatus,
+        onCompleteTutorial = viewModel::completeLibraryTutorial,
+        onSkipAllTutorials = viewModel::skipAllTutorials,
         modifier = modifier,
     )
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun LibraryHubScreenContent(
     uiState: LibraryHubUiState,
     navigator: LibraryNavigator,
     onSelectTab: (LibraryHubTab) -> Unit,
+    onRemoveFromWatchLater: (ShelfItem) -> Unit = {},
+    onRefreshSmartRecommendations: () -> Unit = {},
     onCreateShelf: (name: String, note: String, isPinned: Boolean) -> Unit,
     onUpdateShelf: (shelfId: String, name: String, note: String, isPinned: Boolean) -> Unit,
     onToggleShelfPinned: (Shelf) -> Unit,
@@ -188,9 +207,12 @@ fun LibraryHubScreenContent(
     onRemoveLocalBook: (String) -> Unit,
     onDismissMessage: () -> Unit,
     onDismissImportStatus: () -> Unit,
+    onCompleteTutorial: () -> Unit = {},
+    onSkipAllTutorials: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val colors = LocalRavenColors.current
+    val listState = rememberLazyListState()
     var showCreateShelfSheet by rememberSaveable { mutableStateOf(false) }
     var editingShelf by remember { mutableStateOf<Shelf?>(null) }
     var deletingShelf by remember { mutableStateOf<Shelf?>(null) }
@@ -210,7 +232,7 @@ fun LibraryHubScreenContent(
     ) {
         RavenTopBar(
             title = "鸦巢",
-            subtitle = "片单、下载、收藏与本地内容",
+            subtitle = "稍后观看、智能推荐、下载收藏与本地内容",
             actions = {
                 RavenMorphIconButton(
                     glyph = RavenMorphIcons.Link,
@@ -218,18 +240,6 @@ fun LibraryHubScreenContent(
                     onClick = { showOpenLinkSheet = true },
                     tint = colors.inkPrimary,
                     modifier = Modifier.testTag("library_open_link_button"),
-                )
-                RavenMorphIconButton(
-                    glyph = RavenMorphIcons.Plus,
-                    contentDescription = "新建片单",
-                    onClick = {
-                        when (uiState.selectedTab) {
-                            LibraryHubTab.SMART_SHELVES -> showCreateSmartShelfSheet = true
-                            else -> showCreateShelfSheet = true
-                        }
-                    },
-                    tint = colors.inkPrimary,
-                    modifier = Modifier.testTag("library_create_action_button"),
                 )
             },
         )
@@ -239,7 +249,11 @@ fun LibraryHubScreenContent(
             val localBookRows = remember(uiState.localBooks, localGridColumns) {
                 uiState.localBooks.chunked(localGridColumns)
             }
+            val recommendationRows = remember(uiState.smartRecommendations, localGridColumns) {
+                uiState.smartRecommendations.chunked(localGridColumns)
+            }
             LazyColumn(
+                state = listState,
                 modifier = Modifier.fillMaxSize(),
                 contentPadding = PaddingValues(top = 12.dp, bottom = 28.dp),
                 verticalArrangement = Arrangement.spacedBy(16.dp),
@@ -297,84 +311,272 @@ fun LibraryHubScreenContent(
                 }
             }
 
-            // 3 Primary Tabs: 我的片单 / 智能片单 / 本地内容
+            // 3 Primary Tabs: 稍后观看 / 智能推荐 / 本地内容
             item(key = "hub_tabs") {
-                RavenFilterChipRow(
+                RavenSegmentedTabs(
                     items = LibraryHubTab.entries,
                     selectedItem = uiState.selectedTab,
                     labelProvider = { tab ->
                         when (tab) {
-                            LibraryHubTab.SHELVES -> "${tab.label} (${uiState.shelves.size})"
-                            LibraryHubTab.SMART_SHELVES -> "${tab.label} (${uiState.smartShelves.size})"
+                            LibraryHubTab.WATCH_LATER -> "${tab.label} (${uiState.watchLaterItems.size})"
+                            LibraryHubTab.SMART_RECOMMENDATIONS -> "${tab.label} (${uiState.smartRecommendations.size})"
                             LibraryHubTab.LOCAL -> "${tab.label} (${uiState.localBooks.size})"
                         }
                     },
                     onItemSelected = onSelectTab,
-                    keyProvider = { it.name },
-                    modifier = Modifier.testTag("library_hub_tabs"),
+                    modifier = Modifier
+                        .padding(horizontal = 16.dp)
+                        .testTag("library_hub_tabs"),
                 )
             }
 
             when (uiState.selectedTab) {
-                LibraryHubTab.SHELVES -> {
-                    item(key = "shelves_header") {
+                LibraryHubTab.WATCH_LATER -> {
+                    item(key = "watch_later_header") {
                         RavenSectionHeader(
-                            title = "我的片单",
-                            subtitle = "共 ${uiState.shelves.size} 个片单",
-                            actionLabel = "新建片单",
-                            onActionClick = { showCreateShelfSheet = true },
-                        )
-                    }
-                    items(
-                        items = uiState.shelves,
-                        key = { "shelf_${it.shelf.id}" },
-                    ) { summary ->
-                        ShelfSummaryCard(
-                            summary = summary,
-                            onClick = { navigator.openShelfDetail(summary.shelf.id) },
-                            onEditClick = { editingShelf = summary.shelf },
-                            onTogglePinClick = { onToggleShelfPinned(summary.shelf) },
-                            onDeleteClick = if (summary.shelf.isSystem || summary.shelf.id == Shelf.WATCH_LATER_ID) {
-                                null
+                            title = "稍后观看",
+                            subtitle = "共 ${uiState.watchLaterItems.size} 项待看作品",
+                            actionLabel = if (uiState.watchLaterItems.isNotEmpty()) "管理全部" else null,
+                            onActionClick = if (uiState.watchLaterItems.isNotEmpty()) {
+                                { navigator.openShelfDetail(Shelf.WATCH_LATER_ID) }
                             } else {
-                                { deletingShelf = summary.shelf }
+                                null
                             },
-                            modifier = Modifier.padding(horizontal = 16.dp),
                         )
                     }
-                }
-
-                LibraryHubTab.SMART_SHELVES -> {
-                    item(key = "smart_shelves_header") {
-                        RavenSectionHeader(
-                            title = "智能片单",
-                            subtitle = "按规则动态聚合未完成、离线与近期作品",
-                            actionLabel = "新建智能片单",
-                            onActionClick = { showCreateSmartShelfSheet = true },
-                        )
-                    }
-                    if (uiState.smartShelves.isEmpty()) {
-                        item(key = "smart_shelves_empty") {
+                    if (uiState.watchLaterItems.isEmpty()) {
+                        item(key = "watch_later_empty") {
                             RavenEmptyState(
-                                title = "还没有智能片单",
-                                message = "创建一个动态规则片单，自动追踪未看完作品、已离线未看内容或近 30 天新增收藏。",
-                                icon = Icons.Outlined.AutoAwesome,
-                                actionLabel = "新建智能片单",
-                                onActionClick = { showCreateSmartShelfSheet = true },
+                                title = "稍后观看列表为空",
+                                message = "在任意视频、漫画或写真详情页轻点「稍后看」，即可直接加入这里随时继续。",
+                                icon = Icons.Outlined.WatchLater,
                             )
                         }
                     } else {
                         items(
-                            items = uiState.smartShelves,
-                            key = { "smart_${it.smartShelf.id}" },
-                        ) { summary ->
-                            SmartShelfSummaryCard(
-                                summary = summary,
-                                onClick = { navigator.openSmartShelfDetail(summary.smartShelf.id) },
-                                onEditClick = { editingSmartShelf = summary.smartShelf },
-                                onDeleteClick = { deletingSmartShelf = summary.smartShelf },
-                                modifier = Modifier.padding(horizontal = 16.dp),
+                            items = uiState.watchLaterItems,
+                            key = { "wl_${it.compositeKey}" },
+                        ) { shelfItem ->
+                            val siteLabel = uiState.siteLabels[shelfItem.siteId] ?: shelfItem.siteId.value
+                            val meta = buildList {
+                                add(siteLabel)
+                                add(shelfItem.kind.displayLabel())
+                                shelfItem.pageCount?.takeIf { it > 0 }?.let { add("${it} 页") }
+                                shelfItem.durationSeconds?.takeIf { it > 0 }?.let {
+                                    add(RavenFormatters.formatDuration(it))
+                                }
+                            }.joinToString(" · ")
+                            val mediaItem = MediaItem(
+                                siteId = shelfItem.siteId,
+                                id = shelfItem.mediaId,
+                                url = shelfItem.url,
+                                kind = shelfItem.kind,
+                                title = shelfItem.title,
+                                coverUrl = shelfItem.coverUrl,
+                                durationSeconds = shelfItem.durationSeconds,
+                                pageCount = shelfItem.pageCount,
                             )
+                            RavenCompactMediaRow(
+                                item = mediaItem,
+                                subtitle = meta,
+                                badgeText = if (shelfItem.completed) "已看完" else null,
+                                onClick = {
+                                    if (shelfItem.kind.isVideo) {
+                                        navigator.openVideo(
+                                            siteId = shelfItem.siteId,
+                                            mediaId = shelfItem.mediaId,
+                                            url = shelfItem.url,
+                                            title = shelfItem.title,
+                                            coverUrl = shelfItem.coverUrl,
+                                        )
+                                    } else {
+                                        navigator.openGallery(
+                                            siteId = shelfItem.siteId,
+                                            mediaId = shelfItem.mediaId,
+                                            url = shelfItem.url,
+                                        )
+                                    }
+                                },
+                                trailingContent = {
+                                    IconButton(
+                                        onClick = { onRemoveFromWatchLater(shelfItem) },
+                                        modifier = Modifier.size(36.dp),
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Outlined.DeleteOutline,
+                                            contentDescription = "移出稍后观看",
+                                            tint = colors.inkTertiary,
+                                            modifier = Modifier.size(18.dp),
+                                        )
+                                    }
+                                },
+                                modifier = Modifier
+                                    .animateItem()
+                                    .padding(horizontal = 16.dp),
+                            )
+                        }
+                    }
+                }
+
+                LibraryHubTab.SMART_RECOMMENDATIONS -> {
+                    item(key = "smart_rec_header") {
+                        RavenSectionHeader(
+                            title = "智能推荐",
+                            subtitle = if (uiState.likedWorksCount > 0) {
+                                "基于本地 ${uiState.likedWorksCount} 部点赞作品的标签权重实时分析"
+                            } else {
+                                "根据本地点赞作品分析标签偏好权重"
+                            },
+                            actionLabel = if (uiState.likedWorksCount > 0 && !uiState.isLoadingRecommendations) "换一批" else null,
+                            onActionClick = if (uiState.likedWorksCount > 0 && !uiState.isLoadingRecommendations) {
+                                onRefreshSmartRecommendations
+                            } else {
+                                null
+                            },
+                        )
+                    }
+
+                    if (uiState.likedTagWeights.isNotEmpty()) {
+                        item(key = "smart_rec_tag_weights") {
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 16.dp)
+                                    .clip(RavenShapes.CardShape)
+                                    .background(colors.surface1)
+                                    .border(0.5.dp, colors.hairline, RavenShapes.CardShape)
+                                    .padding(14.dp),
+                                verticalArrangement = Arrangement.spacedBy(10.dp),
+                            ) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically,
+                                ) {
+                                    Text(
+                                        text = "你的高权重偏好标签",
+                                        style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.SemiBold),
+                                        color = colors.inkPrimary,
+                                    )
+                                    Text(
+                                        text = "轻点搜索",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = colors.inkTertiary,
+                                    )
+                                }
+                                FlowRow(
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                                ) {
+                                    uiState.likedTagWeights.take(10).forEach { entry ->
+                                        val weightPct = (entry.normalizedWeight * 100f).toInt().coerceIn(10, 100)
+                                        Row(
+                                            modifier = Modifier
+                                                .clip(RavenShapes.PillShape)
+                                                .background(colors.crimson.copy(alpha = 0.08f + entry.normalizedWeight * 0.14f))
+                                                .border(
+                                                    width = 0.5.dp,
+                                                    color = colors.crimson.copy(alpha = 0.25f + entry.normalizedWeight * 0.35f),
+                                                    shape = RavenShapes.PillShape,
+                                                )
+                                                .ravenSpringPress()
+                                                .clickable(role = Role.Button) {
+                                                    val query = entry.tag.slug.ifBlank { entry.displayLabel }
+                                                    navigator.openSearch(initialQuery = query, crossSite = true)
+                                                }
+                                                .padding(horizontal = 10.dp, vertical = 6.dp),
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.spacedBy(5.dp),
+                                        ) {
+                                            Text(
+                                                text = entry.displayLabel,
+                                                style = MaterialTheme.typography.labelMedium,
+                                                color = colors.inkPrimary,
+                                                maxLines = 1,
+                                            )
+                                            Text(
+                                                text = "${weightPct}%",
+                                                style = MaterialTheme.typography.labelSmall.tabular(),
+                                                color = colors.crimson,
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    when {
+                        uiState.likedWorksCount == 0 -> {
+                            item(key = "smart_rec_no_likes") {
+                                RavenEmptyState(
+                                    title = "还没有点赞偏好数据",
+                                    message = "在作品详情页轻点「点赞」按钮，软件会在本地记录该作品的标签并按频次与时效分析权重，自动为你推荐高匹配度作品。",
+                                    icon = Icons.Outlined.ThumbUp,
+                                )
+                            }
+                        }
+                        uiState.isLoadingRecommendations && uiState.smartRecommendations.isEmpty() -> {
+                            item(key = "smart_rec_loading") {
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(vertical = 36.dp),
+                                    contentAlignment = Alignment.Center,
+                                ) {
+                                    Column(
+                                        horizontalAlignment = Alignment.CenterHorizontally,
+                                        verticalArrangement = Arrangement.spacedBy(10.dp),
+                                    ) {
+                                        CircularProgressIndicator(
+                                            color = colors.crimson,
+                                            strokeWidth = 2.5.dp,
+                                            modifier = Modifier.size(28.dp),
+                                        )
+                                        Text(
+                                            text = "正在按你的高权重标签匹配推荐作品…",
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = colors.inkSecondary,
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                        uiState.smartRecommendations.isEmpty() -> {
+                            item(key = "smart_rec_empty") {
+                                RavenEmptyState(
+                                    title = "暂无推荐结果",
+                                    message = uiState.recommendationsError ?: "点击刷新重新根据你的点赞偏好拉取推荐作品。",
+                                    icon = Icons.Outlined.AutoAwesome,
+                                    actionLabel = "刷新推荐",
+                                    onActionClick = onRefreshSmartRecommendations,
+                                )
+                            }
+                        }
+                        else -> {
+                            itemsIndexed(
+                                items = recommendationRows,
+                                key = { idx, row -> "smart_rec_row_${idx}_${row.first().item.compositeKey}" },
+                            ) { _, rowCards ->
+                                Row(
+                                    modifier = Modifier
+                                        .animateItem()
+                                        .fillMaxWidth()
+                                        .padding(horizontal = 16.dp),
+                                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                                ) {
+                                    rowCards.forEach { card ->
+                                        SmartRecommendationGridCard(
+                                            card = card,
+                                            onClick = { navigator.openMedia(card.item) },
+                                            modifier = Modifier.weight(1f),
+                                        )
+                                    }
+                                    repeat(localGridColumns - rowCards.size) {
+                                        Spacer(modifier = Modifier.weight(1f))
+                                    }
+                                }
+                            }
                         }
                     }
                 }
@@ -521,6 +723,13 @@ fun LibraryHubScreenContent(
                 }
             }
         }
+
+            RavenScrollToTopButton(
+                listState = listState,
+                modifier = Modifier
+                    .align(Alignment.BottomEnd)
+                    .padding(end = 18.dp, bottom = 22.dp),
+            )
         }
     }
 
@@ -621,6 +830,102 @@ fun LibraryHubScreenContent(
             },
             onDismiss = { showOpenLinkSheet = false },
         )
+    }
+
+    if (uiState.showLibraryTutorial) {
+        RavenFeatureTutorialDialog(
+            featureTitle = "鸦巢功能导览",
+            steps = listOf(
+                RavenTutorialStep(
+                    badge = "稍后观看",
+                    title = "直达你的待看清单",
+                    description = "在任意详情页点选「稍后看」的作品都会直接汇总在「稍后观看」栏中，一键续看或移出。",
+                    icon = Icons.Outlined.WatchLater,
+                ),
+                RavenTutorialStep(
+                    badge = "智能推荐",
+                    title = "基于本地点赞的偏好推荐",
+                    description = "给喜欢的作品点「点赞」后，应用只在本地分析这些作品的标签权重，并在「智能推荐」为你匹配高权重偏好作品。",
+                    icon = Icons.Outlined.ThumbUp,
+                ),
+                RavenTutorialStep(
+                    badge = "收藏与订阅分工",
+                    title = "收藏存作品 · 订阅追标签",
+                    description = "「收藏」仅保存作品本身；想追踪特定标签的新发布，可在作品详情页长按标签选择「订阅标签更新」。",
+                    icon = Icons.Outlined.Subscriptions,
+                ),
+            ),
+            onComplete = onCompleteTutorial,
+            onSkipAll = onSkipAllTutorials,
+        )
+    }
+}
+
+@Composable
+private fun SmartRecommendationGridCard(
+    card: SmartRecommendationCard,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val colors = LocalRavenColors.current
+    Column(
+        modifier = modifier
+            .clip(RavenShapes.CardShape)
+            .background(colors.surface1)
+            .border(0.5.dp, colors.hairline, RavenShapes.CardShape)
+            .ravenSpringPress()
+            .clickable(role = Role.Button, onClick = onClick),
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .aspectRatio(if (card.item.kind.isVideo) 16f / 10f else 0.74f)
+                .background(colors.surface2),
+        ) {
+            RavenImage(
+                url = card.item.coverUrl,
+                siteId = card.item.siteId,
+                contentDescription = card.item.title,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier.fillMaxSize(),
+            )
+            Box(
+                modifier = Modifier
+                    .align(Alignment.TopStart)
+                    .padding(6.dp)
+                    .clip(RavenShapes.PillShape)
+                    .background(colors.canvas.copy(alpha = 0.78f))
+                    .padding(horizontal = 7.dp, vertical = 3.dp),
+            ) {
+                Text(
+                    text = card.siteLabel,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = colors.inkPrimary,
+                    maxLines = 1,
+                )
+            }
+        }
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 10.dp, vertical = 9.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            Text(
+                text = card.item.title,
+                style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Medium),
+                color = colors.inkPrimary,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Text(
+                text = card.reason,
+                style = MaterialTheme.typography.labelSmall,
+                color = colors.crimson,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
     }
 }
 

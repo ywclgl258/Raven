@@ -9,6 +9,7 @@ import com.raven.app.core.database.repository.BlockedTermsRepository
 import com.raven.app.core.database.repository.MediaTagCacheRepository
 import com.raven.app.core.database.repository.PreferencesRepository
 import com.raven.app.core.database.repository.SubscriptionRepository
+import com.raven.app.core.model.FeatureTutorialIds
 import com.raven.app.core.model.SearchScope
 import com.raven.app.core.model.InboxSourceKind
 import com.raven.app.core.model.SavedSearch
@@ -94,6 +95,7 @@ data class SubscriptionsUiState(
     val siteLabels: Map<SiteId, String> = emptyMap(),
     val refreshProgress: InboxRefreshProgress = InboxRefreshProgress(),
     val checkingSourceIds: Set<String> = emptySet(),
+    val showSubscriptionsTutorial: Boolean = false,
     val message: String? = null,
 )
 
@@ -180,7 +182,8 @@ class SubscriptionsViewModel(
     val uiState: StateFlow<SubscriptionsUiState> = combine(
         repoDataFlow,
         controls,
-    ) { repo, ctrl ->
+        preferencesRepository.settings,
+    ) { repo, ctrl, appSettings ->
         val allSubs = repo.subscriptions
         val savedSearches = repo.savedSearches
         val allInbox = filterInboxEntries(repo.inbox, repo.blockedBySite, repo.cachedTagsByKey)
@@ -249,6 +252,7 @@ class SubscriptionsViewModel(
             siteLabels = allPresentSites.distinct().associateWith { siteRegistry.displayNameFor(it) },
             refreshProgress = ctrl.refreshProgress,
             checkingSourceIds = ctrl.checkingSourceIds,
+            showSubscriptionsTutorial = !appSettings.hasSeenTutorial(FeatureTutorialIds.SUBSCRIPTIONS_TAGS),
             message = ctrl.message,
         )
     }.stateIn(
@@ -261,6 +265,18 @@ class SubscriptionsViewModel(
 
     fun selectTab(tab: SubscriptionsTab) {
         controls.update { it.copy(selectedTab = tab) }
+    }
+
+    fun completeSubscriptionsTutorial() {
+        viewModelScope.launch(dispatchers.io) {
+            preferencesRepository.markTutorialSeen(FeatureTutorialIds.SUBSCRIPTIONS_TAGS)
+        }
+    }
+
+    fun skipAllTutorials() {
+        viewModelScope.launch(dispatchers.io) {
+            preferencesRepository.markTutorialsSeen(FeatureTutorialIds.ALL)
+        }
     }
 
     fun selectSubscriptionSite(siteId: SiteId?) {

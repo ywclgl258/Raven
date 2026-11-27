@@ -13,10 +13,12 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.lazy.staggeredgrid.LazyVerticalStaggeredGrid
 import androidx.compose.foundation.lazy.staggeredgrid.StaggeredGridCells
 import androidx.compose.foundation.lazy.staggeredgrid.StaggeredGridItemSpan
 import androidx.compose.foundation.lazy.staggeredgrid.items
+import androidx.compose.foundation.lazy.staggeredgrid.rememberLazyStaggeredGridState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
@@ -55,6 +57,7 @@ import com.raven.app.core.designsystem.component.RavenFilterChipRow
 import com.raven.app.core.designsystem.component.RavenGalleryCard
 import com.raven.app.core.designsystem.component.RavenGroupedDivider
 import com.raven.app.core.designsystem.component.RavenGroupedRow
+import com.raven.app.core.designsystem.component.RavenScrollToTopButton
 import com.raven.app.core.designsystem.component.RavenSearchField
 import com.raven.app.core.designsystem.component.RavenStatusPill
 import com.raven.app.core.designsystem.component.RavenStatusTone
@@ -253,6 +256,7 @@ private fun SubscriptionUpdatesWaterfall(
     onItemClick: (UpdateInboxItem) -> Unit,
     onItemMenuClick: (UpdateInboxItem) -> Unit,
 ) {
+    val gridState = rememberLazyStaggeredGridState()
     BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
         val columns = when {
             maxWidth >= 840.dp -> 4
@@ -261,6 +265,7 @@ private fun SubscriptionUpdatesWaterfall(
         }
 
         LazyVerticalStaggeredGrid(
+            state = gridState,
             columns = StaggeredGridCells.Fixed(columns),
             modifier = Modifier
                 .fillMaxSize()
@@ -308,6 +313,12 @@ private fun SubscriptionUpdatesWaterfall(
                 }
             }
         }
+        RavenScrollToTopButton(
+            staggeredGridState = gridState,
+            modifier = Modifier
+                .align(Alignment.BottomEnd)
+                .padding(end = 18.dp, bottom = 22.dp),
+        )
     }
 }
 
@@ -323,10 +334,13 @@ private fun SubscriptionUpdatesList(
     onItemClick: (UpdateInboxItem) -> Unit,
     onItemMenuClick: (UpdateInboxItem) -> Unit,
 ) {
-    LazyColumn(
-        modifier = Modifier
-            .fillMaxSize()
-            .testTag("subscription_update_list"),
+    val listState = rememberLazyListState()
+    Box(modifier = Modifier.fillMaxSize()) {
+        LazyColumn(
+            state = listState,
+            modifier = Modifier
+                .fillMaxSize()
+                .testTag("subscription_update_list"),
         contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 10.dp, bottom = 28.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
@@ -371,6 +385,13 @@ private fun SubscriptionUpdatesList(
                 )
             }
         }
+        }
+        RavenScrollToTopButton(
+            listState = listState,
+            modifier = Modifier
+                .align(Alignment.BottomEnd)
+                .padding(end = 18.dp, bottom = 22.dp),
+        )
     }
 }
 

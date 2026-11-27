@@ -1,11 +1,13 @@
 package com.raven.app.core.database.mapper
 
 import java.util.Locale
+import com.raven.app.core.database.converter.RavenTypeConverters
 import com.raven.app.core.database.entity.BlockedTermEntity
 import com.raven.app.core.database.entity.BrowsePositionEntity
 import com.raven.app.core.database.entity.DownloadItemEntity
 import com.raven.app.core.database.entity.FavoriteEntity
 import com.raven.app.core.database.entity.ImageFavoriteEntity
+import com.raven.app.core.database.entity.MediaLikeEntity
 import com.raven.app.core.database.entity.PageBookmarkEntity
 import com.raven.app.core.database.entity.PlaybackPreferencesEntity
 import com.raven.app.core.database.entity.ReaderPreferencesEntity
@@ -25,6 +27,7 @@ import com.raven.app.core.model.BlockedTerm
 import com.raven.app.core.model.DownloadItem
 import com.raven.app.core.model.FavoriteItem
 import com.raven.app.core.model.ImageFavorite
+import com.raven.app.core.model.LikedMedia
 import com.raven.app.core.model.PageBookmark
 import com.raven.app.core.model.PlaybackPreferences
 import com.raven.app.core.model.ReaderPreferences
@@ -115,6 +118,30 @@ fun FavoriteEntity.toDomain(): FavoriteItem = FavoriteItem(
     coverUrl = coverUrl,
     addedAt = addedAt,
     extra = extra,
+)
+
+fun LikedMedia.toEntity(): MediaLikeEntity = MediaLikeEntity(
+    siteId = siteId.value,
+    mediaId = mediaId,
+    kind = kind,
+    title = title,
+    url = url,
+    coverUrl = coverUrl,
+    authorName = authorName,
+    tagsJson = RavenTypeConverters.encodeTagRefList(tags),
+    likedAt = likedAt,
+)
+
+fun MediaLikeEntity.toDomain(): LikedMedia = LikedMedia(
+    siteId = SiteId(siteId),
+    mediaId = mediaId,
+    kind = kind,
+    title = title,
+    url = url,
+    coverUrl = coverUrl,
+    authorName = authorName,
+    tags = RavenTypeConverters.decodeTagRefList(tagsJson),
+    likedAt = likedAt,
 )
 
 fun Shelf.toEntity(): ShelfEntity = ShelfEntity(

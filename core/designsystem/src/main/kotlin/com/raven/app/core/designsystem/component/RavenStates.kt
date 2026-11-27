@@ -58,6 +58,9 @@ import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.drawscope.translate
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.text
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -230,7 +233,7 @@ fun RavenEmptyState(
             }
         }
 
-        Text(
+        RavenTextReveal(
             text = title,
             style = MaterialTheme.typography.titleLarge,
             color = colors.inkPrimary,
@@ -287,7 +290,7 @@ fun RavenErrorState(
             accentColor = colors.error,
         )
 
-        Text(
+        RavenTextReveal(
             text = title,
             style = MaterialTheme.typography.titleLarge,
             color = colors.inkPrimary,
@@ -559,31 +562,31 @@ fun RavenAnimatedCounter(
     formatter: (Int) -> String = { it.toString() },
 ) {
     val motionReduced = LocalMotionReduced.current
+    val formattedCount = formatter(count)
+    if (motionReduced) {
+        Text(formattedCount, modifier, style = style.tabular(), color = color, maxLines = 1, softWrap = false)
+        return
+    }
+
     AnimatedContent(
         targetState = count,
+        contentKey = formatter,
+        contentAlignment = Alignment.CenterEnd,
         transitionSpec = {
-            if (motionReduced) {
-                EnterTransition.None togetherWith ExitTransition.None
-            } else {
-                val increasing = targetState >= initialState
-                val spec = tween<androidx.compose.ui.unit.IntOffset>(
-                    durationMillis = RavenMotion.CHIP_TRANSITION_DURATION_MS,
-                    easing = RavenMotion.HarmonyDecelerationEasing,
-                )
-                val fadeSpec = tween<Float>(
-                    durationMillis = RavenMotion.CHIP_TRANSITION_DURATION_MS,
-                    easing = RavenMotion.HarmonyDecelerationEasing,
-                )
-                val enter = slideInVertically(animationSpec = spec) { fullHeight ->
-                    if (increasing) fullHeight / 2 else -fullHeight / 2
-                } + fadeIn(animationSpec = fadeSpec)
-                val exit = slideOutVertically(animationSpec = spec) { fullHeight ->
-                    if (increasing) -fullHeight / 2 else fullHeight / 2
-                } + fadeOut(animationSpec = fadeSpec)
-                (enter togetherWith exit).using(SizeTransform(clip = false))
-            }
+            val direction = if (targetState > initialState) 1 else -1
+            val slide = tween<androidx.compose.ui.unit.IntOffset>(
+                durationMillis = RavenMotion.CHIP_TRANSITION_DURATION_MS,
+                easing = RavenMotion.HarmonyDecelerationEasing,
+            )
+            val fade = tween<Float>(
+                durationMillis = RavenMotion.CHIP_TRANSITION_DURATION_MS,
+                easing = RavenMotion.HarmonyDecelerationEasing,
+            )
+            val enter = slideInVertically(slide) { it * direction } + fadeIn(fade)
+            val exit = slideOutVertically(slide) { -it * direction } + fadeOut(fade)
+            (enter togetherWith exit).using(SizeTransform(clip = true))
         },
-        modifier = modifier,
+        modifier = modifier.clearAndSetSemantics { text = AnnotatedString(formattedCount) },
         label = "ravenAnimatedCounter",
     ) { value ->
         Text(

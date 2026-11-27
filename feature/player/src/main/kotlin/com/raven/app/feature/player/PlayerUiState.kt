@@ -20,16 +20,19 @@ import java.util.Locale
 import kotlin.math.abs
 
 /**
- * Rendered tag item with optional Chinese translation, favorite status, and block status.
+ * Rendered tag item with optional Chinese translation, subscription status, and block status.
  */
 @Immutable
 data class PlayerTagDisplay(
     val tag: TagRef,
     val displayLabel: String,
     val translatedLabel: String? = null,
-    val isFavorited: Boolean = false,
+    val isSubscribed: Boolean = false,
     val isBlocked: Boolean = false,
-)
+) {
+    @Deprecated("Tags use subscription instead of favorite", replaceWith = ReplaceWith("isSubscribed"))
+    val isFavorited: Boolean get() = isSubscribed
+}
 
 /**
  * Active sequential queue presentation for the currently playing video.
@@ -210,6 +213,7 @@ data class PlayerUiState(
     // Personal library & social metadata
     val inWatchLater: Boolean = false,
     val isFavorite: Boolean = false,
+    val isLiked: Boolean = false,
     val downloadStatus: DownloadStatus? = null,
     val downloadProgress: Float = 0f,
     val isOfflineDownloaded: Boolean = false,

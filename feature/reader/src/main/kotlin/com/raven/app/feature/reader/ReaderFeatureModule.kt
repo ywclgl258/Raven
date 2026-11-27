@@ -31,6 +31,7 @@ val readerFeatureModule: Module = module {
             tagDictionary = getOrNull<TagDictionary>() ?: TagDictionary.default,
             mediaTagCacheRepository = get(),
             tagDictionaryRepository = get(),
+            likeRepository = get(),
         )
     }
 

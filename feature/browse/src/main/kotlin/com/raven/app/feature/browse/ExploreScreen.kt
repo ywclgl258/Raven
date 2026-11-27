@@ -81,6 +81,7 @@ import com.raven.app.core.designsystem.component.RavenGalleryCardSkeleton
 import com.raven.app.core.designsystem.component.RavenGroupedDivider
 import com.raven.app.core.designsystem.component.RavenGroupedRow
 import com.raven.app.core.designsystem.component.RavenGroupedSection
+import com.raven.app.core.designsystem.component.RavenScrollToTopButton
 import com.raven.app.core.designsystem.component.RavenSiteSwitcherPill
 import com.raven.app.core.designsystem.component.RavenStatusPill
 import com.raven.app.core.designsystem.component.RavenStatusTone
@@ -129,12 +130,17 @@ fun ExploreScreen(
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val shelves by viewModel.shelfPickerShelves.collectAsStateWithLifecycle()
     val inspectedShelfIds by viewModel.inspectedShelfIds.collectAsStateWithLifecycle()
+    val favoriteKeys by viewModel.favoriteKeys.collectAsStateWithLifecycle()
+    val downloadStates by viewModel.downloadStates.collectAsStateWithLifecycle()
+    val actionMessage by viewModel.actionMessage.collectAsStateWithLifecycle()
 
     ExploreScreenContent(
         uiState = uiState,
         navigator = navigator,
         onSelectSite = viewModel::selectSite,
         onTogglePinSite = viewModel::togglePinnedSite,
+        onReorderPinnedSites = viewModel::reorderPinnedSites,
+        onSetDynamicSiteSorting = viewModel::setDynamicSiteSorting,
         onSelectStartupDefaultSite = viewModel::setStartupDefaultSiteId,
         onSelectSection = viewModel::selectSection,
         onSelectSort = viewModel::selectSort,
@@ -152,6 +158,12 @@ fun ExploreScreen(
         onInspectShelfTarget = viewModel::inspectShelfTarget,
         onToggleShelfMembership = viewModel::setShelfMembership,
         onCreateShelfAndAdd = viewModel::createShelfAndAdd,
+        favoriteKeys = favoriteKeys,
+        downloadStates = downloadStates,
+        onToggleFavorite = viewModel::toggleFavorite,
+        onDownloadMedia = viewModel::downloadMedia,
+        actionMessage = actionMessage,
+        onDismissActionMessage = viewModel::clearActionMessage,
         modifier = modifier,
     )
 }
@@ -176,6 +188,14 @@ fun ExploreScreenContent(
     onSaveBrowsePosition: (workId: String, throughPage: Int) -> Unit,
     modifier: Modifier = Modifier,
     onSelectStartupDefaultSite: (SiteId?) -> Unit = {},
+    onReorderPinnedSites: (List<SiteId>) -> Unit = {},
+    onSetDynamicSiteSorting: (Boolean) -> Unit = {},
+    favoriteKeys: Set<String> = emptySet(),
+    downloadStates: Map<String, MediaCardDownloadState> = emptyMap(),
+    onToggleFavorite: ((MediaItem) -> Unit)? = null,
+    onDownloadMedia: ((MediaItem) -> Unit)? = null,
+    actionMessage: String? = null,
+    onDismissActionMessage: () -> Unit = {},
     shelves: List<ShelfWithSummary> = emptyList(),
     selectedShelfIds: Set<String> = emptySet(),
     onInspectShelfTarget: (MediaItem?) -> Unit = {},
@@ -208,6 +228,12 @@ fun ExploreScreenContent(
             .background(colors.canvas)
             .testTag("browse_explore_screen"),
     ) {
+        if (actionMessage != null) {
+            BrowseActionMessageBanner(
+                message = actionMessage,
+                onDismiss = onDismissActionMessage,
+            )
+        }
         RavenTopBar(
             frosted = false,
             showBottomHairline = false,
@@ -516,6 +542,9 @@ fun ExploreScreenContent(
             pinnedSiteIds = uiState.pinnedSiteIds,
             siteOpenCounts = uiState.siteOpenCounts,
             startupDefaultSiteId = uiState.startupDefaultSiteId,
+            dynamicSiteSorting = uiState.dynamicSiteSorting,
+            onDynamicSiteSortingChange = onSetDynamicSiteSorting,
+            onReorderPinnedSites = onReorderPinnedSites,
             onSelectStartupDefaultSite = onSelectStartupDefaultSite,
             onSelectSite = onSelectSite,
             onTogglePinSite = onTogglePinSite,
@@ -709,6 +738,10 @@ fun ExploreScreenContent(
         onToggleShelfMembership = onToggleShelfMembership,
         onCreateShelfAndAdd = onCreateShelfAndAdd,
         onSearchSimilar = { slug -> navigator.openSearch(initialQuery = slug, crossSite = false) },
+        favoriteKeys = favoriteKeys,
+        onToggleFavorite = onToggleFavorite,
+        downloadStateByKey = downloadStates,
+        onDownload = onDownloadMedia,
     )
 }
 
@@ -726,6 +759,7 @@ internal fun ExploreVideoGrid(
     onSaveBrowsePosition: ((workId: String, throughPage: Int) -> Unit)? = null,
     badgeProvider: ((MediaItem) -> String?)? = null,
     scrollResetKey: Any? = null,
+    onAtTopChange: ((Boolean) -> Unit)? = null,
 ) {
     val gridState = rememberLazyGridState()
     var lastResetKey by remember { mutableStateOf(scrollResetKey) }
@@ -733,6 +767,22 @@ internal fun ExploreVideoGrid(
         if (lastResetKey != scrollResetKey) {
             lastResetKey = scrollResetKey
             gridState.scrollToItem(0)
+        }
+    }
+
+    // Reports whether the grid is pinned to its absolute top so callers can gate the
+    // auto-collapsing search header instead of reacting to raw gesture direction.
+    if (onAtTopChange != null) {
+        val currentCallback by rememberUpdatedState(onAtTopChange)
+        LaunchedEffect(gridState) {
+            snapshotFlow {
+                SearchControlsVisibility.isAtAbsoluteTop(
+                    firstVisibleItemIndex = gridState.firstVisibleItemIndex,
+                    firstVisibleItemScrollOffset = gridState.firstVisibleItemScrollOffset,
+                )
+            }
+                .distinctUntilChanged()
+                .collect { atTop -> currentCallback(atTop) }
         }
     }
 
@@ -802,6 +852,13 @@ internal fun ExploreVideoGrid(
                 )
             }
         }
+
+        RavenScrollToTopButton(
+            gridState = gridState,
+            modifier = Modifier
+                .align(Alignment.BottomEnd)
+                .padding(end = 18.dp, bottom = 22.dp),
+        )
     }
 }
 
@@ -820,6 +877,7 @@ internal fun ExploreGalleryGrid(
     onSaveBrowsePosition: ((workId: String, throughPage: Int) -> Unit)? = null,
     badgeProvider: ((MediaItem) -> String?)? = null,
     scrollResetKey: Any? = null,
+    onAtTopChange: ((Boolean) -> Unit)? = null,
 ) {
     val gridState = rememberLazyStaggeredGridState()
     val aspectRatioCache = remember(siteId) { mutableStateMapOf<String, Float>() }
@@ -828,6 +886,20 @@ internal fun ExploreGalleryGrid(
         if (lastResetKey != scrollResetKey) {
             lastResetKey = scrollResetKey
             gridState.scrollToItem(0)
+        }
+    }
+
+    if (onAtTopChange != null) {
+        val currentCallback by rememberUpdatedState(onAtTopChange)
+        LaunchedEffect(gridState) {
+            snapshotFlow {
+                SearchControlsVisibility.isAtAbsoluteTop(
+                    firstVisibleItemIndex = gridState.firstVisibleItemIndex,
+                    firstVisibleItemScrollOffset = gridState.firstVisibleItemScrollOffset,
+                )
+            }
+                .distinctUntilChanged()
+                .collect { atTop -> currentCallback(atTop) }
         }
     }
 
@@ -901,6 +973,13 @@ internal fun ExploreGalleryGrid(
                 )
             }
         }
+
+        RavenScrollToTopButton(
+            staggeredGridState = gridState,
+            modifier = Modifier
+                .align(Alignment.BottomEnd)
+                .padding(end = 18.dp, bottom = 22.dp),
+        )
     }
 }
 

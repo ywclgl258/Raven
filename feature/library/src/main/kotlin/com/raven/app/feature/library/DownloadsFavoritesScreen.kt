@@ -45,6 +45,7 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.raven.app.core.designsystem.component.RavenAnimatedCounter
 import com.raven.app.core.designsystem.component.RavenContentCrossfade
 import com.raven.app.core.designsystem.component.RavenFormatters
 import com.raven.app.core.designsystem.component.RavenTopBar
@@ -53,7 +54,6 @@ import com.raven.app.core.designsystem.theme.LocalRavenColors
 import com.raven.app.core.designsystem.theme.RavenMotion
 import com.raven.app.core.designsystem.theme.RavenShapes
 import com.raven.app.core.designsystem.theme.ravenSpringPress
-import com.raven.app.core.designsystem.theme.tabular
 import com.raven.app.core.model.SiteId
 import org.koin.androidx.compose.koinViewModel
 import org.koin.core.parameter.parametersOf
@@ -331,10 +331,9 @@ private fun CollectionTabButton(
                     color = if (selected) colors.crimson else colors.inkPrimary,
                 )
                 Spacer(modifier = Modifier.width(6.dp))
-                Text(
-                    text = count.toString(),
-                    style = MaterialTheme.typography.titleMedium.tabular(),
-                    fontWeight = FontWeight.Bold,
+                RavenAnimatedCounter(
+                    count = count,
+                    style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
                     color = if (selected) colors.crimson else colors.inkPrimary,
                 )
             }

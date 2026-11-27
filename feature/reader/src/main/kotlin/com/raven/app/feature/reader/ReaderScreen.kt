@@ -117,6 +117,8 @@ import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.raven.app.core.designsystem.component.RavenContentCrossfade
 import com.raven.app.core.designsystem.component.RavenErrorState
+import com.raven.app.core.designsystem.component.RavenFeatureTutorialDialog
+import com.raven.app.core.designsystem.component.RavenTutorialStep
 import com.raven.app.core.designsystem.component.RavenFormatters
 import com.raven.app.core.designsystem.component.RavenMorphIcon
 import com.raven.app.core.designsystem.component.RavenMorphToggleIcon
@@ -406,10 +408,11 @@ fun ReaderScreen(
                             StripReaderViewport(
                                 uiState = uiState,
                                 events = viewModel.events,
-                                onVisiblePagesChanged = viewModel::onVisiblePagesChanged,
+                                onStripProgressChanged = viewModel::onStripViewportProgress,
                                 onConsumePendingOffset = viewModel::consumePendingStripRestoreOffset,
                                 onSingleTap = viewModel::toggleChrome,
-                                onRetryPage = viewModel::retryPage,
+                                onRetryPage = viewModel::retryAppendedChapterPage,
+                                onRetryAppendChapter = { viewModel.preloadNextSerialChapterIfNeeded(forceRetry = true) },
                                 onInteractionChanged = viewModel::onInteractionStateChanged,
                                 onEndReached = viewModel::onStripEndReached,
                             )
@@ -531,13 +534,13 @@ fun ReaderScreen(
             val subtitle = buildList {
                 add(uiState.siteDisplayName)
                 if (uiState.offlineOnly) add("离线")
-                if (uiState.totalPages > 0) {
-                    add(RavenFormatters.formatPageProgress(uiState.currentPage, uiState.totalPages))
+                if (uiState.displayTotalPages > 0) {
+                    add(RavenFormatters.formatPageProgress(uiState.displayCurrentPage, uiState.displayTotalPages))
                 }
             }.joinToString(" · ")
 
             RavenTopBar(
-                title = uiState.detail?.item?.title ?: uiState.siteDisplayName,
+                title = uiState.displayTitle,
                 subtitle = subtitle,
                 frosted = true,
                 navigationIcon = {
@@ -840,20 +843,98 @@ fun ReaderScreen(
         }
         ReaderSheet.NONE -> Unit
     }
+
+    if (uiState.showReaderTutorial && uiState.detail != null) {
+        RavenFeatureTutorialDialog(
+            featureTitle = "阅读器使用引导",
+            steps = listOf(
+                RavenTutorialStep(
+                    badge = "连载沉浸阅读",
+                    title = "垂直模式无缝下滑下一话",
+                    description = "在条漫（垂直下滑）模式下阅读连载漫画时，滑至本话末尾会自动在后台加载并拼接下一话，无需刷新页面即可一直往下滑。",
+                    icon = Icons.Outlined.AutoStories,
+                ),
+                RavenTutorialStep(
+                    badge = "阅读控制",
+                    title = "轻点呼出菜单 · 双指缩放",
+                    description = "轻点屏幕中央显示或隐藏顶底工具栏，可随时切换目录、条漫/左翻/右翻/双页模式与亮度；双击或双指捏合可流畅缩放细节。",
+                    icon = Icons.Outlined.Tune,
+                ),
+                RavenTutorialStep(
+                    badge = "高光与书签",
+                    title = "单图收藏与页码书签",
+                    description = "右上角可将当前精彩画面加入「单图收藏」或打上页码书签，退出阅读器时会自动保存精准阅读进度。",
+                    icon = Icons.Outlined.GridView,
+                ),
+            ),
+            onComplete = viewModel::completeReaderTutorial,
+            onSkipAll = viewModel::skipAllTutorials,
+        )
+    }
+}
+
+private sealed interface StripFeedEntry {
+    val key: String
+
+    data class PrimaryPage(
+        val chapterId: String,
+        val pageNumber: Int,
+    ) : StripFeedEntry {
+        override val key: String = "strip_page_$pageNumber"
+    }
+
+    data class ChapterDivider(
+        val chapterId: String,
+        val title: String,
+        val pageCount: Int,
+    ) : StripFeedEntry {
+        override val key: String = "strip_sep_$chapterId"
+    }
+
+    data class AppendedPage(
+        val chapterId: String,
+        val pageNumber: Int,
+    ) : StripFeedEntry {
+        override val key: String = "strip_chap_${chapterId}_p_$pageNumber"
+    }
 }
 
 @Composable
 private fun StripReaderViewport(
     uiState: ReaderUiState,
     events: SharedFlow<ReaderEvent>,
-    onVisiblePagesChanged: (anchorPage: Int, visiblePages: Set<Int>, scrollOffsetPx: Int) -> Unit,
+    onStripProgressChanged: (
+        anchorChapterId: String,
+        anchorPage: Int,
+        visiblePagesByChapter: Map<String, Set<Int>>,
+        scrollOffsetPx: Int,
+        remainingItemsToBottom: Int,
+    ) -> Unit,
     onConsumePendingOffset: () -> Unit,
     onSingleTap: () -> Unit,
-    onRetryPage: (Int) -> Unit,
+    onRetryPage: (chapterMediaId: String, pageNumber: Int) -> Unit,
+    onRetryAppendChapter: () -> Unit,
     onInteractionChanged: (Boolean) -> Unit,
     onEndReached: () -> Unit,
 ) {
+    val colors = LocalRavenColors.current
     val pageNumbers = uiState.pageNumbers
+    val stripEntries = remember(uiState.mediaId, pageNumbers, uiState.appendedChapters) {
+        buildList {
+            for (p in pageNumbers) {
+                add(StripFeedEntry.PrimaryPage(uiState.mediaId, p))
+            }
+            for (chapter in uiState.appendedChapters) {
+                add(StripFeedEntry.ChapterDivider(chapter.mediaId, chapter.title, chapter.pageNumbers.size))
+                for (p in chapter.pageNumbers) {
+                    add(StripFeedEntry.AppendedPage(chapter.mediaId, p))
+                }
+            }
+        }
+    }
+    val appendedChapterMap = remember(uiState.appendedChapters) {
+        uiState.appendedChapters.associateBy { it.mediaId }
+    }
     val initialIndex = remember(pageNumbers) {
         pageNumbers.indexOf(uiState.currentPage).coerceAtLeast(0)
     }
@@ -871,8 +952,9 @@ private fun StripReaderViewport(
     var viewportSize by remember { mutableStateOf(IntSize.Zero) }
     val currentOnSingleTap by rememberUpdatedState(onSingleTap)
     val currentOnInteraction by rememberUpdatedState(onInteractionChanged)
-    val currentOnVisiblePagesChanged by rememberUpdatedState(onVisiblePagesChanged)
-    val currentPageNumbers by rememberUpdatedState(pageNumbers)
+    val currentOnStripProgress by rememberUpdatedState(onStripProgressChanged)
+    val currentEntries by rememberUpdatedState(stripEntries)
+    val currentIsSerialComic by rememberUpdatedState(uiState.isSerialComic)
     val isZoomed by remember { derivedStateOf { zoom > ReaderGeometry.MIN_ZOOM + 0.01f } }
 
     LaunchedEffect(isZoomed) {
@@ -902,18 +984,48 @@ private fun StripReaderViewport(
         }
     }
 
-    // 120Hz zero-recomposition page tracker: emits only when visible page set changes (NOT on every px).
-    LaunchedEffect(listState, pageNumbers) {
+    // 120Hz zero-recomposition page & seamless-chapter tracker.
+    LaunchedEffect(listState, stripEntries) {
         snapshotFlow {
-            val visible = listState.layoutInfo.visibleItemsInfo.mapNotNull { item ->
-                pageNumbers.getOrNull(item.index)
+            val visibleInfo = listState.layoutInfo.visibleItemsInfo
+            val byChapter = LinkedHashMap<String, MutableSet<Int>>()
+            var anchorChapter: String? = null
+            var anchorPage: Int? = null
+            var lastVisibleIdx = -1
+            for (item in visibleInfo) {
+                lastVisibleIdx = maxOf(lastVisibleIdx, item.index)
+                when (val entry = stripEntries.getOrNull(item.index)) {
+                    is StripFeedEntry.PrimaryPage -> {
+                        if (anchorChapter == null) {
+                            anchorChapter = entry.chapterId
+                            anchorPage = entry.pageNumber
+                        }
+                        byChapter.getOrPut(entry.chapterId) { LinkedHashSet() }.add(entry.pageNumber)
+                    }
+                    is StripFeedEntry.AppendedPage -> {
+                        if (anchorChapter == null) {
+                            anchorChapter = entry.chapterId
+                            anchorPage = entry.pageNumber
+                        }
+                        byChapter.getOrPut(entry.chapterId) { LinkedHashSet() }.add(entry.pageNumber)
+                    }
+                    else -> Unit
+                }
             }
-            visible.firstOrNull() to visible.toSet()
+            val remaining = if (lastVisibleIdx < 0) stripEntries.size else (stripEntries.lastIndex - lastVisibleIdx).coerceAtLeast(0)
+            Triple(anchorChapter to anchorPage, byChapter.mapValues { it.value.toSet() }, remaining)
         }
             .distinctUntilChanged()
-            .collectLatest { (anchor, visibleSet) ->
-                if (anchor != null) {
-                    currentOnVisiblePagesChanged(anchor, visibleSet, listState.firstVisibleItemScrollOffset)
+            .collectLatest { (anchorPair, visibleMap, remaining) ->
+                val (chapId, page) = anchorPair
+                if (chapId != null && page != null) {
+                    currentOnStripProgress(
+                        chapId,
+                        page,
+                        visibleMap,
+                        listState.firstVisibleItemScrollOffset,
+                        remaining,
+                    )
                 }
             }
     }
@@ -924,15 +1036,40 @@ private fun StripReaderViewport(
             .distinctUntilChanged()
             .collectLatest { inProgress ->
                 if (!inProgress) {
-                    val visible = listState.layoutInfo.visibleItemsInfo.mapNotNull { item ->
-                        currentPageNumbers.getOrNull(item.index)
+                    val entries = currentEntries
+                    val visibleInfo = listState.layoutInfo.visibleItemsInfo
+                    val byChapter = LinkedHashMap<String, MutableSet<Int>>()
+                    var anchorChapter: String? = null
+                    var anchorPage: Int? = null
+                    var lastVisibleIdx = -1
+                    for (item in visibleInfo) {
+                        lastVisibleIdx = maxOf(lastVisibleIdx, item.index)
+                        when (val entry = entries.getOrNull(item.index)) {
+                            is StripFeedEntry.PrimaryPage -> {
+                                if (anchorChapter == null) {
+                                    anchorChapter = entry.chapterId
+                                    anchorPage = entry.pageNumber
+                                }
+                                byChapter.getOrPut(entry.chapterId) { LinkedHashSet() }.add(entry.pageNumber)
+                            }
+                            is StripFeedEntry.AppendedPage -> {
+                                if (anchorChapter == null) {
+                                    anchorChapter = entry.chapterId
+                                    anchorPage = entry.pageNumber
+                                }
+                                byChapter.getOrPut(entry.chapterId) { LinkedHashSet() }.add(entry.pageNumber)
+                            }
+                            else -> Unit
+                        }
                     }
-                    val anchor = visible.firstOrNull()
-                    if (anchor != null) {
-                        currentOnVisiblePagesChanged(
-                            anchor,
-                            visible.toSet(),
+                    if (anchorChapter != null && anchorPage != null) {
+                        val remaining = if (lastVisibleIdx < 0) entries.size else (entries.lastIndex - lastVisibleIdx).coerceAtLeast(0)
+                        currentOnStripProgress(
+                            anchorChapter,
+                            anchorPage,
+                            byChapter.mapValues { it.value.toSet() },
                             listState.firstVisibleItemScrollOffset,
+                            remaining,
                         )
                     }
                 }
@@ -941,30 +1078,58 @@ private fun StripReaderViewport(
 
     DisposableEffect(listState) {
         onDispose {
-            val visible = listState.layoutInfo.visibleItemsInfo.mapNotNull { item ->
-                currentPageNumbers.getOrNull(item.index)
+            val entries = currentEntries
+            val visibleInfo = listState.layoutInfo.visibleItemsInfo
+            val byChapter = LinkedHashMap<String, MutableSet<Int>>()
+            var anchorChapter: String? = null
+            var anchorPage: Int? = null
+            for (item in visibleInfo) {
+                when (val entry = entries.getOrNull(item.index)) {
+                    is StripFeedEntry.PrimaryPage -> {
+                        if (anchorChapter == null) {
+                            anchorChapter = entry.chapterId
+                            anchorPage = entry.pageNumber
+                        }
+                        byChapter.getOrPut(entry.chapterId) { LinkedHashSet() }.add(entry.pageNumber)
+                    }
+                    is StripFeedEntry.AppendedPage -> {
+                        if (anchorChapter == null) {
+                            anchorChapter = entry.chapterId
+                            anchorPage = entry.pageNumber
+                        }
+                        byChapter.getOrPut(entry.chapterId) { LinkedHashSet() }.add(entry.pageNumber)
+                    }
+                    else -> Unit
+                }
             }
-            val anchor = visible.firstOrNull()
-            if (anchor != null) {
-                currentOnVisiblePagesChanged(
-                    anchor,
-                    visible.toSet(),
+            if (anchorChapter != null && anchorPage != null) {
+                currentOnStripProgress(
+                    anchorChapter,
+                    anchorPage,
+                    byChapter.mapValues { it.value.toSet() },
                     listState.firstVisibleItemScrollOffset,
+                    Int.MAX_VALUE,
                 )
             }
         }
     }
 
-    // A strip only advances after the user actually scrolls the final page to its bottom.
-    LaunchedEffect(listState, pageNumbers) {
+    // Trigger end callback only when scrolled to the absolute end (non-serial queue or serial fallback).
+    LaunchedEffect(listState, stripEntries) {
         snapshotFlow {
-            listState.isScrollInProgress &&
+            val totalCount = listState.layoutInfo.totalItemsCount
+            totalCount > 0 &&
+                listState.isScrollInProgress &&
                 !listState.canScrollForward &&
-                listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index == pageNumbers.lastIndex
+                (listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: -1) >= totalCount - 1
         }
             .distinctUntilChanged()
             .collectLatest { atEnd ->
-                if (atEnd) onEndReached()
+                if (atEnd && !currentIsSerialComic) {
+                    onEndReached()
+                } else if (atEnd && currentIsSerialComic) {
+                    onEndReached()
+                }
             }
     }
 
@@ -1076,17 +1241,115 @@ private fun StripReaderViewport(
                 },
         ) {
             items(
-                items = pageNumbers,
-                key = { pageNum -> "strip_page_$pageNum" },
-            ) { pageNumber ->
-                StripReaderPageItem(
-                    pageNumber = pageNumber,
-                    loadedPage = uiState.bufferState.pages[pageNumber],
-                    errorMessage = uiState.bufferState.errors[pageNumber],
-                    preservedAspectRatio = uiState.pageAspectRatios[pageNumber],
-                    cropPercent = uiState.preferences.cropPercent,
-                    onRetry = { onRetryPage(pageNumber) },
-                )
+                items = stripEntries,
+                key = { entry -> entry.key },
+            ) { entry ->
+                when (entry) {
+                    is StripFeedEntry.PrimaryPage -> {
+                        StripReaderPageItem(
+                            pageNumber = entry.pageNumber,
+                            loadedPage = uiState.bufferState.pages[entry.pageNumber],
+                            errorMessage = uiState.bufferState.errors[entry.pageNumber],
+                            preservedAspectRatio = uiState.pageAspectRatios[entry.pageNumber],
+                            cropPercent = uiState.preferences.cropPercent,
+                            onRetry = { onRetryPage(entry.chapterId, entry.pageNumber) },
+                        )
+                    }
+                    is StripFeedEntry.ChapterDivider -> {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .background(colors.canvas)
+                                .padding(horizontal = 24.dp, vertical = 22.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(12.dp),
+                        ) {
+                            HorizontalDivider(
+                                modifier = Modifier.weight(1f),
+                                color = colors.hairline,
+                            )
+                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                Text(
+                                    text = entry.title,
+                                    style = MaterialTheme.typography.labelLarge,
+                                    color = colors.inkPrimary,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                                Text(
+                                    text = "下一话 · 共 ${entry.pageCount} 页",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = colors.inkTertiary,
+                                )
+                            }
+                            HorizontalDivider(
+                                modifier = Modifier.weight(1f),
+                                color = colors.hairline,
+                            )
+                        }
+                    }
+                    is StripFeedEntry.AppendedPage -> {
+                        val chapter = appendedChapterMap[entry.chapterId]
+                        StripReaderPageItem(
+                            pageNumber = entry.pageNumber,
+                            loadedPage = chapter?.bufferState?.pages?.get(entry.pageNumber),
+                            errorMessage = chapter?.bufferState?.errors?.get(entry.pageNumber),
+                            preservedAspectRatio = chapter?.pageAspectRatios?.get(entry.pageNumber),
+                            cropPercent = uiState.preferences.cropPercent,
+                            onRetry = { onRetryPage(entry.chapterId, entry.pageNumber) },
+                        )
+                    }
+                }
+            }
+            if (uiState.isSerialComic) {
+                item(key = "strip_serial_footer") {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 28.dp, horizontal = 20.dp),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        when {
+                            uiState.isAppendingNextChapter -> {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                                ) {
+                                    CircularProgressIndicator(
+                                        modifier = Modifier.size(16.dp),
+                                        strokeWidth = 2.dp,
+                                        color = colors.crimson,
+                                    )
+                                    Text(
+                                        text = "正在无感衔接下一话…",
+                                        style = MaterialTheme.typography.labelMedium,
+                                        color = colors.inkSecondary,
+                                    )
+                                }
+                            }
+                            !uiState.appendNextChapterError.isNullOrBlank() -> {
+                                OutlinedButton(
+                                    onClick = onRetryAppendChapter,
+                                    shape = RavenShapes.PillShape,
+                                    border = BorderStroke(0.5.dp, colors.outlineSubtle),
+                                ) {
+                                    Text(
+                                        text = "${uiState.appendNextChapterError} · 点此重试",
+                                        style = MaterialTheme.typography.labelMedium,
+                                        color = colors.inkPrimary,
+                                    )
+                                }
+                            }
+                            uiState.hasReachedFinalSerialChapter -> {
+                                Text(
+                                    text = "已阅读至最新一话",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = colors.inkTertiary,
+                                )
+                            }
+                        }
+                    }
+                }
             }
         }
     }

@@ -21,6 +21,7 @@ dependencies {
     implementation(project(":core:common"))
 
     implementation(libs.jsoup)
+    compileOnly(libs.jspecify)
     implementation(libs.kotlinx.coroutines.core)
     implementation(platform(libs.koin.bom))
     implementation(libs.koin.core)

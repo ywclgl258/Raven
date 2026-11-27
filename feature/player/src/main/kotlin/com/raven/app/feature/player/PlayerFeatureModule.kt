@@ -38,6 +38,8 @@ val playerFeatureModule: Module = module {
             tagDictionary = getOrNull<TagDictionary>() ?: TagDictionary.default,
             mediaTagCacheRepository = get(),
             tagDictionaryRepository = get(),
+            likeRepository = get(),
+            subscriptionRepository = get(),
             lanCastManager = getOrNull(),
             applicationScope = getOrNull<CoroutineScope>(NetworkQualifiers.APPLICATION_SCOPE),
         )

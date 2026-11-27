@@ -54,6 +54,7 @@ import com.raven.app.core.designsystem.component.RavenFilterChipRow
 import com.raven.app.core.designsystem.component.RavenFormatters
 import com.raven.app.core.designsystem.component.RavenImage
 import com.raven.app.core.designsystem.component.RavenLoadingSkeleton
+import com.raven.app.core.designsystem.component.RavenScrollToTopButton
 import com.raven.app.core.designsystem.component.RavenSearchField
 import com.raven.app.core.designsystem.component.RavenStatusPill
 import com.raven.app.core.designsystem.component.RavenTopBar
@@ -556,33 +557,41 @@ fun SiteDirectoryScreenContent(
                         )
                     }
                     else -> {
-                        LazyColumn(
-                            state = listState,
-                            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
-                            verticalArrangement = Arrangement.spacedBy(8.dp),
-                            modifier = Modifier
-                                .fillMaxSize()
-                                .testTag("site_directory_list"),
-                        ) {
-                            items(
-                                items = uiState.entries,
-                                key = { "${it.entry.id}_${it.entry.url}" },
-                            ) { item ->
-                                DirectoryEntryCard(
-                                    item = item,
-                                    onClick = { navigator.openDirectoryEntry(plugin, item.entry) },
-                                    modifier = Modifier.animateItem(),
-                                )
-                            }
+                        Box(modifier = Modifier.fillMaxSize()) {
+                            LazyColumn(
+                                state = listState,
+                                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
+                                verticalArrangement = Arrangement.spacedBy(8.dp),
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .testTag("site_directory_list"),
+                            ) {
+                                items(
+                                    items = uiState.entries,
+                                    key = { "${it.entry.id}_${it.entry.url}" },
+                                ) { item ->
+                                    DirectoryEntryCard(
+                                        item = item,
+                                        onClick = { navigator.openDirectoryEntry(plugin, item.entry) },
+                                        modifier = Modifier.animateItem(),
+                                    )
+                                }
 
-                            item(key = "directory_pagination_footer") {
-                                BrowsePaginationFooter(
-                                    isLoadingMore = uiState.isLoadingMore,
-                                    errorMessage = uiState.paginationErrorMessage,
-                                    hasMore = uiState.hasMore,
-                                    onRetry = onLoadNextPage,
-                                )
+                                item(key = "directory_pagination_footer") {
+                                    BrowsePaginationFooter(
+                                        isLoadingMore = uiState.isLoadingMore,
+                                        errorMessage = uiState.paginationErrorMessage,
+                                        hasMore = uiState.hasMore,
+                                        onRetry = onLoadNextPage,
+                                    )
+                                }
                             }
+                            RavenScrollToTopButton(
+                                listState = listState,
+                                modifier = Modifier
+                                    .align(Alignment.BottomEnd)
+                                    .padding(end = 18.dp, bottom = 22.dp),
+                            )
                         }
                     }
                 }

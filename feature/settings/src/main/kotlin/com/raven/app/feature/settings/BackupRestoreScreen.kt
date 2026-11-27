@@ -268,6 +268,8 @@ fun BackupRestoreScreenContent(
                                     text = if (uiState.isExporting) "正在加密并导出…" else "选择保存位置并导出",
                                     icon = Icons.Outlined.EnhancedEncryption,
                                     loading = uiState.isExporting,
+                                    success = uiState.exportCompleted != null,
+                                    failure = !uiState.exportError.isNullOrBlank(),
                                     enabled = uiState.canStartExport,
                                     onClick = onStartExportPicker,
                                     modifier = Modifier

@@ -3,6 +3,7 @@ package com.raven.app.feature.browse
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.raven.app.core.common.AppDispatchers
+import com.raven.app.core.common.BlockedTermExcludeInjection
 import com.raven.app.core.common.ContentFilter
 import com.raven.app.core.common.MediaDateParser
 import com.raven.app.core.common.TagDictionary
@@ -11,6 +12,8 @@ import com.raven.app.core.database.model.ExploreFilterState
 import com.raven.app.core.database.model.ShelfWithSummary
 import com.raven.app.core.database.repository.BlockedTermsRepository
 import com.raven.app.core.database.repository.BrowsePositionRepository
+import com.raven.app.core.database.repository.DownloadStateRepository
+import com.raven.app.core.database.repository.FavoriteRepository
 import com.raven.app.core.database.repository.HistoryRepository
 import com.raven.app.core.database.repository.MediaTagCacheRepository
 import com.raven.app.core.database.repository.PreferencesRepository
@@ -37,10 +40,12 @@ import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
@@ -58,6 +63,7 @@ data class ExploreUiState(
     val activeSite: SiteDescriptor? = null,
     val allSites: List<SiteDescriptor> = emptyList(),
     val pinnedSiteIds: List<SiteId> = emptyList(),
+    val dynamicSiteSorting: Boolean = true,
     val siteOpenCounts: Map<SiteId, Int> = emptyMap(),
     val startupDefaultSiteId: SiteId? = null,
     val filter: ExploreFilterState = ExploreFilterState(),
@@ -159,11 +165,52 @@ class ExploreViewModel(
     private val tagDictionary: TagDictionary = TagDictionary.default,
     private val mediaTagCacheRepository: MediaTagCacheRepository? = null,
     private val tagDictionaryRepository: TagDictionaryRepository? = null,
+    favoriteRepository: FavoriteRepository? = null,
+    downloadStateRepository: DownloadStateRepository? = null,
+    downloadEnqueuer: BrowseDownloadEnqueuer? = null,
 ) : ViewModel() {
 
     private val allDescriptors: List<SiteDescriptor> = siteRegistry.allDescriptors()
     private val loadState = MutableStateFlow(ExploreLoadState())
     private val filterEditMutex = Mutex()
+
+    /** Optional so existing JVM tests without download fakes keep constructing successfully. */
+    private val mediaActions: BrowseMediaActions? =
+        if (favoriteRepository != null && downloadStateRepository != null && downloadEnqueuer != null) {
+            BrowseMediaActions(
+                favoriteRepository = favoriteRepository,
+                downloadStateRepository = downloadStateRepository,
+                enqueuer = downloadEnqueuer,
+                scope = viewModelScope,
+                ioDispatcher = dispatchers.io,
+            )
+        } else {
+            null
+        }
+
+    val favoriteKeys: StateFlow<Set<String>> = (
+        mediaActions?.favoriteKeysFlow() ?: flowOf(emptySet())
+        ).stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.WhileSubscribed(5_000L),
+        initialValue = emptySet(),
+    )
+
+    val downloadStates: StateFlow<Map<String, MediaCardDownloadState>> =
+        preferencesRepository.settings
+            .map { resolveActiveSiteId(it.activeSiteId) }
+            .distinctUntilChanged()
+            .flatMapLatest { siteId ->
+                mediaActions?.downloadStatesFlow(siteId) ?: flowOf(emptyMap())
+            }
+            .stateIn(
+                scope = viewModelScope,
+                started = SharingStarted.WhileSubscribed(5_000L),
+                initialValue = emptyMap(),
+            )
+
+    val actionMessage: StateFlow<String?> = mediaActions?.messages
+        ?: MutableStateFlow<String?>(null).asStateFlow()
 
     private var loadJob: Job? = null
     private var paginateJob: Job? = null
@@ -236,7 +283,15 @@ class ExploreViewModel(
         val requestedSectionSpec = declaredFeedSections.firstOrNull { spec ->
             !key.filter.section.isNullOrBlank() && spec.id == key.filter.section
         } ?: declaredFeedSections.firstOrNull()
-        val request = buildFeedRequest(plugin, key.siteId, key.filter, page = 1, cursor = null)
+        // Only used for `supportedSorts`; blocked terms are irrelevant here (no network call).
+        val request = buildFeedRequest(
+            plugin = plugin,
+            siteId = key.siteId,
+            filter = key.filter,
+            page = 1,
+            cursor = null,
+            effectiveBlockedTerms = emptyList(),
+        )
         val availableSorts = plugin?.feedSource?.supportedSorts(request)
             ?.takeIf { it.isNotEmpty() }
             ?: descriptor?.feedSorts?.takeIf { it.isNotEmpty() }
@@ -272,6 +327,7 @@ class ExploreViewModel(
             activeSite = descriptor,
             allSites = settings.sortSitesByUsage(allDescriptors) { it.id },
             pinnedSiteIds = settings.pinnedSiteIds,
+            dynamicSiteSorting = settings.dynamicSiteSorting,
             siteOpenCounts = settings.siteOpenCounts,
             startupDefaultSiteId = settings.startupDefaultSiteId,
             filter = key.filter,
@@ -325,6 +381,22 @@ class ExploreViewModel(
     fun togglePinnedSite(siteId: SiteId) {
         viewModelScope.launch {
             preferencesRepository.togglePinnedSite(siteId)
+        }
+    }
+
+    /** Persists a manual reorder of the pinned sites. */
+    fun reorderPinnedSites(siteIds: List<SiteId>) {
+        val known = allDescriptors.mapTo(HashSet()) { it.id }
+        val sanitized = siteIds.filter { it in known }.distinct()
+        if (sanitized.isEmpty()) return
+        viewModelScope.launch {
+            preferencesRepository.setPinnedSiteIds(sanitized)
+        }
+    }
+
+    fun setDynamicSiteSorting(enabled: Boolean) {
+        viewModelScope.launch {
+            preferencesRepository.setDynamicSiteSorting(enabled)
         }
     }
 
@@ -451,12 +523,20 @@ class ExploreViewModel(
         paginateJob = viewModelScope.launch {
             loadState.update { it.copy(isLoadingMore = true, paginationErrorMessage = null) }
             val nextPageNumber = snapshot.nextPage ?: (snapshot.currentPage + 1)
+            // Build from the *loaded* site, not the currently active one, so paging stays consistent
+            // if the user switched sites mid-scroll. Blocked terms are resolved for that same site.
+            val effectiveBlockedTerms = withContext(dispatchers.io) {
+                runCatching {
+                    blockedTermsRepository.observeEffectiveTermsBySite(key.siteId).first()
+                }.getOrDefault(emptyList())
+            }
             val request = buildFeedRequest(
                 plugin = plugin,
                 siteId = key.siteId,
                 filter = key.filter,
                 page = nextPageNumber,
                 cursor = snapshot.nextCursor,
+                effectiveBlockedTerms = effectiveBlockedTerms,
             )
             try {
                 val page = withContext(dispatchers.io) { feedSource.loadFeed(request) }
@@ -492,6 +572,18 @@ class ExploreViewModel(
     fun inspectShelfTarget(item: MediaItem?) = shelfController.inspectItem(item)
 
     fun toggleWatchLater(item: MediaItem) = shelfController.toggleWatchLater(item)
+
+    fun toggleFavorite(item: MediaItem) {
+        mediaActions?.toggleFavorite(item)
+    }
+
+    fun downloadMedia(item: MediaItem) {
+        mediaActions?.download(item)
+    }
+
+    fun clearActionMessage() {
+        mediaActions?.clearMessage()
+    }
 
     fun setShelfMembership(shelfId: String, item: MediaItem, add: Boolean) =
         shelfController.setMembership(shelfId, item, add)
@@ -560,12 +652,18 @@ class ExploreViewModel(
                     }
                 }
 
+                val effectiveBlockedTerms = withContext(dispatchers.io) {
+                    runCatching {
+                        blockedTermsRepository.observeEffectiveTermsBySite(key.siteId).first()
+                    }.getOrDefault(emptyList())
+                }
                 val request = buildFeedRequest(
                     plugin = plugin,
                     siteId = key.siteId,
                     filter = key.filter,
                     page = 1,
                     cursor = null,
+                    effectiveBlockedTerms = effectiveBlockedTerms,
                 )
                 val page = withContext(dispatchers.io) { feedSource.loadFeed(request) }
                 loadState.value = ExploreLoadState(
@@ -644,6 +742,7 @@ class ExploreViewModel(
         filter: ExploreFilterState,
         page: Int,
         cursor: String?,
+        effectiveBlockedTerms: Collection<String>,
     ): FeedRequest {
         val descriptor = plugin?.descriptor
         val sections = descriptor?.sections?.filterNot { it.isDirectory }.orEmpty()
@@ -673,7 +772,11 @@ class ExploreViewModel(
             page = page,
             cursor = cursor,
             mediaKind = matchedSpec?.mediaKind,
-            advancedFilters = filter.advancedFilters,
+            advancedFilters = BlockedTermExcludeInjection.apply(
+                filter.advancedFilters,
+                effectiveBlockedTerms,
+                tagDictionary,
+            ),
         )
     }
 

@@ -11,6 +11,7 @@ import com.raven.app.core.database.repository.BrowsePositionRepository
 import com.raven.app.core.database.repository.DownloadStateRepository
 import com.raven.app.core.database.repository.FavoriteRepository
 import com.raven.app.core.database.repository.HistoryRepository
+import com.raven.app.core.database.repository.LikeRepository
 import com.raven.app.core.database.repository.MediaTagCacheRepository
 import com.raven.app.core.database.repository.PreferencesRepository
 import com.raven.app.core.database.repository.SearchHistoryRepository
@@ -50,6 +51,7 @@ val coreDatabaseModule: Module = module {
     single { get<RavenDatabase>().browsePositionDao() }
     single { get<RavenDatabase>().tagTranslationDao() }
     single { get<RavenDatabase>().mediaTagCacheDao() }
+    single { get<RavenDatabase>().mediaLikeDao() }
 
     // Preferences DataStore
     single<DataStore<Preferences>> { SettingsDataStore.createDataStore(androidContext()) }
@@ -66,6 +68,12 @@ val coreDatabaseModule: Module = module {
     single {
         FavoriteRepository(
             favoriteDao = get(),
+            transactionRunner = get(),
+        )
+    }
+    single {
+        LikeRepository(
+            mediaLikeDao = get(),
             transactionRunner = get(),
         )
     }

@@ -21,6 +21,10 @@ class FavoriteRepository(
     fun observeAll(): Flow<List<FavoriteItem>> =
         favoriteDao.observeAll().map { rows -> rows.map { it.toDomain() } }
 
+    /** Observes only media work favorites (VIDEO / COMIC / PHOTO), excluding legacy tag favorites. */
+    fun observeMediaFavorites(): Flow<List<FavoriteItem>> =
+        favoriteDao.observeMediaFavorites().map { rows -> rows.map { it.toDomain() } }
+
     fun observeBySite(siteId: SiteId): Flow<List<FavoriteItem>> =
         favoriteDao.observeBySite(siteId.value).map { rows -> rows.map { it.toDomain() } }
 

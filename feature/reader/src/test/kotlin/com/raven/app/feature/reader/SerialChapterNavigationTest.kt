@@ -169,15 +169,17 @@ class SerialChapterNavigationTest {
     }
 
     @Test
-    fun `strip end advances even when previous page is still the anchor`() = runTest(mainDispatcherRule.dispatcher) {
+    fun `strip end seamlessly appends next chapter without page reload`() = runTest(mainDispatcherRule.dispatcher) {
         val harness = ReaderTestHarness(mainDispatcherRule.dispatcher, tempFolder.newFolder())
         val chapters = chapters()
         val detail = serialDetail(chapters.first(), pageCount = 2)
+        val nextDetail = serialDetail(chapters[1], pageCount = 3)
         val viewModel = reader(
             harness = harness,
             detail = detail,
             persistenceScope = backgroundScope,
             chapterLoader = SerialChapterLoader { _, _ -> chapters },
+            extraDetails = mapOf(chapters[1].id to nextDetail),
         )
         advanceUntilIdle()
 
@@ -186,10 +188,10 @@ class SerialChapterNavigationTest {
             viewModel.onStripEndReached()
             advanceUntilIdle()
 
-            val event = awaitItem()
-            assertTrue(event is ReaderEvent.OpenChapter)
-            assertEquals(chapters[1], (event as ReaderEvent.OpenChapter).nextItem)
-            assertEquals(2, viewModel.uiState.value.currentPage)
+            expectNoEvents()
+            assertEquals(listOf(chapters[1].id), viewModel.uiState.value.appendedChapters.map { it.mediaId })
+            assertEquals(listOf(1, 2, 3), viewModel.uiState.value.appendedChapters.first().pageNumbers)
+            assertFalse(viewModel.uiState.value.isAppendingNextChapter)
             cancelAndIgnoreRemainingEvents()
         }
     }
@@ -276,6 +278,7 @@ class SerialChapterNavigationTest {
         detail: GalleryDetail,
         persistenceScope: CoroutineScope,
         chapterLoader: SerialChapterLoader,
+        extraDetails: Map<String, GalleryDetail> = emptyMap(),
     ): ReaderViewModel {
         val descriptor = sampleSiteDescriptor(
             detail.item.siteId,
@@ -291,8 +294,9 @@ class SerialChapterNavigationTest {
                 listOf(FakeGallerySitePlugin(descriptor, detailHandler = { detail })),
             ),
             pageLoader = FakeReaderPageLoader(
-                detailLoader = { _, _, _, _ ->
-                    OfflineGallerySnapshot(detail, emptyList(), emptyList(), "", false)
+                detailLoader = { _, requestedMediaId, _, _ ->
+                    val resolved = extraDetails[requestedMediaId] ?: detail
+                    OfflineGallerySnapshot(resolved, emptyList(), emptyList(), "", false)
                 },
             ),
             serialChapterLoader = chapterLoader,

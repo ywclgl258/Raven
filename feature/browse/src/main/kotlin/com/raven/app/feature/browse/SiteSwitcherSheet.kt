@@ -15,6 +15,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -29,9 +30,11 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.SwapVert
 import androidx.compose.material.icons.outlined.AutoStories
 import androidx.compose.material.icons.outlined.Lock
 import androidx.compose.material.icons.outlined.MenuBook
@@ -43,6 +46,8 @@ import androidx.compose.material.icons.rounded.PushPin
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Switch
+import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -54,15 +59,24 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.CustomAccessibilityAction
+import androidx.compose.ui.semantics.customActions
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.zIndex
+import kotlin.math.roundToInt
 import com.raven.app.core.designsystem.component.RavenBottomSheet
 import com.raven.app.core.designsystem.component.RavenMorphIcon
 import com.raven.app.core.designsystem.component.RavenMorphToggleIcon
@@ -74,6 +88,8 @@ import com.raven.app.core.designsystem.theme.RavenMotion
 import com.raven.app.core.designsystem.component.RavenStatusPill
 import com.raven.app.core.designsystem.component.RavenStatusTone
 import com.raven.app.core.designsystem.theme.LocalRavenColors
+import com.raven.app.core.designsystem.theme.LocalRavenFeedback
+import com.raven.app.core.designsystem.theme.RavenFeedbackEffect
 import com.raven.app.core.designsystem.theme.RavenShapes
 import com.raven.app.core.designsystem.theme.ravenSpringPress
 import com.raven.app.core.designsystem.theme.tabular
@@ -104,6 +120,9 @@ fun SiteSwitcherSheet(
     siteOpenCounts: Map<SiteId, Int> = emptyMap(),
     startupDefaultSiteId: SiteId? = null,
     onSelectStartupDefaultSite: (SiteId?) -> Unit = {},
+    dynamicSiteSorting: Boolean = true,
+    onDynamicSiteSortingChange: (Boolean) -> Unit = {},
+    onReorderPinnedSites: (List<SiteId>) -> Unit = {},
 ) {
     var editPinsMode by rememberSaveable { mutableStateOf(false) }
     var startupSiteMode by rememberSaveable { mutableStateOf(false) }
@@ -151,6 +170,9 @@ fun SiteSwitcherSheet(
             startupDefaultSiteId = startupDefaultSiteId,
             editPinsMode = editPinsMode,
             startupSiteMode = startupSiteMode,
+            dynamicSiteSorting = dynamicSiteSorting,
+            onDynamicSiteSortingChange = onDynamicSiteSortingChange,
+            onReorderPinnedSites = onReorderPinnedSites,
             onToggleStartupSiteMode = {
                 val next = !startupSiteMode
                 startupSiteMode = next
@@ -182,8 +204,12 @@ private data class SiteSwitcherGroupSpec(
 
 /**
  * Reusable compact adaptive site switcher content grouped by `VIDEO / COMIC / SERIAL_COMIC / PHOTO`
- * with a collapsible **常用站点 (Pinned)** section. Both sites and category groups are automatically
- * ordered descending by local visit frequency when counts are present.
+ * with a collapsible **常用站点 (Pinned)** section.
+ *
+ * When [dynamicSiteSorting] is `true` both the pinned section and the category groups are ordered
+ * descending by local visit frequency. When it is `false` the pinned section preserves the stored
+ * [pinnedSiteIds] manual order, the groups preserve registry order, and pinned tiles become
+ * long-press draggable.
  */
 @Composable
 fun SiteSwitcherDrawerContent(
@@ -197,6 +223,9 @@ fun SiteSwitcherDrawerContent(
     siteOpenCounts: Map<SiteId, Int> = emptyMap(),
     startupDefaultSiteId: SiteId? = null,
     startupSiteMode: Boolean = false,
+    dynamicSiteSorting: Boolean = true,
+    onDynamicSiteSortingChange: (Boolean) -> Unit = {},
+    onReorderPinnedSites: (List<SiteId>) -> Unit = {},
     onToggleStartupSiteMode: () -> Unit = {},
     onSelectStartupDefaultSite: (SiteId?) -> Unit = {},
 ) {
@@ -217,13 +246,25 @@ fun SiteSwitcherDrawerContent(
             sites.filter { it.matchesSwitcherFilter(normalizedFilter) }
         }
     }
-    val pinnedSites = remember(pinnedSiteIds, sitesById, siteOpenCounts, normalizedFilter) {
+    // Usage-sorted projection of the pinned ids (stable base order when usage ranking is disabled).
+    val pinnedSites = remember(pinnedSiteIds, sitesById, siteOpenCounts, normalizedFilter, dynamicSiteSorting) {
         val resolved = pinnedSiteIds.mapNotNull { sitesById[it] }
             .filter { normalizedFilter.isEmpty() || it.matchesSwitcherFilter(normalizedFilter) }
-        if (siteOpenCounts.isEmpty()) resolved
-        else resolved.sortedByDescending { siteOpenCounts[it.id] ?: 0 }
+        if (!dynamicSiteSorting || siteOpenCounts.isEmpty()) {
+            resolved
+        } else {
+            resolved.sortedByDescending { siteOpenCounts[it.id] ?: 0 }
+        }
     }
-    val orderedGroups = remember(visibleSites, siteOpenCounts) {
+    // Live drag order; only used while a reorder gesture is in flight.
+    var dragOrder by remember(pinnedSiteIds) { mutableStateOf<List<SiteId>?>(null) }
+    val displayedPinnedSites = remember(pinnedSites, dragOrder, sitesById) {
+        val order = dragOrder
+        if (order == null) pinnedSites
+        else order.mapNotNull { sitesById[it] }
+            .filter { normalizedFilter.isEmpty() || it.matchesSwitcherFilter(normalizedFilter) }
+    }
+    val orderedGroups = remember(visibleSites, siteOpenCounts, dynamicSiteSorting) {
         val baseGroups = listOf(
             SiteSwitcherGroupSpec(MediaKind.VIDEO, "视频", Icons.Outlined.Movie, visibleSites.filter { it.primaryKind == MediaKind.VIDEO }),
             SiteSwitcherGroupSpec(MediaKind.COMIC, "漫画", Icons.Outlined.MenuBook, visibleSites.filter { it.primaryKind == MediaKind.COMIC }),
@@ -232,12 +273,12 @@ fun SiteSwitcherDrawerContent(
         ).mapNotNull { spec ->
             if (spec.sites.isEmpty()) null
             else {
-                val sortedSites = if (siteOpenCounts.isEmpty()) spec.sites
+                val sortedSites = if (!dynamicSiteSorting || siteOpenCounts.isEmpty()) spec.sites
                 else spec.sites.sortedByDescending { siteOpenCounts[it.id] ?: 0 }
                 spec.copy(sites = sortedSites)
             }
         }
-        if (siteOpenCounts.isEmpty()) {
+        if (!dynamicSiteSorting || siteOpenCounts.isEmpty()) {
             baseGroups
         } else {
             baseGroups.sortedByDescending { spec ->
@@ -246,10 +287,11 @@ fun SiteSwitcherDrawerContent(
         }
     }
     val showPinnedSection = if (normalizedFilter.isEmpty()) {
-        pinnedSites.isNotEmpty() || editPinsMode
+        displayedPinnedSites.isNotEmpty() || editPinsMode
     } else {
-        pinnedSites.isNotEmpty()
+        displayedPinnedSites.isNotEmpty()
     }
+    val reorderEnabled = !dynamicSiteSorting && normalizedFilter.isEmpty() && !startupSiteMode
 
     BoxWithConstraints(
         modifier = modifier.testTag("site_switcher_content"),
@@ -285,6 +327,12 @@ fun SiteSwitcherDrawerContent(
                 onResetDefault = { onSelectStartupDefaultSite(null) },
             )
 
+            SiteOrderingModeRow(
+                dynamicSiteSorting = dynamicSiteSorting,
+                pinnedCount = pinnedSiteIds.size,
+                onDynamicSiteSortingChange = onDynamicSiteSortingChange,
+            )
+
             if (showPinnedSection) {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Row(
@@ -314,9 +362,18 @@ fun SiteSwitcherDrawerContent(
                                 modifier = Modifier.semantics { heading() },
                             )
                             RavenStatusPill(
-                                text = pinnedSites.size.toString(),
-                                tone = if (pinnedSites.isNotEmpty()) RavenStatusTone.ACCENT else RavenStatusTone.NEUTRAL,
+                                text = displayedPinnedSites.size.toString(),
+                                tone = if (displayedPinnedSites.isNotEmpty()) RavenStatusTone.ACCENT else RavenStatusTone.NEUTRAL,
                             )
+                            if (reorderEnabled && displayedPinnedSites.size > 1) {
+                                Text(
+                                    text = "长按拖动排序",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = colors.inkTertiary,
+                                    maxLines = 1,
+                                    modifier = Modifier.testTag("site_switcher_reorder_hint"),
+                                )
+                            }
                         }
 
                         val motionReduced = LocalMotionReduced.current
@@ -355,7 +412,7 @@ fun SiteSwitcherDrawerContent(
                                 fadeOut(tween(120, easing = RavenMotion.HarmonyDecelerationEasing))
                         },
                     ) {
-                        if (pinnedSites.isEmpty()) {
+                        if (displayedPinnedSites.isEmpty()) {
                             Text(
                                 text = "点击下方任意站点即可加入常用置顶",
                                 style = MaterialTheme.typography.bodySmall,
@@ -363,17 +420,28 @@ fun SiteSwitcherDrawerContent(
                                 modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp),
                             )
                         } else {
-                            SiteSwitcherCompactGrid(
-                                sites = pinnedSites,
+                            SiteSwitcherReorderablePinnedGrid(
+                                sites = displayedPinnedSites,
                                 columns = columns,
                                 activeSiteId = activeSiteId,
                                 startupDefaultSiteId = startupDefaultSiteId,
                                 pinnedSet = pinnedSet,
                                 editPinsMode = editPinsMode,
                                 startupSiteMode = startupSiteMode,
+                                reorderEnabled = reorderEnabled && displayedPinnedSites.size > 1,
                                 onSelectSite = onSelectSite,
                                 onSelectStartupDefaultSite = { siteId -> onSelectStartupDefaultSite(siteId) },
                                 onTogglePinSite = onTogglePinSite,
+                                onReorder = { nextOrder ->
+                                    val reorderedIds = nextOrder.map { it.id }
+                                    val nextIds = SiteOrdering.applyVisibleReorder(
+                                        storedIds = SiteOrdering.ensureAllPinned(pinnedSiteIds, reorderedIds),
+                                        visibleIds = displayedPinnedSites.map { it.id },
+                                        reorderedVisibleIds = reorderedIds,
+                                    )
+                                    if (nextIds != pinnedSiteIds) onReorderPinnedSites(nextIds)
+                                },
+                                onDragOrderChanged = { order -> dragOrder = order },
                             )
                         }
                     }
@@ -408,6 +476,251 @@ fun SiteSwitcherDrawerContent(
                     onSelectStartupDefaultSite = { siteId -> onSelectStartupDefaultSite(siteId) },
                     onTogglePinSite = onTogglePinSite,
                 )
+            }
+        }
+    }
+}
+
+@Composable
+private fun SiteOrderingModeRow(
+    dynamicSiteSorting: Boolean,
+    pinnedCount: Int,
+    onDynamicSiteSortingChange: (Boolean) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val colors = LocalRavenColors.current
+    val feedback = LocalRavenFeedback.current
+    val interactionSource = remember { MutableInteractionSource() }
+
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .heightIn(min = 48.dp)
+            .clip(RavenShapes.ControlShape)
+            .background(colors.surface1)
+            .border(0.5.dp, colors.hairline, RavenShapes.ControlShape)
+            .toggleable(
+                value = dynamicSiteSorting,
+                interactionSource = interactionSource,
+                indication = null,
+                role = Role.Switch,
+                onValueChange = { next ->
+                    feedback.perform(
+                        if (next) RavenFeedbackEffect.TOGGLE_ON else RavenFeedbackEffect.TOGGLE_OFF,
+                    )
+                    onDynamicSiteSortingChange(next)
+                },
+            )
+            .padding(horizontal = 12.dp, vertical = 8.dp)
+            .testTag("site_switcher_dynamic_sorting_row"),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        Icon(
+            imageVector = Icons.Rounded.SwapVert,
+            contentDescription = null,
+            tint = colors.inkSecondary,
+            modifier = Modifier.size(18.dp),
+        )
+        Column(
+            modifier = Modifier.weight(1f),
+            verticalArrangement = Arrangement.spacedBy(2.dp),
+        ) {
+            Text(
+                text = "按使用频率排序",
+                style = MaterialTheme.typography.titleSmall,
+                color = colors.inkPrimary,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Text(
+                text = if (dynamicSiteSorting) {
+                    "常打开的站点自动排在前面"
+                } else if (pinnedCount > 1) {
+                    "按手动顺序固定展示 · 常用站点可长按拖动排序"
+                } else {
+                    "按站点注册顺序固定展示"
+                },
+                style = MaterialTheme.typography.labelSmall,
+                color = colors.inkTertiary,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+        Switch(
+            checked = dynamicSiteSorting,
+            onCheckedChange = null,
+            colors = SwitchDefaults.colors(
+                checkedThumbColor = colors.inkPrimary,
+                checkedTrackColor = colors.crimson,
+                checkedBorderColor = androidx.compose.ui.graphics.Color.Transparent,
+                uncheckedThumbColor = colors.inkSecondary,
+                uncheckedTrackColor = colors.surface3,
+                uncheckedBorderColor = colors.outlineSubtle,
+            ),
+        )
+    }
+}
+
+/**
+ * Pinned tile grid that supports long-press drag reordering while keeping the current
+ * `verticalScroll` sheet layout. Tiles live inside fixed rows of [columns]; a drag is translated
+ * into a source/target slot index and committed on release. Screen-reader users get
+ * "move up / move down" actions on each tile so reordering stays reachable without a drag.
+ */
+@Composable
+private fun SiteSwitcherReorderablePinnedGrid(
+    sites: List<SiteDescriptor>,
+    columns: Int,
+    activeSiteId: SiteId,
+    startupDefaultSiteId: SiteId?,
+    pinnedSet: Set<SiteId>,
+    editPinsMode: Boolean,
+    startupSiteMode: Boolean,
+    reorderEnabled: Boolean,
+    onSelectSite: (SiteId) -> Unit,
+    onSelectStartupDefaultSite: (SiteId) -> Unit,
+    onTogglePinSite: (SiteId) -> Unit,
+    onReorder: (List<SiteDescriptor>) -> Unit,
+    onDragOrderChanged: (List<SiteId>?) -> Unit,
+) {
+    val haptics = LocalHapticFeedback.current
+    val density = LocalDensity.current
+    val rowHeightPx = remember(density) { with(density) { 56.dp.toPx() } }
+    val columnWidthPx = remember(density) { with(density) { 96.dp.toPx() } }
+
+    var draggingIndex by remember { mutableStateOf<Int?>(null) }
+    var dragOffset by remember { mutableStateOf(Offset.Zero) }
+
+    val safeColumns = columns.coerceAtLeast(1)
+    val rows = remember(sites, safeColumns) { sites.chunked(safeColumns) }
+
+    fun commit() {
+        val from = draggingIndex
+        if (from != null) {
+            val safeFrom = from.coerceIn(0, sites.lastIndex)
+            val targetRow = (safeFrom / safeColumns + (dragOffset.y / rowHeightPx).roundToInt())
+                .coerceIn(0, rows.lastIndex)
+            val targetCol = (safeFrom % safeColumns + (dragOffset.x / columnWidthPx).roundToInt())
+                .coerceIn(0, safeColumns - 1)
+            val target = (targetRow * safeColumns + targetCol).coerceIn(0, sites.lastIndex)
+            if (target != safeFrom) {
+                haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                onReorder(SiteOrdering.moveGeneric(sites, safeFrom, target))
+            }
+        }
+        draggingIndex = null
+        dragOffset = Offset.Zero
+        onDragOrderChanged(null)
+    }
+
+    // Accessibility fallback: expose move up/down per tile without breaking pin toggles.
+    fun moveBySlots(site: SiteDescriptor, delta: Int) {
+        val from = sites.indexOfFirst { it.id == site.id }
+        if (from < 0) return
+        val to = (from + delta).coerceIn(0, sites.lastIndex)
+        if (to != from) onReorder(SiteOrdering.moveGeneric(sites, from, to))
+    }
+
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        rows.forEachIndexed { rowIndex, rowSites ->
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(min = 56.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                rowSites.forEachIndexed { colIndex, site ->
+                    val flatIndex = rowIndex * safeColumns + colIndex
+                    val isDragging = draggingIndex == flatIndex
+                    Box(
+                        modifier = Modifier
+                            .weight(1f)
+                            .zIndex(if (isDragging) 1f else 0f)
+                            .graphicsLayer {
+                                if (isDragging) {
+                                    translationX = dragOffset.x
+                                    translationY = dragOffset.y
+                                    scaleX = 1.04f
+                                    scaleY = 1.04f
+                                    shadowElevation = with(density) { 8.dp.toPx() }
+                                }
+                            }
+                            .then(
+                                if (reorderEnabled) {
+                                    Modifier.pointerInput(sites, safeColumns, rowHeightPx, columnWidthPx) {
+                                        detectDragGesturesAfterLongPress(
+                                            onDragStart = {
+                                                draggingIndex = flatIndex
+                                                dragOffset = Offset.Zero
+                                                haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                                                onDragOrderChanged(sites.map { it.id })
+                                            },
+                                            onDrag = { change, dragAmount ->
+                                                change.consume()
+                                                dragOffset += dragAmount
+                                            },
+                                            onDragEnd = { commit() },
+                                            onDragCancel = {
+                                                draggingIndex = null
+                                                dragOffset = Offset.Zero
+                                                onDragOrderChanged(null)
+                                            },
+                                        )
+                                    }
+                                } else {
+                                    Modifier
+                                },
+                            ),
+                    ) {
+                        SiteSwitcherTile(
+                            site = site,
+                            isSelected = site.id == activeSiteId,
+                            isStartupDefault = site.id == startupDefaultSiteId,
+                            isPinned = site.id in pinnedSet,
+                            editPinsMode = editPinsMode,
+                            startupSiteMode = startupSiteMode,
+                            onClick = {
+                                when {
+                                    startupSiteMode -> onSelectStartupDefaultSite(site.id)
+                                    editPinsMode -> onTogglePinSite(site.id)
+                                    else -> onSelectSite(site.id)
+                                }
+                            },
+                            onLongClick = {
+                                // Reorder mode owns long-press for drag; otherwise it toggles the pin.
+                                if (!startupSiteMode && !reorderEnabled) onTogglePinSite(site.id)
+                            },
+                            accessibilityReorderActions = if (reorderEnabled) {
+                                buildList {
+                                    val index = sites.indexOfFirst { it.id == site.id }
+                                    if (index > 0) {
+                                        add(
+                                            CustomAccessibilityAction("上移 ${site.shortName}") {
+                                                moveBySlots(site, -1)
+                                                true
+                                            },
+                                        )
+                                    }
+                                    if (index in 0 until sites.lastIndex) {
+                                        add(
+                                            CustomAccessibilityAction("下移 ${site.shortName}") {
+                                                moveBySlots(site, 1)
+                                                true
+                                            },
+                                        )
+                                    }
+                                }
+                            } else {
+                                emptyList()
+                            },
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                    }
+                }
+                repeat(safeColumns - rowSites.size) {
+                    Spacer(modifier = Modifier.weight(1f))
+                }
             }
         }
     }
@@ -631,6 +944,7 @@ private fun SiteSwitcherTile(
     onClick: () -> Unit,
     onLongClick: () -> Unit,
     modifier: Modifier = Modifier,
+    accessibilityReorderActions: List<CustomAccessibilityAction> = emptyList(),
 ) {
     val colors = LocalRavenColors.current
     val motionReduced = LocalMotionReduced.current
@@ -674,6 +988,11 @@ private fun SiteSwitcherTile(
                 color = borderColor,
                 shape = RavenShapes.ControlShape,
             )
+            .semantics {
+                if (accessibilityReorderActions.isNotEmpty()) {
+                    customActions = accessibilityReorderActions
+                }
+            }
             .ravenSpringPress(interactionSource = interactionSource)
             .combinedClickable(
                 interactionSource = interactionSource,

@@ -251,8 +251,9 @@ fun RavenHeroBanner(
                 ) {
                     HeroMetadataRow(item = item)
 
-                    Text(
+                    RavenTextReveal(
                         text = item.title,
+                        revealKey = item.compositeKey,
                         style = MaterialTheme.typography.headlineMedium,
                         color = colors.inkPrimary,
                         maxLines = 2,

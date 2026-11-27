@@ -92,3 +92,22 @@ data class SmartShelfEntity(
     @ColumnInfo(name = "is_pinned") val isPinned: Boolean,
     @ColumnInfo(name = "created_at") val createdAt: Long,
 )
+
+@Entity(
+    tableName = "media_likes",
+    primaryKeys = ["site_id", "media_id"],
+    indices = [
+        Index(value = ["liked_at"], orders = [Index.Order.DESC]),
+    ],
+)
+data class MediaLikeEntity(
+    @ColumnInfo(name = "site_id") val siteId: String,
+    @ColumnInfo(name = "media_id") val mediaId: String,
+    @ColumnInfo(name = "kind") val kind: MediaKind,
+    @ColumnInfo(name = "title") val title: String,
+    @ColumnInfo(name = "url") val url: String,
+    @ColumnInfo(name = "cover_url") val coverUrl: String,
+    @ColumnInfo(name = "author_name") val authorName: String,
+    @ColumnInfo(name = "tags_json") val tagsJson: String,
+    @ColumnInfo(name = "liked_at") val likedAt: Long,
+)

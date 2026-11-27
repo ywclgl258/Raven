@@ -456,6 +456,15 @@ class SettingsViewModel(
         }
     }
 
+    fun resetAllFeatureTutorials() {
+        viewModelScope.launch(dispatchers.io) {
+            preferencesRepository.resetAllTutorials()
+            auxState.update {
+                it.copy(feedbackMessage = "已重置全部功能新手引导，重新进入对应页面即可再次查看")
+            }
+        }
+    }
+
     fun refreshMediaCacheStats() {
         viewModelScope.launch {
             auxState.update { it.copy(mediaCache = it.mediaCache.copy(isRefreshing = true)) }

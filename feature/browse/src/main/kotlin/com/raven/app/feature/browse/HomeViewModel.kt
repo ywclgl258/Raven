@@ -3,12 +3,14 @@ package com.raven.app.feature.browse
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.raven.app.core.common.AppDispatchers
+import com.raven.app.core.common.BlockedTermExcludeInjection
 import com.raven.app.core.common.ContentFilter
 import com.raven.app.core.common.TagDictionary
 import com.raven.app.core.database.model.BrowsePosition
 import com.raven.app.core.database.model.ShelfWithSummary
 import com.raven.app.core.database.repository.BlockedTermsRepository
 import com.raven.app.core.database.repository.BrowsePositionRepository
+import com.raven.app.core.database.repository.DownloadStateRepository
 import com.raven.app.core.database.repository.FavoriteRepository
 import com.raven.app.core.database.repository.HistoryRepository
 import com.raven.app.core.database.repository.MediaTagCacheRepository
@@ -16,6 +18,7 @@ import com.raven.app.core.database.repository.PreferencesRepository
 import com.raven.app.core.database.repository.ShelfRepository
 import com.raven.app.core.database.repository.TagDictionaryRepository
 import com.raven.app.core.model.ComicLanguage
+import com.raven.app.core.model.FeatureTutorialIds
 import com.raven.app.core.model.FeedRequest
 import com.raven.app.core.model.FeedSection
 import com.raven.app.core.model.FeedSort
@@ -35,6 +38,7 @@ import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
@@ -56,6 +60,7 @@ data class HomeUiState(
     val activeSite: SiteDescriptor? = null,
     val allSites: List<SiteDescriptor> = emptyList(),
     val pinnedSiteIds: List<SiteId> = emptyList(),
+    val dynamicSiteSorting: Boolean = true,
     val siteOpenCounts: Map<SiteId, Int> = emptyMap(),
     val startupDefaultSiteId: SiteId? = null,
     val comicLanguage: ComicLanguage = ComicLanguage.ALL,
@@ -79,6 +84,7 @@ data class HomeUiState(
     val readingProgressMap: Map<String, Float> = emptyMap(),
     val watchLaterKeys: Set<String> = emptySet(),
     val showSiteSwitchTutorial: Boolean = false,
+    val showHomeTutorial: Boolean = false,
     val restoredPosition: BrowsePosition? = null,
     val fromCache: Boolean = false,
 ) {
@@ -131,6 +137,8 @@ class HomeViewModel(
     private val tagDictionary: TagDictionary = TagDictionary.default,
     private val mediaTagCacheRepository: MediaTagCacheRepository? = null,
     private val tagDictionaryRepository: TagDictionaryRepository? = null,
+    downloadStateRepository: DownloadStateRepository? = null,
+    downloadEnqueuer: BrowseDownloadEnqueuer? = null,
 ) : ViewModel() {
 
     private val allDescriptors: List<SiteDescriptor> = siteRegistry.allDescriptors()
@@ -146,6 +154,44 @@ class HomeViewModel(
         scope = viewModelScope,
         ioDispatcher = dispatchers.io,
     )
+
+    // Optional so JVM tests that only exercise feed loading keep working without new fakes.
+    private val mediaActions: BrowseMediaActions? = if (downloadStateRepository != null && downloadEnqueuer != null) {
+        BrowseMediaActions(
+            favoriteRepository = favoriteRepository,
+            downloadStateRepository = downloadStateRepository,
+            enqueuer = downloadEnqueuer,
+            scope = viewModelScope,
+            ioDispatcher = dispatchers.io,
+        )
+    } else {
+        null
+    }
+
+    val favoriteKeys: StateFlow<Set<String>> = (
+        mediaActions?.favoriteKeysFlow()
+            ?: flowOf(emptySet())
+        ).stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.WhileSubscribed(5_000L),
+        initialValue = emptySet(),
+    )
+
+    val downloadStates: StateFlow<Map<String, MediaCardDownloadState>> =
+        preferencesRepository.settings
+            .map { resolveActiveSiteId(it.activeSiteId) }
+            .distinctUntilChanged()
+            .flatMapLatest { siteId ->
+                mediaActions?.downloadStatesFlow(siteId) ?: flowOf(emptyMap())
+            }
+            .stateIn(
+                scope = viewModelScope,
+                started = SharingStarted.WhileSubscribed(5_000L),
+                initialValue = emptyMap(),
+            )
+
+    val actionMessage: StateFlow<String?> = mediaActions?.messages
+        ?: MutableStateFlow<String?>(null).asStateFlow()
 
     val shelfPickerShelves: StateFlow<List<ShelfWithSummary>> get() = shelfController.shelves
     val inspectedShelfIds: StateFlow<Set<String>> get() = shelfController.inspectedShelfIds
@@ -296,6 +342,7 @@ class HomeViewModel(
             activeSite = descriptor,
             allSites = settings.sortSitesByUsage(allDescriptors) { it.id },
             pinnedSiteIds = settings.pinnedSiteIds,
+            dynamicSiteSorting = settings.dynamicSiteSorting,
             siteOpenCounts = settings.siteOpenCounts,
             startupDefaultSiteId = settings.startupDefaultSiteId,
             comicLanguage = effectiveLanguage,
@@ -319,6 +366,7 @@ class HomeViewModel(
             readingProgressMap = readingProgressMap,
             watchLaterKeys = local.watchLaterKeys,
             showSiteSwitchTutorial = tutorialVisible,
+            showHomeTutorial = !settings.hasSeenTutorial(FeatureTutorialIds.HOME_BROWSE),
             restoredPosition = restored,
             fromCache = isAligned && network.fromCache,
         )
@@ -369,9 +417,24 @@ class HomeViewModel(
         }
     }
 
-    fun togglePinnedSite(siteId: SiteId) {
-        viewModelScope.launch {
+    fun togglePinnedSite(siteId: SiteId) {        viewModelScope.launch {
             preferencesRepository.togglePinnedSite(siteId)
+        }
+    }
+
+    /** Persists a manual reorder of the pinned sites (drag drop or accessibility move actions). */
+    fun reorderPinnedSites(siteIds: List<SiteId>) {
+        val known = allDescriptors.mapTo(HashSet()) { it.id }
+        val sanitized = siteIds.filter { it in known }.distinct()
+        if (sanitized.isEmpty()) return
+        viewModelScope.launch {
+            preferencesRepository.setPinnedSiteIds(sanitized)
+        }
+    }
+
+    fun setDynamicSiteSorting(enabled: Boolean) {
+        viewModelScope.launch {
+            preferencesRepository.setDynamicSiteSorting(enabled)
         }
     }
 
@@ -420,6 +483,13 @@ class HomeViewModel(
         paginateJob = viewModelScope.launch {
             feedState.update { it.copy(isLoadingMore = true, paginationErrorMessage = null) }
             val nextPageNumber = snapshot.nextPage ?: (snapshot.currentPage + 1)
+            // Inject the loaded site's blocked terms so plugins that omit tags from payloads
+            // still drop blocked works server-side. Client ContentFilter stays as fallback.
+            val effectiveBlockedTerms = withContext(dispatchers.io) {
+                runCatching {
+                    blockedTermsRepository.observeEffectiveTermsBySite(siteId).first()
+                }.getOrDefault(emptyList())
+            }
             val baseRequest = snapshot.paginationBaseRequest ?: FeedRequest(
                 siteId = siteId,
                 section = "latest",
@@ -431,6 +501,11 @@ class HomeViewModel(
                 language = language,
                 page = nextPageNumber,
                 cursor = snapshot.nextCursor,
+                advancedFilters = BlockedTermExcludeInjection.apply(
+                    baseRequest.advancedFilters,
+                    effectiveBlockedTerms,
+                    tagDictionary,
+                ),
             )
             try {
                 val page = withContext(dispatchers.io) { feedSource.loadFeed(request) }
@@ -467,6 +542,18 @@ class HomeViewModel(
 
     fun toggleWatchLater(item: MediaItem) = shelfController.toggleWatchLater(item)
 
+    fun toggleFavorite(item: MediaItem) {
+        mediaActions?.toggleFavorite(item)
+    }
+
+    fun downloadMedia(item: MediaItem) {
+        mediaActions?.download(item)
+    }
+
+    fun clearActionMessage() {
+        mediaActions?.clearMessage()
+    }
+
     fun setShelfMembership(shelfId: String, item: MediaItem, add: Boolean) =
         shelfController.setMembership(shelfId, item, add)
 
@@ -475,6 +562,18 @@ class HomeViewModel(
 
     fun dismissSiteSwitchTutorial() {
         showSiteSwitchTutorial.value = false
+    }
+
+    fun completeHomeTutorial() {
+        viewModelScope.launch(dispatchers.io) {
+            preferencesRepository.markTutorialSeen(FeatureTutorialIds.HOME_BROWSE)
+        }
+    }
+
+    fun skipAllTutorials() {
+        viewModelScope.launch(dispatchers.io) {
+            preferencesRepository.markTutorialsSeen(FeatureTutorialIds.ALL)
+        }
     }
 
     fun saveBrowsePosition(
@@ -572,6 +671,13 @@ class HomeViewModel(
                 val primaryItems = primaryPage?.items
                     ?: homeFeed.sections.lastOrNull { !it.isRanked }?.items
                     ?: emptyList()
+                // Home payloads omit tags on several plugins, so the pagination request carries the
+                // site's blocked terms into `excludeTags`; plugins then drop them server-side.
+                val effectiveBlockedTerms = withContext(dispatchers.io) {
+                    runCatching {
+                        blockedTermsRepository.observeEffectiveTermsBySite(siteId).first()
+                    }.getOrDefault(emptyList())
+                }
                 val baseRequest = homeFeed.sections
                     .lastOrNull { !it.isRanked && it.seeAllRequest != null }
                     ?.seeAllRequest
@@ -581,6 +687,13 @@ class HomeViewModel(
                         sort = FeedSort.NEWEST,
                         language = language,
                     )
+                val injectedBaseRequest = baseRequest.copy(
+                    advancedFilters = BlockedTermExcludeInjection.apply(
+                        baseRequest.advancedFilters,
+                        effectiveBlockedTerms,
+                        tagDictionary,
+                    ),
+                )
 
                 feedState.value = HomeFeedLoadState(
                     loadedKey = key,
@@ -590,7 +703,7 @@ class HomeViewModel(
                     rawHeroItems = homeFeed.heroItems.distinctBy { it.compositeKey },
                     rawSections = homeFeed.sections,
                     rawPrimaryItems = primaryItems.distinctBy { it.compositeKey },
-                    paginationBaseRequest = baseRequest,
+                    paginationBaseRequest = injectedBaseRequest,
                     currentPage = 1,
                     nextPage = primaryPage?.nextPage,
                     nextCursor = primaryPage?.nextCursor,

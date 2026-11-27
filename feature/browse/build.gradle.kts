@@ -13,6 +13,7 @@ dependencies {
     implementation(project(":core:network"))
     implementation(project(":core:database"))
     implementation(project(":core:designsystem"))
+    implementation(project(":core:media"))
 
     implementation(libs.androidx.lifecycle.runtime.compose)
     implementation(libs.androidx.lifecycle.viewmodel.ktx)

@@ -3,8 +3,6 @@ package com.raven.app.feature.settings
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.EnterTransition
 import androidx.compose.animation.ExitTransition
-import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.core.snap
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
@@ -19,11 +17,13 @@ import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
@@ -63,8 +63,6 @@ import androidx.compose.material.icons.outlined.Tune
 import androidx.compose.material.icons.outlined.VisibilityOff
 import androidx.compose.material.icons.outlined.Wifi
 import androidx.compose.material.icons.rounded.Check
-import androidx.compose.material.icons.rounded.ExpandLess
-import androidx.compose.material.icons.rounded.ExpandMore
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -86,7 +84,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
@@ -94,6 +91,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.raven.app.core.designsystem.component.RavenBottomSheet
+import com.raven.app.core.designsystem.component.RavenExpandableSection
 import com.raven.app.core.designsystem.component.RavenFilterChip
 import com.raven.app.core.designsystem.component.RavenFilterChipRow
 import com.raven.app.core.designsystem.component.RavenFormatters
@@ -102,6 +100,7 @@ import com.raven.app.core.designsystem.component.RavenGroupedRow
 import com.raven.app.core.designsystem.component.RavenGroupedSection
 import com.raven.app.core.designsystem.component.RavenGroupedSliderRow
 import com.raven.app.core.designsystem.component.RavenGroupedSwitchRow
+import com.raven.app.core.designsystem.component.RavenScrollToTopButton
 import com.raven.app.core.designsystem.component.RavenStatusPill
 import com.raven.app.core.designsystem.component.RavenStatusTone
 import com.raven.app.core.designsystem.component.RavenTopBar
@@ -182,6 +181,7 @@ fun SettingsScreen(
         onInstallUpdate = navigator::openAppUpdateInstaller,
         onDismissUpdateSheet = viewModel::dismissUpdateSheet,
         onDismissFeedback = viewModel::clearFeedback,
+        onResetFeatureTutorials = viewModel::resetAllFeatureTutorials,
         modifier = modifier,
     )
 }
@@ -231,9 +231,11 @@ fun SettingsScreenContent(
     onResetMirrorLease: (SiteId) -> Unit = {},
     onToggleUiSoundEffects: (Boolean) -> Unit = {},
     onChangeImageLoadConcurrency: (Int) -> Unit = {},
+    onResetFeatureTutorials: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val colors = LocalRavenColors.current
+    val listState = rememberLazyListState()
     var activeSheet by rememberSaveable { mutableStateOf(SettingsSheetKind.NONE) }
     var accountsExpanded by rememberSaveable { mutableStateOf(false) }
 
@@ -303,14 +305,19 @@ fun SettingsScreenContent(
             },
         )
 
-        LazyColumn(
-            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 14.dp),
-            verticalArrangement = Arrangement.spacedBy(20.dp),
+        Box(
             modifier = Modifier
                 .weight(1f)
-                .fillMaxWidth()
-                .testTag("settings_list"),
+                .fillMaxWidth(),
         ) {
+            LazyColumn(
+                state = listState,
+                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 14.dp),
+                verticalArrangement = Arrangement.spacedBy(20.dp),
+                modifier = Modifier
+                    .fillMaxSize()
+                    .testTag("settings_list"),
+            ) {
             val feedback = uiState.feedbackMessage
             if (!feedback.isNullOrBlank()) {
                 item(key = "settings_feedback_banner") {
@@ -700,73 +707,38 @@ fun SettingsScreenContent(
                         RavenGroupedDivider(insetWithIcon = true)
                     }
 
-                    val motionReduced = LocalMotionReduced.current
-                    val accountsChevronAngle = animateFloatAsState(
-                        targetValue = if (accountsExpanded) 180f else 0f,
-                        animationSpec = if (motionReduced) {
-                            snap()
-                        } else {
-                            tween(durationMillis = 180, easing = RavenMotion.HarmonyDecelerationEasing)
-                        },
-                        label = "settingsAccountsChevron",
-                    )
-                    RavenGroupedRow(
+                    RavenExpandableSection(
+                        expanded = accountsExpanded,
+                        onExpandedChange = { accountsExpanded = it },
                         title = "管理站点账号",
                         subtitle = "支持 ${uiState.authSites.size} 个认证站点的独立登录与注销",
                         value = "$signedInCount / ${uiState.authSites.size} 已登录",
                         icon = Icons.Outlined.Security,
-                        onClick = { accountsExpanded = !accountsExpanded },
-                        trailingContent = {
-                            Icon(
-                                imageVector = Icons.Rounded.ExpandMore,
-                                contentDescription = if (accountsExpanded) "收起站点账号列表" else "展开站点账号列表",
-                                tint = colors.inkSecondary,
-                                modifier = Modifier.graphicsLayer { rotationZ = accountsChevronAngle.value },
-                            )
-                        },
                         modifier = Modifier.testTag("settings_manage_accounts_toggle"),
-                    )
-
-                    AnimatedVisibility(
-                        visible = accountsExpanded,
-                        enter = if (motionReduced) {
-                            EnterTransition.None
-                        } else {
-                            expandVertically(tween(200, easing = RavenMotion.HarmonyDecelerationEasing)) +
-                                fadeIn(tween(160, easing = RavenMotion.HarmonyDecelerationEasing))
-                        },
-                        exit = if (motionReduced) {
-                            ExitTransition.None
-                        } else {
-                            shrinkVertically(tween(170, easing = RavenMotion.HarmonyDecelerationEasing)) +
-                                fadeOut(tween(120, easing = RavenMotion.HarmonyDecelerationEasing))
-                        },
                     ) {
-                        Column(modifier = Modifier.fillMaxWidth()) {
-                            uiState.authSites.forEach { entry ->
-                                RavenGroupedDivider(insetWithIcon = true)
-                                RavenGroupedRow(
-                                    title = entry.descriptor.displayName,
-                                    subtitle = if (entry.authState.isAuthenticated) {
-                                        entry.authState.username ?: "已加密登录"
-                                    } else {
-                                        entry.descriptor.defaultHost
-                                    },
-                                    showChevron = true,
-                                    trailingContent = {
-                                        RavenStatusPill(
-                                            text = if (entry.authState.isAuthenticated) "已登录" else "未登录",
-                                            tone = if (entry.authState.isAuthenticated) {
-                                                RavenStatusTone.SUCCESS
-                                            } else {
-                                                RavenStatusTone.NEUTRAL
-                                            },
-                                        )
-                                    },
-                                    onClick = { navigator.openSiteAccount(entry.descriptor.id) },
-                                    modifier = Modifier.testTag("settings_account_site_${entry.descriptor.id.value}"),
-                                )
-                            }
+                        uiState.authSites.forEach { entry ->
+                            RavenGroupedDivider(insetWithIcon = true)
+                            RavenGroupedRow(
+                                title = entry.descriptor.displayName,
+                                subtitle = if (entry.authState.isAuthenticated) {
+                                    entry.authState.username ?: "已加密登录"
+                                } else {
+                                    entry.descriptor.defaultHost
+                                },
+                                showChevron = true,
+                                trailingContent = {
+                                    RavenStatusPill(
+                                        text = if (entry.authState.isAuthenticated) "已登录" else "未登录",
+                                        tone = if (entry.authState.isAuthenticated) {
+                                            RavenStatusTone.SUCCESS
+                                        } else {
+                                            RavenStatusTone.NEUTRAL
+                                        },
+                                    )
+                                },
+                                onClick = { navigator.openSiteAccount(entry.descriptor.id) },
+                                modifier = Modifier.testTag("settings_account_site_${entry.descriptor.id.value}"),
+                            )
                         }
                     }
 
@@ -957,6 +929,15 @@ fun SettingsScreenContent(
                     )
                     RavenGroupedDivider(insetWithIcon = true)
                     RavenGroupedRow(
+                        title = "重置功能新手引导",
+                        subtitle = "重新显示首页、详情、阅读器与鸦巢的初次使用说明",
+                        icon = Icons.Outlined.AutoStories,
+                        showChevron = true,
+                        onClick = onResetFeatureTutorials,
+                        modifier = Modifier.testTag("settings_reset_tutorials_row"),
+                    )
+                    RavenGroupedDivider(insetWithIcon = true)
+                    RavenGroupedRow(
                         title = "开源许可与免责说明",
                         subtitle = "第三方开源组件清单及使用合规声明",
                         icon = Icons.Outlined.Description,
@@ -966,6 +947,13 @@ fun SettingsScreenContent(
                     )
                 }
             }
+            }
+            RavenScrollToTopButton(
+                listState = listState,
+                modifier = Modifier
+                    .align(Alignment.BottomEnd)
+                    .padding(end = 18.dp, bottom = 22.dp),
+            )
         }
     }
 

@@ -1,13 +1,12 @@
 package com.raven.app.core.designsystem.component
 
 import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.SizeTransform
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.snap
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
-import androidx.compose.animation.scaleIn
-import androidx.compose.animation.scaleOut
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
@@ -55,7 +54,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
-import com.raven.app.core.designsystem.motion.MorphSpringPreset
 import com.raven.app.core.designsystem.motion.RavenMorphIcons
 import com.raven.app.core.designsystem.theme.LocalMotionReduced
 import com.raven.app.core.designsystem.theme.LocalRavenColors
@@ -108,6 +106,7 @@ fun RavenPrimaryButton(
     variant: RavenPrimaryButtonVariant = RavenPrimaryButtonVariant.Crimson,
     leadingIcon: ImageVector? = null,
     trailingIcon: ImageVector? = null,
+    failure: Boolean = false,
 ) {
     val colors = LocalRavenColors.current
     val feedback = LocalRavenFeedback.current
@@ -201,6 +200,7 @@ fun RavenPrimaryButton(
             iconSize = size.iconSize,
             indicatorColor = contentColor,
             fontWeight = FontWeight.SemiBold,
+            failure = failure,
         )
     }
 }
@@ -727,6 +727,8 @@ fun RavenButtonRow(
     RavenButtonRow(buttons = items, modifier = modifier)
 }
 
+private enum class ButtonIconState { IDLE, LOADING, SUCCESS, FAILURE }
+
 @Composable
 private fun RavenButtonContent(
     text: String,
@@ -737,59 +739,48 @@ private fun RavenButtonContent(
     iconSize: Dp,
     indicatorColor: Color,
     fontWeight: FontWeight,
+    failure: Boolean = false,
 ) {
     val motionReduced = LocalMotionReduced.current
     val slotState = when {
-        loading -> 1
-        success -> 2
-        leadingIcon != null -> 3
-        else -> 0
+        loading -> ButtonIconState.LOADING
+        failure -> ButtonIconState.FAILURE
+        success -> ButtonIconState.SUCCESS
+        else -> ButtonIconState.IDLE
     }
     AnimatedContent(
         targetState = slotState,
         transitionSpec = {
-            if (motionReduced) {
-                fadeIn(snap()) togetherWith fadeOut(snap())
-            } else {
-                (fadeIn(tween(140, easing = RavenMotion.HarmonyDecelerationEasing)) +
-                    scaleIn(initialScale = 0.84f, animationSpec = tween(160)))
-                    .togetherWith(
-                        fadeOut(tween(100)) + scaleOut(targetScale = 0.84f, animationSpec = tween(100)),
-                    )
-            }
+            val duration = if (motionReduced) 0 else RavenMotion.CHIP_TRANSITION_DURATION_MS
+            val fade = tween<Float>(duration, easing = RavenMotion.HarmonyDecelerationEasing)
+            (fadeIn(fade) togetherWith fadeOut(fade)).using(
+                SizeTransform { _, _ -> tween(duration, easing = RavenMotion.HarmonyDecelerationEasing) },
+            )
         },
         label = "ravenButtonLeadingSlot",
     ) { state ->
-        when (state) {
-            1 -> Row(verticalAlignment = Alignment.CenterVertically) {
-                CircularProgressIndicator(
-                    color = indicatorColor,
-                    strokeWidth = 2.dp,
-                    modifier = Modifier.size(iconSize - 2.dp),
-                )
-                Spacer(modifier = Modifier.width(8.dp))
-            }
-            2 -> Row(verticalAlignment = Alignment.CenterVertically) {
-                RavenMorphIcon(
-                    glyph = RavenMorphIcons.Check,
-                    tint = indicatorColor,
-                    size = iconSize,
-                    strokeWidth = 2.dp,
-                    springPreset = MorphSpringPreset.BOUNCY,
-                )
-                Spacer(modifier = Modifier.width(6.dp))
-            }
-            3 -> if (leadingIcon != null) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(
-                        imageVector = leadingIcon,
-                        contentDescription = null,
-                        modifier = Modifier.size(iconSize),
-                    )
-                    Spacer(modifier = Modifier.width(6.dp))
+        if (state != ButtonIconState.IDLE || leadingIcon != null) {
+            Box(
+                modifier = Modifier.padding(end = 6.dp).size(iconSize),
+                contentAlignment = Alignment.Center,
+            ) {
+                when (state) {
+                    ButtonIconState.LOADING -> if (motionReduced) {
+                        RavenMorphIcon(RavenMorphIcons.Refresh, tint = indicatorColor, size = iconSize)
+                    } else {
+                        CircularProgressIndicator(
+                            color = indicatorColor,
+                            strokeWidth = 2.dp,
+                            modifier = Modifier.size(iconSize - 2.dp),
+                        )
+                    }
+                    ButtonIconState.SUCCESS -> RavenMorphIcon(RavenMorphIcons.Check, tint = indicatorColor, size = iconSize)
+                    ButtonIconState.FAILURE -> RavenMorphIcon(RavenMorphIcons.Close, tint = indicatorColor, size = iconSize)
+                    ButtonIconState.IDLE -> if (leadingIcon != null) {
+                        Icon(leadingIcon, contentDescription = null, modifier = Modifier.size(iconSize))
+                    }
                 }
             }
-            else -> Unit
         }
     }
     Text(
@@ -798,7 +789,7 @@ private fun RavenButtonContent(
         maxLines = 1,
         overflow = TextOverflow.Ellipsis,
     )
-    if (!loading && !success && trailingIcon != null) {
+    if (slotState == ButtonIconState.IDLE && trailingIcon != null) {
         Spacer(modifier = Modifier.width(6.dp))
         Icon(
             imageVector = trailingIcon,

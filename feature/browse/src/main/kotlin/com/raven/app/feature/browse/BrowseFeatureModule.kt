@@ -25,6 +25,8 @@ val browseFeatureModule: Module = module {
             tagDictionary = getOrNull<TagDictionary>() ?: TagDictionary.default,
             mediaTagCacheRepository = get(),
             tagDictionaryRepository = get(),
+            downloadStateRepository = get(),
+            downloadEnqueuer = CoordinatorBrowseDownloadEnqueuer(coordinator = get<com.raven.app.core.media.download.DownloadCoordinator>()),
         )
     }
 
@@ -40,6 +42,9 @@ val browseFeatureModule: Module = module {
             tagDictionary = getOrNull<TagDictionary>() ?: TagDictionary.default,
             mediaTagCacheRepository = get(),
             tagDictionaryRepository = get(),
+            favoriteRepository = get(),
+            downloadStateRepository = get(),
+            downloadEnqueuer = CoordinatorBrowseDownloadEnqueuer(coordinator = get<com.raven.app.core.media.download.DownloadCoordinator>()),
         )
     }
 
@@ -57,6 +62,9 @@ val browseFeatureModule: Module = module {
             tagDictionary = getOrNull<TagDictionary>() ?: TagDictionary.default,
             mediaTagCacheRepository = get(),
             tagDictionaryRepository = get(),
+            favoriteRepository = get(),
+            downloadStateRepository = get(),
+            downloadEnqueuer = CoordinatorBrowseDownloadEnqueuer(coordinator = get<com.raven.app.core.media.download.DownloadCoordinator>()),
         )
     }
 
@@ -97,6 +105,9 @@ val browseFeatureModule: Module = module {
             tagDictionary = getOrNull<TagDictionary>() ?: TagDictionary.default,
             mediaTagCacheRepository = get(),
             tagDictionaryRepository = get(),
+            favoriteRepository = get(),
+            downloadStateRepository = get(),
+            downloadEnqueuer = CoordinatorBrowseDownloadEnqueuer(coordinator = get<com.raven.app.core.media.download.DownloadCoordinator>()),
         )
     }
 }

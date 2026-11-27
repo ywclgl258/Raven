@@ -47,6 +47,55 @@ enum class FavoriteKind {
     TAG,
     AUTHOR,
     CHARACTER,
+    ;
+
+    val isMediaWork: Boolean
+        get() = this == VIDEO || this == COMIC || this == PHOTO
+}
+
+@Serializable
+data class LikedMedia(
+    val siteId: SiteId,
+    val mediaId: String,
+    val kind: MediaKind,
+    val title: String,
+    val url: String,
+    val coverUrl: String = "",
+    val authorName: String = "",
+    val tags: List<TagRef> = emptyList(),
+    val likedAt: Long = 0L,
+) {
+    val compositeKey: String get() = "${siteId.value}:$mediaId"
+}
+
+@Serializable
+data class LikedTagWeight(
+    val tag: TagRef,
+    val weight: Double,
+    val normalizedWeight: Float,
+    val likeCount: Int,
+    val lastLikedAt: Long,
+)
+
+/**
+ * Stable identifiers for first-use interactive feature tutorials persisted in DataStore.
+ */
+object FeatureTutorialIds {
+    const val HOME_BROWSE: String = "home_browse"
+    const val DETAIL_ACTIONS: String = "detail_actions"
+    const val READER_SERIAL: String = "reader_serial"
+    const val LIBRARY_HUB: String = "library_hub"
+    const val SEARCH_DISCOVER: String = "search_discover"
+    const val SUBSCRIPTIONS_TAGS: String = "subscriptions_tags"
+
+    val ALL: Set<String> = setOf(
+        HOME_BROWSE,
+        DETAIL_ACTIONS,
+        READER_SERIAL,
+        LIBRARY_HUB,
+        SEARCH_DISCOVER,
+        SUBSCRIPTIONS_TAGS,
+    )
 }
 
 @Serializable

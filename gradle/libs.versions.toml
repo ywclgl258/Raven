@@ -1,10 +1,10 @@
 [versions]
 # Core Toolchain (verified compatible with compileSdk=36, AGP 9.0.1, JDK 17)
 agp = "9.0.1"
-kotlin = "2.3.21"
+kotlin = "2.4.21"
 ksp = "2.3.14"
 
-# AndroidX Core & Lifecycle
+# AndroidX Core & Lifecycle (API 36 max compatible)
 coreKtx = "1.18.0"
 activityCompose = "1.13.0"
 lifecycle = "2.10.0"
@@ -29,9 +29,10 @@ coil3 = "3.4.0"
 
 # Networking, Parsing, Serialization & Coroutines
 okhttp = "4.12.0"
-jsoup = "1.18.3"
-kotlinxSerialization = "1.10.0"
-kotlinxCoroutines = "1.10.2"
+jsoup = "1.24.1"
+jspecify = "1.0.0"
+kotlinxSerialization = "1.13.0"
+kotlinxCoroutines = "1.11.0"
 
 # Testing
 junit = "4.13.2"
@@ -39,6 +40,7 @@ turbine = "1.2.1"
 androidxTestRunner = "1.6.2"
 androidxTestRules = "1.6.1"
 androidxTestExtJunit = "1.2.1"
+androidxTestEspresso = "3.7.0"
 
 [libraries]
 # Build-logic and buildscript classpath (AGP 9 built-in Kotlin overridden to 2.3.21)
@@ -104,6 +106,7 @@ okhttp = { module = "com.squareup.okhttp3:okhttp", version.ref = "okhttp" }
 okhttp-logging = { module = "com.squareup.okhttp3:logging-interceptor", version.ref = "okhttp" }
 okhttp-mockwebserver = { module = "com.squareup.okhttp3:mockwebserver", version.ref = "okhttp" }
 jsoup = { module = "org.jsoup:jsoup", version.ref = "jsoup" }
+jspecify = { module = "org.jspecify:jspecify", version.ref = "jspecify" }
 kotlinx-serialization-json = { module = "org.jetbrains.kotlinx:kotlinx-serialization-json", version.ref = "kotlinxSerialization" }
 kotlinx-coroutines-core = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-core", version.ref = "kotlinxCoroutines" }
 kotlinx-coroutines-android = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-android", version.ref = "kotlinxCoroutines" }
@@ -115,6 +118,7 @@ turbine = { module = "app.cash.turbine:turbine", version.ref = "turbine" }
 androidx-test-runner = { module = "androidx.test:runner", version.ref = "androidxTestRunner" }
 androidx-test-rules = { module = "androidx.test:rules", version.ref = "androidxTestRules" }
 androidx-test-ext-junit = { module = "androidx.test.ext:junit", version.ref = "androidxTestExtJunit" }
+androidx-test-espresso-core = { module = "androidx.test.espresso:espresso-core", version.ref = "androidxTestEspresso" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }

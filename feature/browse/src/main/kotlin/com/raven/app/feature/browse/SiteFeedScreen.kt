@@ -36,11 +36,14 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewModelScope
 import com.raven.app.core.common.AppDispatchers
+import com.raven.app.core.common.BlockedTermExcludeInjection
 import com.raven.app.core.common.ContentFilter
 import com.raven.app.core.common.TagDictionary
 import com.raven.app.core.database.model.BrowsePosition
 import com.raven.app.core.database.model.ShelfWithSummary
 import com.raven.app.core.database.repository.BlockedTermsRepository
+import com.raven.app.core.database.repository.DownloadStateRepository
+import com.raven.app.core.database.repository.FavoriteRepository
 import com.raven.app.core.database.repository.BrowsePositionRepository
 import com.raven.app.core.database.repository.HistoryRepository
 import com.raven.app.core.database.repository.MediaTagCacheRepository
@@ -59,6 +62,7 @@ import com.raven.app.core.designsystem.component.RavenGroupedSection
 import com.raven.app.core.designsystem.component.RavenLanguageBar
 import com.raven.app.core.designsystem.component.RavenTopBar
 import com.raven.app.core.designsystem.theme.LocalRavenColors
+import com.raven.app.core.model.AdvancedSearchFilters
 import com.raven.app.core.model.ComicLanguage
 import com.raven.app.core.model.FeedRequest
 import com.raven.app.core.model.FeedSort
@@ -79,10 +83,12 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
@@ -145,6 +151,9 @@ class SiteFeedViewModel(
     private val tagDictionary: TagDictionary = TagDictionary.default,
     private val mediaTagCacheRepository: MediaTagCacheRepository? = null,
     private val tagDictionaryRepository: TagDictionaryRepository? = null,
+    favoriteRepository: FavoriteRepository? = null,
+    downloadStateRepository: DownloadStateRepository? = null,
+    downloadEnqueuer: BrowseDownloadEnqueuer? = null,
 ) : ViewModel() {
 
     val siteId: SiteId? = runCatching { SiteId.of(route.siteId) }.getOrNull()
@@ -170,6 +179,39 @@ class SiteFeedViewModel(
 
     val shelfPickerShelves: StateFlow<List<ShelfWithSummary>> get() = shelfController.shelves
     val inspectedShelfIds: StateFlow<Set<String>> get() = shelfController.inspectedShelfIds
+
+    /** Optional so existing JVM tests without download fakes keep constructing successfully. */
+    private val mediaActions: BrowseMediaActions? =
+        if (favoriteRepository != null && downloadStateRepository != null && downloadEnqueuer != null) {
+            BrowseMediaActions(
+                favoriteRepository = favoriteRepository,
+                downloadStateRepository = downloadStateRepository,
+                enqueuer = downloadEnqueuer,
+                scope = viewModelScope,
+                ioDispatcher = dispatchers.io,
+            )
+        } else {
+            null
+        }
+
+    val favoriteKeys: StateFlow<Set<String>> = (
+        mediaActions?.favoriteKeysFlow(siteId) ?: flowOf(emptySet())
+        ).stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.WhileSubscribed(5_000L),
+        initialValue = emptySet(),
+    )
+
+    val downloadStates: StateFlow<Map<String, MediaCardDownloadState>> =
+        (mediaActions?.downloadStatesFlow(siteId) ?: flowOf(emptyMap()))
+            .stateIn(
+                scope = viewModelScope,
+                started = SharingStarted.WhileSubscribed(5_000L),
+                initialValue = emptyMap(),
+            )
+
+    val actionMessage: StateFlow<String?> = mediaActions?.messages
+        ?: MutableStateFlow<String?>(null).asStateFlow()
 
     private val supportsLanguage: Boolean =
         plugin?.descriptor?.hasCapability(SiteCapability.LANGUAGE_FILTER) == true
@@ -373,6 +415,9 @@ class SiteFeedViewModel(
                 language = lang,
                 page = nextPageNumber,
                 cursor = snap.nextCursor,
+                effectiveBlockedTerms = withContext(dispatchers.io) {
+                    resolveEffectiveBlockedTerms()
+                },
             )
             try {
                 val page = withContext(dispatchers.io) { executeFeedOrSearch(targetPlugin, request) }
@@ -406,6 +451,18 @@ class SiteFeedViewModel(
     fun inspectShelfTarget(item: MediaItem?) = shelfController.inspectItem(item)
 
     fun toggleWatchLater(item: MediaItem) = shelfController.toggleWatchLater(item)
+
+    fun toggleFavorite(item: MediaItem) {
+        mediaActions?.toggleFavorite(item)
+    }
+
+    fun downloadMedia(item: MediaItem) {
+        mediaActions?.download(item)
+    }
+
+    fun clearActionMessage() {
+        mediaActions?.clearMessage()
+    }
 
     fun setShelfMembership(shelfId: String, item: MediaItem, add: Boolean) =
         shelfController.setMembership(shelfId, item, add)
@@ -466,7 +523,15 @@ class SiteFeedViewModel(
                     }
                 }
 
-                val request = buildRequest(sort = sort, language = language, page = 1, cursor = null)
+                val request = buildRequest(
+                    sort = sort,
+                    language = language,
+                    page = 1,
+                    cursor = null,
+                    effectiveBlockedTerms = withContext(dispatchers.io) {
+                        resolveEffectiveBlockedTerms()
+                    },
+                )
                 val page = withContext(dispatchers.io) { executeFeedOrSearch(targetPlugin, request) }
                 networkState.value = SiteFeedNetworkState(
                     isLoading = false,
@@ -503,6 +568,13 @@ class SiteFeedViewModel(
         }
     }
 
+    private suspend fun resolveEffectiveBlockedTerms(): Collection<String> {
+        val targetId = siteId ?: return emptyList()
+        return runCatching {
+            blockedTermsRepository.observeEffectiveTermsBySite(targetId).first()
+        }.getOrDefault(emptyList())
+    }
+
     private suspend fun executeFeedOrSearch(targetPlugin: SitePlugin, request: FeedRequest) =
         if (!request.query.isNullOrBlank() && targetPlugin.searchSource != null) {
             requireNotNull(targetPlugin.searchSource).search(request)
@@ -517,11 +589,19 @@ class SiteFeedViewModel(
         language: ComicLanguage,
         page: Int,
         cursor: String?,
+        effectiveBlockedTerms: Collection<String> = emptyList(),
     ): FeedRequest {
         val matchedSection = plugin?.descriptor?.sections?.firstOrNull { spec ->
             (!route.section.isNullOrBlank() && spec.id == route.section) ||
                 (!route.category.isNullOrBlank() && spec.category == route.category)
         }
+        // Sites like nhentai drop blocked works server-side only via `excludeTags`, and their
+        // listing payloads carry no tags, so client ContentFilter cannot match. Inject there too.
+        val filters = BlockedTermExcludeInjection.apply(
+            AdvancedSearchFilters(),
+            effectiveBlockedTerms,
+            tagDictionary,
+        )
         return FeedRequest(
             siteId = siteId ?: SiteId.of("unknown"),
             section = route.section,
@@ -533,6 +613,7 @@ class SiteFeedViewModel(
             query = querySlug,
             scope = scope,
             mediaKind = matchedSection?.mediaKind,
+            advancedFilters = filters,
         )
     }
 
@@ -588,6 +669,9 @@ fun SiteFeedScreen(
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val shelves by viewModel.shelfPickerShelves.collectAsStateWithLifecycle()
     val inspectedShelfIds by viewModel.inspectedShelfIds.collectAsStateWithLifecycle()
+    val favoriteKeys by viewModel.favoriteKeys.collectAsStateWithLifecycle()
+    val downloadStates by viewModel.downloadStates.collectAsStateWithLifecycle()
+    val actionMessage by viewModel.actionMessage.collectAsStateWithLifecycle()
 
     SiteFeedScreenContent(
         uiState = uiState,
@@ -605,6 +689,12 @@ fun SiteFeedScreen(
         onInspectShelfTarget = viewModel::inspectShelfTarget,
         onToggleShelfMembership = viewModel::setShelfMembership,
         onCreateShelfAndAdd = viewModel::createShelfAndAdd,
+        favoriteKeys = favoriteKeys,
+        downloadStates = downloadStates,
+        onToggleFavorite = viewModel::toggleFavorite,
+        onDownloadMedia = viewModel::downloadMedia,
+        actionMessage = actionMessage,
+        onDismissActionMessage = viewModel::clearActionMessage,
         modifier = modifier,
     )
 }
@@ -623,6 +713,12 @@ fun SiteFeedScreenContent(
     onToggleWatchLater: (MediaItem) -> Unit,
     onSaveBrowsePosition: (workId: String, throughPage: Int) -> Unit,
     modifier: Modifier = Modifier,
+    favoriteKeys: Set<String> = emptySet(),
+    downloadStates: Map<String, MediaCardDownloadState> = emptyMap(),
+    onToggleFavorite: ((MediaItem) -> Unit)? = null,
+    onDownloadMedia: ((MediaItem) -> Unit)? = null,
+    actionMessage: String? = null,
+    onDismissActionMessage: () -> Unit = {},
     shelves: List<ShelfWithSummary> = emptyList(),
     selectedShelfIds: Set<String> = emptySet(),
     onInspectShelfTarget: (MediaItem?) -> Unit = {},
@@ -640,6 +736,12 @@ fun SiteFeedScreenContent(
             .background(colors.canvas)
             .testTag("browse_site_feed_screen"),
     ) {
+        if (actionMessage != null) {
+            BrowseActionMessageBanner(
+                message = actionMessage,
+                onDismiss = onDismissActionMessage,
+            )
+        }
         RavenTopBar(
             title = uiState.title,
             subtitle = uiState.subtitle,
@@ -861,5 +963,9 @@ fun SiteFeedScreenContent(
         onToggleShelfMembership = onToggleShelfMembership,
         onCreateShelfAndAdd = onCreateShelfAndAdd,
         onSearchSimilar = { slug -> navigator.openSearch(initialQuery = slug, crossSite = false) },
+        favoriteKeys = favoriteKeys,
+        onToggleFavorite = onToggleFavorite,
+        downloadStateByKey = downloadStates,
+        onDownload = onDownloadMedia,
     )
 }

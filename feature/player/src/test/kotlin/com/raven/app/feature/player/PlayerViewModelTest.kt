@@ -691,23 +691,25 @@ class PlayerViewModelTest {
 
             vm.toggleWatchLater()
             vm.toggleFavorite()
+            vm.toggleLike()
             vm.enqueueDownload()
             advanceUntilIdle()
 
             val updated = expectMostRecentItem()
             assertTrue(updated.inWatchLater)
             assertTrue(updated.isFavorite)
+            assertTrue(updated.isLiked)
             assertEquals(1, harness.offlinePort.enqueuedVideos.size)
 
-            // Favorite & block tag "spoiler" -> matching related item disappears reactively
+            // Subscribe & block tag "spoiler" -> matching related item disappears reactively
             val spoilerTag = updated.tags.first { it.tag.slug == "spoiler" }.tag
-            vm.toggleTagFavorite(spoilerTag)
+            vm.toggleTagSubscription(spoilerTag)
             vm.toggleTagBlocked(spoilerTag)
             advanceUntilIdle()
 
             val filtered = expectMostRecentItem()
             val updatedSpoiler = filtered.tags.first { it.tag.slug == "spoiler" }
-            assertTrue(updatedSpoiler.isFavorited)
+            assertTrue(updatedSpoiler.isSubscribed)
             assertTrue(updatedSpoiler.isBlocked)
             assertEquals(listOf("rel-clean"), filtered.relatedItems.map { it.id })
             cancelAndIgnoreRemainingEvents()

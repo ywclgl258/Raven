@@ -12,40 +12,50 @@ import com.raven.app.core.database.dao.BlockedTermDao
 import com.raven.app.core.database.dao.DownloadItemDao
 import com.raven.app.core.database.dao.FavoriteDao
 import com.raven.app.core.database.dao.ImageFavoriteDao
+import com.raven.app.core.database.dao.MediaLikeDao
 import com.raven.app.core.database.dao.MediaTagCacheDao
 import com.raven.app.core.database.dao.PageBookmarkDao
 import com.raven.app.core.database.dao.PlaybackPreferencesDao
 import com.raven.app.core.database.dao.ReaderPreferencesDao
 import com.raven.app.core.database.dao.ReadingProgressDao
+import com.raven.app.core.database.dao.SavedSearchDao
 import com.raven.app.core.database.dao.ShelfDao
 import com.raven.app.core.database.dao.ShelfItemDao
 import com.raven.app.core.database.dao.SmartShelfDao
+import com.raven.app.core.database.dao.TagSubscriptionDao
 import com.raven.app.core.database.dao.TagTranslationDao
 import com.raven.app.core.database.dao.TimeBookmarkDao
+import com.raven.app.core.database.dao.UpdateInboxDao
 import com.raven.app.core.database.dao.WatchProgressDao
 import com.raven.app.core.database.datastore.SettingsDataStore
 import com.raven.app.core.database.entity.BlockedTermEntity
 import com.raven.app.core.database.entity.DownloadItemEntity
 import com.raven.app.core.database.entity.FavoriteEntity
 import com.raven.app.core.database.entity.ImageFavoriteEntity
+import com.raven.app.core.database.entity.MediaLikeEntity
 import com.raven.app.core.database.entity.MediaTagCacheEntity
 import com.raven.app.core.database.entity.PageBookmarkEntity
 import com.raven.app.core.database.entity.PlaybackPreferencesEntity
 import com.raven.app.core.database.entity.ReaderPreferencesEntity
 import com.raven.app.core.database.entity.ReadingProgressEntity
+import com.raven.app.core.database.entity.SavedSearchEntity
 import com.raven.app.core.database.entity.ShelfEntity
 import com.raven.app.core.database.entity.ShelfItemEntity
 import com.raven.app.core.database.entity.SmartShelfEntity
+import com.raven.app.core.database.entity.TagSubscriptionEntity
 import com.raven.app.core.database.entity.TagTranslationEntity
 import com.raven.app.core.database.entity.TimeBookmarkEntity
+import com.raven.app.core.database.entity.UpdateInboxEntity
 import com.raven.app.core.database.entity.WatchProgressEntity
 import com.raven.app.core.database.repository.BlockedTermsRepository
 import com.raven.app.core.database.repository.BookmarkRepository
 import com.raven.app.core.database.repository.FavoriteRepository
 import com.raven.app.core.database.repository.HistoryRepository
+import com.raven.app.core.database.repository.LikeRepository
 import com.raven.app.core.database.repository.MediaTagCacheRepository
 import com.raven.app.core.database.repository.PreferencesRepository
 import com.raven.app.core.database.repository.ShelfRepository
+import com.raven.app.core.database.repository.SubscriptionRepository
 import com.raven.app.core.database.repository.TagDictionaryRepository
 import com.raven.app.core.media.download.InMemoryPlaybackQueuePersistence
 import com.raven.app.core.media.download.OfflineMediaHandle
@@ -61,8 +71,10 @@ import com.raven.app.core.model.DownloadErrorCategory
 import com.raven.app.core.model.DownloadItem
 import com.raven.app.core.model.DownloadStatus
 import com.raven.app.core.model.FavoriteKind
+import com.raven.app.core.model.InboxSourceKind
 import com.raven.app.core.model.MediaItem
 import com.raven.app.core.model.MediaKind
+import com.raven.app.core.model.SearchScope
 import com.raven.app.core.model.SiteCapability
 import com.raven.app.core.model.SiteDescriptor
 import com.raven.app.core.model.SiteId
@@ -535,6 +547,10 @@ internal class PlayerTestHarness(
     val imageFavoriteDao = InMemoryImageFavoriteDao()
     val tagTranslationDao = InMemoryTagTranslationDao()
     val mediaTagCacheDao = InMemoryMediaTagCacheDao()
+    val mediaLikeDao = InMemoryMediaLikeDao()
+    val tagSubscriptionDao = InMemoryTagSubscriptionDao()
+    val savedSearchDao = InMemorySavedSearchDao()
+    val updateInboxDao = InMemoryUpdateInboxDao()
 
     val settingsDataStore = SettingsDataStore(InMemoryPreferencesDataStore())
     val preferencesRepository = PreferencesRepository(settingsDataStore, playbackPrefsDao, readerPrefsDao)
@@ -585,6 +601,18 @@ internal class PlayerTestHarness(
         transactionRunner = transactionRunner,
         clock = clock,
     )
+    val likeRepository = LikeRepository(
+        mediaLikeDao = mediaLikeDao,
+        transactionRunner = transactionRunner,
+        clock = clock,
+    )
+    val subscriptionRepository = SubscriptionRepository(
+        tagSubscriptionDao = tagSubscriptionDao,
+        savedSearchDao = savedSearchDao,
+        updateInboxDao = updateInboxDao,
+        transactionRunner = transactionRunner,
+        clock = clock,
+    )
 
     fun createViewModel(
         registry: SiteRegistry,
@@ -607,6 +635,8 @@ internal class PlayerTestHarness(
         elapsedRealtimeMs = elapsedClock,
         mediaTagCacheRepository = mediaTagCacheRepository,
         tagDictionaryRepository = tagDictionaryRepository,
+        likeRepository = likeRepository,
+        subscriptionRepository = subscriptionRepository,
     )
 }
 
@@ -956,6 +986,133 @@ internal class InMemoryTagTranslationDao : TagTranslationDao {
         rows.update { list -> list.filterNot { it.source == source } }
     }
     override suspend fun deleteAll() { rows.value = emptyList() }
+}
+
+internal class InMemoryMediaLikeDao : MediaLikeDao {
+    private val rows = MutableStateFlow<List<MediaLikeEntity>>(emptyList())
+    override fun observeAll(): Flow<List<MediaLikeEntity>> =
+        rows.map { list -> list.sortedByDescending { it.likedAt } }
+    override fun observeBySite(siteId: String): Flow<List<MediaLikeEntity>> =
+        rows.map { list -> list.filter { it.siteId == siteId }.sortedByDescending { it.likedAt } }
+    override fun observeExists(siteId: String, mediaId: String): Flow<Boolean> =
+        rows.map { list -> list.any { it.siteId == siteId && it.mediaId == mediaId } }
+    override suspend fun exists(siteId: String, mediaId: String): Boolean =
+        rows.value.any { it.siteId == siteId && it.mediaId == mediaId }
+    override suspend fun getAll(): List<MediaLikeEntity> =
+        rows.value.sortedByDescending { it.likedAt }
+    override suspend fun upsert(entity: MediaLikeEntity) {
+        rows.update { list ->
+            list.filterNot { it.siteId == entity.siteId && it.mediaId == entity.mediaId } + entity
+        }
+    }
+    override suspend fun upsertAll(entities: List<MediaLikeEntity>) = entities.forEach { upsert(it) }
+    override suspend fun delete(siteId: String, mediaId: String) {
+        rows.update { list -> list.filterNot { it.siteId == siteId && it.mediaId == mediaId } }
+    }
+    override suspend fun deleteBySite(siteId: String) {
+        rows.update { list -> list.filterNot { it.siteId == siteId } }
+    }
+    override suspend fun deleteAll() { rows.value = emptyList() }
+}
+
+internal class InMemoryTagSubscriptionDao : TagSubscriptionDao {
+    private val rows = MutableStateFlow<List<TagSubscriptionEntity>>(emptyList())
+    override fun observeAll(): Flow<List<TagSubscriptionEntity>> = rows
+    override fun observeBySite(siteId: String): Flow<List<TagSubscriptionEntity>> =
+        rows.map { it.filter { e -> e.siteId == siteId }.sortedBy { e -> e.sortOrder } }
+    override fun observeExists(siteId: String, slug: String, scope: SearchScope): Flow<Boolean> =
+        rows.map { it.any { e -> e.siteId == siteId && e.slug == slug && e.scope == scope } }
+    override suspend fun getBySite(siteId: String): List<TagSubscriptionEntity> =
+        rows.value.filter { it.siteId == siteId }.sortedBy { it.sortOrder }
+    override suspend fun getOne(siteId: String, slug: String, scope: SearchScope): TagSubscriptionEntity? =
+        rows.value.firstOrNull { it.siteId == siteId && it.slug == slug && it.scope == scope }
+    override suspend fun getMaxSortOrder(siteId: String): Int? =
+        rows.value.filter { it.siteId == siteId }.maxOfOrNull { it.sortOrder }
+    override suspend fun getAll(): List<TagSubscriptionEntity> = rows.value
+    override suspend fun upsert(entity: TagSubscriptionEntity) {
+        rows.update { list ->
+            list.filterNot { it.siteId == entity.siteId && it.slug == entity.slug && it.scope == entity.scope } + entity
+        }
+    }
+    override suspend fun upsertAll(entities: List<TagSubscriptionEntity>) = entities.forEach { upsert(it) }
+    override suspend fun updateLabel(siteId: String, slug: String, scope: SearchScope, label: String) {
+        rows.update { list ->
+            list.map { if (it.siteId == siteId && it.slug == slug && it.scope == scope) it.copy(label = label) else it }
+        }
+    }
+    override suspend fun updateSortOrder(siteId: String, slug: String, scope: SearchScope, sortOrder: Int) {
+        rows.update { list ->
+            list.map { if (it.siteId == siteId && it.slug == slug && it.scope == scope) it.copy(sortOrder = sortOrder) else it }
+        }
+    }
+    override suspend fun delete(siteId: String, slug: String, scope: SearchScope) {
+        rows.update { list -> list.filterNot { it.siteId == siteId && it.slug == slug && it.scope == scope } }
+    }
+    override suspend fun deleteBySite(siteId: String) { rows.update { list -> list.filterNot { it.siteId == siteId } } }
+    override suspend fun deleteAll() { rows.value = emptyList() }
+}
+
+internal class InMemorySavedSearchDao : SavedSearchDao {
+    private val rows = MutableStateFlow<List<SavedSearchEntity>>(emptyList())
+    override fun observeAll(): Flow<List<SavedSearchEntity>> =
+        rows.map { it.sortedByDescending { e -> e.createdAt } }
+    override fun observeById(id: String): Flow<SavedSearchEntity?> = rows.map { it.firstOrNull { e -> e.id == id } }
+    override suspend fun getById(id: String): SavedSearchEntity? = rows.value.firstOrNull { it.id == id }
+    override suspend fun getAll(): List<SavedSearchEntity> = rows.value
+    override suspend fun upsert(entity: SavedSearchEntity) {
+        rows.update { list -> list.filterNot { it.id == entity.id } + entity }
+    }
+    override suspend fun upsertAll(entities: List<SavedSearchEntity>) = entities.forEach { upsert(it) }
+    override suspend fun updateName(id: String, name: String) {
+        rows.update { list -> list.map { if (it.id == id) it.copy(name = name) else it } }
+    }
+    override suspend fun updateLastCheckedAt(id: String, checkedAt: Long) {
+        rows.update { list -> list.map { if (it.id == id) it.copy(lastCheckedAt = checkedAt) else it } }
+    }
+    override suspend fun deleteById(id: String) { rows.update { list -> list.filterNot { it.id == id } } }
+    override suspend fun deleteAll() { rows.value = emptyList() }
+}
+
+internal class InMemoryUpdateInboxDao : UpdateInboxDao {
+    private val rows = MutableStateFlow<List<UpdateInboxEntity>>(emptyList())
+    override fun observeAll(): Flow<List<UpdateInboxEntity>> = rows
+    override fun observeUnread(): Flow<List<UpdateInboxEntity>> = rows.map { it.filterNot { e -> e.isRead } }
+    override fun observeUnreadCount(): Flow<Int> = rows.map { it.count { e -> !e.isRead } }
+    override fun observeUnreadCountBySourceKind(sourceKind: InboxSourceKind): Flow<Int> =
+        rows.map { it.count { e -> !e.isRead && e.sourceKind == sourceKind } }
+    override fun observeBySource(sourceKind: InboxSourceKind, sourceId: String): Flow<List<UpdateInboxEntity>> =
+        rows.map { it.filter { e -> e.sourceKind == sourceKind && e.sourceId == sourceId } }
+    override fun observeBySite(siteId: String): Flow<List<UpdateInboxEntity>> =
+        rows.map { it.filter { e -> e.siteId == siteId } }
+    override suspend fun getByIds(ids: List<String>): List<UpdateInboxEntity> = rows.value.filter { it.id in ids }
+    override suspend fun getAll(): List<UpdateInboxEntity> = rows.value
+    override suspend fun upsert(entity: UpdateInboxEntity) {
+        rows.update { list -> list.filterNot { it.id == entity.id } + entity }
+    }
+    override suspend fun upsertAll(entities: List<UpdateInboxEntity>) = entities.forEach { upsert(it) }
+    override suspend fun setRead(id: String, isRead: Boolean) {
+        rows.update { list -> list.map { if (it.id == id) it.copy(isRead = isRead) else it } }
+    }
+    override suspend fun markReadByIds(ids: List<String>) {
+        rows.update { list -> list.map { if (it.id in ids) it.copy(isRead = true) else it } }
+    }
+    override suspend fun markAllRead() { rows.update { list -> list.map { it.copy(isRead = true) } } }
+    override suspend fun markAllReadBySourceKind(sourceKind: InboxSourceKind) {
+        rows.update { list -> list.map { if (it.sourceKind == sourceKind) it.copy(isRead = true) else it } }
+    }
+    override suspend fun markAllReadBySource(sourceKind: InboxSourceKind, sourceId: String) {
+        rows.update { list ->
+            list.map { if (it.sourceKind == sourceKind && it.sourceId == sourceId) it.copy(isRead = true) else it }
+        }
+    }
+    override suspend fun deleteById(id: String) { rows.update { list -> list.filterNot { it.id == id } } }
+    override suspend fun deleteBySource(sourceKind: InboxSourceKind, sourceId: String) {
+        rows.update { list -> list.filterNot { it.sourceKind == sourceKind && it.sourceId == sourceId } }
+    }
+    override suspend fun deleteAll() { rows.value = emptyList() }
+    override suspend fun prune(limit: Int) {
+        rows.update { list -> list.sortedByDescending { it.discoveredAt }.take(limit) }
+    }
 }
 
 internal class InMemoryMediaTagCacheDao : MediaTagCacheDao {
