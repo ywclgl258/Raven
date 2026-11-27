@@ -760,4 +760,54 @@ class R34vAndHanimeSitePluginTest {
         assertFalse(plugin.authProvider.currentAuthState().isAuthenticated)
         assertTrue(store.getCookies(SiteId.HANIME1).isEmpty())
     }
+
+    @Test
+    fun `hanime1 native account sections resolve to user paths and require a parsed account id`() = runTest {
+        val fakeHttp = FakeHttpClientAdapter()
+        val store = InMemorySiteSessionStore()
+        val plugin = HanimeSitePlugin(fakeHttp, store, rateLimitBackoffMs = 0L)
+
+        val ids = plugin.descriptor.sections.map { it.id }.toSet()
+        assertTrue("my_likes" in ids)
+        assertTrue("my_saves" in ids)
+        assertTrue("my_subscriptions" in ids)
+
+        // Anonymous access fails fast instead of requesting a malformed /user//path.
+        var denied: Throwable? = null
+        try {
+            HanimeSitePlugin.resolveFeedUrl(
+                FeedRequest(SiteId.HANIME1, section = "my_likes"),
+                accountUserId = null,
+            )
+        } catch (e: Throwable) {
+            denied = e
+        }
+        assertTrue(denied is SiteException.AuthRequired)
+
+        // With a signed-in account id, each native surface maps to its own endpoint.
+        assertEquals(
+            "https://hanime1.me/user/4242/likes",
+            HanimeSitePlugin.resolveFeedUrl(FeedRequest(SiteId.HANIME1, section = "my_likes"), accountUserId = "4242"),
+        )
+        assertEquals(
+            "https://hanime1.me/user/4242/saves",
+            HanimeSitePlugin.resolveFeedUrl(FeedRequest(SiteId.HANIME1, section = "my_saves"), accountUserId = "4242"),
+        )
+        assertEquals(
+            "https://hanime1.me/user/4242/SL",
+            HanimeSitePlugin.resolveFeedUrl(FeedRequest(SiteId.HANIME1, section = "my_subscriptions"), accountUserId = "4242"),
+        )
+        assertEquals(
+            "https://hanime1.me/user/4242/likes?page=3",
+            HanimeSitePlugin.resolveFeedUrl(
+                FeedRequest(SiteId.HANIME1, section = "my_likes", page = 3),
+                accountUserId = "4242",
+            ),
+        )
+
+        // The header's /user/<uid> link is what makes those sections addressable.
+        val headerHtml = """<a id="user-modal-trigger" href="/user/4242">me</a>"""
+        assertEquals("4242", HanimeSitePlugin.extractUserId(headerHtml))
+        assertNull(HanimeSitePlugin.extractUserId("<html><body>anonymous</body></html>"))
+    }
 }

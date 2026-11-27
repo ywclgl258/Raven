@@ -76,7 +76,8 @@ class HanimeSitePlugin(
 
         override suspend fun loadFeed(request: FeedRequest): FeedPage {
             VideoSiteSupport.validateFilters(request.advancedFilters, SiteId.HANIME1)
-            val url = resolveFeedUrl(request)
+            // Account sections address /user/<uid>/..., and the uid only exists after sign-in.
+            val url = resolveFeedUrl(request, accountUserId = sessionStore.getSecret(SiteId.HANIME1, HANIME_USER_ID_KEY))
             val (response, html) = VideoSiteSupport.fetchHtml(
                 http = http,
                 siteId = SiteId.HANIME1,
@@ -236,6 +237,7 @@ class HanimeSitePlugin(
             }
             sessionStore.saveUsername(SiteId.HANIME1, trimmedEmail)
             sessionStore.saveSecret(SiteId.HANIME1, SESSION_MARKER_KEY, "1")
+            persistAccountUserId(sessionStore, extractUserId(verifyResp.bodyText()))
             return AuthState(
                 isAuthenticated = true,
                 username = trimmedEmail,
@@ -272,6 +274,7 @@ class HanimeSitePlugin(
             }
             sessionStore.replaceCookies(SiteId.HANIME1, cookies)
             sessionStore.saveSecret(SiteId.HANIME1, SESSION_MARKER_KEY, "1")
+            persistAccountUserId(sessionStore, extractUserId(verifyResp.bodyText()))
             return AuthState(
                 isAuthenticated = true,
                 username = sessionStore.getUsername(SiteId.HANIME1),
@@ -394,6 +397,10 @@ class HanimeSitePlugin(
         const val BASE_URL: String = "https://hanime1.me"
         private const val SESSION_MARKER_KEY = "hanime_session_ok"
 
+        /** Numeric Hanime1 account id parsed from the header's `/user/<uid>` link. */
+        private const val HANIME_USER_ID_KEY = "hanime_user_id"
+        private val USER_ID_REGEX = Regex("/user/(\\d+)")
+
         private val videoHrefRegex = Regex("[?&]v=(\\d+)")
         private val pageParamRegex = Regex("[?&]page=(\\d+)")
         private val viewsLabelRegex = Regex("觀看次數：([^\\s]+)")
@@ -471,6 +478,10 @@ class HanimeSitePlugin(
                 SiteSectionSpec("month", "本月排行", defaultSort = FeedSort.POPULAR),
                 SiteSectionSpec("popular", "觀看次數", defaultSort = FeedSort.VIEWS),
                 SiteSectionSpec("liked", "讚好比例", defaultSort = FeedSort.LIKES),
+                // Native account surfaces (require sign-in), mirroring Han1meViewer's MyList types.
+                SiteSectionSpec("my_likes", "我喜欢的影片", subtitle = "需登录 Hanime1 账号"),
+                SiteSectionSpec("my_saves", "稍后再看", subtitle = "需登录 Hanime1 账号"),
+                SiteSectionSpec("my_subscriptions", "我的订阅", subtitle = "需登录 Hanime1 账号"),
                 SiteSectionSpec("裏番", "裏番", category = "裏番"),
                 SiteSectionSpec("泡麵番", "泡麵番", category = "泡麵番"),
                 SiteSectionSpec("Motion Anime", "Motion Anime", category = "Motion Anime"),
@@ -505,7 +516,11 @@ class HanimeSitePlugin(
 
         fun videoId(url: String): String? = videoHrefRegex.find(url)?.groupValues?.get(1)
 
-        fun resolveFeedUrl(request: FeedRequest, baseUrl: String = BASE_URL): String {
+        fun resolveFeedUrl(
+            request: FeedRequest,
+            baseUrl: String = BASE_URL,
+            accountUserId: String? = null,
+        ): String {
             VideoSiteSupport.validateFilters(request.advancedFilters, SiteId.HANIME1)
             val params = LinkedHashMap<String, String>()
             val query = request.query?.trim().orEmpty()
@@ -564,6 +579,28 @@ class HanimeSitePlugin(
             }
 
             val page = request.page.coerceAtLeast(1)
+
+            // Native account surfaces: /user/<uid>/likes | saves | SL (see Han1meViewer MyListType).
+            val nativeAccountPath = when (section) {
+                "my_likes" -> "likes"
+                "my_saves" -> "saves"
+                "my_subscriptions" -> "SL"
+                else -> null
+            }
+            if (nativeAccountPath != null) {
+                // Account pages live outside /search, so the caller supplies the resolved user id.
+                val uid = accountUserId?.trim().orEmpty().ifBlank {
+                    throw SiteException.AuthRequired(
+                        "请先登录 Hanime1 账号以查看该分区", siteId = SiteId.HANIME1,
+                    )
+                }
+                return buildString {
+                    append(baseUrl.trimEnd('/'))
+                    append("/user/").append(uid).append('/').append(nativeAccountPath)
+                    if (page > 1) append("?page=").append(page)
+                }
+            }
+
             if (page > 1) {
                 params["page"] = page.toString()
             }
@@ -594,6 +631,18 @@ class HanimeSitePlugin(
             "時長最長" -> FeedSort.DURATION
             "本日排行", "本週排行", "本月排行" -> FeedSort.POPULAR
             else -> null
+        }
+
+        /**
+         * Hanime1 renders its signed-in header with an `/user/<uid>` link; that numeric id is what
+         * the native `/user/<uid>/likes|saves|SL` sections need. Returns null on anonymous pages.
+         */
+        fun extractUserId(html: String): String? =
+            USER_ID_REGEX.find(html)?.groupValues?.getOrNull(1)?.takeIf { it.isNotBlank() }
+
+        fun persistAccountUserId(store: com.raven.app.core.sitespi.SiteSessionStore, userId: String?) {
+            if (userId.isNullOrBlank()) return
+            store.saveSecret(SiteId.HANIME1, HANIME_USER_ID_KEY, userId)
         }
 
         fun parseCards(doc: Document, baseUrl: String = BASE_URL): List<MediaItem> =
