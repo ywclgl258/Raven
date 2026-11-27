@@ -132,4 +132,47 @@ class ReaderParentDetailTest {
         assertFalse(plan.popStaleParentDetail)
         assertNull(plan.insertParentDetail)
     }
+    @Test
+    fun readerWithKnownParentInsertsCanonicalRootDetail() {
+        val reader = RavenRoute.Reader(
+            siteId = SiteId.JMCOMIC.value,
+            mediaId = "chapter-42",
+            url = "https://jmcomic.example/photo/42",
+            parent = RavenRoute.ReaderParent(
+                seriesId = "album-7",
+                title = "Album 7",
+                url = "https://jmcomic.example/album/7",
+            ),
+        )
+
+        assertEquals(
+            RavenRoute.GalleryDetail(
+                siteId = reader.siteId,
+                mediaId = "album-7",
+                url = "https://jmcomic.example/album/7",
+            ),
+            readerParentDetail(currentDetail = null, reader = reader),
+        )
+    }
+
+    @Test
+    fun matchingParentRootDetailIsReused() {
+        val reader = RavenRoute.Reader(
+            siteId = SiteId.MANGACOPY.value,
+            mediaId = "work-18:ch1",
+            url = "https://example.com/comic/work-18/chapter/ch1",
+            parent = RavenRoute.ReaderParent(
+                seriesId = "work-18",
+                title = "Work 18",
+                url = "https://example.com/comic/work-18",
+            ),
+        )
+        val detail = RavenRoute.GalleryDetail(
+            siteId = reader.siteId,
+            mediaId = "work-18",
+            url = "https://example.com/comic/work-18",
+        )
+
+        assertNull(readerParentDetail(currentDetail = detail, reader = reader))
+    }
 }

@@ -385,4 +385,77 @@ class BackupMergerTest {
         assertEquals("TITLE", merged.settings["legacy_subscription_order_r34v"])
         assertEquals("true", merged.settings["auto_download"])
     }
+
+    @Test
+    fun `reading merge retains chapters of a work and caps distinct works`() {
+        val manyChapters = (1..501).map { i ->
+            ReadingProgress(
+                SiteId.NHENTAI,
+                "work:chapter$i",
+                "https://nhentai.net/g/1/$i/",
+                "Chapter $i",
+                kind = MediaKind.SERIAL_COMIC,
+                currentPage = 1,
+                totalPages = 10,
+                updatedAt = 1_000L + i,
+                seriesId = "work",
+            )
+        }
+        val manyWorks = (1..501).map { i ->
+            ReadingProgress(SiteId.NHENTAI, "solo$i", "https://nhentai.net/g/$i/", "Solo $i", currentPage = 1, totalPages = 10, updatedAt = i.toLong())
+        }
+        val merged = BackupMerger.merge(
+            RavenBackupPayload(exportedAt = 1L, readingProgress = manyChapters + manyWorks),
+            RavenBackupPayload(exportedAt = 2L),
+            now = 3L,
+        )
+        assertEquals(501, merged.readingProgress.count { it.seriesId == "work" })
+        assertEquals(500, merged.readingProgress.map { it.seriesId ?: it.mediaId }.distinct().size)
+        assertTrue(merged.readingProgress.none { it.mediaId == "solo1" })
+    }
+
+    @Test
+    fun `reading merge inherits series metadata from older partial chapter without conflict`() {
+        val older = ReadingProgress(
+            SiteId.NHENTAI,
+            "work:chapter1",
+            "https://nhentai.net/g/1/1/",
+            "Chapter 1",
+            kind = MediaKind.SERIAL_COMIC,
+            currentPage = 1,
+            totalPages = 10,
+            updatedAt = 100L,
+            seriesId = "work",
+            seriesTitle = "Series",
+            seriesUrl = "https://nhentai.net/g/1/",
+        )
+        val newer = older.copy(currentPage = 5, updatedAt = 200L, seriesId = null, seriesTitle = null, seriesUrl = null)
+
+        val newerIncoming = BackupMerger.merge(
+            RavenBackupPayload(exportedAt = 1L, readingProgress = listOf(older)),
+            RavenBackupPayload(exportedAt = 2L, readingProgress = listOf(newer)),
+            now = 3L,
+        ).readingProgress.single()
+        assertEquals("work", newerIncoming.seriesId)
+        assertEquals("Series", newerIncoming.seriesTitle)
+        assertEquals("https://nhentai.net/g/1/", newerIncoming.seriesUrl)
+        assertEquals(5, newerIncoming.currentPage)
+
+        val newerLocal = BackupMerger.merge(
+            RavenBackupPayload(exportedAt = 1L, readingProgress = listOf(newer)),
+            RavenBackupPayload(exportedAt = 2L, readingProgress = listOf(older)),
+            now = 3L,
+        ).readingProgress.single()
+        assertEquals("work", newerLocal.seriesId)
+        assertEquals(5, newerLocal.currentPage)
+
+        val conflicting = older.copy(seriesId = "other", updatedAt = 50L)
+        val conflictMerged = BackupMerger.merge(
+            RavenBackupPayload(exportedAt = 1L, readingProgress = listOf(conflicting)),
+            RavenBackupPayload(exportedAt = 2L, readingProgress = listOf(newer.copy(seriesId = "work"))),
+            now = 3L,
+        ).readingProgress.single()
+        assertEquals("work", conflictMerged.seriesId)
+        assertEquals(null, conflictMerged.seriesTitle)
+    }
 }

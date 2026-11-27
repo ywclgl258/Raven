@@ -91,6 +91,8 @@ import com.raven.app.core.model.MediaItem
 import com.raven.app.core.model.MediaKind
 import com.raven.app.core.model.Shelf
 import com.raven.app.core.model.ReadingProgress
+import com.raven.app.core.model.workId
+import com.raven.app.core.model.workTitle
 import com.raven.app.core.model.SiteDescriptor
 
 /**
@@ -329,6 +331,11 @@ internal fun CompactResumeReadingCard(
 ) {
     val colors = LocalRavenColors.current
     val pageLabel = RavenFormatters.formatPageProgress(progress.currentPage, progress.totalPages)
+    val workTitle = progress.workTitle
+    val chapterTitle = progress.title.takeIf {
+        (progress.seriesId != null || progress.workId != progress.mediaId) &&
+            it.isNotBlank() && it != workTitle
+    }
 
     Column(
         modifier = modifier
@@ -358,7 +365,7 @@ internal fun CompactResumeReadingCard(
                 RavenImage(
                     url = progress.coverUrl,
                     siteId = progress.siteId,
-                    contentDescription = progress.title,
+                    contentDescription = workTitle,
                     contentScale = ContentScale.Crop,
                     modifier = Modifier.matchParentSize(),
                 )
@@ -373,12 +380,21 @@ internal fun CompactResumeReadingCard(
                     tone = RavenStatusTone.ACCENT,
                 )
                 Text(
-                    text = progress.title,
+                    text = workTitle,
                     style = MaterialTheme.typography.titleMedium,
                     color = colors.inkPrimary,
-                    maxLines = 2,
+                    maxLines = if (chapterTitle == null) 2 else 1,
                     overflow = TextOverflow.Ellipsis,
                 )
+                if (chapterTitle != null) {
+                    Text(
+                        text = chapterTitle,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = colors.inkSecondary,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
             }
 
             Box(

@@ -183,7 +183,7 @@ class LibraryHubViewModel(
 
     private val metricCountsFlow = combine(
         historyRepository.observeAllWatchProgress(),
-        historyRepository.observeAllReadingProgress(),
+        historyRepository.observeReadingHistory(),
         favoriteRepository.observeMediaFavorites(),
         downloadGateway.downloads,
         subscriptionRepository.observeUnreadCount(),

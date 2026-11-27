@@ -1,8 +1,10 @@
 package com.raven.app
 
 import android.net.Uri
-import androidx.compose.animation.EnterTransition
+import android.os.Bundle
+import kotlin.reflect.typeOf
 import androidx.compose.animation.ExitTransition
+import androidx.compose.animation.EnterTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -46,6 +48,8 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.navigation.NavDestination
+import androidx.navigation.NavType
+import kotlinx.serialization.json.Json
 import androidx.navigation.NavDestination.Companion.hasRoute
 import androidx.navigation.NavGraph.Companion.findStartDestination
 import androidx.navigation.NavHostController
@@ -119,11 +123,14 @@ import org.koin.core.parameter.parametersOf
  */
 internal fun readerWorkId(mediaId: String): String = mediaId.substringBefore(':')
 
+internal fun readerSeriesId(reader: RavenRoute.Reader): String =
+    reader.parent?.seriesId?.takeIf(String::isNotBlank) ?: readerWorkId(reader.mediaId)
+
 internal fun readerParentDetail(
     currentDetail: RavenRoute.GalleryDetail?,
     reader: RavenRoute.Reader,
 ): RavenRoute.GalleryDetail? {
-    val workId = readerWorkId(reader.mediaId)
+    val workId = readerSeriesId(reader)
     // If the current detail is already the work root, reuse it (no parent inserted).
     if (currentDetail != null &&
         currentDetail.siteId == reader.siteId &&
@@ -137,10 +144,28 @@ internal fun readerParentDetail(
     return RavenRoute.GalleryDetail(
         siteId = reader.siteId,
         mediaId = workId,
-        url = reader.url,
+        url = reader.parent?.url?.takeIf(String::isNotBlank) ?: reader.url,
         offlineOnly = reader.offlineOnly,
     )
 }
+
+internal val ReaderParentNavType: NavType<RavenRoute.ReaderParent?> =
+    object : NavType<RavenRoute.ReaderParent?>(isNullableAllowed = true) {
+        override fun get(bundle: Bundle, key: String): RavenRoute.ReaderParent? =
+            bundle.getString(key)?.takeIf { it.isNotBlank() && it != "null" }
+                ?.let { Json.decodeFromString<RavenRoute.ReaderParent>(it) }
+
+        override fun put(bundle: Bundle, key: String, value: RavenRoute.ReaderParent?) {
+            if (value == null) bundle.remove(key) else bundle.putString(key, Json.encodeToString(value))
+        }
+
+        override fun parseValue(value: String): RavenRoute.ReaderParent? =
+            value.takeIf { it.isNotBlank() && it != "null" }
+                ?.let { Json.decodeFromString<RavenRoute.ReaderParent>(it) }
+
+        override fun serializeAsValue(value: RavenRoute.ReaderParent?): String =
+            value?.let { Json.encodeToString(it) } ?: "null"
+    }
 
 /** Search destination used by Gallery Detail tag actions; canonical slug is preferred over translations. */
 internal fun tagSearchRoute(tag: TagRef, crossSite: Boolean, sourceSiteId: SiteId? = null): RavenRoute.Search =
@@ -181,9 +206,10 @@ internal fun planReaderNavigation(
             insertParentDetail = readerParentDetail(currentDetail, targetReader),
         )
     }
+    val targetWorkId = readerSeriesId(targetReader)
     val matchesPrevious = previousDetail != null &&
         previousDetail.siteId == targetReader.siteId &&
-        readerWorkId(previousDetail.mediaId) == readerWorkId(targetReader.mediaId) &&
+        (previousDetail.parent?.seriesId?.takeIf(String::isNotBlank) ?: readerWorkId(previousDetail.mediaId)) == targetWorkId &&
         previousDetail.offlineOnly == targetReader.offlineOnly
     if (matchesPrevious) {
         return ReaderNavigationPlan(
@@ -197,8 +223,8 @@ internal fun planReaderNavigation(
         popStaleParentDetail = previousDetail != null,
         insertParentDetail = RavenRoute.GalleryDetail(
             siteId = targetReader.siteId,
-            mediaId = readerWorkId(targetReader.mediaId),
-            url = targetReader.url,
+            mediaId = targetWorkId,
+            url = targetReader.parent?.url?.takeIf(String::isNotBlank) ?: targetReader.url,
             offlineOnly = targetReader.offlineOnly,
         ),
     )
@@ -589,6 +615,7 @@ fun RavenAppShell(
                 startPage: Int,
                 offlineOnly: Boolean,
                 queueToken: String?,
+                parent: RavenRoute.ReaderParent?,
             ) {
                 navigateReaderRoute(
                     RavenRoute.Reader(
@@ -598,6 +625,7 @@ fun RavenAppShell(
                         startPage = startPage.coerceAtLeast(1),
                         offlineOnly = offlineOnly,
                         queueToken = queueToken,
+                        parent = parent,
                     ),
                 )
             }
@@ -650,6 +678,7 @@ fun RavenAppShell(
                 url: String,
                 offlineOnly: Boolean,
                 queueToken: String?,
+                parent: RavenRoute.ReaderParent?,
             ) {
                 if (!queueToken.isNullOrBlank()) {
                     navigateReaderRoute(
@@ -660,11 +689,12 @@ fun RavenAppShell(
                             startPage = 1,
                             offlineOnly = offlineOnly,
                             queueToken = queueToken,
+                            parent = parent,
                         ),
                     )
                 } else {
                     navController.navigate(
-                        RavenRoute.GalleryDetail(siteId = siteId.value, mediaId = mediaId, url = url),
+                        RavenRoute.GalleryDetail(siteId = siteId.value, mediaId = mediaId, url = url, parent = parent),
                     )
                 }
             }
@@ -881,7 +911,9 @@ fun RavenAppShell(
             }
 
             // ---- Gallery Detail & Reader Routes ----
-            composable<RavenRoute.GalleryDetail> { backStackEntry ->
+            composable<RavenRoute.GalleryDetail>(
+                typeMap = mapOf(typeOf<RavenRoute.ReaderParent?>() to ReaderParentNavType),
+            ) { backStackEntry ->
                 val route = backStackEntry.toRoute<RavenRoute.GalleryDetail>()
                 val viewModel: GalleryDetailViewModel = koinViewModel(
                     key = "gallery_detail_${route.siteId}_${route.mediaId}",
@@ -890,9 +922,12 @@ fun RavenAppShell(
                 GalleryDetailScreen(
                     viewModel = viewModel,
                     navigator = readerNavigator,
+                    parent = route.parent,
                 )
             }
-            composable<RavenRoute.Reader> { backStackEntry ->
+            composable<RavenRoute.Reader>(
+                typeMap = mapOf(typeOf<RavenRoute.ReaderParent?>() to ReaderParentNavType),
+            ) { backStackEntry ->
                 val route = backStackEntry.toRoute<RavenRoute.Reader>()
                 val viewModel: ReaderViewModel = koinViewModel(
                     key = "reader_${route.siteId}_${route.mediaId}_${route.startPage}_${route.offlineOnly}_${route.queueToken.orEmpty()}",
@@ -901,6 +936,7 @@ fun RavenAppShell(
                 ReaderScreen(
                     viewModel = viewModel,
                     navigator = readerNavigator,
+                    parent = route.parent,
                     registerVolumeKeyHandler = hostActions::registerVolumeKeyHandler,
                 )
             }

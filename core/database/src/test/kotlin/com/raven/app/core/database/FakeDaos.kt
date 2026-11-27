@@ -252,12 +252,41 @@ internal class FakeReadingProgressDao : ReadingProgressDao {
     }
 
     override suspend fun pruneSite(siteId: String, limit: Int) {
-        val keep = rows.value.values
+        val keepWorks = rows.value.values
             .filter { it.siteId == siteId }
-            .sortedByDescending { it.updatedAt }
+            .groupBy { it.seriesId?.takeIf { s -> s.isNotBlank() } ?: it.mediaId }
+            .mapValues { (_, chapters) -> chapters.maxOf { it.updatedAt } }
+            .entries
+            .sortedWith(compareByDescending<Map.Entry<String, Long>> { it.value }.thenBy { it.key })
             .take(limit)
-            .mapTo(mutableSetOf()) { it.mediaId }
-        rows.value = rows.value.filterKeys { (s, m) -> s != siteId || m in keep }
+            .mapTo(mutableSetOf()) { it.key }
+        rows.value = rows.value.filter { (key, entity) ->
+            key.first != siteId || (entity.seriesId?.takeIf { it.isNotBlank() } ?: entity.mediaId) in keepWorks
+        }
+    }
+
+    override suspend fun deleteWork(siteId: String, workId: String) {
+        rows.value = rows.value.filterNot { (key, entity) ->
+            key.first == siteId && (entity.seriesId?.takeIf { it.isNotBlank() } ?: entity.mediaId) == workId
+        }
+    }
+
+    override suspend fun linkChapters(siteId: String, seriesId: String, seriesTitle: String?, seriesUrl: String?, chapterIds: List<String>) {
+        val idSet = chapterIds.toSet()
+        rows.value = rows.value.mapValues { (key, entity) ->
+            if (key.first == siteId && key.second in idSet &&
+                (entity.seriesId.isNullOrBlank() || entity.seriesId == seriesId)
+            ) {
+                val changed = entity.seriesId.isNullOrBlank() || entity.seriesId != seriesId ||
+                    (entity.seriesTitle.isNullOrBlank() && !seriesTitle.isNullOrBlank()) ||
+                    (entity.seriesUrl.isNullOrBlank() && !seriesUrl.isNullOrBlank())
+                if (!changed) entity else entity.copy(
+                    seriesId = seriesId,
+                    seriesTitle = entity.seriesTitle?.takeIf { it.isNotBlank() } ?: seriesTitle,
+                    seriesUrl = entity.seriesUrl?.takeIf { it.isNotBlank() } ?: seriesUrl,
+                )
+            } else entity
+        }
     }
 }
 

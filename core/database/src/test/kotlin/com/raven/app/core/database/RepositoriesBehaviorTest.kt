@@ -107,6 +107,36 @@ class RepositoriesBehaviorTest {
     }
 
     @Test
+    fun `linking opaque chapters preserves the last chapter and deleting a work is site scoped`() = runTest {
+        val db = FakeRavenDb()
+        val repo = HistoryRepository(db.watchProgress, db.readingProgress, db.transactionRunner)
+        val first = ReadingProgress(
+            siteId = SiteId.HIPMH, mediaId = "opaque-a", url = "https://example.org/a", title = "第一话",
+            kind = MediaKind.SERIAL_COMIC, currentPage = 4, totalPages = 10, updatedAt = 3,
+        )
+        val second = first.copy(mediaId = "opaque-b", url = "https://example.org/b", title = "第二话", updatedAt = 5)
+        repo.saveReadingProgress(first)
+        repo.saveReadingProgress(second)
+        repo.saveReadingProgress(first.copy(siteId = SiteId.MANGACOPY, seriesId = "work", seriesTitle = "同名作品"))
+        repo.linkReadingChapters(SiteId.HIPMH, "work", "同名作品", "https://example.org/work", listOf("opaque-a", "opaque-b"))
+
+        // A direct chapter revisit can lack parent metadata, even after the catalogue identified it.
+        repo.saveReadingProgress(first.copy(currentPage = 8, scrollOffsetPx = 147, updatedAt = 7))
+        val latest = repo.observeReadingHistoryBySite(SiteId.HIPMH).first().single()
+        assertEquals("work", latest.seriesId)
+        assertEquals("同名作品", latest.seriesTitle)
+        assertEquals(first.url, latest.url)
+        assertEquals(8, latest.currentPage)
+        assertEquals(147, latest.scrollOffsetPx)
+        assertEquals(2, repo.observeReadingHistory().first().size)
+        assertEquals(4, repo.getReadingProgress(SiteId.HIPMH, "opaque-b")?.currentPage)
+
+        repo.removeReadingHistory(SiteId.HIPMH, "work")
+        assertTrue(repo.observeReadingProgressBySite(SiteId.HIPMH).first().isEmpty())
+        assertEquals(SiteId.MANGACOPY, repo.observeReadingHistory().first().single().siteId)
+    }
+
+    @Test
     fun `shelf repository auto-ensures watch-later, protects invariants, reorders, and evaluates live smart shelves`() =
         runTest {
             val db = FakeRavenDb()

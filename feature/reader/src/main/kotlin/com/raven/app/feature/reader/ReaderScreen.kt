@@ -142,6 +142,7 @@ import com.raven.app.core.media.reader.PanOffset
 import com.raven.app.core.media.reader.ReaderGeometry
 import com.raven.app.core.media.reader.SpreadNavigator
 import com.raven.app.core.model.ReaderFit
+import com.raven.app.core.model.RavenRoute
 import com.raven.app.core.model.ReaderMode
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.SharedFlow
@@ -166,6 +167,7 @@ fun ReaderScreen(
     viewModel: ReaderViewModel,
     navigator: ReaderNavigator,
     modifier: Modifier = Modifier,
+    parent: RavenRoute.ReaderParent? = null,
     registerVolumeKeyHandler: (((up: Boolean, isLongPress: Boolean) -> Boolean)?) -> Unit = {},
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
@@ -275,6 +277,7 @@ fun ReaderScreen(
                             startPage = 1,
                             offlineOnly = false,
                             queueToken = null,
+                            parent = parent,
                         )
                     }.onFailure {
                         viewModel.onChapterNavigationFailed()

@@ -651,9 +651,17 @@ class GalleryDetailViewModel(
         val comicId = detail.item.extra["comicId"]?.takeIf { it.isNotBlank() }
             ?: detail.item.id.substringBefore(':')
         if (comicId.isBlank()) return emptyList()
-        return feed.loadFeed(
+        val chapters = feed.loadFeed(
             FeedRequest(siteId = siteId, section = "chapters", category = comicId, page = 1),
         ).items
+        if (chapters.isNotEmpty()) {
+            val title = if (detail.item.id == comicId) detail.item.title else detail.item.title.substringBefore(" · ", "")
+            historyRepository.linkReadingChapters(
+                siteId, comicId, title.takeIf { it.isNotBlank() }, detail.chaptersUrl?.substringBefore('#'),
+                chapters.map { it.id } + comicId,
+            )
+        }
+        return chapters
     }
 
     /**
@@ -827,7 +835,7 @@ class GalleryDetailViewModel(
                 historyRepository.observeReadingProgressBySite(siteId).first()
             }.getOrElse { emptyList() }
             val resume = history.firstOrNull {
-                it.mediaId in chapterIds && it.currentPage > 0 && !it.completed
+                (it.mediaId == detail.item.id || it.mediaId in chapterIds) && it.currentPage > 0
             } ?: return@launch
             val chapter = chapters.firstOrNull { it.id == resume.mediaId } ?: return@launch
             if (chapter.id == detail.item.id) return@launch

@@ -261,6 +261,7 @@ sealed interface ReaderEvent {
 
     data class OpenChapter(
         val nextItem: MediaItem,
+        val parent: RavenRoute.ReaderParent? = null,
     ) : ReaderEvent
 }
 
@@ -375,6 +376,8 @@ class ReaderViewModel(
     private var appendedProgressSaveJob: Job? = null
     // Latest appended-chapter anchor awaiting the debounce; flushed on early exit / onCleared.
     private var pendingAppendedProgress: PendingAppendedProgress? = null
+    @Volatile
+    private var activeSeriesMetadata: RavenRoute.ReaderParent? = null
     private val appendedChapterBuffers: MutableMap<String, ReaderBuffer<LoadedReaderPage>> = ConcurrentHashMap()
     private val appendedChapterCollectJobs: MutableMap<String, Job> = ConcurrentHashMap()
     private val appendedChapterRatios: MutableMap<String, MutableMap<Int, Float>> = ConcurrentHashMap()
@@ -541,6 +544,7 @@ class ReaderViewModel(
         preparedPreviousChapter = null
         serialChaptersPrepared = false
         chapterTransitionEmitted = false
+        activeSeriesMetadata = null
         _uiState.update {
             it.copy(
                 previousChapter = null,
@@ -602,6 +606,7 @@ class ReaderViewModel(
                     offlineOnly = offlineOnly,
                 )
                 val detail = snapshot.detail
+                activeSeriesMetadata = resolveSeriesMetadata(detail)
                 val totalPages = detail.pageCount.coerceAtLeast(detail.pages.size).coerceAtLeast(1)
                 val pageNumbers = if (offlineOnly && !siteId.isLocal && snapshot.downloadedPages.isNotEmpty() && !snapshot.isComplete) {
                     snapshot.downloadedPages.distinct().sorted()
@@ -956,6 +961,7 @@ class ReaderViewModel(
     ) {
         val state = _uiState.value
         if (anchorChapterId == mediaId) {
+            clearPendingAppendedProgress()
             if (state.activeStripChapterId != null) {
                 _uiState.update {
                     it.copy(
@@ -975,6 +981,9 @@ class ReaderViewModel(
         } else {
             val chapter = state.appendedChapters.firstOrNull { it.mediaId == anchorChapterId }
             if (chapter != null) {
+                if (state.activeStripChapterId == null) {
+                    persistPrimaryAnchorBeforeAppended(state)
+                }
                 val safePage = nearestPageIn(chapter.pageNumbers, anchorPage)
                 _uiState.update {
                     it.copy(
@@ -1037,6 +1046,9 @@ class ReaderViewModel(
         page: Int,
         scrollOffsetPx: Int,
     ) {
+        val series = activeSeriesMetadata ?: resolveSeriesMetadata(chapter.detail).also {
+            activeSeriesMetadata = it
+        }
         // Remember the newest appended-chapter anchor so an early exit (before the debounce elapses)
         // can still flush it instead of only persisting the first chapter's stale position.
         pendingAppendedProgress = PendingAppendedProgress(
@@ -1048,10 +1060,19 @@ class ReaderViewModel(
             page = page,
             totalPages = chapter.pageNumbers.size.coerceAtLeast(1),
             scrollOffsetPx = scrollOffsetPx,
+            series = series,
         )
         appendedProgressSaveJob?.cancel()
         appendedProgressSaveJob = viewModelScope.launch(dispatchers.io) {
             delay(PROGRESS_SAVE_DEBOUNCE_MS)
+            // Reverse scrolling back to the primary chapter (or into a different appended chapter)
+            // must not let this delayed write promote an outdated chapter in history.
+            if (_uiState.value.activeStripChapterId != chapter.mediaId) {
+                if (pendingAppendedProgress?.mediaId == chapter.mediaId) {
+                    pendingAppendedProgress = null
+                }
+                return@launch
+            }
             persistProgressEntity(
                 siteId = siteId,
                 mediaId = chapter.mediaId,
@@ -1062,8 +1083,11 @@ class ReaderViewModel(
                 currentPage = page,
                 totalPages = chapter.pageNumbers.size.coerceAtLeast(1),
                 scrollOffsetPx = scrollOffsetPx,
+                series = series,
             )
-            pendingAppendedProgress = null
+            if (pendingAppendedProgress?.mediaId == chapter.mediaId) {
+                pendingAppendedProgress = null
+            }
         }
     }
 
@@ -1076,6 +1100,7 @@ class ReaderViewModel(
         val page: Int,
         val totalPages: Int,
         val scrollOffsetPx: Int,
+        val series: RavenRoute.ReaderParent?,
     )
 
     /** Persists the pending appended-chapter anchor synchronously; safe under cancellation. */
@@ -1091,6 +1116,7 @@ class ReaderViewModel(
             currentPage = pending.page,
             totalPages = pending.totalPages,
             scrollOffsetPx = pending.scrollOffsetPx,
+            series = pending.series,
         )
     }
 
@@ -1178,7 +1204,12 @@ class ReaderViewModel(
 
                 chapterTransitionEmitted = true
                 flushProgress()
-                _events.emit(ReaderEvent.OpenChapter(nextItem = target))
+                _events.emit(
+                    ReaderEvent.OpenChapter(
+                        nextItem = target,
+                        parent = route.parent?.takeIf { it.seriesId.isNotBlank() } ?: activeSeriesMetadata,
+                    ),
+                )
             } catch (ce: CancellationException) {
                 throw ce
             } catch (error: Throwable) {
@@ -1341,6 +1372,9 @@ class ReaderViewModel(
             if (state.preferences.mode != ReaderMode.STRIP || chapterId != state.displayMediaId) return
             val activeChapter = state.appendedChapters.firstOrNull { it.mediaId == chapterId } ?: return
             val target = nearestPageIn(activeChapter.pageNumbers, page)
+            if (state.activeStripChapterId == null) {
+                persistPrimaryAnchorBeforeAppended(state)
+            }
             _uiState.update {
                 it.copy(
                     activeStripChapterPage = target,
@@ -1357,6 +1391,7 @@ class ReaderViewModel(
         }
 
         if (state.pageNumbers.isEmpty()) return
+        clearPendingAppendedProgress()
         val target = nearestPageIn(state.pageNumbers, page)
 
         _uiState.update {
@@ -2090,17 +2125,30 @@ class ReaderViewModel(
         progressSaveJob?.cancel()
         progressSaveJob = null
         appendedProgressSaveJob?.cancel()
+        appendedProgressSaveJob = null
         val state = _uiState.value
         val detail = state.detail ?: return
+        val activeChapterId = state.activeStripChapterId
         val scope = persistenceScope ?: viewModelScope
-        // The appended chapter's pending write must always be flushed: on fast exit the delayed
-        // job is cancelled and the first chapter's page would be the only thing persisted.
-        if (pendingAppendedProgress != null) {
-            scope.launch(dispatchers.io + NonCancellable) {
-                flushPendingAppendedProgress()
+        val pendingChapter = pendingAppendedProgress
+        if (pendingChapter != null) {
+            if (activeChapterId == pendingChapter.mediaId) {
+                // The appended chapter still owns the viewport: flush it under NonCancellable so a
+                // fast exit cannot lose its position while the delayed job is cancelled.
+                scope.launch(dispatchers.io + NonCancellable) {
+                    flushPendingAppendedProgress()
+                    if (pendingAppendedProgress?.mediaId == pendingChapter.mediaId) {
+                        pendingAppendedProgress = null
+                    }
+                }
+            } else {
+                // Reverse scrolling left a stale appended anchor; never write it over the primary row.
                 pendingAppendedProgress = null
             }
         }
+        // While an appended chapter is active it owns the latest history row; writing the primary
+        // row here would promote a chapter the reader has already scrolled past.
+        if (activeChapterId != null) return
         if (!hasDirtyProgress && lastSavedPage == state.currentPage && lastSavedOffsetPx == state.stripScrollOffsetPx) {
             return
         }
@@ -2108,17 +2156,19 @@ class ReaderViewModel(
         val offset = state.stripScrollOffsetPx
         val total = state.totalPages.coerceAtLeast(1)
         val item = detail.item
+        val series = activeSeriesMetadata ?: resolveSeriesMetadata(detail)
         scope.launch(dispatchers.io + NonCancellable) {
             persistProgressEntity(
                 siteId = siteId,
                 mediaId = mediaId,
-                url = item.url,
+                url = item.url.ifBlank { url },
                 title = item.title,
                 coverUrl = item.coverUrl,
                 kind = item.kind,
                 currentPage = page,
                 totalPages = total,
                 scrollOffsetPx = offset,
+                series = series,
             )
         }
     }
@@ -2128,15 +2178,22 @@ class ReaderViewModel(
         progressSaveJob?.cancel()
         progressSaveJob = null
         appendedProgressSaveJob?.cancel()
+        appendedProgressSaveJob = null
         val state = _uiState.value
         if (state.detail == null) return
+        val activeChapterId = state.activeStripChapterId
         withContext(dispatchers.io + NonCancellable) {
-            flushPendingAppendedProgress()
+            val pendingChapter = pendingAppendedProgress
+            if (pendingChapter != null && activeChapterId == pendingChapter.mediaId) {
+                flushPendingAppendedProgress()
+            }
             pendingAppendedProgress = null
-            persistProgressInternal(
-                page = state.currentPage,
-                scrollOffsetPx = state.stripScrollOffsetPx,
-            )
+            if (activeChapterId == null) {
+                persistProgressInternal(
+                    page = state.currentPage,
+                    scrollOffsetPx = state.stripScrollOffsetPx,
+                )
+            }
         }
     }
 
@@ -2145,16 +2202,18 @@ class ReaderViewModel(
         val detail = state.detail ?: return
         val item = detail.item
         val total = state.totalPages.coerceAtLeast(1)
+        val series = activeSeriesMetadata ?: resolveSeriesMetadata(detail)
         persistProgressEntity(
             siteId = siteId,
             mediaId = mediaId,
-            url = item.url,
+            url = item.url.ifBlank { url },
             title = item.title,
             coverUrl = item.coverUrl,
             kind = item.kind,
             currentPage = page,
             totalPages = total,
             scrollOffsetPx = scrollOffsetPx,
+            series = series,
         )
     }
 
@@ -2168,6 +2227,7 @@ class ReaderViewModel(
         currentPage: Int,
         totalPages: Int,
         scrollOffsetPx: Int,
+        series: RavenRoute.ReaderParent?,
     ) {
         if (isInvalidSiteId || latestIncognitoMode) {
             hasDirtyProgress = false
@@ -2188,6 +2248,9 @@ class ReaderViewModel(
                     totalPages = totalPages,
                     scrollOffsetPx = clampedOffset,
                     updatedAt = clock(),
+                    seriesId = series?.seriesId,
+                    seriesTitle = series?.title?.takeIf(String::isNotBlank),
+                    seriesUrl = series?.url?.takeIf(String::isNotBlank),
                 ),
             )
             hasDirtyProgress = false
@@ -2220,6 +2283,31 @@ class ReaderViewModel(
         appendedChapterBuffers.clear()
         super.onCleared()
     }
+
+    private fun clearPendingAppendedProgress() {
+        pendingAppendedProgress = null
+        appendedProgressSaveJob?.cancel()
+        appendedProgressSaveJob = null
+    }
+
+    /** Persist the primary chapter anchor before an appended chapter becomes the viewport owner. */
+    private fun persistPrimaryAnchorBeforeAppended(state: ReaderUiState) {
+        if (!hasDirtyProgress) return
+        progressSaveJob?.cancel()
+        progressSaveJob = null
+        val page = state.currentPage
+        val offset = state.stripScrollOffsetPx
+        viewModelScope.launch(dispatchers.io + NonCancellable) {
+            persistProgressInternal(page = page, scrollOffsetPx = offset)
+        }
+    }
+
+    /**
+     * Series identity shared by every chapter row of the same work. An explicit route parent wins,
+     * so opaque chapter IDs (e.g. JMComic photo routes) keep their work identity across transitions.
+     */
+    private fun resolveSeriesMetadata(detail: GalleryDetail): RavenRoute.ReaderParent? =
+        resolveReaderParent(detail, route.parent)
 
     private fun nearestPageIn(pages: List<Int>, target: Int): Int {
         if (pages.isEmpty()) return 1

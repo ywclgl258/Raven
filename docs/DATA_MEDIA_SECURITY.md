@@ -29,13 +29,13 @@ flowchart LR
 ### 1.1 `RavenDatabase` 与全部 21 张表结构
 
 - **实现路径**：`core/database/src/main/kotlin/com/raven/app/core/database/RavenDatabase.kt`
-- **关键配置**：`DATABASE_NAME = "raven.db"`、`SCHEMA_VERSION = 5`、`exportSchema = true`、`@TypeConverters(RavenTypeConverters::class)`；`build()` 注册从 v1 到 v5 的逐版迁移。
+- `raven.db` 使用 Room schema v7，`build()` 注册从 v1 到 v7 的逐版迁移。
 - **建库种子回调**：`watchLaterSeedCallback` 在 `onCreate` 时通过 `INSERT OR IGNORE` 预置内置系统片单 `id = "watch-later"`（`Shelf.WATCH_LATER_ID`，名称 `"稍后看"`，`is_system = 1`）。该片单受业务层保护，禁止重命名或删除。
 
 | # | 表名 (`tableName`) | Entity 类 | 主键 (PK) | 外键 (FK) | 索引 (Indices) | 容量上限 / 语义备注 |
 | :-: | :--- | :--- | :--- | :--- | :--- | :--- |
 | 1 | `watch_progress` | `WatchProgressEntity` | `(site_id, media_id)` | 无 | `(updated_at DESC)`, `(site_id ASC, updated_at DESC)` | 每站点上限 **500** 条 (`WatchProgressDao.MAX_PER_SITE`) |
-| 2 | `reading_progress` | `ReadingProgressEntity` | `(site_id, media_id)` | 无 | `(updated_at DESC)`, `(site_id ASC, updated_at DESC)` | 每站点上限 **500** 条 (`ReadingProgressDao.MAX_PER_SITE`) |
+| 2 | `reading_progress` | `ReadingProgressEntity` | `(site_id, media_id)` | 无 | `(updated_at DESC)`, `(site_id ASC, updated_at DESC)` | 每站保留最近阅读的 500 部作品。连载历史按作品汇总，各集独立保留页码、滚动位置和已读状态。 |
 | 3 | `favorites` | `FavoriteEntity` | `(site_id, kind, target_id)` | 无 | `(added_at DESC)`, `(kind ASC, added_at DESC)` | 支持作品/作者/角色/标签等 `FavoriteKind` |
 | 4 | `shelves` | `ShelfEntity` | `id` | 无 | `(is_pinned DESC, modified_at DESC)` | 内置 `watch-later` (`is_system = 1`)；名称 `<= 80`，备注 `<= 1000` |
 | 5 | `shelf_items` | `ShelfItemEntity` | `(shelf_id, site_id, media_id)` | **`shelf_id -> shelves(id) ON DELETE CASCADE`** | `(shelf_id ASC, position ASC)`, `(shelf_id ASC, added_at DESC)`, `(site_id, media_id)` | **全库唯一外键约束**；批量覆写时须先删子表再删父表、先插父表再插子表 |
@@ -134,6 +134,8 @@ flowchart LR
 | 2 → 3 | 为片单条目和订阅更新增加查询索引。 |
 | 3 → 4 | 创建 `media_likes` 并按点赞时间建立索引。 |
 | 4 → 5 | 为 `shelf_items` 增加可空的 `completion_changed_at`。旧条目继续根据原完成标志和观看、阅读历史判断。手动标记后，该条目按用户的选择显示。 |
+| 5 → 6 | 增加 `series_follows` 以保存追更记录。 |
+| 6 → 7 | 阅读进度增加作品 ID、标题和地址。旧连载的复合章节 ID 可直接恢复作品归属，仅含独立章节 ID 的记录在加载该作品目录时补全。 |
 
 后续表结构变更必须延续显式迁移，不得回退到破坏性重建：
 
@@ -538,7 +540,7 @@ stateDiagram-v2
    - Room 快照读取 → `BackupMerger.merge(local, incoming)` 确定性合并 → 全表覆写全部包裹在**单个 Room 事务**内（且严格遵循先删 `shelf_items` 再删 `shelves`，先插 `shelves` 再插 `shelf_items` 以满足外键）。
    - 事务内任意异常自动全量回滚，且 **`SettingsDataStore` 保持原封不动**；仅当 Room 事务提交成功后才写入便携 DataStore 配置。
    - **冲突解决规则**：
-     - 观看/阅读历史：按 `updatedAt` 较新者胜出，按站截断 500 条。
+     - 观看与阅读进度按 `updatedAt` 合并。每站保留最近的 500 部阅读作品及其章节进度。
      - 片单条目：取最早正值 `addedAt`，`completed` 状态按父片单最新 `modifiedAt`（平局按 `addedAt` 再按逻辑 OR）合并；清理悬空 `coverCompositeKey`。
      - 更新收件箱：同一条目合并时强制保留已读态（`isRead = prev.isRead || entry.isRead`）。
      - 收藏/书签/单图收藏/订阅/保存搜索/屏蔽词：按复合主键确定性并集去重。

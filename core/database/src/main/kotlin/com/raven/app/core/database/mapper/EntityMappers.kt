@@ -43,6 +43,7 @@ import com.raven.app.core.model.TagTranslationEntry
 import com.raven.app.core.model.TimeBookmark
 import com.raven.app.core.model.UpdateInboxItem
 import com.raven.app.core.model.WatchProgress
+import com.raven.app.core.model.workId
 
 fun WatchProgress.toEntity(): WatchProgressEntity = WatchProgressEntity(
     siteId = siteId.value,
@@ -82,6 +83,9 @@ fun ReadingProgress.toEntity(): ReadingProgressEntity = ReadingProgressEntity(
     scrollOffsetPx = scrollOffsetPx,
     updatedAt = updatedAt,
     completed = completed,
+    seriesId = seriesId ?: workId.takeIf { it != mediaId },
+    seriesTitle = seriesTitle,
+    seriesUrl = seriesUrl,
 )
 
 fun ReadingProgressEntity.toDomain(): ReadingProgress = ReadingProgress(
@@ -96,6 +100,9 @@ fun ReadingProgressEntity.toDomain(): ReadingProgress = ReadingProgress(
     scrollOffsetPx = scrollOffsetPx,
     updatedAt = updatedAt,
     completed = completed,
+    seriesId = seriesId,
+    seriesTitle = seriesTitle,
+    seriesUrl = seriesUrl,
 )
 
 fun FavoriteItem.toEntity(): FavoriteEntity = FavoriteEntity(

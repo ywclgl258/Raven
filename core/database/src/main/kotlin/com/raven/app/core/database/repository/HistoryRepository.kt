@@ -9,6 +9,7 @@ import com.raven.app.core.database.mapper.toEntity
 import com.raven.app.core.model.ReadingProgress
 import com.raven.app.core.model.SiteId
 import com.raven.app.core.model.WatchProgress
+import com.raven.app.core.model.latestReadingByWork
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 
@@ -72,6 +73,12 @@ class HistoryRepository(
     fun observeReadingProgressBySite(siteId: SiteId): Flow<List<ReadingProgress>> =
         readingProgressDao.observeBySite(siteId.value).map { rows -> rows.map { it.toDomain() } }
 
+    fun observeReadingHistory(): Flow<List<ReadingProgress>> =
+        observeAllReadingProgress().map { it.latestReadingByWork() }
+
+    fun observeReadingHistoryBySite(siteId: SiteId): Flow<List<ReadingProgress>> =
+        observeReadingProgressBySite(siteId).map { it.latestReadingByWork() }
+
     fun observeReadingProgress(siteId: SiteId, mediaId: String): Flow<ReadingProgress?> =
         readingProgressDao.observeOne(siteId.value, mediaId).map { it?.toDomain() }
 
@@ -81,15 +88,45 @@ class HistoryRepository(
     suspend fun saveReadingProgress(progress: ReadingProgress): ReadingProgress {
         require(progress.mediaId.isNotBlank()) { "ReadingProgress.mediaId must not be blank" }
         val resolved = CompletionPolicy.resolveReadingProgress(progress)
-        transactionRunner {
-            readingProgressDao.upsert(resolved.toEntity())
+        return transactionRunner {
+            val previous = readingProgressDao.getOne(progress.siteId.value, progress.mediaId)
+            if (previous != null && previous.updatedAt > resolved.updatedAt) return@transactionRunner previous.toDomain()
+            val entity = resolved.toEntity()
+            val saved = if (previous?.seriesId != null && (entity.seriesId == null || entity.seriesId == previous.seriesId)) {
+                entity.copy(
+                    seriesId = previous.seriesId,
+                    seriesTitle = entity.seriesTitle ?: previous.seriesTitle,
+                    seriesUrl = entity.seriesUrl ?: previous.seriesUrl,
+                )
+            } else entity
+            readingProgressDao.upsert(saved)
             readingProgressDao.pruneSite(resolved.siteId.value, maxHistoryPerSite)
+            saved.toDomain()
         }
-        return resolved
     }
 
     suspend fun removeReadingProgress(siteId: SiteId, mediaId: String) {
         readingProgressDao.delete(siteId.value, mediaId)
+    }
+
+    suspend fun removeReadingHistory(siteId: SiteId, workId: String) {
+        readingProgressDao.deleteWork(siteId.value, workId)
+    }
+
+    /** Older opaque chapter IDs can only be associated once the site's catalogue identifies their parent. */
+    suspend fun linkReadingChapters(
+        siteId: SiteId,
+        seriesId: String,
+        seriesTitle: String?,
+        seriesUrl: String?,
+        chapterIds: List<String>,
+    ) {
+        transactionRunner {
+            // Leave room for the other bound parameters on older Android SQLite versions.
+            chapterIds.chunked(900).forEach { ids ->
+                readingProgressDao.linkChapters(siteId.value, seriesId, seriesTitle, seriesUrl, ids)
+            }
+        }
     }
 
     suspend fun clearReadingProgress(siteId: SiteId) {

@@ -33,6 +33,8 @@ import com.raven.app.core.model.SiteException
 import com.raven.app.core.model.SiteId
 import com.raven.app.core.model.TagRef
 import com.raven.app.core.model.WatchProgress
+import com.raven.app.core.model.workId
+import com.raven.app.core.model.workTitle
 import com.raven.app.core.sitespi.SiteRegistry
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -115,11 +117,17 @@ private data class HomeFeedLoadState(
     val fromCache: Boolean = false,
 )
 
+private data class ReadingProgressSnapshot(
+    val raw: List<ReadingProgress>,
+    val grouped: List<ReadingProgress>,
+)
+
 private data class SiteLocalContext(
     val blockedTerms: List<String>,
     val cachedTagsByKey: Map<String, List<TagRef>>,
     val watchProgress: List<WatchProgress>,
     val readingProgress: List<ReadingProgress>,
+    val readingHistory: List<ReadingProgress>,
     val watchLaterKeys: Set<String>,
     val browsePosition: BrowsePosition?,
     val dictRevision: Long = 0L,
@@ -215,18 +223,24 @@ class HomeViewModel(
 
     private val siteLocalContextFlow = resolvedSiteKeyFlow.flatMapLatest { (siteId, language) ->
         val cachedTagsFlow = mediaTagCacheRepository?.observeTagsBySite(siteId) ?: flowOf(emptyMap())
+        // Raw rows keep chapter-level markers on feed cards; grouped rows surface one entry per work.
+        val readingProgressFlow = combine(
+            historyRepository.observeReadingProgressBySite(siteId),
+            historyRepository.observeReadingHistoryBySite(siteId),
+        ) { raw, grouped -> ReadingProgressSnapshot(raw = raw, grouped = grouped) }
         val baseFlow = combine(
             blockedTermsRepository.observeEffectiveTermsBySite(siteId),
             cachedTagsFlow,
             historyRepository.observeWatchProgressBySite(siteId),
-            historyRepository.observeReadingProgressBySite(siteId),
+            readingProgressFlow,
             shelfRepository.observeShelfItemKeys(Shelf.WATCH_LATER_ID),
-        ) { blockedTerms, cachedTags, watches, readings, watchLaterKeys ->
+        ) { blockedTerms, cachedTags, watches, reading, watchLaterKeys ->
             SiteLocalContext(
                 blockedTerms = blockedTerms,
                 cachedTagsByKey = cachedTags,
                 watchProgress = watches,
-                readingProgress = readings,
+                readingProgress = reading.raw,
+                readingHistory = reading.grouped,
                 watchLaterKeys = watchLaterKeys,
                 browsePosition = null,
             )
@@ -316,8 +330,12 @@ class HomeViewModel(
             }
             .take(12)
 
-        val continueReading = local.readingProgress
-            .filter { !it.completed && it.currentPage > 0 }
+        val continueReading = local.readingHistory
+            // A finished chapter in a serial does not finish the work itself.
+            .filter {
+                it.currentPage > 0 &&
+                    (it.seriesId != null || it.workId != it.mediaId || !it.completed)
+            }
             .filter { rp ->
                 isItemAllowed(
                     MediaItem(
@@ -325,7 +343,7 @@ class HomeViewModel(
                         id = rp.mediaId,
                         url = rp.url,
                         kind = rp.kind,
-                        title = rp.title,
+                        title = rp.workTitle,
                         coverUrl = rp.coverUrl,
                     ),
                 )
@@ -336,7 +354,12 @@ class HomeViewModel(
         val resumeReading = continueReading.firstOrNull()
 
         val watchProgressMap = local.watchProgress.associate { it.mediaId to it.progressFraction }
-        val readingProgressMap = local.readingProgress.associate { it.mediaId to it.progressFraction }
+        val readingProgressMap = buildMap {
+            // Exact chapter markers stay available for feed cards that still point at a chapter.
+            local.readingProgress.forEach { put(it.mediaId, it.progressFraction) }
+            // Work-level marker lets a series feed card reuse its latest chapter progress.
+            local.readingHistory.forEach { put(it.workId, it.progressFraction) }
+        }
 
         val posKey = homePositionKey(siteId, effectiveLanguage)
         val restored = local.browsePosition?.takeIf {

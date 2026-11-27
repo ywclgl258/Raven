@@ -208,6 +208,25 @@ abstract class RavenDatabase : RoomDatabase() {
             }
         }
 
+        val MIGRATION_6_7: Migration = object : Migration(6, 7) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE `reading_progress` ADD COLUMN `series_id` TEXT")
+                db.execSQL("ALTER TABLE `reading_progress` ADD COLUMN `series_title` TEXT")
+                db.execSQL("ALTER TABLE `reading_progress` ADD COLUMN `series_url` TEXT")
+                // Legacy serial chapters encode the work as `seriesId:chapterId`; keep upgrades
+                // consistent with `ReadingProgress.workId`/`toEntity()` without guessing URLs.
+                db.execSQL(
+                    """
+                    UPDATE `reading_progress`
+                    SET `series_id` = substr(`media_id`, 1, instr(`media_id`, ':') - 1)
+                    WHERE `series_id` IS NULL
+                      AND `kind` = 'SERIAL_COMIC'
+                      AND instr(`media_id`, ':') > 1
+                    """.trimIndent(),
+                )
+            }
+        }
+
         private val watchLaterSeedCallback = object : Callback() {
             override fun onCreate(db: SupportSQLiteDatabase) {
                 super.onCreate(db)

@@ -59,6 +59,8 @@ import com.raven.app.core.designsystem.theme.LocalRavenColors
 import com.raven.app.core.model.MediaItem
 import com.raven.app.core.model.MediaKind
 import com.raven.app.core.model.SiteId
+import com.raven.app.core.model.workId
+import com.raven.app.core.model.workTitle
 import com.raven.app.core.sitespi.SiteRegistry
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -72,6 +74,7 @@ import org.koin.androidx.compose.koinViewModel
 data class HistoryEntryUi(
     val siteId: SiteId,
     val siteLabel: String,
+    val workId: String,
     val mediaId: String,
     val url: String,
     val kind: MediaKind,
@@ -83,8 +86,11 @@ data class HistoryEntryUi(
     val completed: Boolean,
     val resumePage: Int,
     val mediaItem: MediaItem,
+    val shelfMediaItem: MediaItem,
+    val chapterTitle: String? = null,
+    val seriesUrl: String? = null,
 ) {
-    val compositeKey: String get() = "${siteId.value}:${kind.name}:$mediaId"
+    val compositeKey: String get() = "${siteId.value}:${kind.name}:$workId"
 }
 
 data class HistoryUiState(
@@ -122,7 +128,7 @@ class HistoryViewModel(
 
     val uiState: StateFlow<HistoryUiState> = combine(
         historyRepository.observeAllWatchProgress(),
-        historyRepository.observeAllReadingProgress(),
+        historyRepository.observeReadingHistory(),
         shelfRepository.observeShelvesWithSummary(),
         controls,
     ) { watches, readings, shelves, ctrl ->
@@ -132,6 +138,7 @@ class HistoryViewModel(
                     HistoryEntryUi(
                         siteId = w.siteId,
                         siteLabel = siteRegistry.displayNameFor(w.siteId),
+                        workId = w.mediaId,
                         mediaId = w.mediaId,
                         url = w.url,
                         kind = MediaKind.VIDEO,
@@ -143,6 +150,7 @@ class HistoryViewModel(
                         completed = CompletionPolicy.isWatchCompleted(w),
                         resumePage = 1,
                         mediaItem = w.toMediaItem(),
+                        shelfMediaItem = w.toMediaItem(),
                     ),
                 )
             }
@@ -151,17 +159,21 @@ class HistoryViewModel(
                     HistoryEntryUi(
                         siteId = r.siteId,
                         siteLabel = siteRegistry.displayNameFor(r.siteId),
+                        workId = r.workId,
                         mediaId = r.mediaId,
                         url = r.url,
                         kind = r.kind,
-                        title = r.title,
+                        title = r.workTitle,
                         coverUrl = r.coverUrl,
                         progressFraction = r.progressFraction,
-                        statusCaption = r.resumeCaption(),
+                        statusCaption = r.workResumeCaption(),
                         updatedAt = r.updatedAt,
-                        completed = CompletionPolicy.isReadingCompleted(r),
+                        completed = r.isWorkCompleted(),
                         resumePage = r.currentPage.coerceAtLeast(1),
-                        mediaItem = r.toMediaItem(),
+                        mediaItem = r.toMediaItem().copy(title = r.workTitle),
+                        shelfMediaItem = r.toWorkMediaItem(),
+                        chapterTitle = r.chapterCaption(),
+                        seriesUrl = r.seriesUrl,
                     ),
                 )
             }
@@ -253,7 +265,7 @@ class HistoryViewModel(
             if (entry.kind.isVideo) {
                 historyRepository.removeWatchProgress(entry.siteId, entry.mediaId)
             } else {
-                historyRepository.removeReadingProgress(entry.siteId, entry.mediaId)
+                historyRepository.removeReadingHistory(entry.siteId, entry.workId)
             }
             controls.update { it.copy(message = "已删除该条历史记录") }
         }
@@ -268,7 +280,7 @@ class HistoryViewModel(
                 if (entry.kind.isVideo) {
                     historyRepository.removeWatchProgress(entry.siteId, entry.mediaId)
                 } else {
-                    historyRepository.removeReadingProgress(entry.siteId, entry.mediaId)
+                    historyRepository.removeReadingHistory(entry.siteId, entry.workId)
                 }
             }
             controls.update {
@@ -309,7 +321,7 @@ class HistoryViewModel(
         viewModelScope.launch(dispatchers.io) {
             val added = shelfRepository.addItems(
                 shelfId = shelfId,
-                items = entries.map { it.mediaItem.toLibraryShelfItem(shelfId) },
+                items = entries.map { it.shelfMediaItem.toLibraryShelfItem(shelfId) },
             )
             controls.update {
                 it.copy(
@@ -328,7 +340,7 @@ class HistoryViewModel(
                 val created = shelfRepository.createShelf(name = shelfName)
                 val added = shelfRepository.addItems(
                     shelfId = created.id,
-                    items = entries.map { it.mediaItem.toLibraryShelfItem(created.id) },
+                    items = entries.map { it.shelfMediaItem.toLibraryShelfItem(created.id) },
                 )
                 created.name to added
             }.onSuccess { (name, added) ->
@@ -484,8 +496,10 @@ fun HistoryScreen(
                         onClick = {
                             if (uiState.selectionMode) {
                                 viewModel.toggleSelectEntry(entry)
+                            } else if (entry.kind.isVideo) {
+                                navigator.openVideo(siteId = entry.siteId, mediaId = entry.mediaId, url = entry.url, title = entry.title, coverUrl = entry.coverUrl)
                             } else {
-                                navigator.openMedia(entry.mediaItem, startPage = entry.resumePage)
+                                navigator.openReader(siteId = entry.siteId, mediaId = entry.mediaId, url = entry.url, startPage = entry.resumePage, offlineOnly = entry.siteId.isLocal)
                             }
                         },
                         onLongClick = { viewModel.toggleSelectEntry(entry) },

@@ -100,15 +100,42 @@ interface ReadingProgressDao {
         """
         DELETE FROM reading_progress
         WHERE site_id = :siteId
-          AND media_id NOT IN (
-            SELECT media_id FROM reading_progress
+          AND COALESCE(series_id, media_id) NOT IN (
+            SELECT COALESCE(series_id, media_id) AS work_id
+            FROM reading_progress
             WHERE site_id = :siteId
-            ORDER BY updated_at DESC
+            GROUP BY work_id
+            ORDER BY MAX(updated_at) DESC, work_id ASC
             LIMIT :limit
           )
         """,
     )
     suspend fun pruneSite(siteId: String, limit: Int = MAX_PER_SITE)
+
+    @Query("DELETE FROM reading_progress WHERE site_id = :siteId AND COALESCE(series_id, media_id) = :workId")
+    suspend fun deleteWork(siteId: String, workId: String)
+
+    @Query(
+        """
+        UPDATE reading_progress
+        SET series_id = :seriesId,
+            series_title = COALESCE(series_title, :seriesTitle),
+            series_url = COALESCE(series_url, :seriesUrl)
+        WHERE site_id = :siteId
+          AND media_id IN (:chapterIds)
+          AND (series_id IS NULL OR series_id = :seriesId)
+          AND (series_id IS NULL OR series_id <> :seriesId
+               OR (series_title IS NULL AND :seriesTitle IS NOT NULL)
+               OR (series_url IS NULL AND :seriesUrl IS NOT NULL))
+        """,
+    )
+    suspend fun linkChapters(
+        siteId: String,
+        seriesId: String,
+        seriesTitle: String?,
+        seriesUrl: String?,
+        chapterIds: List<String>,
+    )
 
     companion object {
         const val MAX_PER_SITE: Int = 500

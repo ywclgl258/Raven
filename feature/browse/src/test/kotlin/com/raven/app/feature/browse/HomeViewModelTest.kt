@@ -10,6 +10,8 @@ import com.raven.app.core.model.FeedSection
 import com.raven.app.core.model.HomeFeed
 import com.raven.app.core.model.MediaKind
 import com.raven.app.core.model.ReadingProgress
+import com.raven.app.core.model.workId
+import com.raven.app.core.model.workTitle
 import com.raven.app.core.model.SiteCapability
 import com.raven.app.core.model.SiteDescriptor
 import com.raven.app.core.model.SiteId
@@ -742,6 +744,93 @@ class HomeViewModelTest {
                 assertFalse(
                     comic.continueReading.any { it.mediaId == "blocked_book" || it.mediaId == "done_book" },
                 )
+                cancelAndIgnoreRemainingEvents()
+            }
+        }
+
+    @Test
+    fun `serial chapters collapse into one continuation and a completed chapter does not complete the work`() =
+        runTest(mainDispatcherRule.dispatcher) {
+            val harness = BrowseTestHarness(mainDispatcherRule.dispatcher)
+            harness.historyRepository.saveReadingProgress(
+                ReadingProgress(
+                    siteId = SiteId.NHENTAI,
+                    mediaId = "work-42-chapter-1",
+                    url = "https://nhentai.example/g/work-42/chapter-1",
+                    title = "Chapter 1",
+                    seriesId = "work-42",
+                    seriesTitle = "Serial Work",
+                    kind = MediaKind.SERIAL_COMIC,
+                    currentPage = 20,
+                    totalPages = 20,
+                    updatedAt = 100L,
+                    completed = true,
+                ),
+            )
+            harness.historyRepository.saveReadingProgress(
+                ReadingProgress(
+                    siteId = SiteId.NHENTAI,
+                    mediaId = "work-42-chapter-2",
+                    url = "https://nhentai.example/g/work-42/chapter-2",
+                    title = "Chapter 2",
+                    seriesId = "work-42",
+                    seriesTitle = "Serial Work",
+                    kind = MediaKind.SERIAL_COMIC,
+                    currentPage = 7,
+                    totalPages = 30,
+                    updatedAt = 300L,
+                    completed = true,
+                ),
+            )
+            harness.historyRepository.saveReadingProgress(
+                ReadingProgress(
+                    siteId = SiteId.NHENTAI,
+                    mediaId = "one-shot-7",
+                    url = "https://nhentai.example/g/one-shot-7",
+                    title = "One Shot",
+                    kind = MediaKind.COMIC,
+                    currentPage = 2,
+                    totalPages = 10,
+                    updatedAt = 200L,
+                    completed = false,
+                ),
+            )
+            val (registry, _, _) = buildRegistry()
+            val vm = HomeViewModel(
+                siteRegistry = registry,
+                preferencesRepository = harness.preferencesRepository,
+                blockedTermsRepository = harness.blockedTermsRepository,
+                historyRepository = harness.historyRepository,
+                favoriteRepository = harness.favoriteRepository,
+                shelfRepository = harness.shelfRepository,
+                browsePositionRepository = harness.browsePositionRepository,
+                dispatchers = harness.dispatchers,
+            )
+
+            vm.uiState.test {
+                advanceUntilIdle()
+                vm.selectSite(SiteId.NHENTAI)
+                advanceUntilIdle()
+                val comic = expectMostRecentItem()
+
+                assertEquals(
+                    listOf("work-42-chapter-2", "one-shot-7"),
+                    comic.continueReading.map { it.mediaId },
+                )
+                val serial = requireNotNull(comic.resumeReading)
+                assertEquals("work-42", serial.workId)
+                assertEquals("Serial Work", serial.workTitle)
+                assertEquals("Chapter 2", serial.title)
+                assertEquals("work-42-chapter-2", serial.mediaId)
+                assertEquals("https://nhentai.example/g/work-42/chapter-2", serial.url)
+                assertEquals(7, serial.currentPage)
+                assertEquals(30, serial.totalPages)
+
+                // Raw chapter markers stay available; the work key mirrors the latest chapter.
+                assertEquals(1f, comic.readingProgressMap["work-42-chapter-1"] ?: -1f, 0.0001f)
+                assertEquals(7f / 30f, comic.readingProgressMap["work-42-chapter-2"] ?: -1f, 0.0001f)
+                assertEquals(7f / 30f, comic.readingProgressMap["work-42"] ?: -1f, 0.0001f)
+                assertEquals(0.2f, comic.readingProgressMap["one-shot-7"] ?: -1f, 0.0001f)
                 cancelAndIgnoreRemainingEvents()
             }
         }

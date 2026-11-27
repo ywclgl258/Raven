@@ -21,6 +21,7 @@ import com.raven.app.core.model.SiteId
 import com.raven.app.core.model.SmartShelf
 import com.raven.app.core.model.SmartShelfRule
 import com.raven.app.core.model.WatchProgress
+import com.raven.app.core.model.workId
 import com.raven.app.core.sitespi.SiteRegistry
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.Flow
@@ -163,7 +164,8 @@ private data class ShelfSourcePayload(
 
 private data class ShelfAuxState(
     val watches: List<WatchProgress>,
-    val readings: List<ReadingProgress>,
+    val rawReadings: List<ReadingProgress>,
+    val workReadings: List<ReadingProgress>,
     val downloads: List<DownloadItem>,
     val batchProgress: BatchEnqueueProgress,
 )
@@ -224,12 +226,14 @@ class ShelfDetailViewModel(
     private val auxFlow = combine(
         historyRepository.observeAllWatchProgress(),
         historyRepository.observeAllReadingProgress(),
+        historyRepository.observeReadingHistory(),
         downloadGateway.downloads,
         downloadGateway.batchProgress,
-    ) { watches, readings, downloads, batchProgress ->
+    ) { watches, rawReadings, workReadings, downloads, batchProgress ->
         ShelfAuxState(
             watches = watches,
-            readings = readings,
+            rawReadings = rawReadings,
+            workReadings = workReadings,
             downloads = downloads,
             batchProgress = batchProgress,
         )
@@ -526,21 +530,24 @@ class ShelfDetailViewModel(
         ephemeral: ShelfEphemeralState,
     ): ShelfDetailUiState {
         val watchByKey = aux.watches.associateBy { it.compositeKey }
-        val readingByKey = aux.readings.associateBy { it.compositeKey }
+        val readingByChapterKey = aux.rawReadings.associateBy { it.compositeKey }
+        val readingByWorkKey = aux.workReadings.associateBy { "${it.siteId.value}:${it.workId}" }
         val downloadsByKey = aux.downloads.groupBy { "${it.siteId.value}:${it.mediaId}" }
-
         val rawEntries = when (target) {
             is ShelfDetailTarget.Custom -> source.customItems.map { item ->
                 val key = item.compositeKey
                 val watch = watchByKey[key]
-                val reading = readingByKey[key]
+                val chapterReading = readingByChapterKey[key]
+                val workReading = readingByWorkKey["${item.siteId.value}:${item.mediaId}"]
+                val reading = chapterReading ?: workReading
+                val chapterMatch = chapterReading != null
                 val dls = downloadsByKey[key].orEmpty()
                 val bestStatus = resolveAggregateDownloadStatus(dls)
                 val isCompleted = if (item.completionChangedAt != null) {
                     item.completed
                 } else {
                     item.completed || (watch != null && CompletionPolicy.isWatchCompleted(watch)) ||
-                        (reading != null && CompletionPolicy.isReadingCompleted(reading))
+                        (reading != null && if (chapterMatch) CompletionPolicy.isReadingCompleted(reading) else reading.isWorkCompleted())
                 }
                 val fraction = when {
                     watch != null && watch.durationMs > 0L -> watch.progressFraction
@@ -564,13 +571,13 @@ class ShelfDetailViewModel(
                     resumePage = resumePage,
                     isOfflineReady = item.siteId.isLocal || bestStatus == DownloadStatus.COMPLETED,
                     downloadStatus = bestStatus,
-                    mediaItem = item.toMediaItem(),
+                    mediaItem = if (reading != null && !chapterMatch) reading.toWorkMediaItem() else item.toMediaItem(),
                 )
             }
 
             is ShelfDetailTarget.Smart -> source.smartEntries.mapIndexed { index, entry ->
                 val key = entry.compositeKey
-                val reading = readingByKey[key]
+                val reading = readingByWorkKey["${entry.siteId.value}:${entry.mediaId}"] ?: readingByChapterKey[key]
                 val dls = downloadsByKey[key].orEmpty()
                 val bestStatus = resolveAggregateDownloadStatus(dls) ?: entry.downloadStatus
                 ShelfEntryUi(
@@ -589,7 +596,7 @@ class ShelfDetailViewModel(
                     resumePage = reading?.currentPage?.coerceAtLeast(1) ?: 1,
                     isOfflineReady = entry.isOffline || bestStatus == DownloadStatus.COMPLETED,
                     downloadStatus = bestStatus,
-                    mediaItem = entry.toMediaItem(),
+                    mediaItem = if (reading != null) reading.toWorkMediaItem() else entry.toMediaItem(),
                 )
             }
         }

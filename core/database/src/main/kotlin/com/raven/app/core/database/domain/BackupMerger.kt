@@ -19,6 +19,7 @@ import com.raven.app.core.model.PlaybackPreferences
 import com.raven.app.core.model.RavenBackupPayload
 import com.raven.app.core.model.ReaderPreferences
 import com.raven.app.core.model.ReadingProgress
+import com.raven.app.core.model.workId
 import com.raven.app.core.model.SavedSearch
 import com.raven.app.core.model.SearchHistoryEntry
 import com.raven.app.core.model.Shelf
@@ -49,7 +50,7 @@ object BackupMerger {
         exportedAt = payload.exportedAt,
         appVersion = payload.appVersion,
         watchHistoryCount = payload.watchProgress.size,
-        readingHistoryCount = payload.readingProgress.size,
+        readingHistoryCount = payload.readingProgress.map { it.siteId to it.workId }.distinct().size,
         favoritesCount = payload.favorites.size,
         shelvesCount = payload.shelves.size,
         shelfItemsCount = payload.shelfItems.size,
@@ -239,25 +240,46 @@ object BackupMerger {
             if (entry.mediaId.isBlank()) continue
             val resolved = CompletionPolicy.resolveReadingProgress(entry)
             val prev = byKey[resolved.compositeKey]
-            if (prev == null || resolved.updatedAt > prev.updatedAt) {
-                byKey[resolved.compositeKey] = resolved
+            byKey[resolved.compositeKey] = when {
+                prev == null -> resolved
+                resolved.updatedAt > prev.updatedAt -> resolved.inheritSeriesMetadata(prev)
+                else -> prev.inheritSeriesMetadata(resolved)
             }
         }
         for (entry in incoming) {
             if (entry.mediaId.isBlank()) continue
             val resolved = CompletionPolicy.resolveReadingProgress(entry)
             val prev = byKey[resolved.compositeKey]
-            if (prev == null || resolved.updatedAt >= prev.updatedAt) {
-                byKey[resolved.compositeKey] = resolved
+            byKey[resolved.compositeKey] = when {
+                prev == null -> resolved
+                resolved.updatedAt >= prev.updatedAt -> resolved.inheritSeriesMetadata(prev)
+                else -> prev.inheritSeriesMetadata(resolved)
             }
         }
         return byKey.values
             .groupBy { it.siteId }
             .values
             .flatMap { siteList ->
-                siteList.sortedByDescending { it.updatedAt }.take(ReadingProgressDao.MAX_PER_SITE)
+                val workLatest = siteList.groupBy { it.workId }
+                    .mapValues { (_, chapters) -> chapters.maxOf { it.updatedAt } }
+                val retainedWorks = workLatest.entries
+                    .sortedWith(compareByDescending<Map.Entry<String, Long>> { it.value }.thenBy { it.key })
+                    .take(ReadingProgressDao.MAX_PER_SITE)
+                    .mapTo(mutableSetOf()) { it.key }
+                siteList.filter { it.workId in retainedWorks }
             }
             .sortedByDescending { it.updatedAt }
+    }
+
+    private fun ReadingProgress.inheritSeriesMetadata(older: ReadingProgress): ReadingProgress {
+        val newerSeriesId = seriesId?.takeIf { it.isNotBlank() }
+        val olderSeriesId = older.seriesId?.takeIf { it.isNotBlank() }
+        if (newerSeriesId != null && olderSeriesId != null && newerSeriesId != olderSeriesId) return this
+        return copy(
+            seriesId = newerSeriesId ?: olderSeriesId,
+            seriesTitle = seriesTitle?.takeIf { it.isNotBlank() } ?: older.seriesTitle?.takeIf { it.isNotBlank() },
+            seriesUrl = seriesUrl?.takeIf { it.isNotBlank() } ?: older.seriesUrl?.takeIf { it.isNotBlank() },
+        )
     }
 
     private fun mergeFavorites(

@@ -65,13 +65,20 @@ sealed interface RavenRoute {
         val siteId: String,
     ) : RavenRoute
 
-    // Media Detail & Reader Routes (Video launches PlayerActivity; Gallery/Reader live in NavHost)
+    @Serializable
+    data class ReaderParent(
+        val seriesId: String,
+        val title: String = "",
+        val url: String = "",
+    ) : java.io.Serializable
+
     @Serializable
     data class GalleryDetail(
         val siteId: String,
         val mediaId: String,
         val url: String,
         val offlineOnly: Boolean = false,
+        val parent: ReaderParent? = null,
     ) : RavenRoute
 
     @Serializable
@@ -82,6 +89,7 @@ sealed interface RavenRoute {
         val startPage: Int = 1,
         val offlineOnly: Boolean = false,
         val queueToken: String? = null,
+        val parent: ReaderParent? = null,
     ) : RavenRoute
 
     // Library Sub-Routes

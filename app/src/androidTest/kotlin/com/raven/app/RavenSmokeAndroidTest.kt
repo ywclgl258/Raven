@@ -2,11 +2,13 @@ package com.raven.app
 
 import android.Manifest
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.hasScrollToIndexAction
 import androidx.compose.ui.test.hasClickAction
 import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onAllNodesWithTag
+import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
@@ -14,6 +16,13 @@ import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performScrollToNode
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.rule.GrantPermissionRule
+import com.raven.app.core.database.repository.HistoryRepository
+import com.raven.app.core.model.MediaKind
+import com.raven.app.core.model.ReadingProgress
+import com.raven.app.core.model.SiteId
+import java.util.UUID
+import kotlinx.coroutines.runBlocking
+import org.koin.core.context.GlobalContext
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.RuleChain
@@ -103,6 +112,43 @@ class RavenSmokeAndroidTest {
             composeRule.onAllNodesWithTag("site_switcher_sheet").fetchSemanticsNodes().isEmpty()
         }
         composeRule.onNodeWithTag("browse_home_screen").assertIsDisplayed()
+    }
+
+    @Test
+    fun serialHistoryShowsOneWorkAndTheMostRecentChapter() {
+        waitForTag("browse_home_screen")
+        val repository = GlobalContext.get().get<HistoryRepository>()
+        val work = UUID.randomUUID().toString()
+        val workTitle = "连载历史测试 $work"
+        val now = System.currentTimeMillis()
+        try {
+            runBlocking {
+                for (chapter in 1..2) {
+                    repository.saveReadingProgress(
+                        ReadingProgress(
+                            siteId = SiteId.MANGACOPY, mediaId = "$work:$chapter",
+                            url = "https://example.org/comic/$work/chapter/$chapter", title = "${work.take(8)} 第${chapter}话",
+                            kind = MediaKind.SERIAL_COMIC, currentPage = chapter + 1, totalPages = 20,
+                            updatedAt = now + chapter, seriesId = work, seriesTitle = workTitle,
+                            seriesUrl = "https://example.org/comic/$work",
+                        ),
+                    )
+                }
+            }
+            composeRule.onNodeWithTag("nav_library").performClick()
+            waitForTag("library_hub_screen")
+            composeRule.onNode(hasScrollToIndexAction()).performScrollToNode(hasTestTag("metric_tile_history"))
+            composeRule.onNodeWithTag("metric_tile_history").performScrollTo().performClick()
+            waitForTag("history_screen")
+            composeRule.waitUntil(10_000) {
+                composeRule.onAllNodesWithText(workTitle).fetchSemanticsNodes().size == 1
+            }
+            composeRule.onNodeWithText(workTitle).assertIsDisplayed()
+            composeRule.onNodeWithText("${work.take(8)} 第2话", substring = true).assertIsDisplayed()
+            composeRule.onNodeWithText("${work.take(8)} 第1话", substring = true).assertDoesNotExist()
+        } finally {
+            runBlocking { repository.removeReadingHistory(SiteId.MANGACOPY, work) }
+        }
     }
 
     @Test

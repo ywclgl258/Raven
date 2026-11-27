@@ -51,6 +51,9 @@ class PersonalModelsSerializationTest {
                     totalPages = 24,
                     scrollOffsetPx = 320,
                     updatedAt = 1_700_000_002_000L,
+                    seriesId = "series-9999",
+                    seriesTitle = "Sample Series",
+                    seriesUrl = "https://e-hentai.org/s/9999/",
                 ),
             ),
             favorites = listOf(

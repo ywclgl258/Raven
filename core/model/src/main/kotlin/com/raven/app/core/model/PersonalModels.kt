@@ -33,11 +33,26 @@ data class ReadingProgress(
     val scrollOffsetPx: Int = 0,
     val updatedAt: Long,
     val completed: Boolean = false,
+    val seriesId: String? = null,
+    val seriesTitle: String? = null,
+    val seriesUrl: String? = null,
 ) {
     val compositeKey: String get() = "${siteId.value}:$mediaId"
     val progressFraction: Float
         get() = if (totalPages <= 0) 0f else (currentPage.toFloat() / totalPages.toFloat()).coerceIn(0f, 1f)
 }
+
+/**
+ * Stable grouping key for chapter-level reading history: the explicit series id when present,
+ * else the legacy `seriesId:chapterId` prefix encoded in [ReadingProgress.mediaId], else the
+ * media id itself. Never derives an identity from URLs.
+ */
+val ReadingProgress.workId: String
+    get() {
+        seriesId?.takeIf { it.isNotBlank() }?.let { return it }
+        val separator = mediaId.indexOf(':')
+        return if (separator > 0 && kind.isSerialComic) mediaId.substring(0, separator) else mediaId
+    }
 
 @Serializable
 enum class FavoriteKind {

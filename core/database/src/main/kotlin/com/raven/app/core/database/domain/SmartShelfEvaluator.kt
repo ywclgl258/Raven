@@ -16,6 +16,9 @@ import com.raven.app.core.model.SiteId
 import com.raven.app.core.model.SmartShelf
 import com.raven.app.core.model.SmartShelfRule
 import com.raven.app.core.model.WatchProgress
+import com.raven.app.core.model.latestReadingByWork
+import com.raven.app.core.model.workId
+import com.raven.app.core.model.workTitle
 
 /**
  * Pure dynamic catalog builder and rule evaluator for [SmartShelf].
@@ -130,26 +133,27 @@ object SmartShelfEvaluator {
             )
         }
 
-        for (reading in readingProgress) {
+        for (reading in readingProgress.latestReadingByWork()) {
+            val workUrl = reading.seriesUrl ?: reading.url
             val seed = upsertSeed(
                 siteId = reading.siteId,
-                mediaId = reading.mediaId,
-                url = reading.url,
-                title = reading.title,
+                mediaId = reading.workId,
+                url = workUrl,
+                title = reading.workTitle,
                 coverUrl = reading.coverUrl,
                 kind = reading.kind,
                 addedAt = 0L,
             )
             val started = CompletionPolicy.isReadingStarted(reading)
-            val completed = CompletionPolicy.isReadingCompleted(reading)
+            val completed = reading.seriesId == null && CompletionPolicy.isReadingCompleted(reading)
             val fraction = when {
                 completed -> 1f
                 reading.totalPages > 0 -> reading.progressFraction
                 else -> seed.progressFraction
             }
             entries[seed.compositeKey] = seed.copy(
-                url = reading.url.ifBlank { seed.url },
-                title = reading.title.ifBlank { seed.title },
+                url = workUrl.ifBlank { seed.url },
+                title = reading.workTitle.ifBlank { seed.title },
                 coverUrl = reading.coverUrl.ifBlank { seed.coverUrl },
                 kind = reading.kind,
                 lastActivityAt = maxOf(seed.lastActivityAt, reading.updatedAt),

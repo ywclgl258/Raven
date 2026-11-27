@@ -113,9 +113,10 @@ class StatsViewModel(
         combine(
             historyRepository.observeAllWatchProgress(),
             historyRepository.observeAllReadingProgress(),
+            historyRepository.observeReadingHistory(),
             favoriteRepository.observeAll(),
-        ) { watches, readings, favorites ->
-            Triple(watches, readings, favorites)
+        ) { watches, rawReadings, workReadings, favorites ->
+            Triple(watches, Pair(rawReadings, workReadings), favorites)
         },
         combine(
             shelfRepository.observeShelvesWithSummary(),
@@ -130,47 +131,51 @@ class StatsViewModel(
                 range = range,
             )
         },
-    ) { (watches, readings, favorites), library ->
+    ) { (watches, readingPair, favorites), library ->
+        val (rawReadings, workReadings) = readingPair
         val cutoff = library.range.startEpochMs(clock())
 
         fun inRange(epochMs: Long): Boolean = cutoff == null || epochMs >= cutoff
 
         val rangedWatches = watches.filter { inRange(it.updatedAt) }
-        val rangedReadings = readings.filter { inRange(it.updatedAt) }
+        val rangedRawReadings = rawReadings.filter { inRange(it.updatedAt) }
+        val rangedWorkReadings = workReadings.filter { inRange(it.updatedAt) }
         val rangedFavorites = favorites.filter { inRange(it.addedAt) }
         val allCompletedDownloads = library.downloads.filter { it.status == DownloadStatus.COMPLETED }
         val completedDownloads = allCompletedDownloads.filter { inRange(it.updatedAt) }
         val hasAnyData = watches.isNotEmpty() ||
-            readings.isNotEmpty() ||
+            rawReadings.isNotEmpty() ||
             favorites.isNotEmpty() ||
             allCompletedDownloads.isNotEmpty()
 
         val involvedKeys = buildSet {
             rangedWatches.forEach { add("${it.siteId.value}:${it.mediaId}") }
-            rangedReadings.forEach { add("${it.siteId.value}:${it.mediaId}") }
+            rangedRawReadings.forEach { add("${it.siteId.value}:${it.mediaId}") }
             rangedFavorites.forEach { add("${it.siteId.value}:${it.targetId}") }
         }
 
         val siteIds = buildSet {
             rangedWatches.forEach { add(it.siteId) }
-            rangedReadings.forEach { add(it.siteId) }
+            rangedRawReadings.forEach { add(it.siteId) }
             rangedFavorites.forEach { add(it.siteId) }
             completedDownloads.forEach { add(it.siteId) }
         }
         val watchBySite = rangedWatches.groupBy { it.siteId }
-        val readBySite = rangedReadings.groupBy { it.siteId }
+        val readBySite = rangedRawReadings.groupBy { it.siteId }
+        val workBySite = rangedWorkReadings.groupBy { it.siteId }
         val favBySite = rangedFavorites.groupBy { it.siteId }
         val dlBySite = completedDownloads.groupBy { it.siteId }
 
         val breakdowns = siteIds.map { siteId ->
             val siteWatches = watchBySite[siteId].orEmpty()
+            val siteWorkReads = workBySite[siteId].orEmpty()
             val siteReads = readBySite[siteId].orEmpty()
             SiteActivityStat(
                 siteId = siteId,
                 siteName = siteRegistry.displayNameFor(siteId),
                 watchedCount = siteWatches.size,
                 watchDurationMs = siteWatches.sumOf { it.positionMs.coerceAtLeast(0L) },
-                readCount = siteReads.size,
+                readCount = siteWorkReads.size,
                 readPages = siteReads.sumOf { it.currentPage.coerceAtLeast(0) },
                 favoriteCount = favBySite[siteId].orEmpty().size,
                 completedDownloads = dlBySite[siteId].orEmpty().size,
@@ -201,9 +206,9 @@ class StatsViewModel(
             totalWatchDurationMs = rangedWatches.sumOf { it.positionMs.coerceAtLeast(0L) },
             totalWatchedCount = rangedWatches.size,
             completedWatchCount = rangedWatches.count { CompletionPolicy.isWatchCompleted(it) },
-            totalReadPages = rangedReadings.sumOf { it.currentPage.coerceAtLeast(0) },
-            totalReadCount = rangedReadings.size,
-            completedReadCount = rangedReadings.count { CompletionPolicy.isReadingCompleted(it) },
+            totalReadPages = rangedRawReadings.sumOf { it.currentPage.coerceAtLeast(0) },
+            totalReadCount = rangedWorkReadings.size,
+            completedReadCount = rangedWorkReadings.count { it.isWorkCompleted() },
             favoriteCount = rangedFavorites.size,
             shelfCount = library.shelves.count {
                 cutoff == null || it.shelf.modifiedAt >= cutoff

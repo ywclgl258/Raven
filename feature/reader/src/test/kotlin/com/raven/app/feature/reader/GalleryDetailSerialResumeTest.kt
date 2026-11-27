@@ -68,7 +68,7 @@ class GalleryDetailSerialResumeTest {
     }
 
     @Test
-    fun `series root still resumes unfinished history`() = runTest(mainDispatcherRule.dispatcher) {
+    fun `series root resumes latest chapter even after its final page`() = runTest(mainDispatcherRule.dispatcher) {
         val harness = ReaderTestHarness(mainDispatcherRule.dispatcher, tempFolder.newFolder())
         val chapters = chapters()
         val root = serialDetail(chapters[0]).let { detail ->
@@ -80,7 +80,10 @@ class GalleryDetailSerialResumeTest {
             )
         }
         val resumeDetail = serialDetail(chapters[1])
-        saveProgress(harness, chapters[1], page = 7)
+        saveProgress(harness, chapters[0], page = 7)
+        harness.historyRepository.saveReadingProgress(
+            progressOf(chapters[1], page = 48, completed = true, nowMs = harness.nowMs + 1),
+        )
         val loader = FakeReaderPageLoader(
             detailLoader = { _, mediaId, _, _ ->
                 val detail = if (mediaId == root.item.id) root else resumeDetail
@@ -92,7 +95,7 @@ class GalleryDetailSerialResumeTest {
         advanceUntilIdle()
 
         assertEquals(resumeDetail.item.id, viewModel.uiState.value.detail?.item?.id)
-        assertEquals(7, viewModel.uiState.value.readingProgress?.currentPage)
+        assertEquals(48, viewModel.uiState.value.readingProgress?.currentPage)
 
         // Favorite toggle after serial auto-resume must sync UI isFavorite state with the resumed chapter id
         assertFalse(viewModel.uiState.value.isFavorite)

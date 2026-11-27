@@ -75,6 +75,9 @@ class EntityMappersTest {
             scrollOffsetPx = 320,
             updatedAt = 2000L,
             completed = false,
+            seriesId = "series-9",
+            seriesTitle = "Series Nine",
+            seriesUrl = "https://example.com/series/9/",
         )
         assertEquals(reading, reading.toEntity().toDomain())
 

@@ -170,10 +170,11 @@ fun ProfileScreenContent(
                         ProfileHeroFeatureCard(
                             hero = hero,
                             onContinueClick = {
-                                navigator.openMedia(
-                                    item = hero.mediaItem,
-                                    startPage = hero.resumePage,
-                                )
+                                if (hero.kind.isVideo) {
+                                    navigator.openVideo(siteId = hero.siteId, mediaId = hero.mediaId, url = hero.url, title = hero.title, coverUrl = hero.coverUrl)
+                                } else {
+                                    navigator.openReader(siteId = hero.siteId, mediaId = hero.mediaId, url = hero.url, startPage = hero.resumePage, offlineOnly = hero.siteId.isLocal)
+                                }
                             },
                             modifier = Modifier.padding(horizontal = 16.dp),
                         )
@@ -222,9 +223,12 @@ fun ProfileScreenContent(
                                     ProfileContinueGalleryCard(
                                         entry = entry,
                                         onClick = {
-                                            navigator.openMedia(
-                                                item = entry.mediaItem,
+                                            navigator.openReader(
+                                                siteId = entry.siteId,
+                                                mediaId = entry.mediaId,
+                                                url = entry.url,
                                                 startPage = entry.resumePage,
+                                                offlineOnly = entry.siteId.isLocal,
                                             )
                                         },
                                         modifier = Modifier.width(142.dp),

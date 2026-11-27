@@ -410,12 +410,274 @@ class SerialChapterNavigationTest {
             assertEquals(640, progress?.scrollOffsetPx)
         }
 
+    @Test
+    fun `serial progress keeps shared series identity and chapter resume target`() =
+        runTest(mainDispatcherRule.dispatcher) {
+            val harness = ReaderTestHarness(mainDispatcherRule.dispatcher, tempFolder.newFolder())
+            val chapters = chapters()
+            val seriesUrl = "https://mangacopy.example/comic/parent"
+            val primaryChapter = chapters[0].copy(
+                title = "Parent Comic · 第 1 话",
+                extra = mapOf("comicId" to "parent-comic", "chapterUuid" to "chapter-1"),
+            )
+            val primaryDetail = serialDetail(primaryChapter, pageCount = 2)
+                .copy(chaptersUrl = "$seriesUrl#chapters")
+            val nextDetail = serialDetail(chapters[1], pageCount = 3)
+                .copy(chaptersUrl = "$seriesUrl#chapters")
+            val viewModel = reader(
+                harness = harness,
+                detail = primaryDetail,
+                persistenceScope = backgroundScope,
+                chapterLoader = SerialChapterLoader { _, _ -> chapters },
+                extraDetails = mapOf(chapters[1].id to nextDetail),
+            )
+            advanceUntilIdle()
+
+            val primaryProgress = harness.historyRepository
+                .getReadingProgress(SiteId.MANGACOPY, chapters[0].id)
+            assertEquals(chapters[0].id, primaryProgress?.mediaId)
+            assertEquals(chapters[0].url, primaryProgress?.url)
+            assertEquals("parent-comic", primaryProgress?.seriesId)
+            assertEquals("Parent Comic", primaryProgress?.seriesTitle)
+            assertEquals(seriesUrl, primaryProgress?.seriesUrl)
+
+            viewModel.setReadingMode(ReaderMode.STRIP)
+            viewModel.onStripEndReached()
+            advanceUntilIdle()
+            viewModel.onStripViewportProgress(
+                anchorChapterId = chapters[1].id,
+                anchorPage = 2,
+                visiblePagesByChapter = mapOf(chapters[1].id to setOf(2)),
+                scrollOffsetPx = 320,
+                remainingItemsToBottom = 8,
+            )
+            advanceUntilIdle()
+
+            val appendedProgress = harness.historyRepository
+                .getReadingProgress(SiteId.MANGACOPY, chapters[1].id)
+            assertEquals(chapters[1].id, appendedProgress?.mediaId)
+            assertEquals(chapters[1].url, appendedProgress?.url)
+            assertEquals("parent-comic", appendedProgress?.seriesId)
+            assertEquals("Parent Comic", appendedProgress?.seriesTitle)
+            assertEquals(seriesUrl, appendedProgress?.seriesUrl)
+        }
+
+    @Test
+    fun `reverse scroll and flush never promote a stale appended chapter`() =
+        runTest(mainDispatcherRule.dispatcher) {
+            val harness = ReaderTestHarness(mainDispatcherRule.dispatcher, tempFolder.newFolder())
+            val chapters = chapters()
+            val seriesUrl = "https://mangacopy.example/comic/parent"
+            val primaryDetail = serialDetail(
+                chapters[0].copy(title = "Parent Comic · 第 1 话"),
+                pageCount = 2,
+            ).copy(chaptersUrl = "$seriesUrl#chapters")
+            val nextDetail = serialDetail(chapters[1], pageCount = 3)
+                .copy(chaptersUrl = "$seriesUrl#chapters")
+            val viewModel = reader(
+                harness = harness,
+                detail = primaryDetail,
+                persistenceScope = backgroundScope,
+                chapterLoader = SerialChapterLoader { _, _ -> chapters },
+                extraDetails = mapOf(chapters[1].id to nextDetail),
+            )
+            advanceUntilIdle()
+            viewModel.setReadingMode(ReaderMode.STRIP)
+            viewModel.onVisiblePagesChanged(anchorPage = 2, visiblePages = setOf(2))
+            advanceUntilIdle()
+            assertEquals(
+                2,
+                harness.historyRepository
+                    .getReadingProgress(SiteId.MANGACOPY, chapters[0].id)?.currentPage,
+            )
+
+            viewModel.onStripEndReached()
+            advanceUntilIdle()
+            viewModel.onStripViewportProgress(
+                anchorChapterId = chapters[1].id,
+                anchorPage = 3,
+                visiblePagesByChapter = mapOf(chapters[1].id to setOf(3)),
+                scrollOffsetPx = 640,
+                remainingItemsToBottom = 8,
+            )
+            // Reverse back to the primary chapter before the appended debounce elapses.
+            viewModel.onStripViewportProgress(
+                anchorChapterId = chapters[0].id,
+                anchorPage = 2,
+                visiblePagesByChapter = mapOf(chapters[0].id to setOf(2)),
+                scrollOffsetPx = 0,
+                remainingItemsToBottom = 8,
+            )
+            viewModel.flushProgressNow()
+            assertNull(
+                "reverse scroll must discard the stale appended anchor",
+                harness.historyRepository.getReadingProgress(SiteId.MANGACOPY, chapters[1].id),
+            )
+            advanceUntilIdle()
+
+            assertNull(harness.historyRepository.getReadingProgress(SiteId.MANGACOPY, chapters[1].id))
+            assertEquals(
+                2,
+                harness.historyRepository
+                    .getReadingProgress(SiteId.MANGACOPY, chapters[0].id)?.currentPage,
+            )
+        }
+
+    @Test
+    fun `debounced appended save is discarded after reverse scrolling`() =
+        runTest(mainDispatcherRule.dispatcher) {
+            val harness = ReaderTestHarness(mainDispatcherRule.dispatcher, tempFolder.newFolder())
+            val chapters = chapters()
+            val seriesUrl = "https://mangacopy.example/comic/parent"
+            val primaryDetail = serialDetail(chapters[0], pageCount = 2)
+                .copy(chaptersUrl = "$seriesUrl#chapters")
+            val nextDetail = serialDetail(chapters[1], pageCount = 3)
+                .copy(chaptersUrl = "$seriesUrl#chapters")
+            val viewModel = reader(
+                harness = harness,
+                detail = primaryDetail,
+                persistenceScope = backgroundScope,
+                chapterLoader = SerialChapterLoader { _, _ -> chapters },
+                extraDetails = mapOf(chapters[1].id to nextDetail),
+            )
+            advanceUntilIdle()
+            viewModel.setReadingMode(ReaderMode.STRIP)
+            viewModel.onStripEndReached()
+            advanceUntilIdle()
+            viewModel.onStripViewportProgress(
+                anchorChapterId = chapters[1].id,
+                anchorPage = 3,
+                visiblePagesByChapter = mapOf(chapters[1].id to setOf(3)),
+                scrollOffsetPx = 640,
+                remainingItemsToBottom = 8,
+            )
+            viewModel.onStripViewportProgress(
+                anchorChapterId = chapters[0].id,
+                anchorPage = 1,
+                visiblePagesByChapter = mapOf(chapters[0].id to setOf(1)),
+                scrollOffsetPx = 0,
+                remainingItemsToBottom = 8,
+            )
+            advanceUntilIdle()
+
+            assertNull(
+                "the debounced appended write must not outlive the reverse scroll",
+                harness.historyRepository.getReadingProgress(SiteId.MANGACOPY, chapters[1].id),
+            )
+        }
+
+    @Test
+    fun `serial root progress keeps root resume target and series identity`() =
+        runTest(mainDispatcherRule.dispatcher) {
+            val harness = ReaderTestHarness(mainDispatcherRule.dispatcher, tempFolder.newFolder())
+            // A root detail can expose the work without a comicId extra (e.g. Guazimanhua).
+            val rootItem = MediaItem(
+                siteId = SiteId.MANGACOPY,
+                id = "parent-comic",
+                url = "https://mangacopy.example/comic/parent",
+                kind = MediaKind.SERIAL_COMIC,
+                title = "Parent Comic",
+                extra = mapOf("chapterId" to "first-chapter"),
+            )
+            val rootDetail = sampleGalleryDetail(
+                siteId = SiteId.MANGACOPY,
+                mediaId = rootItem.id,
+                pageCount = 2,
+                kind = MediaKind.SERIAL_COMIC,
+            ).copy(
+                item = rootItem,
+                chaptersUrl = "${rootItem.url}#chapters",
+            )
+            reader(
+                harness = harness,
+                detail = rootDetail,
+                persistenceScope = backgroundScope,
+                chapterLoader = SerialChapterLoader { _, _ -> emptyList() },
+            )
+            advanceUntilIdle()
+
+            val progress = harness.historyRepository
+                .getReadingProgress(SiteId.MANGACOPY, rootItem.id)
+            assertEquals(rootItem.id, progress?.mediaId)
+            assertEquals(rootItem.url, progress?.url)
+            assertEquals(rootItem.id, progress?.seriesId)
+            assertEquals(rootItem.title, progress?.seriesTitle)
+            assertEquals(rootItem.url, progress?.seriesUrl)
+        }
+
+    @Test
+    fun `route parent supplies shared series identity and survives chapter transitions`() =
+        runTest(mainDispatcherRule.dispatcher) {
+            val harness = ReaderTestHarness(mainDispatcherRule.dispatcher, tempFolder.newFolder())
+            val parent = RavenRoute.ReaderParent(
+                seriesId = "work-123",
+                title = "Opaque Work",
+                url = "https://mangacopy.example/comic/work-123",
+            )
+            val chapters = listOf(
+                MediaItem(
+                    siteId = SiteId.MANGACOPY,
+                    id = "hid-1",
+                    url = "https://mangacopy.example/chapter/hid-1",
+                    kind = MediaKind.SERIAL_COMIC,
+                    title = "Chapter 1",
+                ),
+                MediaItem(
+                    siteId = SiteId.MANGACOPY,
+                    id = "hid-2",
+                    url = "https://mangacopy.example/chapter/hid-2",
+                    kind = MediaKind.SERIAL_COMIC,
+                    title = "Chapter 2",
+                ),
+            )
+            val detail = sampleGalleryDetail(
+                siteId = SiteId.MANGACOPY,
+                mediaId = "hid-1",
+                pageCount = 2,
+                kind = MediaKind.SERIAL_COMIC,
+            ).copy(
+                item = MediaItem(
+                    siteId = SiteId.MANGACOPY,
+                    id = "hid-1",
+                    url = "https://mangacopy.example/chapter/hid-1",
+                    kind = MediaKind.SERIAL_COMIC,
+                    title = "Chapter 1",
+                    pageCount = 2,
+                ),
+                chaptersUrl = "${parent.url}#chapters",
+            )
+            val viewModel = reader(
+                harness = harness,
+                detail = detail,
+                persistenceScope = backgroundScope,
+                chapterLoader = SerialChapterLoader { _, _ -> chapters },
+                parent = parent,
+            )
+            advanceUntilIdle()
+
+            val progress = harness.historyRepository
+                .getReadingProgress(SiteId.MANGACOPY, "hid-1")
+            assertEquals(parent.seriesId, progress?.seriesId)
+            assertEquals(parent.title, progress?.seriesTitle)
+            assertEquals(parent.url, progress?.seriesUrl)
+
+            viewModel.events.test {
+                viewModel.openNextChapter()
+                advanceUntilIdle()
+                val event = awaitItem() as ReaderEvent.OpenChapter
+                assertEquals(chapters[1], event.nextItem)
+                assertEquals(parent, event.parent)
+                cancelAndIgnoreRemainingEvents()
+            }
+        }
+
     private fun reader(
         harness: ReaderTestHarness,
         detail: GalleryDetail,
         persistenceScope: CoroutineScope,
         chapterLoader: SerialChapterLoader,
         extraDetails: Map<String, GalleryDetail> = emptyMap(),
+        parent: RavenRoute.ReaderParent? = null,
     ): ReaderViewModel {
         val descriptor = sampleSiteDescriptor(
             detail.item.siteId,
@@ -426,6 +688,7 @@ class SerialChapterNavigationTest {
                 siteId = detail.item.siteId.value,
                 mediaId = detail.item.id,
                 url = detail.item.url,
+                parent = parent,
             ),
             siteRegistry = SiteRegistry(
                 listOf(FakeGallerySitePlugin(descriptor, detailHandler = { detail })),

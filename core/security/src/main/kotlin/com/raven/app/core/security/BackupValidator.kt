@@ -5,6 +5,7 @@ import com.raven.app.core.model.AdvancedSearchFilters
 import com.raven.app.core.model.MediaItem
 import com.raven.app.core.model.RavenBackupPayload
 import com.raven.app.core.model.SiteId
+import com.raven.app.core.model.workId
 import com.raven.app.core.sitespi.SiteRegistry
 
 /**
@@ -147,12 +148,15 @@ class BackupValidator(
         }
 
         // 2. Reading progress
-        val readingCountBySite = HashMap<SiteId, Int>()
+        val readingWorksBySite = HashMap<SiteId, MutableSet<String>>()
         for (reading in payload.readingProgress) {
             validateSite(reading.siteId)
-            val count = (readingCountBySite[reading.siteId] ?: 0) + 1
-            checkRule(count <= MAX_HISTORY_PER_SITE) { "站点 ${reading.siteId.value} 阅读记录超过上限 ($MAX_HISTORY_PER_SITE)" }
-            readingCountBySite[reading.siteId] = count
+            val works = readingWorksBySite.getOrPut(reading.siteId) { linkedSetOf() }
+            val workId = reading.workId
+            if (workId !in works) {
+                checkRule(works.size < MAX_HISTORY_PER_SITE) { "站点 ${reading.siteId.value} 阅读记录超过上限 ($MAX_HISTORY_PER_SITE)" }
+                works.add(workId)
+            }
             checkRule(reading.mediaId.isNotBlank() && reading.mediaId.length <= MAX_ID_LENGTH) { "阅读记录作品 ID 无效" }
             checkRule(reading.currentPage in 1..MAX_PAGE_INDEX) { "阅读页码超出范围：${reading.currentPage}" }
             checkRule(reading.totalPages == 0 || reading.totalPages >= reading.currentPage) { "总页数小于当前页码" }
@@ -160,6 +164,11 @@ class BackupValidator(
             checkRule(reading.updatedAt >= 0L) { "阅读时间戳无效" }
             validateSiteUrl(reading.url, reading.siteId, allowBlank = true, allowRelative = true)
             validateOptionalHttpsOrLocalImageUrl(reading.coverUrl, reading.siteId)
+            checkRule(reading.seriesId.isNullOrBlank() || reading.seriesId!!.length <= MAX_ID_LENGTH) { "阅读记录作品系列 ID 无效" }
+            checkRule((reading.seriesTitle?.length ?: 0) <= MAX_TEXT_LENGTH) { "阅读记录系列标题过长" }
+            if (!reading.seriesUrl.isNullOrBlank()) {
+                validateSiteUrl(reading.seriesUrl!!, reading.siteId, allowBlank = true, allowRelative = true)
+            }
         }
 
         // 3. Favorites
@@ -393,7 +402,7 @@ class BackupValidator(
             exportedAt = payload.exportedAt,
             appVersion = payload.appVersion,
             watchProgressCount = payload.watchProgress.size,
-            readingProgressCount = payload.readingProgress.size,
+            readingProgressCount = payload.readingProgress.map { it.siteId to it.workId }.distinct().size,
             favoritesCount = payload.favorites.size,
             shelvesCount = payload.shelves.size,
             shelfItemsCount = payload.shelfItems.size,

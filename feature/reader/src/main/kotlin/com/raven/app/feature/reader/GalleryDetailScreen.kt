@@ -165,8 +165,10 @@ import com.raven.app.core.model.GalleryDetail
 import com.raven.app.core.model.MediaItem
 import com.raven.app.core.model.GalleryPage
 import com.raven.app.core.model.ReadingProgress
+import com.raven.app.feature.reader.resolveReaderParent
 import com.raven.app.core.model.PageBookmark
 import com.raven.app.core.model.TagRef
+import com.raven.app.core.model.RavenRoute
 import java.util.Locale
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
@@ -193,6 +195,7 @@ fun GalleryDetailScreen(
     viewModel: GalleryDetailViewModel,
     navigator: ReaderNavigator,
     modifier: Modifier = Modifier,
+    parent: RavenRoute.ReaderParent? = null,
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val colors = LocalRavenColors.current
@@ -309,6 +312,7 @@ fun GalleryDetailScreen(
                                     siteId = uiState.siteId,
                                     mediaId = chapter.id,
                                     url = chapter.url,
+                                    parent = resolveReaderParent(activeDetail, parent),
                                 )
                             },
                             showAllPreviewPages = showAllPreviewPages,
@@ -323,6 +327,7 @@ fun GalleryDetailScreen(
                                     startPage = startPage,
                                     offlineOnly = offline,
                                     queueToken = null,
+                                    parent = resolveReaderParent(activeDetail, parent),
                                 )
                             },
                             onOpenVideo = { video ->

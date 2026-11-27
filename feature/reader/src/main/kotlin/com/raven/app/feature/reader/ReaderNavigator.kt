@@ -2,6 +2,8 @@ package com.raven.app.feature.reader
 
 import android.net.Uri
 import com.raven.app.core.model.AuthorRef
+import com.raven.app.core.model.GalleryDetail
+import com.raven.app.core.model.RavenRoute
 import com.raven.app.core.model.MediaItem
 import com.raven.app.core.model.SiteId
 import com.raven.app.core.model.TagRef
@@ -21,6 +23,7 @@ interface ReaderNavigator {
         startPage: Int = 1,
         offlineOnly: Boolean = false,
         queueToken: String? = null,
+        parent: RavenRoute.ReaderParent? = null,
     )
 
     fun openVideo(
@@ -118,6 +121,7 @@ interface ReaderNavigator {
         url: String,
         offlineOnly: Boolean = false,
         queueToken: String? = null,
+        parent: RavenRoute.ReaderParent? = null,
     ) = Unit
 
     /**
@@ -159,4 +163,36 @@ fun ReaderNavigator.openQueueItem(
             queueToken = queueToken,
         )
     }
+}
+/**
+ * Resolves a known work-level identity for [detail], preferring an explicitly supplied route
+ * parent so series identity survives chapter details without catalogue metadata.
+ */
+fun resolveReaderParent(
+    detail: GalleryDetail,
+    explicit: RavenRoute.ReaderParent? = null,
+): RavenRoute.ReaderParent? {
+    explicit?.takeIf { it.seriesId.isNotBlank() }?.let { return it }
+    val item = detail.item
+    val extras = item.extra
+    val explicitSeriesId = listOf("seriesId", "comicId", "albumId")
+        .firstNotNullOfOrNull { key -> extras[key]?.trim()?.takeIf(String::isNotBlank) }
+    val hasCatalogue = !detail.chaptersUrl.isNullOrBlank()
+    val compositeSeriesId = item.id.substringBefore(':').takeIf {
+        item.id.contains(':') && it.isNotBlank()
+    }
+    val seriesId = explicitSeriesId
+        ?: compositeSeriesId
+        ?: item.id.takeIf { hasCatalogue && it.isNotBlank() }
+        ?: return null
+    val seriesUrl = detail.chaptersUrl?.substringBefore('#')?.trim()?.takeIf(String::isNotBlank)
+        ?: item.url.substringBefore("/chapter/").trimEnd('/').takeIf(String::isNotBlank)
+        ?: item.url.takeIf(String::isNotBlank)
+        ?: return null
+    val seriesTitle = listOf("seriesTitle", "comicTitle", "comicName")
+        .firstNotNullOfOrNull { key -> extras[key]?.trim()?.takeIf(String::isNotBlank) }
+        ?: item.title.substringBefore(" · ").trim().takeIf(String::isNotBlank)
+        ?: item.title.trim().takeIf(String::isNotBlank)
+        ?: return null
+    return RavenRoute.ReaderParent(seriesId = seriesId, title = seriesTitle, url = seriesUrl)
 }

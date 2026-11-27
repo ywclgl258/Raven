@@ -94,6 +94,8 @@ import com.raven.app.core.designsystem.theme.RavenShapes
 import com.raven.app.core.model.ComicLanguage
 import com.raven.app.core.model.MediaItem
 import com.raven.app.core.model.MediaKind
+import com.raven.app.core.model.workId
+import com.raven.app.core.model.workTitle
 import com.raven.app.core.model.SiteDescriptor
 import com.raven.app.core.model.SiteId
 import kotlinx.coroutines.flow.distinctUntilChanged
@@ -1046,22 +1048,29 @@ private fun GalleryMasonryHome(
                                     ) {
                                         items(
                                             items = additionalReading,
-                                            key = { "cr_${it.compositeKey}" },
+                                            key = { "cr_${it.siteId.value}:${it.workId}" },
                                         ) { progress ->
+                                            val workTitle = progress.workTitle
+                                            val chapterTitle = progress.title.takeIf {
+                                                (progress.seriesId != null || progress.workId != progress.mediaId) &&
+                                                    it.isNotBlank() && it != workTitle
+                                            }
                                             val readingItem = MediaItem(
                                                 siteId = progress.siteId,
                                                 id = progress.mediaId,
                                                 url = progress.url,
                                                 kind = progress.kind,
-                                                title = progress.title,
+                                                title = workTitle,
                                                 coverUrl = progress.coverUrl,
                                                 pageCount = progress.totalPages,
                                             )
                                             val siteLabel = uiState.allSites
                                                 .firstOrNull { it.id == progress.siteId }
                                                 ?.displayName
-                                            val badge = listOfNotNull(siteLabel, progress.kind.displayLabel())
-                                                .joinToString(" · ")
+                                            val badge = listOfNotNull(
+                                                siteLabel,
+                                                chapterTitle ?: progress.kind.displayLabel(),
+                                            ).joinToString(" · ")
                                             RavenGalleryCard(
                                                 item = readingItem,
                                                 onClick = {

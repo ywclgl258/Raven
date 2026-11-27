@@ -183,6 +183,8 @@ internal class FakeReadingProgressDao : ReadingProgressDao {
     }
     override suspend fun deleteAll() { rows.value = emptyList() }
     override suspend fun pruneSite(siteId: String, limit: Int) = Unit
+    override suspend fun deleteWork(siteId: String, workId: String) = Unit
+    override suspend fun linkChapters(siteId: String, seriesId: String, seriesTitle: String?, seriesUrl: String?, chapterIds: List<String>) = Unit
 }
 
 internal class FakeFavoriteDao : FavoriteDao {

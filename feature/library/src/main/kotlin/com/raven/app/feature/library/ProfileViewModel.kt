@@ -23,6 +23,8 @@ import com.raven.app.core.model.SiteId
 import com.raven.app.core.model.SmartShelf
 import com.raven.app.core.model.SmartShelfRule
 import com.raven.app.core.model.WatchProgress
+import com.raven.app.core.model.workId
+import com.raven.app.core.model.workTitle
 import com.raven.app.core.sitespi.AuthMode
 import com.raven.app.core.sitespi.SiteRegistry
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -38,6 +40,7 @@ import kotlinx.coroutines.launch
 data class ProfileContinueItem(
     val siteId: SiteId,
     val siteLabel: String,
+    val workId: String,
     val mediaId: String,
     val url: String,
     val kind: MediaKind,
@@ -48,8 +51,9 @@ data class ProfileContinueItem(
     val updatedAt: Long,
     val resumePage: Int = 1,
     val mediaItem: MediaItem,
+    val chapterTitle: String? = null,
 ) {
-    val compositeKey: String get() = "${siteId.value}:$mediaId"
+    val compositeKey: String get() = "${siteId.value}:$workId"
 }
 
 enum class ProfileHeroSource {
@@ -165,7 +169,7 @@ class ProfileViewModel(
 
     private val activityFlow = combine(
         historyRepository.observeAllWatchProgress(),
-        historyRepository.observeAllReadingProgress(),
+        historyRepository.observeReadingHistory(),
         shelfRepository.observeShelfItems(Shelf.WATCH_LATER_ID),
     ) { watches, readings, watchLater ->
         ProfileActivitySnapshot(
@@ -264,6 +268,7 @@ class ProfileViewModel(
                 ProfileContinueItem(
                     siteId = watch.siteId,
                     siteLabel = siteRegistry.displayNameFor(watch.siteId),
+                    workId = watch.mediaId,
                     mediaId = watch.mediaId,
                     url = watch.url,
                     kind = MediaKind.VIDEO,
@@ -279,21 +284,23 @@ class ProfileViewModel(
 
         val unfinishedReadings = activity.readings
             .asSequence()
-            .filter { CompletionPolicy.isReadingStarted(it) && !CompletionPolicy.isReadingCompleted(it) }
+            .filter { CompletionPolicy.isReadingStarted(it) && (it.isSerialWork || !CompletionPolicy.isReadingCompleted(it)) }
             .map { reading ->
                 ProfileContinueItem(
                     siteId = reading.siteId,
                     siteLabel = siteRegistry.displayNameFor(reading.siteId),
+                    workId = reading.workId,
                     mediaId = reading.mediaId,
                     url = reading.url,
                     kind = reading.kind,
-                    title = reading.title,
+                    title = reading.workTitle,
                     coverUrl = reading.coverUrl,
                     progressFraction = reading.progressFraction,
-                    resumeLabel = reading.resumeCaption(),
+                    resumeLabel = reading.workResumeCaption(),
                     updatedAt = reading.updatedAt,
                     resumePage = reading.currentPage.coerceAtLeast(1),
-                    mediaItem = reading.toMediaItem(),
+                    mediaItem = reading.toMediaItem().copy(title = reading.workTitle),
+                    chapterTitle = reading.chapterCaption(),
                 )
             }
 

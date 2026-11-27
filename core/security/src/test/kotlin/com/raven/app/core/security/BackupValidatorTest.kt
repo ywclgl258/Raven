@@ -17,6 +17,7 @@ import com.raven.app.core.model.SiteId
 import com.raven.app.core.model.SiteNetworkProfile
 import com.raven.app.core.model.TagTranslationEntry
 import com.raven.app.core.model.TagTranslationSource
+import com.raven.app.core.model.ReadingProgress
 import com.raven.app.core.model.WatchProgress
 import com.raven.app.core.sitespi.SitePlugin
 import com.raven.app.core.sitespi.SiteRegistry
@@ -360,6 +361,41 @@ class BackupValidatorTest {
         validator.validate(RavenBackupPayload(exportedAt = 1L, customTagTranslations = listOf(atLimit)))
         assertThrows(BackupValidationException::class.java) {
             validator.validate(RavenBackupPayload(exportedAt = 1L, customTagTranslations = listOf(overLimit)))
+        }
+    }
+    @Test
+    fun `reading progress counts works and validates series metadata`() {
+        val manyChapters = (1..501).map { i ->
+            ReadingProgress(
+                siteId = SiteId.EHENTAI,
+                mediaId = "work:chapter$i",
+                url = "https://e-hentai.org/g/1/$i/",
+                title = "Chapter $i",
+                kind = com.raven.app.core.model.MediaKind.SERIAL_COMIC,
+                currentPage = 1,
+                totalPages = 10,
+                updatedAt = i.toLong(),
+                seriesId = "work",
+                seriesTitle = "Work",
+                seriesUrl = "https://e-hentai.org/g/1/",
+            )
+        }
+        val summary = validator.validate(RavenBackupPayload(exportedAt = 1L, readingProgress = manyChapters))
+        assertEquals(1, summary.readingProgressCount)
+
+        val manyWorks = (1..501).map { i ->
+            ReadingProgress(
+                siteId = SiteId.EHENTAI,
+                mediaId = "work$i",
+                url = "https://e-hentai.org/g/$i/",
+                title = "Work $i",
+                currentPage = 1,
+                totalPages = 10,
+                updatedAt = i.toLong(),
+            )
+        }
+        assertThrows(BackupValidationException::class.java) {
+            validator.validate(RavenBackupPayload(exportedAt = 1L, readingProgress = manyWorks))
         }
     }
 }

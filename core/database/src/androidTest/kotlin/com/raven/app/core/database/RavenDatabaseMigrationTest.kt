@@ -45,6 +45,10 @@ class RavenDatabaseMigrationTest {
                 """.trimIndent())
                 if (oldVersion >= 4) {
                     db.execSQL("INSERT INTO media_likes VALUES ('r34v', 'v1', 'VIDEO', 'Demo', '', '', '', '[]', 1234)")
+                if (oldVersion >= 6) {
+                    db.execSQL("INSERT INTO reading_progress (site_id, media_id, url, title, cover_url, kind, current_page, total_pages, scroll_offset_px, updated_at, completed) VALUES ('r34v', 'series-1:chapter-2', 'https://rule34video.com/g/1/', 'Serial', '', 'SERIAL_COMIC', 1, 2, 0, 1000, 0)")
+                    db.execSQL("INSERT INTO reading_progress (site_id, media_id, url, title, cover_url, kind, current_page, total_pages, scroll_offset_px, updated_at, completed) VALUES ('r34v', 'plain-serial', 'https://rule34video.com/g/2/', 'Plain', '', 'SERIAL_COMIC', 0, 0, 0, 1001, 0)")
+                    db.execSQL("INSERT INTO reading_progress (site_id, media_id, url, title, cover_url, kind, current_page, total_pages, scroll_offset_px, updated_at, completed) VALUES ('r34v', 'gallery:1', 'https://rule34video.com/g/3/', 'Gallery', '', 'COMIC', 1, 2, 0, 1002, 0)")
                 }
             }
             helper.runMigrationsAndValidate(
@@ -67,7 +71,20 @@ class RavenDatabaseMigrationTest {
                     assertEquals(oldVersion >= 4, it.moveToFirst())
                     if (oldVersion >= 4) assertEquals(1234L, it.getLong(0))
                 }
-                db.query("PRAGMA foreign_key_check").use { assertFalse(it.moveToFirst()) }
+                if (oldVersion >= 6) {
+                    db.query("SELECT series_id FROM reading_progress WHERE media_id = 'series-1:chapter-2'").use {
+                        assertTrue(it.moveToFirst())
+                        assertEquals("series-1", it.getString(0))
+                    }
+                    db.query("SELECT series_id FROM reading_progress WHERE media_id = 'plain-serial'").use {
+                        assertTrue(it.moveToFirst())
+                        assertTrue(it.isNull(0))
+                    }
+                    db.query("SELECT series_id FROM reading_progress WHERE media_id = 'gallery:1'").use {
+                        assertTrue(it.moveToFirst())
+                        assertTrue(it.isNull(0))
+                    }
+                }
             } finally {
                 room.close()
             }

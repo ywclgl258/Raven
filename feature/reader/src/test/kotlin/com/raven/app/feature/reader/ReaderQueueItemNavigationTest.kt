@@ -3,6 +3,7 @@ package com.raven.app.feature.reader
 import com.raven.app.core.model.MediaItem
 import com.raven.app.core.model.MediaKind
 import com.raven.app.core.model.SiteId
+import com.raven.app.core.model.RavenRoute
 import org.junit.Assert.assertEquals
 import org.junit.Test
 
@@ -35,6 +36,7 @@ class ReaderQueueItemNavigationTest {
             startPage: Int,
             offlineOnly: Boolean,
             queueToken: String?,
+            parent: RavenRoute.ReaderParent?,
         ) {
             lastReader = ReaderCall(mediaId, offlineOnly, queueToken)
         }

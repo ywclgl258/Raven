@@ -46,4 +46,7 @@ data class ReadingProgressEntity(
     @ColumnInfo(name = "scroll_offset_px") val scrollOffsetPx: Int,
     @ColumnInfo(name = "updated_at") val updatedAt: Long,
     @ColumnInfo(name = "completed") val completed: Boolean,
+    @ColumnInfo(name = "series_id") val seriesId: String? = null,
+    @ColumnInfo(name = "series_title") val seriesTitle: String? = null,
+    @ColumnInfo(name = "series_url") val seriesUrl: String? = null,
 )

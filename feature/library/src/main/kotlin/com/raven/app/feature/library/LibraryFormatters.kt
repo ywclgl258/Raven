@@ -16,9 +16,12 @@ import com.raven.app.core.model.SearchScope
 import com.raven.app.core.model.Shelf
 import com.raven.app.core.model.ShelfItem
 import com.raven.app.core.model.SiteException
-import com.raven.app.core.model.SiteId
-import com.raven.app.core.model.SmartShelfRule
 import com.raven.app.core.model.WatchProgress
+import com.raven.app.core.model.SiteId
+import com.raven.app.core.model.workId
+import com.raven.app.core.model.workTitle
+import com.raven.app.core.model.SmartShelfRule
+import com.raven.app.core.database.domain.CompletionPolicy
 import com.raven.app.core.sitespi.SiteRegistry
 
 data class SiteFilterOption(
@@ -220,6 +223,30 @@ fun WatchProgress.toMediaItem(): MediaItem = MediaItem(
     coverUrl = coverUrl,
     durationSeconds = if (durationMs > 0L) (durationMs / 1000L).toInt() else null,
 )
+
+fun ReadingProgress.toWorkMediaItem(): MediaItem = MediaItem(
+    siteId = siteId,
+    id = workId,
+    url = seriesUrl?.takeIf { it.isNotBlank() } ?: url,
+    kind = kind,
+    title = workTitle,
+    coverUrl = coverUrl,
+    pageCount = totalPages.takeIf { it > 0 },
+)
+
+val ReadingProgress.isSerialWork: Boolean
+    get() = seriesId != null
+
+fun ReadingProgress.isWorkCompleted(): Boolean =
+    !isSerialWork && CompletionPolicy.isReadingCompleted(this)
+
+fun ReadingProgress.chapterCaption(): String? =
+    if (isSerialWork) title else null
+
+fun ReadingProgress.workResumeCaption(): String {
+    val chapter = if (isSerialWork) "「$title」· " else ""
+    return chapter + resumeCaption()
+}
 
 fun ReadingProgress.toMediaItem(): MediaItem = MediaItem(
     siteId = siteId,

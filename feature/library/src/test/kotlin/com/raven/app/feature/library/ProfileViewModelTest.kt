@@ -399,5 +399,6 @@ private class RecordingLibraryNavigator : LibraryNavigator {
         startPage: Int,
         offlineOnly: Boolean,
         queueToken: String?,
+        parent: RavenRoute.ReaderParent?,
     ) = Unit
 }
