@@ -48,7 +48,10 @@ systemctl enable --now raven-feedback.service
 SNIPPET=/etc/nginx-ai/snippets/raven-feedback.conf
 install -d -m 0755 /etc/nginx-ai/snippets
 install -m 0644 "$SCRIPT_DIR/nginx-raven-feedback.conf" "$SNIPPET"
-if ! grep -q "snippets/raven-feedback.conf" "$SITE_CONF"; then
+# The repo vhost may already declare these locations inline; do not double-include them.
+if grep -q "location = /api/feedback" "$SITE_CONF"; then
+    printf 'Website vhost already routes the feedback API; skipping snippet include.\n'
+elif ! grep -q "snippets/raven-feedback.conf" "$SITE_CONF"; then
     python3 - "$SITE_CONF" <<'PY'
 import pathlib, sys
 path = pathlib.Path(sys.argv[1])
