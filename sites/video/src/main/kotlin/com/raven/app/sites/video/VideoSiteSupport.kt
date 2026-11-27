@@ -375,8 +375,32 @@ internal object VideoSiteSupport {
         return stars.takeIf { it in 0f..5f }
     }
 
-    fun parseStreamHeight(label: String): Int =
-        heightRegex.find(label)?.groupValues?.get(1)?.toIntOrNull() ?: 0
+    private val fourKRegex = Regex("\\b(4k|uhd)\\b", RegexOption.IGNORE_CASE)
+    private val twoKRegex = Regex("\\b(2k|qhd)\\b", RegexOption.IGNORE_CASE)
+    private val resolutionPairRegex = Regex("(\\d{3,4})\\s*[x×]\\s*(\\d{3,4})", RegexOption.IGNORE_CASE)
+    /** `1080p` style tokens win over unrelated 4-digit ids such as `9100-1080p.mp4`. */
+    private val explicitHeightRegex = Regex("(\\d{3,4})\\s*p", RegexOption.IGNORE_CASE)
+
+    /**
+     * Vertical height for sorting/labels. Accepts `1080p`, `1080`, `1920x1080`, and the `2K`/`4K`
+     * aliases Hanime1 uses, so alias labels sort and match like their numeric height.
+     */
+    fun parseStreamHeight(label: String): Int {
+        val text = label.trim()
+        if (text.isEmpty()) return 0
+        if (fourKRegex.containsMatchIn(text)) return 2160
+        if (twoKRegex.containsMatchIn(text)) return 1440
+        explicitHeightRegex.find(text)?.groupValues?.get(1)?.toIntOrNull()
+            ?.takeIf { it in 144..4320 }?.let { return it }
+        resolutionPairRegex.find(text)?.groupValues?.let { groups ->
+            val width = groups.getOrNull(1)?.toIntOrNull() ?: 0
+            val height = groups.getOrNull(2)?.toIntOrNull() ?: 0
+            if (height in 144..4320) return height
+            if (width in 144..4320) return width
+        }
+        return heightRegex.find(text)?.groupValues?.get(1)?.toIntOrNull()
+            ?.takeIf { it in 144..4320 } ?: 0
+    }
 
     fun validateFilters(filters: AdvancedSearchFilters, siteId: SiteId) {
         val year = filters.year

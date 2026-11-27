@@ -4,6 +4,7 @@ import androidx.room.Dao
 import androidx.room.Query
 import androidx.room.Upsert
 import com.raven.app.core.database.entity.BlockedTermEntity
+import com.raven.app.core.database.entity.InboxDismissedEntity
 import com.raven.app.core.database.entity.SavedSearchEntity
 import com.raven.app.core.database.entity.SearchHistoryEntity
 import com.raven.app.core.database.entity.TagSubscriptionEntity
@@ -88,6 +89,25 @@ interface SavedSearchDao {
 
     @Query("DELETE FROM saved_searches")
     suspend fun deleteAll()
+}
+
+@Dao
+interface InboxDismissedDao {
+    @Upsert
+    suspend fun upsert(entity: InboxDismissedEntity)
+
+    @Query("SELECT item_key FROM inbox_dismissed WHERE source_kind = :sourceKind AND source_id = :sourceId")
+    suspend fun itemKeysForSource(sourceKind: InboxSourceKind, sourceId: String): List<String>
+
+    @Query("DELETE FROM inbox_dismissed WHERE source_kind = :sourceKind AND source_id = :sourceId")
+    suspend fun deleteBySource(sourceKind: InboxSourceKind, sourceId: String)
+
+    /** Keeps the tombstone table bounded; oldest dismissals are dropped first. */
+    @Query(
+        "DELETE FROM inbox_dismissed WHERE entry_key NOT IN " +
+            "(SELECT entry_key FROM inbox_dismissed ORDER BY dismissed_at DESC LIMIT :limit)",
+    )
+    suspend fun prune(limit: Int)
 }
 
 @Dao

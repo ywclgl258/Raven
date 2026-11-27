@@ -1696,7 +1696,16 @@ class ReaderViewModel(
                 }
 
                 val pages = latest.pageNumbers
+                // 条漫连读时章末应无缝追加下一话，而不是开一个新的 Reader 打断节奏。
+                val appendsSeamlessly = latest.isSerialComic &&
+                    latest.preferences.mode == ReaderMode.STRIP &&
+                    latest.slideshowOrder == SlideshowOrder.SEQUENTIAL &&
+                    !latest.hasReachedFinalSerialChapter
                 if (pages.size <= 1) {
+                    if (appendsSeamlessly) {
+                        preloadNextSerialChapterIfNeeded()
+                        continue
+                    }
                     val opensNextChapter = latest.slideshowOrder == SlideshowOrder.SEQUENTIAL &&
                         latest.queueSession?.hasNext != true &&
                         requestNextChapterAtBoundary()
@@ -1725,6 +1734,8 @@ class ReaderViewModel(
 
                 if (nextPage != null) {
                     jumpToPage(nextPage)
+                } else if (appendsSeamlessly) {
+                    preloadNextSerialChapterIfNeeded()
                 } else {
                     val opensNextChapter = latest.slideshowOrder == SlideshowOrder.SEQUENTIAL &&
                         latest.queueSession?.hasNext != true &&

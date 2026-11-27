@@ -358,11 +358,16 @@ fun DownloadsScreen(
 
     // Clean Completed Confirmation
     if (showCleanCompletedConfirm) {
+        val scopeName = uiState.siteFilter?.let { uiState.siteLabels[it] ?: it.value }
         LibraryConfirmBottomSheet(
             title = "清理 ${uiState.completedCount} 个已完成下载？",
-            message = "将删除全部已完成下载记录及其本地缓存文件，预计释放 " +
-                "${RavenFormatters.formatByteSize(uiState.totalCompletedBytes)}。" +
-                "进行中、已暂停与需处理的任务不受影响。",
+            message = buildString {
+                append("将删除")
+                append(scopeName?.let { "「$it」" } ?: "全部站点")
+                append("的已完成下载记录及其本地缓存文件，预计释放 ")
+                append(RavenFormatters.formatByteSize(uiState.totalCompletedBytes))
+                append("。进行中、已暂停与需处理的任务不受影响。")
+            },
             confirmLabel = "清理已完成",
             onConfirm = { viewModel.deleteCompletedDownloads() },
             onDismiss = { showCleanCompletedConfirm = false },

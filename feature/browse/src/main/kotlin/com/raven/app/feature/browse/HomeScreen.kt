@@ -40,6 +40,8 @@ import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.SnackbarDuration
+import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.material3.pulltorefresh.PullToRefreshDefaults
 import androidx.compose.material3.pulltorefresh.rememberPullToRefreshState
@@ -347,6 +349,8 @@ private fun CinemaVideoHome(
     val listState = key(activeSite.id) { rememberLazyListState() }
     val coroutineScope = rememberCoroutineScope()
     val pullState = rememberPullToRefreshState()
+    val restoredHost = remember { SnackbarHostState() }
+    var isRestoringPosition by remember { mutableStateOf(false) }
 
     // Keyed on `listState` so switching sites (which rebuilds the state via `key(activeSite.id)`)
     // never leaves the top bar bound to the previous site's scroll position.
@@ -535,21 +539,30 @@ private fun CinemaVideoHome(
                                     RestoredAnchorBanner(
                                         throughPage = restoredPos.throughPage,
                                         onJump = {
-                                            val rowIdx = primaryRows.indexOfFirst { row ->
-                                                row.any { it.id == restoredPos.workId }
-                                            }
-                                            if (rowIdx >= 0) {
-                                                val headerCount = 1 +
-                                                    (if (uiState.showSiteSwitchTutorial) 1 else 0) +
-                                                    1 +
-                                                    (if (uiState.continueWatching.isNotEmpty()) 1 else 0) +
-                                                    uiState.sections.size +
-                                                    1
-                                                coroutineScope.launch {
-                                                    listState.animateScrollToItem(headerCount + rowIdx)
+                                            val scope = coroutineScope
+                                            val host = restoredHost
+                                            if (!isRestoringPosition) {
+                                                isRestoringPosition = true
+                                                scope.launch {
+                                                    jumpToSavedWork(
+                                                        targetId = restoredPos.workId,
+                                                        readItems = { uiState.primaryItems },
+                                                        hasMore = { uiState.hasMore },
+                                                        onLoadNextPage = onLoadNextPage,
+                                                        onFound = { itemIndex ->
+                                                            val rowIdx = itemIndex / gridColumns
+                                                            val headerCount = 1 +
+                                                                (if (uiState.showSiteSwitchTutorial) 1 else 0) +
+                                                                1 +
+                                                                (if (uiState.continueWatching.isNotEmpty()) 1 else 0) +
+                                                                uiState.sections.size +
+                                                                1
+                                                            scope.launch { listState.animateScrollToItem(headerCount + rowIdx) }
+                                                        },
+                                                        host = host,
+                                                    )
+                                                    isRestoringPosition = false
                                                 }
-                                            } else {
-                                                coroutineScope.launch { listState.animateScrollToItem(0) }
                                             }
                                         },
                                         onDismiss = onDismissRestoredPosition,
@@ -786,6 +799,8 @@ private fun GalleryMasonryHome(
     val gridState = key(activeSite.id) { rememberLazyStaggeredGridState() }
     val coroutineScope = rememberCoroutineScope()
     val pullState = rememberPullToRefreshState()
+    val restoredHost = remember { SnackbarHostState() }
+    var isRestoringPosition by remember { mutableStateOf(false) }
     val aspectRatioCache = remember(activeSite.id) { mutableStateMapOf<String, Float>() }
 
     // Collapsible language bar state driven by vertical scroll direction
@@ -1105,12 +1120,24 @@ private fun GalleryMasonryHome(
                                     RestoredAnchorBanner(
                                         throughPage = restoredPos.throughPage,
                                         onJump = {
-                                            val itemIdx = uiState.primaryItems.indexOfFirst { it.id == restoredPos.workId }
-                                            if (itemIdx >= 0) {
-                                                val headerCount = (if (uiState.resumeReading != null) 1 else 0) +
-                                                    (if (additionalReading.isNotEmpty()) 1 else 0) + 1
-                                                coroutineScope.launch {
-                                                    gridState.animateScrollToItem(headerCount + itemIdx)
+                                            val scope = coroutineScope
+                                            val host = restoredHost
+                                            if (!isRestoringPosition) {
+                                                isRestoringPosition = true
+                                                scope.launch {
+                                                    jumpToSavedWork(
+                                                        targetId = restoredPos.workId,
+                                                        readItems = { uiState.primaryItems },
+                                                        hasMore = { uiState.hasMore },
+                                                        onLoadNextPage = onLoadNextPage,
+                                                        onFound = { itemIndex ->
+                                                            val headerCount = (if (uiState.resumeReading != null) 1 else 0) +
+                                                                (if (additionalReading.isNotEmpty()) 1 else 0) + 1
+                                                            scope.launch { gridState.animateScrollToItem(headerCount + itemIndex) }
+                                                        },
+                                                        host = host,
+                                                    )
+                                                    isRestoringPosition = false
                                                 }
                                             }
                                         },
@@ -1239,3 +1266,30 @@ private fun GalleryMasonrySkeleton() {
         }
     }
 }
+
+/**
+ * Loads pages until the saved work is visible instead of silently jumping to the top when the
+ * anchor has not arrived yet. The caller is responsible for scrolling after a hit.
+ */
+private suspend fun jumpToSavedWork(
+    targetId: String,
+    readItems: () -> List<com.raven.app.core.model.MediaItem>,
+    hasMore: () -> Boolean,
+    onLoadNextPage: () -> Unit,
+    onFound: (Int) -> Unit,
+    host: SnackbarHostState,
+) {
+    for (attempt in 0 until MAX_RESTORE_PAGE_ATTEMPTS) {
+        val index = readItems().indexOfFirst { it.id == targetId }
+        if (index >= 0) {
+            onFound(index)
+            return
+        }
+        if (!hasMore()) break
+        onLoadNextPage()
+        kotlinx.coroutines.delay(250)
+    }
+    host.showSnackbar("当前已加载的内容里没有该位置，请继续向下浏览或重试", duration = SnackbarDuration.Short)
+}
+
+private const val MAX_RESTORE_PAGE_ATTEMPTS: Int = 10

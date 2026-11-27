@@ -39,6 +39,7 @@ import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -93,6 +94,13 @@ fun SubscriptionsScreen(
     var editorOpen by remember { mutableStateOf(false) }
     var editingGroup by remember { mutableStateOf<SubscriptionGroup?>(null) }
     var deleteTarget by remember { mutableStateOf<SubscriptionGroup?>(null) }
+    // The sheet closes only after the write actually succeeded; failures stay editable.
+    LaunchedEffect(uiState.groupSaveToken) {
+        if (uiState.groupSaveToken > 0) {
+            editorOpen = false
+            editingGroup = null
+        }
+    }
 
     Column(
         modifier = modifier
@@ -360,9 +368,14 @@ fun SubscriptionsScreen(
             initialGroup = editingGroup,
             eligibleSites = uiState.onlineTagSearchSites,
             siteLabels = uiState.siteLabels,
+            isSaving = uiState.isSavingGroup,
+            errorMessage = uiState.groupSaveError,
             onDismiss = {
-                editorOpen = false
-                editingGroup = null
+                if (!uiState.isSavingGroup) {
+                    editorOpen = false
+                    editingGroup = null
+                    viewModel.clearGroupEditorError()
+                }
             },
             onSave = { slug, label, coverage, siteIds ->
                 val group = editingGroup
@@ -381,8 +394,6 @@ fun SubscriptionsScreen(
                         selectedSiteIds = siteIds,
                     )
                 }
-                editorOpen = false
-                editingGroup = null
             },
         )
     }
@@ -552,6 +563,8 @@ private fun SubscriptionEditorSheet(
     initialGroup: SubscriptionGroup?,
     eligibleSites: List<SiteFilterOption>,
     siteLabels: Map<SiteId, String>,
+    isSaving: Boolean = false,
+    errorMessage: String? = null,
     onDismiss: () -> Unit,
     onSave: (
         slug: String,
@@ -777,6 +790,15 @@ private fun SubscriptionEditorSheet(
 
             HorizontalDivider(thickness = 0.5.dp, color = colors.hairline)
 
+            if (!errorMessage.isNullOrBlank()) {
+                Text(
+                    text = errorMessage,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = colors.error,
+                    modifier = Modifier.fillMaxWidth().testTag("subscription_editor_error"),
+                )
+            }
+
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -784,6 +806,7 @@ private fun SubscriptionEditorSheet(
                 RavenSecondaryButton(
                     text = "取消",
                     onClick = onDismiss,
+                    enabled = !isSaving,
                     modifier = Modifier.weight(1f),
                 )
                 RavenPrimaryButton(
@@ -796,7 +819,8 @@ private fun SubscriptionEditorSheet(
                             if (coverage == SubscriptionCoverage.ALL) emptySet() else selectedSiteIds,
                         )
                     },
-                    enabled = canSave,
+                    enabled = canSave && !isSaving,
+                    loading = isSaving,
                     leadingIcon = if (initialGroup == null) Icons.Outlined.Add else Icons.Outlined.Edit,
                     modifier = Modifier
                         .weight(1f)

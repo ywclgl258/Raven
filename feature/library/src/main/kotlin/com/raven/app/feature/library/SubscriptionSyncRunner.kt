@@ -73,7 +73,7 @@ data class SubscriptionSyncSummary(
  * [SavedSearch] updates into [SubscriptionRepository], shared by [SubscriptionsViewModel] and
  * `:app` background maintenance workers.
  */
-class SubscriptionSyncRunner(
+open class SubscriptionSyncRunner(
     private val subscriptionRepository: SubscriptionRepository,
     private val blockedTermsRepository: BlockedTermsRepository,
     private val preferencesRepository: PreferencesRepository,
@@ -89,7 +89,7 @@ class SubscriptionSyncRunner(
         baselinedSources.remove(sourceId)
     }
 
-    suspend fun syncAll(
+    open suspend fun syncAll(
         includeTags: Boolean = true,
         includeSavedSearches: Boolean = true,
         includeSeries: Boolean = false,
@@ -244,6 +244,8 @@ class SubscriptionSyncRunner(
                 .first()
             val isBaseline = existing.isEmpty() && sourceId !in baselinedSources
             val knownKeys = existing.mapTo(mutableSetOf()) { it.item.compositeKey }
+            // Items the user removed stay gone; without this the next sync re-reports them as new.
+            knownKeys += subscriptionRepository.dismissedInboxKeys(InboxSourceKind.TAG_SUBSCRIPTION, sourceId)
 
             val rawItems = fetchTagItems(plugin, sub, settings)
             val allowed = filterBlocked(rawItems, blockedBySite, cachedTagsByKey)
@@ -307,6 +309,7 @@ class SubscriptionSyncRunner(
                 existing.isEmpty() &&
                 sourceId !in baselinedSources
             val knownKeys = existing.mapTo(mutableSetOf()) { it.item.compositeKey }
+            knownKeys += subscriptionRepository.dismissedInboxKeys(InboxSourceKind.SAVED_SEARCH, sourceId)
 
             val collected = linkedMapOf<String, MediaItem>()
             var anySucceeded = false

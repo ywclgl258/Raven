@@ -61,6 +61,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -173,6 +174,8 @@ fun LibraryHubScreen(
         onRemoveLocalBook = viewModel::removeLocalBook,
         onDismissMessage = viewModel::clearMessage,
         onDismissImportStatus = viewModel::clearImportStatus,
+        onCancelImport = viewModel::cancelImport,
+        onRetryImport = viewModel::retryImport,
         onCompleteTutorial = viewModel::completeLibraryTutorial,
         onSkipAllTutorials = viewModel::skipAllTutorials,
         modifier = modifier,
@@ -208,6 +211,8 @@ fun LibraryHubScreenContent(
     onRemoveLocalBook: (String) -> Unit,
     onDismissMessage: () -> Unit,
     onDismissImportStatus: () -> Unit,
+    onCancelImport: () -> Unit = {},
+    onRetryImport: () -> Unit = {},
     onCompleteTutorial: () -> Unit = {},
     onSkipAllTutorials: () -> Unit = {},
 ) {
@@ -590,6 +595,8 @@ fun LibraryHubScreenContent(
                             onImportVideo = onImportVideoClick,
                             onOpenFromLink = { showOpenLinkSheet = true },
                             onDismissStatus = onDismissImportStatus,
+                            onCancelImport = onCancelImport,
+                            onRetryImport = onRetryImport,
                             modifier = Modifier.padding(horizontal = 16.dp),
                         )
                     }
@@ -1186,6 +1193,8 @@ private fun LocalImportPanel(
     onImportVideo: () -> Unit,
     onOpenFromLink: () -> Unit,
     onDismissStatus: () -> Unit,
+    onCancelImport: () -> Unit = {},
+    onRetryImport: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val colors = LocalRavenColors.current
@@ -1214,13 +1223,19 @@ private fun LocalImportPanel(
                     text = importState.progressMessage ?: "正在导入本地内容…",
                     style = MaterialTheme.typography.bodySmall,
                     color = colors.inkPrimary,
+                    modifier = Modifier.weight(1f),
                 )
+                TextButton(onClick = onCancelImport) {
+                    Text("取消", color = colors.inkSecondary)
+                }
             }
         } else if (!importState.lastMessage.isNullOrBlank()) {
             LibraryFeedbackBanner(
                 message = importState.lastMessage,
                 tone = if (importState.isError) RavenStatusTone.ERROR else RavenStatusTone.SUCCESS,
                 onDismiss = onDismissStatus,
+                actionLabel = if (importState.canRetry) "重试导入" else null,
+                onActionClick = if (importState.canRetry) onRetryImport else null,
             )
         }
 

@@ -1,0 +1,2017 @@
+{
+  "formatVersion": 1,
+  "database": {
+    "version": 8,
+    "identityHash": "a850d5141ab7d5fb9ae4c53225efcdee",
+    "entities": [
+      {
+        "tableName": "watch_progress",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`site_id` TEXT NOT NULL, `media_id` TEXT NOT NULL, `url` TEXT NOT NULL, `title` TEXT NOT NULL, `cover_url` TEXT NOT NULL, `position_ms` INTEGER NOT NULL, `duration_ms` INTEGER NOT NULL, `updated_at` INTEGER NOT NULL, `completed` INTEGER NOT NULL, `quality` TEXT, PRIMARY KEY(`site_id`, `media_id`))",
+        "fields": [
+          {
+            "fieldPath": "siteId",
+            "columnName": "site_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "mediaId",
+            "columnName": "media_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "url",
+            "columnName": "url",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "title",
+            "columnName": "title",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "coverUrl",
+            "columnName": "cover_url",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "positionMs",
+            "columnName": "position_ms",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "durationMs",
+            "columnName": "duration_ms",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "updatedAt",
+            "columnName": "updated_at",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "completed",
+            "columnName": "completed",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "quality",
+            "columnName": "quality",
+            "affinity": "TEXT"
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "site_id",
+            "media_id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_watch_progress_updated_at",
+            "unique": false,
+            "columnNames": [
+              "updated_at"
+            ],
+            "orders": [
+              "DESC"
+            ],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_watch_progress_updated_at` ON `${TABLE_NAME}` (`updated_at` DESC)"
+          },
+          {
+            "name": "index_watch_progress_site_id_updated_at",
+            "unique": false,
+            "columnNames": [
+              "site_id",
+              "updated_at"
+            ],
+            "orders": [
+              "ASC",
+              "DESC"
+            ],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_watch_progress_site_id_updated_at` ON `${TABLE_NAME}` (`site_id` ASC, `updated_at` DESC)"
+          }
+        ]
+      },
+      {
+        "tableName": "reading_progress",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`site_id` TEXT NOT NULL, `media_id` TEXT NOT NULL, `url` TEXT NOT NULL, `title` TEXT NOT NULL, `cover_url` TEXT NOT NULL, `kind` TEXT NOT NULL, `current_page` INTEGER NOT NULL, `total_pages` INTEGER NOT NULL, `scroll_offset_px` INTEGER NOT NULL, `updated_at` INTEGER NOT NULL, `completed` INTEGER NOT NULL, `series_id` TEXT, `series_title` TEXT, `series_url` TEXT, PRIMARY KEY(`site_id`, `media_id`))",
+        "fields": [
+          {
+            "fieldPath": "siteId",
+            "columnName": "site_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "mediaId",
+            "columnName": "media_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "url",
+            "columnName": "url",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "title",
+            "columnName": "title",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "coverUrl",
+            "columnName": "cover_url",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "kind",
+            "columnName": "kind",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "currentPage",
+            "columnName": "current_page",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "totalPages",
+            "columnName": "total_pages",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "scrollOffsetPx",
+            "columnName": "scroll_offset_px",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "updatedAt",
+            "columnName": "updated_at",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "completed",
+            "columnName": "completed",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "seriesId",
+            "columnName": "series_id",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "seriesTitle",
+            "columnName": "series_title",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "seriesUrl",
+            "columnName": "series_url",
+            "affinity": "TEXT"
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "site_id",
+            "media_id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_reading_progress_updated_at",
+            "unique": false,
+            "columnNames": [
+              "updated_at"
+            ],
+            "orders": [
+              "DESC"
+            ],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_reading_progress_updated_at` ON `${TABLE_NAME}` (`updated_at` DESC)"
+          },
+          {
+            "name": "index_reading_progress_site_id_updated_at",
+            "unique": false,
+            "columnNames": [
+              "site_id",
+              "updated_at"
+            ],
+            "orders": [
+              "ASC",
+              "DESC"
+            ],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_reading_progress_site_id_updated_at` ON `${TABLE_NAME}` (`site_id` ASC, `updated_at` DESC)"
+          }
+        ]
+      },
+      {
+        "tableName": "favorites",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`site_id` TEXT NOT NULL, `kind` TEXT NOT NULL, `target_id` TEXT NOT NULL, `title` TEXT NOT NULL, `url` TEXT NOT NULL, `cover_url` TEXT NOT NULL, `added_at` INTEGER NOT NULL, `extra` TEXT NOT NULL, PRIMARY KEY(`site_id`, `kind`, `target_id`))",
+        "fields": [
+          {
+            "fieldPath": "siteId",
+            "columnName": "site_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "kind",
+            "columnName": "kind",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "targetId",
+            "columnName": "target_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "title",
+            "columnName": "title",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "url",
+            "columnName": "url",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "coverUrl",
+            "columnName": "cover_url",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "addedAt",
+            "columnName": "added_at",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "extra",
+            "columnName": "extra",
+            "affinity": "TEXT",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "site_id",
+            "kind",
+            "target_id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_favorites_added_at",
+            "unique": false,
+            "columnNames": [
+              "added_at"
+            ],
+            "orders": [
+              "DESC"
+            ],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_favorites_added_at` ON `${TABLE_NAME}` (`added_at` DESC)"
+          },
+          {
+            "name": "index_favorites_kind_added_at",
+            "unique": false,
+            "columnNames": [
+              "kind",
+              "added_at"
+            ],
+            "orders": [
+              "ASC",
+              "DESC"
+            ],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_favorites_kind_added_at` ON `${TABLE_NAME}` (`kind` ASC, `added_at` DESC)"
+          }
+        ]
+      },
+      {
+        "tableName": "shelves",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` TEXT NOT NULL, `name` TEXT NOT NULL, `note` TEXT NOT NULL, `is_pinned` INTEGER NOT NULL, `is_system` INTEGER NOT NULL, `cover_composite_key` TEXT, `created_at` INTEGER NOT NULL, `modified_at` INTEGER NOT NULL, PRIMARY KEY(`id`))",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "name",
+            "columnName": "name",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "note",
+            "columnName": "note",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "isPinned",
+            "columnName": "is_pinned",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "isSystem",
+            "columnName": "is_system",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "coverCompositeKey",
+            "columnName": "cover_composite_key",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "createdAt",
+            "columnName": "created_at",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "modifiedAt",
+            "columnName": "modified_at",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_shelves_is_pinned_modified_at",
+            "unique": false,
+            "columnNames": [
+              "is_pinned",
+              "modified_at"
+            ],
+            "orders": [
+              "DESC",
+              "DESC"
+            ],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_shelves_is_pinned_modified_at` ON `${TABLE_NAME}` (`is_pinned` DESC, `modified_at` DESC)"
+          }
+        ]
+      },
+      {
+        "tableName": "shelf_items",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`shelf_id` TEXT NOT NULL, `site_id` TEXT NOT NULL, `media_id` TEXT NOT NULL, `url` TEXT NOT NULL, `kind` TEXT NOT NULL, `title` TEXT NOT NULL, `cover_url` TEXT NOT NULL, `position` INTEGER NOT NULL, `added_at` INTEGER NOT NULL, `completed` INTEGER NOT NULL, `duration_seconds` INTEGER, `page_count` INTEGER, `completion_changed_at` INTEGER, PRIMARY KEY(`shelf_id`, `site_id`, `media_id`), FOREIGN KEY(`shelf_id`) REFERENCES `shelves`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE )",
+        "fields": [
+          {
+            "fieldPath": "shelfId",
+            "columnName": "shelf_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "siteId",
+            "columnName": "site_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "mediaId",
+            "columnName": "media_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "url",
+            "columnName": "url",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "kind",
+            "columnName": "kind",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "title",
+            "columnName": "title",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "coverUrl",
+            "columnName": "cover_url",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "position",
+            "columnName": "position",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "addedAt",
+            "columnName": "added_at",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "completed",
+            "columnName": "completed",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "durationSeconds",
+            "columnName": "duration_seconds",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "pageCount",
+            "columnName": "page_count",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "completionChangedAt",
+            "columnName": "completion_changed_at",
+            "affinity": "INTEGER"
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "shelf_id",
+            "site_id",
+            "media_id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_shelf_items_shelf_id_position",
+            "unique": false,
+            "columnNames": [
+              "shelf_id",
+              "position"
+            ],
+            "orders": [
+              "ASC",
+              "ASC"
+            ],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_shelf_items_shelf_id_position` ON `${TABLE_NAME}` (`shelf_id` ASC, `position` ASC)"
+          },
+          {
+            "name": "index_shelf_items_shelf_id_added_at",
+            "unique": false,
+            "columnNames": [
+              "shelf_id",
+              "added_at"
+            ],
+            "orders": [
+              "ASC",
+              "DESC"
+            ],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_shelf_items_shelf_id_added_at` ON `${TABLE_NAME}` (`shelf_id` ASC, `added_at` DESC)"
+          },
+          {
+            "name": "index_shelf_items_site_id_media_id",
+            "unique": false,
+            "columnNames": [
+              "site_id",
+              "media_id"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_shelf_items_site_id_media_id` ON `${TABLE_NAME}` (`site_id`, `media_id`)"
+          }
+        ],
+        "foreignKeys": [
+          {
+            "table": "shelves",
+            "onDelete": "CASCADE",
+            "onUpdate": "NO ACTION",
+            "columns": [
+              "shelf_id"
+            ],
+            "referencedColumns": [
+              "id"
+            ]
+          }
+        ]
+      },
+      {
+        "tableName": "smart_shelves",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` TEXT NOT NULL, `name` TEXT NOT NULL, `rule` TEXT NOT NULL, `media_kind_filter` TEXT, `site_id_filter` TEXT, `is_pinned` INTEGER NOT NULL, `created_at` INTEGER NOT NULL, PRIMARY KEY(`id`))",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "name",
+            "columnName": "name",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "rule",
+            "columnName": "rule",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "mediaKindFilter",
+            "columnName": "media_kind_filter",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "siteIdFilter",
+            "columnName": "site_id_filter",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "isPinned",
+            "columnName": "is_pinned",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "createdAt",
+            "columnName": "created_at",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_smart_shelves_is_pinned_created_at",
+            "unique": false,
+            "columnNames": [
+              "is_pinned",
+              "created_at"
+            ],
+            "orders": [
+              "DESC",
+              "DESC"
+            ],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_smart_shelves_is_pinned_created_at` ON `${TABLE_NAME}` (`is_pinned` DESC, `created_at` DESC)"
+          }
+        ]
+      },
+      {
+        "tableName": "page_bookmarks",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` TEXT NOT NULL, `site_id` TEXT NOT NULL, `media_id` TEXT NOT NULL, `url` TEXT NOT NULL, `title` TEXT NOT NULL, `cover_url` TEXT NOT NULL, `page` INTEGER NOT NULL, `total_pages` INTEGER NOT NULL, `scroll_offset_px` INTEGER NOT NULL, `note` TEXT NOT NULL, `created_at` INTEGER NOT NULL, PRIMARY KEY(`id`))",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "siteId",
+            "columnName": "site_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "mediaId",
+            "columnName": "media_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "url",
+            "columnName": "url",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "title",
+            "columnName": "title",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "coverUrl",
+            "columnName": "cover_url",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "page",
+            "columnName": "page",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "totalPages",
+            "columnName": "total_pages",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "scrollOffsetPx",
+            "columnName": "scroll_offset_px",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "note",
+            "columnName": "note",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "createdAt",
+            "columnName": "created_at",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_page_bookmarks_site_id_media_id_page",
+            "unique": false,
+            "columnNames": [
+              "site_id",
+              "media_id",
+              "page"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_page_bookmarks_site_id_media_id_page` ON `${TABLE_NAME}` (`site_id`, `media_id`, `page`)"
+          },
+          {
+            "name": "index_page_bookmarks_created_at",
+            "unique": false,
+            "columnNames": [
+              "created_at"
+            ],
+            "orders": [
+              "DESC"
+            ],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_page_bookmarks_created_at` ON `${TABLE_NAME}` (`created_at` DESC)"
+          }
+        ]
+      },
+      {
+        "tableName": "time_bookmarks",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` TEXT NOT NULL, `site_id` TEXT NOT NULL, `media_id` TEXT NOT NULL, `url` TEXT NOT NULL, `title` TEXT NOT NULL, `cover_url` TEXT NOT NULL, `position_ms` INTEGER NOT NULL, `duration_ms` INTEGER NOT NULL, `label` TEXT NOT NULL, `group_name` TEXT NOT NULL, `created_at` INTEGER NOT NULL, PRIMARY KEY(`id`))",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "siteId",
+            "columnName": "site_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "mediaId",
+            "columnName": "media_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "url",
+            "columnName": "url",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "title",
+            "columnName": "title",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "coverUrl",
+            "columnName": "cover_url",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "positionMs",
+            "columnName": "position_ms",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "durationMs",
+            "columnName": "duration_ms",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "label",
+            "columnName": "label",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "groupName",
+            "columnName": "group_name",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "createdAt",
+            "columnName": "created_at",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_time_bookmarks_site_id_media_id_position_ms",
+            "unique": false,
+            "columnNames": [
+              "site_id",
+              "media_id",
+              "position_ms"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_time_bookmarks_site_id_media_id_position_ms` ON `${TABLE_NAME}` (`site_id`, `media_id`, `position_ms`)"
+          },
+          {
+            "name": "index_time_bookmarks_created_at",
+            "unique": false,
+            "columnNames": [
+              "created_at"
+            ],
+            "orders": [
+              "DESC"
+            ],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_time_bookmarks_created_at` ON `${TABLE_NAME}` (`created_at` DESC)"
+          }
+        ]
+      },
+      {
+        "tableName": "image_favorites",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` TEXT NOT NULL, `site_id` TEXT NOT NULL, `media_id` TEXT NOT NULL, `media_title` TEXT NOT NULL, `page_url` TEXT NOT NULL, `image_url` TEXT NOT NULL, `page_index` INTEGER NOT NULL, `added_at` INTEGER NOT NULL, PRIMARY KEY(`id`))",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "siteId",
+            "columnName": "site_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "mediaId",
+            "columnName": "media_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "mediaTitle",
+            "columnName": "media_title",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "pageUrl",
+            "columnName": "page_url",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "imageUrl",
+            "columnName": "image_url",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "pageIndex",
+            "columnName": "page_index",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "addedAt",
+            "columnName": "added_at",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_image_favorites_site_id_media_id_page_index",
+            "unique": false,
+            "columnNames": [
+              "site_id",
+              "media_id",
+              "page_index"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_image_favorites_site_id_media_id_page_index` ON `${TABLE_NAME}` (`site_id`, `media_id`, `page_index`)"
+          },
+          {
+            "name": "index_image_favorites_added_at",
+            "unique": false,
+            "columnNames": [
+              "added_at"
+            ],
+            "orders": [
+              "DESC"
+            ],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_image_favorites_added_at` ON `${TABLE_NAME}` (`added_at` DESC)"
+          }
+        ]
+      },
+      {
+        "tableName": "tag_subscriptions",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`site_id` TEXT NOT NULL, `slug` TEXT NOT NULL, `label` TEXT NOT NULL, `url` TEXT NOT NULL, `scope` TEXT NOT NULL, `sort_order` INTEGER NOT NULL, `created_at` INTEGER NOT NULL, PRIMARY KEY(`site_id`, `slug`, `scope`))",
+        "fields": [
+          {
+            "fieldPath": "siteId",
+            "columnName": "site_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "slug",
+            "columnName": "slug",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "label",
+            "columnName": "label",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "url",
+            "columnName": "url",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "scope",
+            "columnName": "scope",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "sortOrder",
+            "columnName": "sort_order",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "createdAt",
+            "columnName": "created_at",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "site_id",
+            "slug",
+            "scope"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_tag_subscriptions_site_id_sort_order",
+            "unique": false,
+            "columnNames": [
+              "site_id",
+              "sort_order"
+            ],
+            "orders": [
+              "ASC",
+              "ASC"
+            ],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_tag_subscriptions_site_id_sort_order` ON `${TABLE_NAME}` (`site_id` ASC, `sort_order` ASC)"
+          }
+        ]
+      },
+      {
+        "tableName": "saved_searches",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` TEXT NOT NULL, `name` TEXT NOT NULL, `query` TEXT NOT NULL, `scope` TEXT NOT NULL, `site_ids` TEXT NOT NULL, `media_kind` TEXT, `sort` TEXT NOT NULL, `language` TEXT NOT NULL, `filters` TEXT NOT NULL, `created_at` INTEGER NOT NULL, `last_checked_at` INTEGER, PRIMARY KEY(`id`))",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "name",
+            "columnName": "name",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "query",
+            "columnName": "query",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "scope",
+            "columnName": "scope",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "siteIds",
+            "columnName": "site_ids",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "mediaKind",
+            "columnName": "media_kind",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "sort",
+            "columnName": "sort",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "language",
+            "columnName": "language",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "filters",
+            "columnName": "filters",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "createdAt",
+            "columnName": "created_at",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "lastCheckedAt",
+            "columnName": "last_checked_at",
+            "affinity": "INTEGER"
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_saved_searches_created_at",
+            "unique": false,
+            "columnNames": [
+              "created_at"
+            ],
+            "orders": [
+              "DESC"
+            ],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_saved_searches_created_at` ON `${TABLE_NAME}` (`created_at` DESC)"
+          }
+        ]
+      },
+      {
+        "tableName": "update_inbox",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` TEXT NOT NULL, `source_kind` TEXT NOT NULL, `source_id` TEXT NOT NULL, `source_label` TEXT NOT NULL, `site_id` TEXT NOT NULL, `media_id` TEXT NOT NULL, `item_json` TEXT NOT NULL, `discovered_at` INTEGER NOT NULL, `is_read` INTEGER NOT NULL, PRIMARY KEY(`id`))",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "sourceKind",
+            "columnName": "source_kind",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "sourceId",
+            "columnName": "source_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "sourceLabel",
+            "columnName": "source_label",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "siteId",
+            "columnName": "site_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "mediaId",
+            "columnName": "media_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "item",
+            "columnName": "item_json",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "discoveredAt",
+            "columnName": "discovered_at",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "isRead",
+            "columnName": "is_read",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_update_inbox_is_read_discovered_at",
+            "unique": false,
+            "columnNames": [
+              "is_read",
+              "discovered_at"
+            ],
+            "orders": [
+              "ASC",
+              "DESC"
+            ],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_update_inbox_is_read_discovered_at` ON `${TABLE_NAME}` (`is_read` ASC, `discovered_at` DESC)"
+          },
+          {
+            "name": "index_update_inbox_source_kind_source_id",
+            "unique": false,
+            "columnNames": [
+              "source_kind",
+              "source_id"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_update_inbox_source_kind_source_id` ON `${TABLE_NAME}` (`source_kind`, `source_id`)"
+          },
+          {
+            "name": "index_update_inbox_site_id_discovered_at",
+            "unique": false,
+            "columnNames": [
+              "site_id",
+              "discovered_at"
+            ],
+            "orders": [
+              "ASC",
+              "DESC"
+            ],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_update_inbox_site_id_discovered_at` ON `${TABLE_NAME}` (`site_id` ASC, `discovered_at` DESC)"
+          }
+        ]
+      },
+      {
+        "tableName": "inbox_dismissed",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`entry_key` TEXT NOT NULL, `source_kind` TEXT NOT NULL, `source_id` TEXT NOT NULL, `item_key` TEXT NOT NULL, `dismissed_at` INTEGER NOT NULL, PRIMARY KEY(`entry_key`))",
+        "fields": [
+          {
+            "fieldPath": "entryKey",
+            "columnName": "entry_key",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "sourceKind",
+            "columnName": "source_kind",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "sourceId",
+            "columnName": "source_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "itemKey",
+            "columnName": "item_key",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "dismissedAt",
+            "columnName": "dismissed_at",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "entry_key"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_inbox_dismissed_source_kind_source_id",
+            "unique": false,
+            "columnNames": [
+              "source_kind",
+              "source_id"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_inbox_dismissed_source_kind_source_id` ON `${TABLE_NAME}` (`source_kind`, `source_id`)"
+          }
+        ]
+      },
+      {
+        "tableName": "blocked_terms",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`site_id` TEXT NOT NULL, `term` TEXT NOT NULL, `created_at` INTEGER NOT NULL, PRIMARY KEY(`site_id`, `term`))",
+        "fields": [
+          {
+            "fieldPath": "siteId",
+            "columnName": "site_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "term",
+            "columnName": "term",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "createdAt",
+            "columnName": "created_at",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "site_id",
+            "term"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_blocked_terms_site_id",
+            "unique": false,
+            "columnNames": [
+              "site_id"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_blocked_terms_site_id` ON `${TABLE_NAME}` (`site_id`)"
+          }
+        ]
+      },
+      {
+        "tableName": "search_history",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`site_id` TEXT NOT NULL, `query` TEXT NOT NULL, `scope` TEXT NOT NULL, `searched_at` INTEGER NOT NULL, PRIMARY KEY(`site_id`, `query`, `scope`))",
+        "fields": [
+          {
+            "fieldPath": "siteId",
+            "columnName": "site_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "query",
+            "columnName": "query",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "scope",
+            "columnName": "scope",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "searchedAt",
+            "columnName": "searched_at",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "site_id",
+            "query",
+            "scope"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_search_history_site_id_searched_at",
+            "unique": false,
+            "columnNames": [
+              "site_id",
+              "searched_at"
+            ],
+            "orders": [
+              "ASC",
+              "DESC"
+            ],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_search_history_site_id_searched_at` ON `${TABLE_NAME}` (`site_id` ASC, `searched_at` DESC)"
+          }
+        ]
+      },
+      {
+        "tableName": "download_items",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` TEXT NOT NULL, `site_id` TEXT NOT NULL, `media_id` TEXT NOT NULL, `url` TEXT NOT NULL, `title` TEXT NOT NULL, `cover_url` TEXT NOT NULL, `kind` TEXT NOT NULL, `status` TEXT NOT NULL, `quality` TEXT, `group_name` TEXT NOT NULL, `progress_fraction` REAL NOT NULL, `completed_units` INTEGER NOT NULL, `total_units` INTEGER NOT NULL, `downloaded_bytes` INTEGER NOT NULL, `total_bytes` INTEGER, `selected_pages` TEXT NOT NULL, `error_category` TEXT, `error_message` TEXT, `retry_at_epoch_ms` INTEGER, `priority` INTEGER NOT NULL, `storage_location` TEXT NOT NULL, `local_path` TEXT, `created_at` INTEGER NOT NULL, `updated_at` INTEGER NOT NULL, PRIMARY KEY(`id`))",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "siteId",
+            "columnName": "site_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "mediaId",
+            "columnName": "media_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "url",
+            "columnName": "url",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "title",
+            "columnName": "title",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "coverUrl",
+            "columnName": "cover_url",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "kind",
+            "columnName": "kind",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "status",
+            "columnName": "status",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "quality",
+            "columnName": "quality",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "groupName",
+            "columnName": "group_name",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "progressFraction",
+            "columnName": "progress_fraction",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "completedUnits",
+            "columnName": "completed_units",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "totalUnits",
+            "columnName": "total_units",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "downloadedBytes",
+            "columnName": "downloaded_bytes",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "totalBytes",
+            "columnName": "total_bytes",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "selectedPages",
+            "columnName": "selected_pages",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "errorCategory",
+            "columnName": "error_category",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "errorMessage",
+            "columnName": "error_message",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "retryAtEpochMs",
+            "columnName": "retry_at_epoch_ms",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "priority",
+            "columnName": "priority",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "storageLocation",
+            "columnName": "storage_location",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "localPath",
+            "columnName": "local_path",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "createdAt",
+            "columnName": "created_at",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "updatedAt",
+            "columnName": "updated_at",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_download_items_status_priority_updated_at",
+            "unique": false,
+            "columnNames": [
+              "status",
+              "priority",
+              "updated_at"
+            ],
+            "orders": [
+              "ASC",
+              "DESC",
+              "DESC"
+            ],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_download_items_status_priority_updated_at` ON `${TABLE_NAME}` (`status` ASC, `priority` DESC, `updated_at` DESC)"
+          },
+          {
+            "name": "index_download_items_site_id_media_id",
+            "unique": false,
+            "columnNames": [
+              "site_id",
+              "media_id"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_download_items_site_id_media_id` ON `${TABLE_NAME}` (`site_id`, `media_id`)"
+          }
+        ]
+      },
+      {
+        "tableName": "playback_preferences",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`site_id` TEXT NOT NULL, `default_speed` REAL NOT NULL, `long_press_speed` REAL NOT NULL, `seek_step_seconds` INTEGER NOT NULL, `gesture_sensitivity_seconds` INTEGER NOT NULL, `preferred_quality` TEXT NOT NULL, `auto_fullscreen` INTEGER NOT NULL, `auto_download` INTEGER NOT NULL, PRIMARY KEY(`site_id`))",
+        "fields": [
+          {
+            "fieldPath": "siteId",
+            "columnName": "site_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "defaultSpeed",
+            "columnName": "default_speed",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "longPressSpeed",
+            "columnName": "long_press_speed",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "seekStepSeconds",
+            "columnName": "seek_step_seconds",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "gestureSensitivitySeconds",
+            "columnName": "gesture_sensitivity_seconds",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "preferredQuality",
+            "columnName": "preferred_quality",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "autoFullscreen",
+            "columnName": "auto_fullscreen",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "autoDownload",
+            "columnName": "auto_download",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "site_id"
+          ]
+        }
+      },
+      {
+        "tableName": "reader_preferences",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`site_id` TEXT NOT NULL, `media_id` TEXT NOT NULL, `mode` TEXT NOT NULL, `fit` TEXT NOT NULL, `start_position` TEXT NOT NULL, `crop_percent` INTEGER NOT NULL, `combine_cover` INTEGER NOT NULL, `prefer_original_images` INTEGER NOT NULL, `volume_key_paging` INTEGER NOT NULL, `reverse_volume_keys` INTEGER NOT NULL, `keep_screen_on` INTEGER NOT NULL, `brightness_percent` INTEGER NOT NULL, PRIMARY KEY(`site_id`, `media_id`))",
+        "fields": [
+          {
+            "fieldPath": "siteId",
+            "columnName": "site_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "mediaId",
+            "columnName": "media_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "mode",
+            "columnName": "mode",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "fit",
+            "columnName": "fit",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "startPosition",
+            "columnName": "start_position",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "cropPercent",
+            "columnName": "crop_percent",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "combineCover",
+            "columnName": "combine_cover",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "preferOriginalImages",
+            "columnName": "prefer_original_images",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "volumeKeyPaging",
+            "columnName": "volume_key_paging",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "reverseVolumeKeys",
+            "columnName": "reverse_volume_keys",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "keepScreenOn",
+            "columnName": "keep_screen_on",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "brightnessPercent",
+            "columnName": "brightness_percent",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "site_id",
+            "media_id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_reader_preferences_site_id",
+            "unique": false,
+            "columnNames": [
+              "site_id"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_reader_preferences_site_id` ON `${TABLE_NAME}` (`site_id`)"
+          }
+        ]
+      },
+      {
+        "tableName": "browse_positions",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`position_key` TEXT NOT NULL, `site_id` TEXT NOT NULL, `work_id` TEXT NOT NULL, `through_page` INTEGER NOT NULL, `shelf_id` TEXT NOT NULL, `updated_at` INTEGER NOT NULL, PRIMARY KEY(`position_key`))",
+        "fields": [
+          {
+            "fieldPath": "positionKey",
+            "columnName": "position_key",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "siteId",
+            "columnName": "site_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "workId",
+            "columnName": "work_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "throughPage",
+            "columnName": "through_page",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "shelfId",
+            "columnName": "shelf_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "updatedAt",
+            "columnName": "updated_at",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "position_key"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_browse_positions_updated_at",
+            "unique": false,
+            "columnNames": [
+              "updated_at"
+            ],
+            "orders": [
+              "DESC"
+            ],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_browse_positions_updated_at` ON `${TABLE_NAME}` (`updated_at` DESC)"
+          }
+        ]
+      },
+      {
+        "tableName": "tag_translations",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`namespace` TEXT NOT NULL, `raw_slug` TEXT NOT NULL, `source` TEXT NOT NULL, `chinese_name` TEXT NOT NULL, `intro` TEXT NOT NULL, `updated_at` INTEGER NOT NULL, PRIMARY KEY(`source`, `namespace`, `raw_slug`))",
+        "fields": [
+          {
+            "fieldPath": "namespace",
+            "columnName": "namespace",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "rawSlug",
+            "columnName": "raw_slug",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "source",
+            "columnName": "source",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "chineseName",
+            "columnName": "chinese_name",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "intro",
+            "columnName": "intro",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "updatedAt",
+            "columnName": "updated_at",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "source",
+            "namespace",
+            "raw_slug"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_tag_translations_raw_slug",
+            "unique": false,
+            "columnNames": [
+              "raw_slug"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_tag_translations_raw_slug` ON `${TABLE_NAME}` (`raw_slug`)"
+          },
+          {
+            "name": "index_tag_translations_chinese_name",
+            "unique": false,
+            "columnNames": [
+              "chinese_name"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_tag_translations_chinese_name` ON `${TABLE_NAME}` (`chinese_name`)"
+          },
+          {
+            "name": "index_tag_translations_source",
+            "unique": false,
+            "columnNames": [
+              "source"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_tag_translations_source` ON `${TABLE_NAME}` (`source`)"
+          }
+        ]
+      },
+      {
+        "tableName": "media_tag_cache",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`site_id` TEXT NOT NULL, `media_id` TEXT NOT NULL, `tags_json` TEXT NOT NULL, `updated_at` INTEGER NOT NULL, PRIMARY KEY(`site_id`, `media_id`))",
+        "fields": [
+          {
+            "fieldPath": "siteId",
+            "columnName": "site_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "mediaId",
+            "columnName": "media_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "tagsJson",
+            "columnName": "tags_json",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "updatedAt",
+            "columnName": "updated_at",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "site_id",
+            "media_id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_media_tag_cache_updated_at",
+            "unique": false,
+            "columnNames": [
+              "updated_at"
+            ],
+            "orders": [
+              "DESC"
+            ],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_media_tag_cache_updated_at` ON `${TABLE_NAME}` (`updated_at` DESC)"
+          }
+        ]
+      },
+      {
+        "tableName": "media_likes",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`site_id` TEXT NOT NULL, `media_id` TEXT NOT NULL, `kind` TEXT NOT NULL, `title` TEXT NOT NULL, `url` TEXT NOT NULL, `cover_url` TEXT NOT NULL, `author_name` TEXT NOT NULL, `tags_json` TEXT NOT NULL, `liked_at` INTEGER NOT NULL, PRIMARY KEY(`site_id`, `media_id`))",
+        "fields": [
+          {
+            "fieldPath": "siteId",
+            "columnName": "site_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "mediaId",
+            "columnName": "media_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "kind",
+            "columnName": "kind",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "title",
+            "columnName": "title",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "url",
+            "columnName": "url",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "coverUrl",
+            "columnName": "cover_url",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "authorName",
+            "columnName": "author_name",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "tagsJson",
+            "columnName": "tags_json",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "likedAt",
+            "columnName": "liked_at",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "site_id",
+            "media_id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_media_likes_liked_at",
+            "unique": false,
+            "columnNames": [
+              "liked_at"
+            ],
+            "orders": [
+              "DESC"
+            ],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_media_likes_liked_at` ON `${TABLE_NAME}` (`liked_at` DESC)"
+          }
+        ]
+      },
+      {
+        "tableName": "backup_restore_journal",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` INTEGER NOT NULL, `restore_id` TEXT NOT NULL, `created_at` INTEGER NOT NULL, `settings_json` TEXT NOT NULL, `site_languages_json` TEXT NOT NULL, PRIMARY KEY(`id`))",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "restoreId",
+            "columnName": "restore_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "createdAt",
+            "columnName": "created_at",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "settingsJson",
+            "columnName": "settings_json",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "siteLanguagesJson",
+            "columnName": "site_languages_json",
+            "affinity": "TEXT",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "id"
+          ]
+        }
+      },
+      {
+        "tableName": "series_follows",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`site_id` TEXT NOT NULL, `series_id` TEXT NOT NULL, `title` TEXT NOT NULL, `url` TEXT NOT NULL, `cover_url` TEXT NOT NULL, `created_at` INTEGER NOT NULL, `last_checked_at` INTEGER, `seen_chapter_ids` TEXT NOT NULL, PRIMARY KEY(`site_id`, `series_id`))",
+        "fields": [
+          {
+            "fieldPath": "siteId",
+            "columnName": "site_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "seriesId",
+            "columnName": "series_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "title",
+            "columnName": "title",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "url",
+            "columnName": "url",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "coverUrl",
+            "columnName": "cover_url",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "createdAt",
+            "columnName": "created_at",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "lastCheckedAt",
+            "columnName": "last_checked_at",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "seenChapterIds",
+            "columnName": "seen_chapter_ids",
+            "affinity": "TEXT",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "site_id",
+            "series_id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_series_follows_site_id",
+            "unique": false,
+            "columnNames": [
+              "site_id"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_series_follows_site_id` ON `${TABLE_NAME}` (`site_id`)"
+          }
+        ]
+      }
+    ],
+    "setupQueries": [
+      "CREATE TABLE IF NOT EXISTS room_master_table (id INTEGER PRIMARY KEY,identity_hash TEXT)",
+      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, 'a850d5141ab7d5fb9ae4c53225efcdee')"
+    ]
+  }
+}

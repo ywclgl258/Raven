@@ -76,18 +76,52 @@ object BufferPlanner {
     fun planFor(stream: VideoStream, linkKbps: Int = 0): BufferPlan =
         plan(StreamSelector.requiredKbps(stream), linkKbps)
 
+    /**
+     * One buffer envelope that covers 480p through 4K. Switching resolution no longer needs a new
+     * ExoPlayer (which detaches the video surface and shows a black frame on Hanime1 2K streams).
+     */
+    val UNIFIED_PLAN: BufferPlan = BufferPlan(
+        minMs = 4_000,
+        maxMs = 40_000,
+        forPlaybackMs = 500,
+        afterRebufferMs = 800,
+    )
+
     fun createLoadControl(
         plan: BufferPlan,
         memoryClassMb: Int = 256,
     ): DefaultLoadControl =
+        buildLoadControl(
+            minMs = plan.minMs,
+            maxMs = plan.maxMs,
+            forPlaybackMs = plan.forPlaybackMs,
+            afterRebufferMs = plan.afterRebufferMs,
+            backBufferMs = plan.backBufferMs,
+            memoryClassMb = memoryClassMb,
+        )
+
+    /** Load control for the single long-lived player instance. */
+    fun createUnifiedLoadControl(memoryClassMb: Int = 256): DefaultLoadControl =
+        buildLoadControl(
+            minMs = UNIFIED_PLAN.minMs,
+            maxMs = UNIFIED_PLAN.maxMs,
+            forPlaybackMs = UNIFIED_PLAN.forPlaybackMs,
+            afterRebufferMs = UNIFIED_PLAN.afterRebufferMs,
+            backBufferMs = UNIFIED_PLAN.backBufferMs,
+            memoryClassMb = memoryClassMb,
+        )
+
+    private fun buildLoadControl(
+        minMs: Int,
+        maxMs: Int,
+        forPlaybackMs: Int,
+        afterRebufferMs: Int,
+        backBufferMs: Int,
+        memoryClassMb: Int,
+    ): DefaultLoadControl =
         DefaultLoadControl.Builder()
-            .setBufferDurationsMs(
-                plan.minMs,
-                plan.maxMs,
-                plan.forPlaybackMs,
-                plan.afterRebufferMs,
-            )
-            .setBackBuffer(plan.backBufferMs, true)
+            .setBufferDurationsMs(minMs, maxMs, forPlaybackMs, afterRebufferMs)
+            .setBackBuffer(backBufferMs, true)
             .setTargetBufferBytes(targetBufferBytesForMemoryClass(memoryClassMb))
             .setPrioritizeTimeOverSizeThresholds(true)
             .build()

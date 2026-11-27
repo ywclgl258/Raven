@@ -23,6 +23,8 @@ import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
@@ -837,6 +839,99 @@ class SubscriptionsViewModelTest {
         clockMs = harness.clock,
         mediaTagCacheRepository = harness.mediaTagCacheRepository,
     )
+    @Test
+    fun `invalid group selections keep the editor open with an inline error`() = runTest {
+        val harness = LibraryTestHarness(mainRule.dispatcher, tempFolder.newFolder("sub-editor-error"))
+        val vm = createViewModel(harness)
+
+        vm.uiState.test {
+            awaitItem()
+            advanceUntilIdle()
+            vm.createSubscriptionGroup(
+                slug = "needs-two",
+                label = "多站",
+                coverage = SubscriptionCoverage.MULTI,
+                selectedSiteIds = setOf(SiteId.R34V),
+            )
+            advanceUntilIdle()
+            val rejected = expectMostRecentItem()
+            assertFalse("保存中不应阻塞用户再次编辑", rejected.isSavingGroup)
+            assertNotNull(rejected.groupSaveError)
+            assertEquals(0, rejected.groupSaveToken)
+
+            vm.createSubscriptionGroup(
+                slug = "needs-two",
+                label = "多站",
+                coverage = SubscriptionCoverage.MULTI,
+                selectedSiteIds = setOf(SiteId.R34V, SiteId.NHENTAI),
+            )
+            advanceUntilIdle()
+            val saved = expectMostRecentItem()
+            assertNull(saved.groupSaveError)
+            assertTrue("保存成功后应发出完成信号", saved.groupSaveToken > 0)
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    @Test
+    fun `refresh failure releases busy state and can retry`() = runTest {
+        val harness = LibraryTestHarness(mainRule.dispatcher, tempFolder.newFolder("sub-refresh-fail"))
+        var shouldFail = true
+        val runner = object : SubscriptionSyncRunner(
+            subscriptionRepository = harness.subscriptionRepository,
+            blockedTermsRepository = harness.blockedTermsRepository,
+            preferencesRepository = harness.preferencesRepository,
+            siteRegistry = harness.siteRegistry,
+            dispatchers = harness.dispatchers,
+        ) {
+            override suspend fun syncAll(
+                includeTags: Boolean,
+                includeSavedSearches: Boolean,
+                includeSeries: Boolean,
+                siteFilter: SiteId?,
+                onSourceStarted: (String) -> Unit,
+                onSourceFinished: (String, SourceCheckOutcome) -> Unit,
+            ): SubscriptionSyncSummary {
+                if (shouldFail) throw IllegalStateException("offline")
+                return SubscriptionSyncSummary()
+            }
+        }
+        harness.subscriptionRepository.subscribe(
+            TagSubscription(siteId = SiteId.R34V, slug = "test", label = "测试", url = "https://rule34video.com/tags/test/")
+        )
+        val vm = SubscriptionsViewModel(
+            initialSiteId = null,
+            subscriptionRepository = harness.subscriptionRepository,
+            blockedTermsRepository = harness.blockedTermsRepository,
+            preferencesRepository = harness.preferencesRepository,
+            siteRegistry = harness.siteRegistry,
+            dispatchers = harness.dispatchers,
+            syncRunner = runner,
+            clockMs = harness.clock,
+            tagDictionary = harness.runtimeDictionary,
+            mediaTagCacheRepository = harness.mediaTagCacheRepository,
+        )
+
+        vm.uiState.test {
+            awaitItem()
+            advanceUntilIdle()
+            vm.refreshAllUpdates()
+            advanceUntilIdle()
+            val failed = expectMostRecentItem()
+            assertFalse(failed.refreshProgress.isRefreshing)
+            assertTrue(failed.checkingSourceIds.isEmpty())
+            assertTrue(failed.message.orEmpty().contains("检查更新失败"))
+
+            shouldFail = false
+            vm.refreshAllUpdates()
+            advanceUntilIdle()
+            val recovered = expectMostRecentItem()
+            assertFalse(recovered.refreshProgress.isRefreshing)
+            assertTrue(recovered.checkingSourceIds.isEmpty())
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
 }
 
 private fun tagSourceId(
@@ -922,3 +1017,4 @@ private fun nonEligibleSubscriptionPlugin(): SitePlugin = FakeLibrarySitePlugin(
         defaultHost = "jable.tv",
     ),
 )
+

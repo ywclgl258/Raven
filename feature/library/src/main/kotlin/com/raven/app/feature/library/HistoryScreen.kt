@@ -37,6 +37,12 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.material3.SnackbarDuration
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.SnackbarResult
+import androidx.compose.runtime.LaunchedEffect
+import com.raven.app.core.designsystem.component.RavenConfirmDialog
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.ViewModel
@@ -57,6 +63,8 @@ import com.raven.app.core.designsystem.component.RavenStatusTone
 import com.raven.app.core.designsystem.component.RavenTopBar
 import com.raven.app.core.designsystem.theme.LocalRavenColors
 import com.raven.app.core.model.MediaItem
+import com.raven.app.core.model.ReadingProgress
+import com.raven.app.core.model.WatchProgress
 import com.raven.app.core.model.MediaKind
 import com.raven.app.core.model.SiteId
 import com.raven.app.core.model.workId
@@ -65,6 +73,8 @@ import com.raven.app.core.sitespi.SiteRegistry
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.flowOn
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
@@ -105,6 +115,8 @@ data class HistoryUiState(
     val selectionMode: Boolean = false,
     val selectedKeys: Set<String> = emptySet(),
     val message: String? = null,
+    /** True while the just-deleted entry can still be restored from the undo snackbar. */
+    val undoAvailable: Boolean = false,
 )
 
 private data class HistoryControls(
@@ -115,6 +127,7 @@ private data class HistoryControls(
     val selectionMode: Boolean = false,
     val selectedKeys: Set<String> = emptySet(),
     val message: String? = null,
+    val undoAvailable: Boolean = false,
 )
 
 class HistoryViewModel(
@@ -208,8 +221,9 @@ class HistoryViewModel(
             selectionMode = ctrl.selectionMode,
             selectedKeys = ctrl.selectedKeys.intersect(validKeys),
             message = ctrl.message,
+            undoAvailable = ctrl.undoAvailable,
         )
-    }.stateIn(
+    }.flowOn(dispatchers.default).stateIn(
         scope = viewModelScope,
         started = SharingStarted.WhileSubscribed(5_000L),
         initialValue = HistoryUiState(),
@@ -260,15 +274,72 @@ class HistoryViewModel(
         controls.update { it.copy(selectionMode = false, selectedKeys = emptySet()) }
     }
 
+    /**
+     * Captured rows backing the undo action. A serial work may span many chapter rows, so undo
+     * restores the whole set, not just the one the list displayed.
+     */
+    private data class PendingUndo(
+        val watches: List<WatchProgress> = emptyList(),
+        val readings: List<ReadingProgress> = emptyList(),
+    )
+
+    private var pendingUndo: PendingUndo? = null
+
+    private suspend fun captureForUndo(entry: HistoryEntryUi): PendingUndo =
+        if (entry.kind.isVideo) {
+            PendingUndo(watches = listOfNotNull(historyRepository.getWatchProgress(entry.siteId, entry.mediaId)))
+        } else {
+            PendingUndo(
+                readings = historyRepository.observeReadingProgressBySite(entry.siteId).first()
+                    .filter { it.workId == entry.workId },
+            )
+        }
+
     fun removeEntry(entry: HistoryEntryUi) {
         viewModelScope.launch(dispatchers.io) {
-            if (entry.kind.isVideo) {
-                historyRepository.removeWatchProgress(entry.siteId, entry.mediaId)
-            } else {
-                historyRepository.removeReadingHistory(entry.siteId, entry.workId)
+            runCatching {
+                val captured = captureForUndo(entry)
+                deleteEntry(entry)
+                captured
+            }.onSuccess { captured ->
+                pendingUndo = captured
+                controls.update {
+                    it.copy(message = null, undoAvailable = true)
+                }
+            }.onFailure { error ->
+                controls.update { it.copy(message = "删除失败：${error.message ?: "请重试"}", undoAvailable = false) }
             }
-            controls.update { it.copy(message = "已删除该条历史记录") }
         }
+    }
+
+    private suspend fun deleteEntry(entry: HistoryEntryUi) {
+        if (entry.kind.isVideo) {
+            historyRepository.removeWatchProgress(entry.siteId, entry.mediaId)
+        } else {
+            historyRepository.removeReadingHistory(entry.siteId, entry.workId)
+        }
+    }
+
+    fun undoLastRemoval() {
+        val pending = pendingUndo ?: return
+        pendingUndo = null
+        viewModelScope.launch(dispatchers.io) {
+            runCatching {
+                pending.watches.forEach { historyRepository.saveWatchProgress(it) }
+                pending.readings.forEach { historyRepository.saveReadingProgress(it) }
+            }.onSuccess {
+                controls.update { it.copy(message = "已恢复刚才删除的历史记录", undoAvailable = false) }
+            }.onFailure { error ->
+                controls.update {
+                    it.copy(message = "恢复失败：${error.message ?: "请重试"}", undoAvailable = false)
+                }
+            }
+        }
+    }
+
+    fun dismissUndo() {
+        pendingUndo = null
+        controls.update { it.copy(undoAvailable = false) }
     }
 
     fun removeSelected() {
@@ -276,18 +347,19 @@ class HistoryViewModel(
         val targets = snapshot.entries.filter { it.compositeKey in snapshot.selectedKeys }
         if (targets.isEmpty()) return
         viewModelScope.launch(dispatchers.io) {
+            var removed = 0
+            var failed = 0
             for (entry in targets) {
-                if (entry.kind.isVideo) {
-                    historyRepository.removeWatchProgress(entry.siteId, entry.mediaId)
-                } else {
-                    historyRepository.removeReadingHistory(entry.siteId, entry.workId)
-                }
+                runCatching { deleteEntry(entry) }.onSuccess { removed++ }.onFailure { failed++ }
             }
             controls.update {
                 it.copy(
                     selectionMode = false,
                     selectedKeys = emptySet(),
-                    message = "已移除 ${targets.size} 条历史记录",
+                    message = buildString {
+                        append("已移除 $removed 条历史记录")
+                        if (failed > 0) append("，$failed 条删除失败")
+                    },
                 )
             }
         }
@@ -418,6 +490,8 @@ fun HistoryScreen(
             },
         )
 
+        var confirmBulkRemove by remember { mutableStateOf(false) }
+        val snackbarHost = remember { SnackbarHostState() }
         val listState = rememberLazyListState()
         Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
             LazyColumn(
@@ -547,11 +621,43 @@ fun HistoryScreen(
                 }
             }
             }
+            SnackbarHost(
+                hostState = snackbarHost,
+                modifier = Modifier.align(Alignment.BottomCenter),
+            )
             RavenScrollToTopButton(
                 listState = listState,
                 modifier = Modifier
                     .align(Alignment.BottomEnd)
                     .padding(end = 18.dp, bottom = 22.dp),
+            )
+        }
+
+        // 单条删除给出可恢复路径；剧集/连载的整条历史按作品删除，撤销会恢复所有章节。
+        LaunchedEffect(uiState.undoAvailable) {
+            if (!uiState.undoAvailable) return@LaunchedEffect
+            val result = snackbarHost.showSnackbar(
+                message = "已删除该条历史记录",
+                actionLabel = "撤销",
+                duration = SnackbarDuration.Long,
+            )
+            when (result) {
+                SnackbarResult.ActionPerformed -> viewModel.undoLastRemoval()
+                SnackbarResult.Dismissed -> viewModel.dismissUndo()
+            }
+        }
+
+        if (confirmBulkRemove) {
+            RavenConfirmDialog(
+                onDismissRequest = { confirmBulkRemove = false },
+                title = "移除所选历史？",
+                message = "将从历史记录中移除 ${uiState.selectedKeys.size} 项，连载作品会连同各话的阅读进度一起删除。",
+                confirmLabel = "移除",
+                destructive = true,
+                onConfirm = {
+                    confirmBulkRemove = false
+                    viewModel.removeSelected()
+                },
             )
         }
 
@@ -580,7 +686,8 @@ fun HistoryScreen(
                     if (selectedItems.isNotEmpty()) shelfPickerTargets = selectedItems
                 },
                 onDeleteSelected = {
-                    if (selectedItems.isNotEmpty()) viewModel.removeSelected()
+                    // 批量移除会连带整部作品的全部章节，必须先让用户确认影响范围。
+                    if (selectedItems.isNotEmpty()) confirmBulkRemove = true
                 },
             )
         }

@@ -92,6 +92,19 @@ class PlaybackCoreTest {
         assertEquals(0, StreamSelector.mergeEstimates(0, 0))
     }
 
+    @Test
+    fun unifiedLoadControlCoversEveryQualityWithoutRebuildingThePlayer() {
+        val plan = BufferPlanner.UNIFIED_PLAN
+        assertEquals(4_000, plan.minMs)
+        assertEquals(40_000, plan.maxMs)
+        assertEquals(500, plan.forPlaybackMs)
+        assertEquals(800, plan.afterRebufferMs)
+        // One envelope must be able to describe both 480p and 4K switches.
+        assertTrue(plan.maxMs >= BufferPlanner.HIGH_BITRATE_PLAN.maxMs)
+        assertTrue(plan.minMs >= BufferPlanner.LOW_NET_PLAN.minMs)
+        assertTrue(plan.minMs <= BufferPlanner.HIGH_BITRATE_PLAN.minMs)
+    }
+
     // ---- BufferPlanner ----
 
     @Test

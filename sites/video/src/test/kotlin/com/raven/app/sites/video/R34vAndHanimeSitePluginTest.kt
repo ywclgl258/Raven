@@ -424,6 +424,35 @@ class R34vAndHanimeSitePluginTest {
     }
 
     @Test
+    fun `hanime1 2K and 4K source aliases keep distinct selectable tiers`() = runTest {
+        val fakeHttp = FakeHttpClientAdapter()
+        val store = InMemorySiteSessionStore()
+        fakeHttp.onGet(
+            "https://hanime1.me/watch?v=9100",
+            body = """
+                <html><body>
+                    <h3 id="shareBtn-title">Ultra Episode</h3>
+                    <video id="player" poster="https://cdn.hanime1.me/p9100.jpg">
+                        <source src="https://v.hanime1.me/9100-720p.mp4" size="720" type="video/mp4" />
+                        <source src="https://v.hanime1.me/9100-1080p.mp4" size="1080" type="video/mp4" />
+                        <source src="https://v.hanime1.me/9100-1080p.m3u8" type="application/x-mpegURL" />
+                        <source src="https://v.hanime1.me/9100-2k.m3u8" size="2K" type="application/x-mpegURL" />
+                        <source src="https://v.hanime1.me/9100-2160p.mp4" type="video/mp4" />
+                    </video>
+                </body></html>
+            """.trimIndent(),
+        )
+        val plugin = HanimeSitePlugin(fakeHttp, store, rateLimitBackoffMs = 0L)
+        val detail = plugin.videoSource.loadVideoDetail("https://hanime1.me/watch?v=9100")
+
+        // 2K alias maps to 1440p, 4K/missing size falls back to the file name, and same-tier HLS+MP4
+        // both stay selectable instead of one being dropped by a label-only de-duplication.
+        assertEquals(listOf("2160p", "1440p", "1080p", "1080p · HLS", "720p"), detail.streams.map { it.label })
+        assertTrue(detail.streams[1].isHls)
+        assertFalse(detail.streams.first().isHls)
+    }
+
+    @Test
     fun `hanime1 login verifies 404 on second login GET and persists session`() = runTest {
         val fakeHttp = FakeHttpClientAdapter()
         val store = InMemorySiteSessionStore()

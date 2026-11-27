@@ -242,7 +242,7 @@ class PlayerSessionController(
                 it.copy(
                     isPlaying = false,
                     isBuffering = false,
-                    errorMessage = error.localizedMessage ?: "播放失败 (${error.errorCodeName})",
+                    errorMessage = playbackErrorMessage(error),
                     errorCode = error.errorCode,
                 )
             }
@@ -585,7 +585,8 @@ class PlayerSessionController(
         val wasPlaying = player?.playWhenReady ?: snapshot.isPlaying
         val speed = player?.playbackParameters?.speed ?: snapshot.playbackSpeed
         val key = cacheKey(siteId, mediaId, stream.quality.ifBlank { stream.label })
-        beginVideoRecovery(clearRenderedFrame = true)
+        // Keep the last painted frame while the new stream prepares instead of blanking the surface.
+        beginVideoRecovery(clearRenderedFrame = false)
         activeCacheKey = key
 
         val plan = BufferPlanner.planFor(stream, linkSpeedEstimator.estimateKbps())
@@ -750,6 +751,25 @@ class PlayerSessionController(
         return null
     }
 
+    /**
+     * Player errors are localized and actionable; raw ExoPlayer text ("Source error") tells a
+     * user nothing they can act on.
+     */
+    private fun playbackErrorMessage(error: PlaybackException): String = when (error.errorCode) {
+        PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_FAILED,
+        PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_TIMEOUT,
+        PlaybackException.ERROR_CODE_TIMEOUT -> "网络连接中断，请检查网络后重试"
+        PlaybackException.ERROR_CODE_IO_BAD_HTTP_STATUS,
+        PlaybackException.ERROR_CODE_IO_FILE_NOT_FOUND -> "视频地址已失效或需要登录，请刷新后重试"
+        PlaybackException.ERROR_CODE_DECODING_FAILED,
+        PlaybackException.ERROR_CODE_DECODER_INIT_FAILED,
+        PlaybackException.ERROR_CODE_DECODING_FORMAT_UNSUPPORTED -> "当前设备无法解码该清晰度，试试较低画质"
+        PlaybackException.ERROR_CODE_PARSING_CONTAINER_MALFORMED,
+        PlaybackException.ERROR_CODE_PARSING_CONTAINER_UNSUPPORTED,
+        PlaybackException.ERROR_CODE_PARSING_MANIFEST_UNSUPPORTED -> "视频格式不支持，可换一个清晰度"
+        else -> error.localizedMessage ?: "播放失败（${error.errorCodeName}）"
+    }
+
     private fun beginVideoRecovery(clearRenderedFrame: Boolean) {
         if (clearRenderedFrame) {
             player?.clearVideoSurface()
@@ -883,7 +903,11 @@ class PlayerSessionController(
 
     private fun ensurePlayer(plan: BufferPlan, speed: Float): ExoPlayer {
         val existing = player
-        if (existing != null && activeBufferPlan?.signature == plan.signature) {
+        if (existing != null) {
+            // Quality switches (including Hanime1 2K) must reuse the player: recreating it detaches
+            // the video surface, so the screen stays black until the UI rebinds it.
+            activeBufferPlan = plan
+            existing.setPlaybackSpeed(speed.coerceIn(MIN_SPEED, MAX_SPEED))
             return existing
         }
         runCatching { mediaSession?.release() }
@@ -905,7 +929,7 @@ class PlayerSessionController(
             .setEnableDecoderFallback(true)
 
         val created = ExoPlayer.Builder(appContext, renderersFactory)
-            .setLoadControl(BufferPlanner.createLoadControl(plan, memoryClassMb))
+            .setLoadControl(BufferPlanner.createUnifiedLoadControl(memoryClassMb))
             .setBandwidthMeter(linkSpeedEstimator.meter)
             .setSeekParameters(SeekParameters.CLOSEST_SYNC)
             .setVideoChangeFrameRateStrategy(C.VIDEO_CHANGE_FRAME_RATE_STRATEGY_ONLY_IF_SEAMLESS)

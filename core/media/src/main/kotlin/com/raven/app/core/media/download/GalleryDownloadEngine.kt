@@ -203,7 +203,10 @@ class GalleryDownloadEngine(
 
     suspend fun retryFailed(id: String): Boolean = withContext(dispatchers.io) {
         galleryPageRepository.checkDownloadsAllowed()
-        val queued = updateIf(id, predicate = { it.status == DownloadStatus.FAILED }) { task ->
+        // CANCELLED is surfaced as "需处理" too; requeue it like a failure so the button works.
+        val queued = updateIf(id, predicate = {
+            it.status == DownloadStatus.FAILED || it.status == DownloadStatus.CANCELLED
+        }) { task ->
             task.copy(
                 status = DownloadStatus.QUEUED,
                 errorCategory = null,

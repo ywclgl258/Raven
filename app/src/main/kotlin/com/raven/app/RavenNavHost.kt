@@ -305,13 +305,17 @@ fun RavenAppShell(
         }
     }
 
-    val openSearchRoute: (String?, Boolean) -> Unit = remember(navController, selectTopDestination) {
-        { initialQuery, crossSite ->
+    val openSearchRoute: (String?, Boolean, SiteId?) -> Unit = remember(navController, selectTopDestination) {
+        { initialQuery, crossSite, sourceSiteId ->
             if (initialQuery.isNullOrBlank() && !crossSite) {
                 selectTopDestination(RavenTopDestination.SEARCH)
             } else {
                 navController.navigate(
-                    RavenRoute.Search(initialQuery = initialQuery, crossSite = crossSite),
+                    RavenRoute.Search(
+                        initialQuery = initialQuery,
+                        crossSite = crossSite,
+                        sourceSiteId = sourceSiteId?.value,
+                    ),
                 ) {
                     launchSingleTop = true
                 }
@@ -391,7 +395,9 @@ fun RavenAppShell(
             override fun openGallery(siteId: SiteId, mediaId: String, url: String) {
                 navController.navigate(
                     RavenRoute.GalleryDetail(siteId = siteId.value, mediaId = mediaId, url = url),
-                )
+                ) {
+                    launchSingleTop = true
+                }
             }
 
             override fun openReader(
@@ -413,21 +419,25 @@ fun RavenAppShell(
             }
 
             override fun openSiteFeed(route: RavenRoute.SiteFeed) {
-                navController.navigate(route)
+                navController.navigate(route) { launchSingleTop = true }
             }
 
             override fun openSiteDirectory(siteId: SiteId, section: String) {
                 navController.navigate(
                     RavenRoute.SiteDirectory(siteId = siteId.value, section = section),
-                )
+                ) {
+                    launchSingleTop = true
+                }
             }
 
             override fun openSiteFunctions(siteId: SiteId) {
-                navController.navigate(RavenRoute.SiteFunctions(siteId = siteId.value))
+                navController.navigate(RavenRoute.SiteFunctions(siteId = siteId.value)) {
+                    launchSingleTop = true
+                }
             }
 
-            override fun openSearch(initialQuery: String?, crossSite: Boolean) {
-                openSearchRoute(initialQuery, crossSite)
+            override fun openSearch(initialQuery: String?, crossSite: Boolean, sourceSiteId: SiteId?) {
+                openSearchRoute(initialQuery, crossSite, sourceSiteId)
             }
 
             override fun openSiteAccount(siteId: SiteId) {
@@ -542,8 +552,8 @@ fun RavenAppShell(
                 }
             }
 
-            override fun openSearch(initialQuery: String?, crossSite: Boolean) {
-                openSearchRoute(initialQuery, crossSite)
+            override fun openSearch(initialQuery: String?, crossSite: Boolean, sourceSiteId: SiteId?) {
+                openSearchRoute(initialQuery, crossSite, sourceSiteId)
             }
 
             override fun openShelfDetail(shelfId: String) {

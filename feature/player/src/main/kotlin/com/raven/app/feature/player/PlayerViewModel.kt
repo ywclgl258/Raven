@@ -316,6 +316,11 @@ class PlayerViewModel(
 
         clearAutoContinueCountdown()
         val previousTarget = current
+        // Switching in place must stop the old source immediately; otherwise a failed new load
+        // leaves the old video audible behind an error card for a different title.
+        if (previousTarget != null && previousTarget.compositeKey != args.compositeKey) {
+            playback.pause()
+        }
         loadJob?.cancel()
         metadataEnrichJob?.cancel()
         refreshStreamJob?.cancel()
@@ -371,7 +376,11 @@ class PlayerViewModel(
         val target = activeTarget.value ?: return
         // The previous failure must stop looking like the current state while the retry loads.
         playback.clearPlaybackError()
-        open(target, forceReload = true)
+        viewModelScope.launch {
+            // Persist the exact failure position first; otherwise resume may fall back seconds.
+            flushWatchProgress()
+            open(target, forceReload = true)
+        }
     }
 
     // ---- Foreground Lifecycle Ticker (strictly bound to repeatOnLifecycle(STARTED)) ----

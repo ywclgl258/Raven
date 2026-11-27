@@ -23,6 +23,7 @@ import com.raven.app.core.database.dao.TagSubscriptionDao
 import com.raven.app.core.database.dao.SeriesFollowDao
 import com.raven.app.core.database.dao.TagTranslationDao
 import com.raven.app.core.database.dao.TimeBookmarkDao
+import com.raven.app.core.database.dao.InboxDismissedDao
 import com.raven.app.core.database.dao.UpdateInboxDao
 import com.raven.app.core.database.dao.WatchProgressDao
 import com.raven.app.core.database.entity.BackupRestoreJournalEntity
@@ -45,6 +46,7 @@ import com.raven.app.core.database.entity.TagSubscriptionEntity
 import com.raven.app.core.database.entity.SeriesFollowEntity
 import com.raven.app.core.database.entity.TagTranslationEntity
 import com.raven.app.core.database.entity.TimeBookmarkEntity
+import com.raven.app.core.database.entity.InboxDismissedEntity
 import com.raven.app.core.database.entity.UpdateInboxEntity
 import com.raven.app.core.database.entity.WatchProgressEntity
 import com.raven.app.core.model.DownloadErrorCategory
@@ -100,6 +102,7 @@ internal class FakeRavenDb {
     val seriesFollowDao = seriesFollows
     val savedSearches = FakeSavedSearchDao()
     val updateInbox = FakeUpdateInboxDao()
+    val inboxDismissed = FakeInboxDismissedDao()
     val blockedTerms = FakeBlockedTermDao()
     val searchHistory = FakeSearchHistoryDao()
     val downloadItems = FakeDownloadItemDao()
@@ -719,6 +722,28 @@ internal class FakeSavedSearchDao : SavedSearchDao {
 
     override suspend fun deleteAll() {
         rows.value = emptyMap()
+    }
+}
+
+internal class FakeInboxDismissedDao : InboxDismissedDao {
+    val rows = MutableStateFlow<Map<String, InboxDismissedEntity>>(emptyMap())
+
+    override suspend fun upsert(entity: InboxDismissedEntity) {
+        rows.value = rows.value + (entity.entryKey to entity)
+    }
+
+    override suspend fun itemKeysForSource(sourceKind: InboxSourceKind, sourceId: String): List<String> =
+        rows.value.values
+            .filter { it.sourceKind == sourceKind && it.sourceId == sourceId }
+            .map(InboxDismissedEntity::itemKey)
+
+    override suspend fun deleteBySource(sourceKind: InboxSourceKind, sourceId: String) {
+        rows.value = rows.value.filterValues { it.sourceKind != sourceKind || it.sourceId != sourceId }
+    }
+
+    override suspend fun prune(limit: Int) {
+        val kept = rows.value.values.sortedByDescending(InboxDismissedEntity::dismissedAt).take(limit)
+        rows.value = kept.associateBy(InboxDismissedEntity::entryKey)
     }
 }
 

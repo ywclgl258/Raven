@@ -48,6 +48,8 @@ interface BrowseNavigator {
     fun openSearch(
         initialQuery: String? = null,
         crossSite: Boolean = false,
+        /** Search must run against the site whose list the user is currently viewing. */
+        sourceSiteId: SiteId? = null,
     )
 
     fun openSiteAccount(siteId: SiteId)

@@ -178,4 +178,53 @@ class HistoryViewModelTest {
             cancelAndIgnoreRemainingEvents()
         }
     }
+
+    @Test
+    fun `undo restores the whole serial work after a single entry removal`() = runTest {
+        val harness = LibraryTestHarness(mainRule.dispatcher, tempFolder.newFolder("hist_undo"))
+        for ((chapter, page, stamp) in listOf(Triple("series:ch1", 10, 1_000L), Triple("series:ch2", 5, 2_000L))) {
+            harness.historyRepository.saveReadingProgress(
+                ReadingProgress(
+                    siteId = SiteId.MANGACOPY,
+                    mediaId = chapter,
+                    url = "https://mangacopy.com/ch/$chapter",
+                    title = chapter,
+                    kind = MediaKind.SERIAL_COMIC,
+                    currentPage = page,
+                    totalPages = 20,
+                    updatedAt = stamp,
+                    seriesId = "series",
+                    seriesTitle = "Serial Work",
+                ),
+            )
+        }
+
+        val vm = HistoryViewModel(
+            historyRepository = harness.historyRepository,
+            shelfRepository = harness.shelfRepository,
+            siteRegistry = harness.siteRegistry,
+            dispatchers = harness.dispatchers,
+        )
+
+        vm.uiState.test {
+            awaitItem()
+            advanceUntilIdle()
+            val entry = expectMostRecentItem().entries.single { it.workId == "series" }
+            vm.removeEntry(entry)
+            advanceUntilIdle()
+            val afterDelete = expectMostRecentItem()
+            assertTrue(afterDelete.undoAvailable)
+            assertEquals(emptyList<String>(), afterDelete.entries.map { it.workId })
+            assertNull(harness.historyRepository.getReadingProgress(SiteId.MANGACOPY, "series:ch1"))
+
+            vm.undoLastRemoval()
+            advanceUntilIdle()
+            val afterUndo = expectMostRecentItem()
+            assertFalse(afterUndo.undoAvailable)
+            assertEquals(listOf("series"), afterUndo.entries.map { it.workId })
+            assertEquals(10, harness.historyRepository.getReadingProgress(SiteId.MANGACOPY, "series:ch1")?.currentPage)
+            assertEquals(5, harness.historyRepository.getReadingProgress(SiteId.MANGACOPY, "series:ch2")?.currentPage)
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
 }

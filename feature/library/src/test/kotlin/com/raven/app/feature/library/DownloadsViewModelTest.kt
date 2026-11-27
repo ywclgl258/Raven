@@ -106,12 +106,12 @@ class DownloadsViewModelTest {
 
             vm.pauseAll()
             advanceUntilIdle()
-            assertEquals(1, harness.downloadGateway.pauseAllCount)
+            assertEquals(listOf("v1"), harness.downloadGateway.pausedIds)
             assertEquals(DownloadStatus.PAUSED, harness.downloadStateRepository.getById("v1")?.status)
 
             vm.resumeAll()
             advanceUntilIdle()
-            assertEquals(1, harness.downloadGateway.resumeAllCount)
+            assertEquals(listOf("v1"), harness.downloadGateway.resumedIds)
             assertEquals(DownloadStatus.QUEUED, harness.downloadStateRepository.getById("v1")?.status)
 
             vm.retryAllFailed()
@@ -510,6 +510,53 @@ class DownloadsViewModelTest {
             assertEquals(DownloadStatus.DOWNLOADING, harness.downloadStateRepository.getById("active")?.status)
             assertEquals(DownloadStatus.COMPLETED, harness.downloadStateRepository.getById("done")?.status)
             assertEquals("已重新加入 2 个需处理任务", retriedState.message)
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    @Test
+    fun `site scoped downloads scope stats and batch operations to that site only`() = runTest {
+        val harness = LibraryTestHarness(mainRule.dispatcher, tempFolder.newFolder("dl-site-scope"))
+        harness.downloadStateRepository.upsertAll(
+            listOf(
+                sampleDownload(id = "m1", siteId = SiteId.NHENTAI, mediaId = "m1", kind = DownloadKind.COMIC, status = DownloadStatus.COMPLETED, title = "本站已完成", completedUnits = 12, totalUnits = 12),
+                sampleDownload(id = "m2", siteId = SiteId.NHENTAI, mediaId = "m2", kind = DownloadKind.COMIC, status = DownloadStatus.DOWNLOADING, title = "本站进行中"),
+                sampleDownload(id = "o1", siteId = SiteId.R34V, mediaId = "o1", kind = DownloadKind.VIDEO, status = DownloadStatus.COMPLETED, title = "他站已完成"),
+                sampleDownload(id = "o2", siteId = SiteId.R34V, mediaId = "o2", kind = DownloadKind.VIDEO, status = DownloadStatus.DOWNLOADING, title = "他站进行中"),
+            ),
+        )
+
+        val vm = DownloadsViewModel(
+            downloadGateway = harness.downloadGateway,
+            siteRegistry = harness.siteRegistry,
+            dispatchers = harness.dispatchers,
+            mediaTagCacheRepository = harness.mediaTagCacheRepository,
+            preferencesRepository = harness.preferencesRepository,
+            tagDictionary = harness.runtimeDictionary,
+        )
+
+        vm.uiState.test {
+            awaitItem()
+            advanceUntilIdle()
+            assertEquals(2, expectMostRecentItem().completedCount)
+
+            vm.selectSiteFilter(SiteId.NHENTAI)
+            advanceUntilIdle()
+            val scoped = expectMostRecentItem()
+            assertEquals(SiteId.NHENTAI, scoped.siteFilter)
+            assertEquals(1, scoped.completedCount)
+            assertEquals(1, scoped.activeTransferCount)
+            assertEquals(4, scoped.allCount)
+
+            vm.deleteCompletedDownloads()
+            advanceUntilIdle()
+            assertEquals(listOf("m1"), harness.downloadGateway.deletedIds)
+            assertNotNull(harness.downloadStateRepository.getById("o1"))
+
+            vm.pauseAll()
+            advanceUntilIdle()
+            assertEquals(listOf("m2"), harness.downloadGateway.pausedIds)
+            assertEquals(DownloadStatus.DOWNLOADING, harness.downloadStateRepository.getById("o2")?.status)
             cancelAndIgnoreRemainingEvents()
         }
     }

@@ -781,8 +781,13 @@ class HanimeSitePlugin(
                 val type = src.attr("type").trim()
                 val isHls = resolved.substringBefore('?').endsWith(".m3u8", ignoreCase = true) ||
                     type.contains("mpegurl", ignoreCase = true)
+                // `size` may be 1080, 1920x1080, or the 2K/4K aliases; fall back to the file name so
+                // 2K sources without an attribute keep their own tier instead of colliding on "原画".
+                val height = VideoSiteSupport.parseStreamHeight(size)
+                    .takeIf { it > 0 }
+                    ?: VideoSiteSupport.parseStreamHeight(resolved.substringAfterLast('/'))
                 val label = when {
-                    size.isNotBlank() -> "${size}p"
+                    height > 0 -> "${height}p"
                     isHls -> "自动"
                     else -> "原画"
                 }
@@ -793,6 +798,18 @@ class HanimeSitePlugin(
                     isHls = isHls,
                     mimeTypeHint = if (isHls) "application/vnd.apple.mpegurl" else "video/mp4",
                 )
+            }.distinctBy { it.url }.let { parsed ->
+                // Two sources at the same tier (e.g. 1080p HLS + 1080p MP4) must stay selectable.
+                val used = mutableSetOf<String>()
+                parsed.map { stream ->
+                    if (used.add(stream.label)) {
+                        stream
+                    } else {
+                        val suffix = if (stream.isHls) " · HLS" else " · MP4"
+                        val label = "${stream.label}$suffix"
+                        stream.copy(quality = label, label = label)
+                    }
+                }
             }.ifEmpty {
                 val html = doc.outerHtml()
                 val scriptSource = JsExtractor.extractJsStringVar(html, "source")

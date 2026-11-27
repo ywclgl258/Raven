@@ -59,6 +59,7 @@ interface LibraryNavigator {
     fun openSearch(
         initialQuery: String? = null,
         crossSite: Boolean = false,
+        sourceSiteId: SiteId? = null,
     )
 
     fun openShelfDetail(shelfId: String)

@@ -36,6 +36,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -70,6 +71,7 @@ import com.raven.app.core.media.storage.LocalLibraryImporter
 import com.raven.app.core.model.MediaItem
 import com.raven.app.core.model.MediaKind
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -351,17 +353,28 @@ class LocalLibraryViewModel(
         }
     }
 
+    private var importJob: Job? = null
+    private var retryImportAction: (suspend () -> MediaItem)? = null
+
     private fun runImport(
         startMessage: String,
         action: suspend () -> MediaItem,
     ) {
         if (controls.value.importState.isImporting) return
-        viewModelScope.launch(dispatchers.io) {
+        retryImportAction = action
+        importJob = viewModelScope.launch(dispatchers.io) {
             controls.update {
-                it.copy(importState = LocalImportState(isImporting = true, progressMessage = startMessage))
+                it.copy(
+                    importState = LocalImportState(
+                        isImporting = true,
+                        progressMessage = startMessage,
+                        canRetry = false,
+                    ),
+                )
             }
             try {
                 val item = action()
+                retryImportAction = null
                 refreshStorageInfo()
                 controls.update {
                     it.copy(
@@ -373,19 +386,40 @@ class LocalLibraryViewModel(
                     )
                 }
             } catch (ce: CancellationException) {
+                controls.update {
+                    it.copy(
+                        importState = LocalImportState(
+                            isImporting = false,
+                            lastMessage = "已取消导入",
+                            isError = false,
+                            canRetry = retryImportAction != null,
+                        ),
+                    )
+                }
                 throw ce
             } catch (error: Throwable) {
                 controls.update {
                     it.copy(
                         importState = LocalImportState(
                             isImporting = false,
-                            lastMessage = error.message ?: "导入失败",
+                            lastMessage = "导入失败：${error.message ?: "请重试"}",
                             isError = true,
+                            canRetry = retryImportAction != null,
                         ),
                     )
                 }
             }
         }
+    }
+
+    fun cancelImport() {
+        importJob?.cancel()
+        importJob = null
+    }
+
+    fun retryImport() {
+        val action = retryImportAction ?: return
+        runImport(startMessage = "正在重试导入…", action = action)
     }
 }
 
@@ -509,7 +543,14 @@ fun LocalLibraryScreen(
                             text = uiState.importState.progressMessage ?: "正在导入…",
                             style = MaterialTheme.typography.bodySmall,
                             color = colors.inkPrimary,
+                            modifier = Modifier.weight(1f),
                         )
+                        TextButton(
+                            onClick = viewModel::cancelImport,
+                            modifier = Modifier.testTag("local_import_cancel_button"),
+                        ) {
+                            Text("取消", color = colors.inkSecondary)
+                        }
                     }
                 }
             } else if (!uiState.importState.lastMessage.isNullOrBlank()) {
@@ -518,6 +559,8 @@ fun LocalLibraryScreen(
                         message = uiState.importState.lastMessage.orEmpty(),
                         tone = if (uiState.importState.isError) RavenStatusTone.ERROR else RavenStatusTone.SUCCESS,
                         onDismiss = viewModel::clearImportStatus,
+                        actionLabel = if (uiState.importState.canRetry) "重试导入" else null,
+                        onActionClick = if (uiState.importState.canRetry) viewModel::retryImport else null,
                         modifier = Modifier.padding(horizontal = 16.dp),
                     )
                 }

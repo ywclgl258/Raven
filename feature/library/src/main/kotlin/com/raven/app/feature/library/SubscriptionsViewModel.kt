@@ -23,12 +23,15 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 enum class SubscriptionsTab(val label: String) {
     SETTINGS("订阅设置"),
@@ -99,6 +102,11 @@ data class SubscriptionsUiState(
     val checkingSourceIds: Set<String> = emptySet(),
     val showSubscriptionsTutorial: Boolean = false,
     val message: String? = null,
+    /** Editor sheet state: keep it open while the write is in flight and surface inline errors. */
+    val isSavingGroup: Boolean = false,
+    val groupSaveError: String? = null,
+    /** Increments after a successful save so the sheet can close on its own. */
+    val groupSaveToken: Int = 0,
 )
 
 /**
@@ -118,6 +126,9 @@ private data class SubscriptionsControls(
     val checkingSourceIds: Set<String> = emptySet(),
     val refreshProgress: InboxRefreshProgress = InboxRefreshProgress(),
     val message: String? = null,
+    val isSavingGroup: Boolean = false,
+    val groupSaveError: String? = null,
+    val groupSaveToken: Int = 0,
 )
 
 class SubscriptionsViewModel(
@@ -162,6 +173,7 @@ class SubscriptionsViewModel(
     )
 
     private var refreshJob: Job? = null
+    private val groupSaveMutex = Mutex()
 
     private val cachedTagsFlow = mediaTagCacheRepository?.observeAllTags() ?: flowOf(emptyMap())
 
@@ -257,8 +269,11 @@ class SubscriptionsViewModel(
             checkingSourceIds = ctrl.checkingSourceIds,
             showSubscriptionsTutorial = !appSettings.hasSeenTutorial(FeatureTutorialIds.SUBSCRIPTIONS_TAGS),
             message = ctrl.message,
+            isSavingGroup = ctrl.isSavingGroup,
+            groupSaveError = ctrl.groupSaveError,
+            groupSaveToken = ctrl.groupSaveToken,
         )
-    }.stateIn(
+    }.flowOn(dispatchers.default).stateIn(
         scope = viewModelScope,
         started = SharingStarted.WhileSubscribed(5_000L),
         initialValue = SubscriptionsUiState(selectedSiteId = initialSiteId),
@@ -337,9 +352,12 @@ class SubscriptionsViewModel(
         }
     }
 
-    fun deleteInboxItem(id: String) {
+    fun deleteInboxItem(entry: UpdateInboxItem) {
         viewModelScope.launch(dispatchers.io) {
-            subscriptionRepository.deleteInboxItem(id)
+            runCatching { subscriptionRepository.dismissInboxItem(entry) }
+                .onFailure { error ->
+                    controls.update { it.copy(message = "删除动态失败：${error.message ?: "请重试"}") }
+                }
         }
     }
 
@@ -395,10 +413,18 @@ class SubscriptionsViewModel(
                 controls.update { it.copy(message = groupCheckMessage(group.label, summary)) }
             } catch (ce: CancellationException) {
                 throw ce
+            } catch (error: Throwable) {
+                controls.update {
+                    it.copy(message = "检查「${group.label}」失败：${error.message ?: "请稍后重试"}")
+                }
             } finally {
                 controls.update { it.copy(checkingSourceIds = it.checkingSourceIds - sourceIds) }
             }
         }
+    }
+
+    fun clearGroupEditorError() {
+        controls.update { it.copy(groupSaveError = null) }
     }
 
     private fun persistSubscriptionGroup(
@@ -410,12 +436,15 @@ class SubscriptionsViewModel(
     ) {
         val cleanSlug = (existingGroup?.slug ?: slug).trim()
         if (cleanSlug.isEmpty()) {
-            controls.update { it.copy(message = "标签 Slug 不能为空") }
+            controls.update { it.copy(groupSaveError = "标签 Slug 不能为空") }
             return
         }
         val cleanLabel = label.trim().ifBlank { cleanSlug }
         val scope = existingGroup?.scope ?: SearchScope.TAG
+        controls.update { it.copy(isSavingGroup = true, groupSaveError = null) }
         viewModelScope.launch(dispatchers.io) {
+            // 串行化保存：连续调用不会互相覆盖，UI 端仍在 isSavingGroup 时禁用按钮。
+            groupSaveMutex.withLock {
             try {
                 val allRows = subscriptionRepository.observeAllSubscriptions().first()
                 val currentRows = existingGroup?.subscriptions
@@ -436,7 +465,7 @@ class SubscriptionsViewModel(
                     else -> null
                 }
                 if (validationMessage != null) {
-                    controls.update { it.copy(message = validationMessage) }
+                    controls.update { it.copy(isSavingGroup = false, groupSaveError = validationMessage) }
                     return@launch
                 }
 
@@ -474,11 +503,24 @@ class SubscriptionsViewModel(
                     currentSiteIds.isNotEmpty() -> "已合并订阅"
                     else -> "已添加订阅"
                 }
-                controls.update { it.copy(message = "$action「$cleanLabel」") }
+                controls.update {
+                    it.copy(
+                        isSavingGroup = false,
+                        groupSaveError = null,
+                        groupSaveToken = it.groupSaveToken + 1,
+                        message = "$action「$cleanLabel」",
+                    )
+                }
             } catch (ce: CancellationException) {
                 throw ce
-            } catch (_: Throwable) {
-                controls.update { it.copy(message = "保存订阅失败，请稍后重试") }
+            } catch (error: Throwable) {
+                controls.update {
+                    it.copy(
+                        isSavingGroup = false,
+                        groupSaveError = "保存订阅失败：${error.message ?: "请稍后重试"}",
+                    )
+                }
+            }
             }
         }
     }
@@ -569,13 +611,21 @@ class SubscriptionsViewModel(
                     )
                 }
             } catch (ce: CancellationException) {
+                throw ce
+            } catch (error: Throwable) {
+                controls.update {
+                    it.copy(
+                        message = "检查更新失败：${error.message ?: "请稍后重试"}",
+                    )
+                }
+            } finally {
+                // Any failure path must release the busy state, otherwise the toolbar spins forever.
                 controls.update {
                     it.copy(
                         refreshProgress = it.refreshProgress.copy(isRefreshing = false),
                         checkingSourceIds = emptySet(),
                     )
                 }
-                throw ce
             }
         }
     }

@@ -135,6 +135,28 @@ internal class InMemoryPreferencesDataStore(
         }
 }
 
+internal class InMemoryInboxDismissedDao : com.raven.app.core.database.dao.InboxDismissedDao {
+    private val rows = linkedMapOf<String, com.raven.app.core.database.entity.InboxDismissedEntity>()
+
+    override suspend fun upsert(entity: com.raven.app.core.database.entity.InboxDismissedEntity) {
+        rows[entity.entryKey] = entity
+    }
+
+    override suspend fun itemKeysForSource(sourceKind: InboxSourceKind, sourceId: String): List<String> =
+        rows.values.filter { it.sourceKind == sourceKind && it.sourceId == sourceId }.map { it.itemKey }
+
+    override suspend fun deleteBySource(sourceKind: InboxSourceKind, sourceId: String) {
+        rows.entries.removeIf { it.value.sourceKind == sourceKind && it.value.sourceId == sourceId }
+    }
+
+    override suspend fun prune(limit: Int) {
+        while (rows.size > limit) {
+            val oldest = rows.values.minByOrNull { it.dismissedAt } ?: break
+            rows.remove(oldest.entryKey)
+        }
+    }
+}
+
 internal class FakeLibraryDownloadGateway(
     private val downloadStateRepository: DownloadStateRepository,
 ) : LibraryDownloadGateway {
@@ -402,6 +424,7 @@ internal class LibraryTestHarness(
         savedSearchDao = savedSearchDao,
         updateInboxDao = updateInboxDao,
         seriesFollowDao = InMemorySeriesFollowDao(),
+        inboxDismissedDao = InMemoryInboxDismissedDao(),
         transactionRunner = transactionRunner,
         clock = clock,
     )

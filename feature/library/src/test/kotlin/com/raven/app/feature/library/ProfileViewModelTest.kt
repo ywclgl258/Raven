@@ -358,7 +358,7 @@ private class RecordingLibraryNavigator : LibraryNavigator {
 
     override fun openSiteFunctions(siteId: SiteId) = Unit
 
-    override fun openSearch(initialQuery: String?, crossSite: Boolean) = Unit
+    override fun openSearch(initialQuery: String?, crossSite: Boolean, sourceSiteId: SiteId?) = Unit
 
     override fun openShelfDetail(shelfId: String) = Unit
 

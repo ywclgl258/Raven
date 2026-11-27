@@ -13,6 +13,7 @@ import com.raven.app.core.database.dao.BrowsePositionDao
 import com.raven.app.core.database.dao.DownloadItemDao
 import com.raven.app.core.database.dao.FavoriteDao
 import com.raven.app.core.database.dao.ImageFavoriteDao
+import com.raven.app.core.database.dao.InboxDismissedDao
 import com.raven.app.core.database.dao.MediaLikeDao
 import com.raven.app.core.database.dao.MediaTagCacheDao
 import com.raven.app.core.database.dao.PageBookmarkDao
@@ -52,6 +53,7 @@ import com.raven.app.core.database.entity.SmartShelfEntity
 import com.raven.app.core.database.entity.TagSubscriptionEntity
 import com.raven.app.core.database.entity.TagTranslationEntity
 import com.raven.app.core.database.entity.TimeBookmarkEntity
+import com.raven.app.core.database.entity.InboxDismissedEntity
 import com.raven.app.core.database.entity.UpdateInboxEntity
 import com.raven.app.core.database.entity.WatchProgressEntity
 import com.raven.app.core.model.Shelf
@@ -70,6 +72,7 @@ import com.raven.app.core.model.Shelf
         TagSubscriptionEntity::class,
         SavedSearchEntity::class,
         UpdateInboxEntity::class,
+        InboxDismissedEntity::class,
         BlockedTermEntity::class,
         SearchHistoryEntity::class,
         DownloadItemEntity::class,
@@ -99,6 +102,7 @@ abstract class RavenDatabase : RoomDatabase() {
     abstract fun tagSubscriptionDao(): TagSubscriptionDao
     abstract fun savedSearchDao(): SavedSearchDao
     abstract fun updateInboxDao(): UpdateInboxDao
+    abstract fun inboxDismissedDao(): InboxDismissedDao
     abstract fun blockedTermDao(): BlockedTermDao
     abstract fun searchHistoryDao(): SearchHistoryDao
     abstract fun downloadItemDao(): DownloadItemDao
@@ -113,7 +117,7 @@ abstract class RavenDatabase : RoomDatabase() {
 
     companion object {
         const val DATABASE_NAME: String = "raven.db"
-        const val SCHEMA_VERSION: Int = 7
+        const val SCHEMA_VERSION: Int = 8
         const val DEFAULT_WATCH_LATER_NAME: String = "稍后看"
 
         val MIGRATION_1_2: Migration = object : Migration(1, 2) {
@@ -252,6 +256,27 @@ abstract class RavenDatabase : RoomDatabase() {
             }
         }
 
+        val MIGRATION_7_8: Migration = object : Migration(7, 8) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS `inbox_dismissed` (
+                        `entry_key` TEXT NOT NULL,
+                        `source_kind` TEXT NOT NULL,
+                        `source_id` TEXT NOT NULL,
+                        `item_key` TEXT NOT NULL,
+                        `dismissed_at` INTEGER NOT NULL,
+                        PRIMARY KEY(`entry_key`)
+                    )
+                    """.trimIndent(),
+                )
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS `index_inbox_dismissed_source_kind_source_id` " +
+                        "ON `inbox_dismissed` (`source_kind`, `source_id`)",
+                )
+            }
+        }
+
         private val watchLaterSeedCallback = object : Callback() {
             override fun onCreate(db: SupportSQLiteDatabase) {
                 super.onCreate(db)
@@ -280,6 +305,7 @@ abstract class RavenDatabase : RoomDatabase() {
                     MIGRATION_4_5,
                     MIGRATION_5_6,
                     MIGRATION_6_7,
+                    MIGRATION_7_8,
                 )
                 .addCallback(watchLaterSeedCallback)
                 .build()

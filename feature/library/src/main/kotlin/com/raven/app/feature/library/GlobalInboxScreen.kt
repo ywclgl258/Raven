@@ -235,7 +235,7 @@ fun GlobalInboxScreen(
                 icon = Icons.Outlined.DeleteOutline,
                 destructive = true,
                 onClick = {
-                    viewModel.deleteInboxItem(target.id)
+                    viewModel.deleteInboxItem(target)
                     actionTarget = null
                 },
             )

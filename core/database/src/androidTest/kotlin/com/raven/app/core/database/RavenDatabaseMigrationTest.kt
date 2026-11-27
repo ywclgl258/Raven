@@ -47,6 +47,7 @@ class RavenDatabaseMigrationTest {
                 """.trimIndent())
                 if (oldVersion >= 4) {
                     db.execSQL("INSERT INTO media_likes VALUES ('r34v', 'v1', 'VIDEO', 'Demo', '', '', '', '[]', 1234)")
+                }
                 if (oldVersion >= 6) {
                     db.execSQL("INSERT INTO reading_progress (site_id, media_id, url, title, cover_url, kind, current_page, total_pages, scroll_offset_px, updated_at, completed) VALUES ('r34v', 'series-1:chapter-2', 'https://rule34video.com/g/1/', 'Serial', '', 'SERIAL_COMIC', 1, 2, 0, 1000, 0)")
                     db.execSQL("INSERT INTO reading_progress (site_id, media_id, url, title, cover_url, kind, current_page, total_pages, scroll_offset_px, updated_at, completed) VALUES ('r34v', 'plain-serial', 'https://rule34video.com/g/2/', 'Plain', '', 'SERIAL_COMIC', 0, 0, 0, 1001, 0)")
@@ -56,7 +57,7 @@ class RavenDatabaseMigrationTest {
             helper.runMigrationsAndValidate(
                 name, RavenDatabase.SCHEMA_VERSION, true,
                 RavenDatabase.MIGRATION_1_2, RavenDatabase.MIGRATION_2_3,
-                RavenDatabase.MIGRATION_3_4, RavenDatabase.MIGRATION_4_5, RavenDatabase.MIGRATION_5_6, RavenDatabase.MIGRATION_6_7,
+                RavenDatabase.MIGRATION_3_4, RavenDatabase.MIGRATION_4_5, RavenDatabase.MIGRATION_5_6, RavenDatabase.MIGRATION_6_7, RavenDatabase.MIGRATION_7_8,
             ).close()
             val room = Room.databaseBuilder(context, RavenDatabase::class.java, name).build()
             try {
@@ -75,6 +76,9 @@ class RavenDatabaseMigrationTest {
                 }
                 db.query("SELECT name FROM sqlite_master WHERE type='table' AND name='series_follows'").use {
                     assertTrue(it.moveToFirst())
+                }
+                db.query("SELECT name FROM sqlite_master WHERE type='table' AND name='inbox_dismissed'").use {
+                    assertTrue("迁移后应存在 inbox_dismissed 墓碑表", it.moveToFirst())
                 }
                 if (oldVersion >= 6) {
                     db.query("SELECT series_id FROM reading_progress WHERE media_id = 'series-1:chapter-2'").use {

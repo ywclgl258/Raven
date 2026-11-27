@@ -1192,4 +1192,27 @@ class PlayerViewModelTest {
         tickerJob.cancel()
         advanceUntilIdle()
     }
+
+    @Test
+    fun inPlaceSwitchPausesOldSourceAndRetryClearsStaleError() = runTest {
+        val harness = PlayerTestHarness(mainDispatcherRule.dispatcher)
+        val (registry, _) = buildRegistry()
+        val vm = harness.createViewModel(
+            registry,
+            initialArgs = PlayerLaunchArgs(SiteId.R34V, "a1", "https://r34v.example/video/a1", "Video a1"),
+        )
+        advanceUntilIdle()
+        assertTrue(harness.playbackPort.state.value.isPlaying)
+
+        harness.playbackPort.simulatePlaybackError("Source error")
+        vm.open(PlayerLaunchArgs(SiteId.R34V, "b2", "https://r34v.example/video/b2", "Video b2"))
+        advanceUntilIdle()
+        assertTrue(harness.playbackPort.pauseCalls > 0)
+
+        harness.playbackPort.simulatePlaybackError("Source error")
+        vm.retryLoad()
+        advanceUntilIdle()
+        assertNull(harness.playbackPort.state.value.errorMessage)
+        assertTrue(harness.playbackPort.onlineLoads.size >= 2)
+    }
 }

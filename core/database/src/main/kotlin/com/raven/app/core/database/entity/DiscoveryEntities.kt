@@ -69,6 +69,22 @@ data class UpdateInboxEntity(
     @ColumnInfo(name = "is_read") val isRead: Boolean,
 )
 
+/**
+ * Tombstone for inbox entries the user removed. The update inbox row is deleted, but the key stays
+ * here so the next subscription sync does not treat the same item as newly discovered again.
+ */
+@Entity(
+    tableName = "inbox_dismissed",
+    indices = [Index(value = ["source_kind", "source_id"])],
+)
+data class InboxDismissedEntity(
+    @PrimaryKey @ColumnInfo(name = "entry_key") val entryKey: String,
+    @ColumnInfo(name = "source_kind") val sourceKind: InboxSourceKind,
+    @ColumnInfo(name = "source_id") val sourceId: String,
+    @ColumnInfo(name = "item_key") val itemKey: String,
+    @ColumnInfo(name = "dismissed_at") val dismissedAt: Long,
+)
+
 @Entity(
     tableName = "blocked_terms",
     primaryKeys = ["site_id", "term"],

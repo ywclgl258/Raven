@@ -72,6 +72,9 @@ import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.SnackbarDuration
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -306,11 +309,22 @@ fun SettingsScreenContent(
             },
         )
 
+        val feedback = uiState.feedbackMessage
+        val snackbarHost = remember { SnackbarHostState() }
+        // 结果跟着用户当前位置走，不再只在列表顶部那条看不见的 banner 里。
+        LaunchedEffect(feedback) {
+            if (!feedback.isNullOrBlank()) {
+                snackbarHost.showSnackbar(feedback, duration = SnackbarDuration.Short)
+                onDismissFeedback()
+            }
+        }
+
         Box(
             modifier = Modifier
                 .weight(1f)
                 .fillMaxWidth(),
         ) {
+            SnackbarHost(hostState = snackbarHost, modifier = Modifier.align(Alignment.BottomCenter))
             LazyColumn(
                 state = listState,
                 contentPadding = PaddingValues(horizontal = 16.dp, vertical = 14.dp),
@@ -319,21 +333,6 @@ fun SettingsScreenContent(
                     .fillMaxSize()
                     .testTag("settings_list"),
             ) {
-            val feedback = uiState.feedbackMessage
-            if (!feedback.isNullOrBlank()) {
-                item(key = "settings_feedback_banner") {
-                    SettingsNoticeBanner(
-                        message = feedback,
-                        tone = RavenStatusTone.ACCENT,
-                        action = {
-                            TextButton(onClick = onDismissFeedback) {
-                                Text("知道了", color = colors.inkPrimary)
-                            }
-                        },
-                    )
-                }
-            }
-
             // 1. 外观与阅读
             item(key = "section_appearance_reading") {
                 RavenGroupedSection(

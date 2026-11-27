@@ -95,6 +95,8 @@ data class LocalImportState(
     val progressMessage: String? = null,
     val lastMessage: String? = null,
     val isError: Boolean = false,
+    /** A failed or cancelled import can be retried with the same source. */
+    val canRetry: Boolean = false,
 )
 
 data class LibraryHubUiState(
@@ -755,33 +757,55 @@ class LibraryHubViewModel(
         }
     }
 
+    private var importJob: Job? = null
+    private var retryImportAction: (suspend () -> MediaItem)? = null
+
     private fun runLocalImport(
         startLabel: String,
         action: suspend () -> MediaItem,
     ) {
         if (importState.value.isImporting) return
-        viewModelScope.launch(dispatchers.io) {
+        retryImportAction = action
+        importJob = viewModelScope.launch(dispatchers.io) {
             importState.value = LocalImportState(
                 isImporting = true,
                 progressMessage = startLabel,
             )
             try {
                 val imported = action()
+                retryImportAction = null
                 importState.value = LocalImportState(
                     isImporting = false,
                     lastMessage = "已导入「${imported.title}」",
                     isError = false,
                 )
             } catch (ce: CancellationException) {
+                importState.value = LocalImportState(
+                    isImporting = false,
+                    lastMessage = "已取消导入",
+                    isError = false,
+                    canRetry = retryImportAction != null,
+                )
                 throw ce
             } catch (error: Throwable) {
                 importState.value = LocalImportState(
                     isImporting = false,
-                    lastMessage = error.message ?: "导入失败，请确认文件完整且空间充足",
+                    lastMessage = "导入失败：${error.message ?: "请确认文件完整且空间充足"}",
                     isError = true,
+                    canRetry = retryImportAction != null,
                 )
             }
         }
+    }
+
+    fun cancelImport() {
+        importJob?.cancel()
+        importJob = null
+    }
+
+    fun retryImport() {
+        val action = retryImportAction ?: return
+        runLocalImport(startLabel = "正在重试导入…", action = action)
     }
 
     private data class HubControlsSnapshot(

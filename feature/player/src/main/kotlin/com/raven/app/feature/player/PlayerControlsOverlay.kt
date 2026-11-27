@@ -136,6 +136,7 @@ internal fun PlayerControlsOverlay(
     val motionReduced = LocalMotionReduced.current
     val supportsPip = Build.VERSION.SDK_INT >= Build.VERSION_CODES.O
 
+    val activeError = (uiState.loadError ?: uiState.playbackError).takeUnless { uiState.isRefreshingExpiredStream }
     Box(modifier = modifier.fillMaxSize()) {
         // 1. Lock mode: hide all controls, expose only subtle left "解锁画面" pill
         if (uiState.isLocked) {
@@ -178,15 +179,33 @@ internal fun PlayerControlsOverlay(
                     }
                 }
             }
+            // 锁屏时失败只表现为静止画面，给一个能解锁查看的最简提示。
+            if (activeError != null) {
+                RavenFrostedBox(
+                    shape = RavenShapes.PillShape,
+                    reduceTransparency = reduceTransparency,
+                    borderColor = colors.rimHighlight,
+                    modifier = Modifier
+                        .align(Alignment.BottomCenter)
+                        .padding(bottom = 28.dp),
+                ) {
+                    Text(
+                        text = "播放出错 · 解锁查看",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = colors.inkPrimary,
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                    )
+                }
+            }
             return@Box
         }
 
-        val activeError = (uiState.loadError ?: uiState.playbackError).takeUnless { uiState.isRefreshingExpiredStream }
         val waitingLabel = when {
             uiState.isRefreshingExpiredStream -> "正在刷新播放地址…"
             activeError != null -> null
             uiState.isLoadingDetail -> "正在加载视频…"
-            uiState.isBuffering -> "正在缓冲…"
+            // 暂停时的 BUFFERING 不等于还在缓冲，继续显示会遮住播放键并让用户以为卡死。
+            uiState.isBuffering && uiState.isPlaying -> "正在缓冲…"
             uiState.isInitialized && !uiState.isVideoFrameReady -> "正在恢复画面…"
             else -> null
         }

@@ -43,6 +43,7 @@ val coreDatabaseModule: Module = module {
     single { get<RavenDatabase>().tagSubscriptionDao() }
     single { get<RavenDatabase>().savedSearchDao() }
     single { get<RavenDatabase>().updateInboxDao() }
+    single { get<RavenDatabase>().inboxDismissedDao() }
     single { get<RavenDatabase>().blockedTermDao() }
     single { get<RavenDatabase>().searchHistoryDao() }
     single { get<RavenDatabase>().downloadItemDao() }
@@ -107,6 +108,7 @@ val coreDatabaseModule: Module = module {
             updateInboxDao = get(),
             transactionRunner = get(),
             seriesFollowDao = get(),
+            inboxDismissedDao = get(),
         )
     }
     single {

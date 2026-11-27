@@ -22,6 +22,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
@@ -312,6 +313,8 @@ class DownloadsViewModel(
             )
         }
 
+        // 站点入口进入时，统计和批量操作必须都限定在该站点，而不是默默作用于全局。
+        val scopedDownloads = if (ctrl.siteFilter == null) allDownloads else allDownloads.filter { it.siteId == ctrl.siteFilter }
         DownloadsUiState(
             selectedTab = ctrl.selectedTab,
             searchQuery = ctrl.searchQuery,
@@ -331,13 +334,13 @@ class DownloadsViewModel(
             groupSummaries = groupSummaries,
             allItems = sortDownloads(allDownloads, DownloadSort.RECENT),
             allCount = allDownloads.size,
-            inProgressCount = allDownloads.count { it.status.isInProgressBucket() },
-            completedCount = allDownloads.count { it.status == DownloadStatus.COMPLETED },
-            attentionCount = allDownloads.count { it.status.needsAttention() },
-            activeTransferCount = allDownloads.count { it.status.isActiveTransfer() },
-            pausedCount = allDownloads.count { it.status == DownloadStatus.PAUSED },
-            failedCount = allDownloads.count { it.status == DownloadStatus.FAILED },
-            totalCompletedBytes = allDownloads
+            inProgressCount = scopedDownloads.count { it.status.isInProgressBucket() },
+            completedCount = scopedDownloads.count { it.status == DownloadStatus.COMPLETED },
+            attentionCount = scopedDownloads.count { it.status.needsAttention() },
+            activeTransferCount = scopedDownloads.count { it.status.isActiveTransfer() },
+            pausedCount = scopedDownloads.count { it.status == DownloadStatus.PAUSED },
+            failedCount = scopedDownloads.count { it.status == DownloadStatus.FAILED },
+            totalCompletedBytes = scopedDownloads
                 .filter { it.status == DownloadStatus.COMPLETED }
                 .sumOf { it.totalBytes ?: it.downloadedBytes },
             items = sorted,
@@ -351,7 +354,7 @@ class DownloadsViewModel(
             isSyncingDisk = ctrl.isSyncingDisk,
             message = ctrl.message,
         )
-    }.stateIn(
+    }.flowOn(dispatchers.default).stateIn(
         scope = viewModelScope,
         started = SharingStarted.WhileSubscribed(5_000L),
         initialValue = DownloadsUiState(),
@@ -449,24 +452,64 @@ class DownloadsViewModel(
 
     // ---- Batch Controls ----
 
+    /** Everything a batch action touches must match the site's visible scope, never the whole DB. */
+    private fun scopedItems(): List<DownloadItem> {
+        val scope = uiState.value.siteFilter
+        return if (scope == null) uiState.value.allItems else uiState.value.allItems.filter { it.siteId == scope }
+    }
+
+    private fun scopeLabel(): String? = uiState.value.siteFilter?.let(siteRegistry::displayNameFor)
+
     fun pauseAll() {
+        val targets = scopedItems().filter { it.status.isActiveTransfer() }
+        if (targets.isEmpty()) {
+            controls.update { it.copy(message = "当前没有进行中的下载") }
+            return
+        }
         viewModelScope.launch(dispatchers.io) {
-            runCatching { downloadGateway.pauseAll() }
-                .onSuccess { controls.update { it.copy(message = "已暂停全部进行中的下载") } }
-                .onFailure { e -> controls.update { it.copy(message = e.message ?: "暂停失败") } }
+            var paused = 0
+            var failed = 0
+            targets.forEach { item ->
+                runCatching { downloadGateway.pause(item.id) }.onSuccess { paused++ }.onFailure { failed++ }
+            }
+            val scope = scopeLabel()?.let { "「$it」 " }.orEmpty()
+            controls.update {
+                it.copy(
+                    message = buildString {
+                        append("已暂停 ${scope}$paused 项下载")
+                        if (failed > 0) append("，$failed 项失败")
+                    },
+                )
+            }
         }
     }
 
     fun resumeAll() {
+        val targets = scopedItems().filter { it.status == DownloadStatus.PAUSED }
+        if (targets.isEmpty()) {
+            controls.update { it.copy(message = "当前没有已暂停的下载") }
+            return
+        }
         viewModelScope.launch(dispatchers.io) {
-            runCatching { downloadGateway.resumeAll() }
-                .onSuccess { controls.update { it.copy(message = "已恢复已暂停的下载任务") } }
-                .onFailure { e -> controls.update { it.copy(message = e.message ?: "恢复失败") } }
+            var resumed = 0
+            var failed = 0
+            targets.forEach { item ->
+                runCatching { downloadGateway.resume(item.id) }.onSuccess { resumed++ }.onFailure { failed++ }
+            }
+            val scope = scopeLabel()?.let { "「$it」 " }.orEmpty()
+            controls.update {
+                it.copy(
+                    message = buildString {
+                        append("已继续 ${scope}$resumed 项下载")
+                        if (failed > 0) append("，$failed 项失败")
+                    },
+                )
+            }
         }
     }
 
     fun retryAllFailed() {
-        val targets = uiState.value.allItems.filter { it.status.needsAttention() }
+        val targets = scopedItems().filter { it.status.needsAttention() }
         if (targets.isEmpty()) {
             controls.update { it.copy(message = "当前没有可重试的需处理任务") }
             return
@@ -487,11 +530,12 @@ class DownloadsViewModel(
                     skipped += 1
                 }
             }
+            val scope = scopeLabel()?.let { "「$it」 " }.orEmpty()
             controls.update {
                 it.copy(
                     message = when {
-                        retried > 0 && skipped > 0 -> "已重新加入 $retried 个需处理任务，$skipped 项暂时无法重试"
-                        retried > 0 -> "已重新加入 $retried 个需处理任务"
+                        retried > 0 && skipped > 0 -> "已重新加入 ${scope}$retried 个需处理任务，$skipped 项暂时无法重试"
+                        retried > 0 -> "已重新加入 ${scope}$retried 个需处理任务"
                         else -> "当前没有可重试的需处理任务"
                     },
                 )
@@ -673,7 +717,7 @@ class DownloadsViewModel(
 
     fun deleteCompletedDownloads() {
         if (controls.value.isCleaningCompleted) return
-        val targets = uiState.value.allItems.filter { it.status == DownloadStatus.COMPLETED }
+        val targets = scopedItems().filter { it.status == DownloadStatus.COMPLETED }
         if (targets.isEmpty()) {
             controls.update { it.copy(message = "当前没有可清理的已完成下载") }
             return
@@ -694,10 +738,11 @@ class DownloadsViewModel(
                     failedCount += 1
                 }
             }
+            val scope = scopeLabel()?.let { "「$it」 " }.orEmpty()
             controls.update {
                 it.copy(
                     isCleaningCompleted = false,
-                    message = completedCleanupMessage(deletedCount, releasedBytes, failedCount),
+                    message = completedCleanupMessage(deletedCount, releasedBytes, failedCount, scope),
                 )
             }
         }
@@ -944,11 +989,16 @@ private fun sortDownloads(items: List<DownloadItem>, sort: DownloadSort): List<D
 
 private fun downloadBytes(item: DownloadItem): Long = (item.totalBytes ?: item.downloadedBytes).coerceAtLeast(0L)
 
-private fun completedCleanupMessage(deletedCount: Int, releasedBytes: Long, failedCount: Int): String = when {
+private fun completedCleanupMessage(
+    deletedCount: Int,
+    releasedBytes: Long,
+    failedCount: Int,
+    scope: String = "",
+): String = when {
     deletedCount > 0 && failedCount > 0 ->
-        "已清理 $deletedCount 个已完成下载，释放 ${RavenFormatters.formatByteSize(releasedBytes)}；$failedCount 项删除失败"
+        "已清理 ${scope}$deletedCount 个已完成下载，释放 ${RavenFormatters.formatByteSize(releasedBytes)}；$failedCount 项删除失败"
     deletedCount > 0 ->
-        "已清理 $deletedCount 个已完成下载，释放 ${RavenFormatters.formatByteSize(releasedBytes)}"
+        "已清理 ${scope}$deletedCount 个已完成下载，释放 ${RavenFormatters.formatByteSize(releasedBytes)}"
     else -> "未能清理已完成下载，请稍后重试"
 }
 

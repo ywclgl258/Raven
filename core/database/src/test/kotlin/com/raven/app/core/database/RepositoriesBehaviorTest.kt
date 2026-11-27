@@ -607,6 +607,34 @@ class RepositoriesBehaviorTest {
             assertEquals(2, db.tagTranslations.getBySource(TagTranslationSource.COMMUNITY_EHTAG).size)
             assertEquals(2, db.tagTranslations.getBySource(TagTranslationSource.USER_CUSTOM).size)
 
+            // Dismissing an inbox entry leaves a tombstone so the next sync does not re-add it.
+            val dismissRepo = SubscriptionRepository(
+                db.tagSubscriptions,
+                db.savedSearches,
+                db.updateInbox,
+                db.transactionRunner,
+                clock,
+                seriesFollowDao = db.seriesFollows,
+                inboxDismissedDao = db.inboxDismissed,
+            )
+            val dismissMedia = MediaItem(SiteId.R34V, "v-dismiss", "https://rule34video.com/v-dismiss", MediaKind.VIDEO, "Dismissed")
+            val dismissEntry = UpdateInboxItem(
+                id = "in-dismiss",
+                sourceKind = InboxSourceKind.TAG_SUBSCRIPTION,
+                sourceId = "r34v:TAG:gone",
+                sourceLabel = "Gone",
+                item = dismissMedia,
+                discoveredAt = 1L,
+                isRead = false,
+            )
+            dismissRepo.upsertInboxItems(listOf(dismissEntry))
+            dismissRepo.dismissInboxItem(dismissEntry)
+            assertTrue(dismissRepo.observeInbox().first().none { it.id == dismissEntry.id })
+            assertEquals(
+                setOf(dismissMedia.compositeKey),
+                dismissRepo.dismissedInboxKeys(InboxSourceKind.TAG_SUBSCRIPTION, dismissEntry.sourceId),
+            )
+
             // Unsubscribe deletes tag subscription AND cleans up corresponding TAG_SUBSCRIPTION inbox entries
             val subRepo = SubscriptionRepository(db.tagSubscriptions, db.savedSearches, db.updateInbox, db.transactionRunner, clock)
             val sub = TagSubscription(SiteId.R34V, "3d", "3D", "https://rule34video.com/tags/3d/")

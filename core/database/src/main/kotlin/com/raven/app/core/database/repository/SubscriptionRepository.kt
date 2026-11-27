@@ -4,7 +4,9 @@ import com.raven.app.core.database.DatabaseTransactionRunner
 import com.raven.app.core.database.dao.SavedSearchDao
 import com.raven.app.core.database.dao.TagSubscriptionDao
 import com.raven.app.core.database.dao.SeriesFollowDao
+import com.raven.app.core.database.dao.InboxDismissedDao
 import com.raven.app.core.database.dao.UpdateInboxDao
+import com.raven.app.core.database.entity.InboxDismissedEntity
 import com.raven.app.core.database.mapper.toDomain
 import com.raven.app.core.database.mapper.toEntity
 import com.raven.app.core.model.InboxSourceKind
@@ -29,6 +31,7 @@ class SubscriptionRepository(
     private val transactionRunner: DatabaseTransactionRunner,
     private val clock: () -> Long = System::currentTimeMillis,
     private val seriesFollowDao: SeriesFollowDao? = null,
+    private val inboxDismissedDao: InboxDismissedDao? = null,
 ) {
     // ---- Tag subscriptions ----
 
@@ -80,6 +83,7 @@ class SubscriptionRepository(
     private suspend fun deleteSubscription(siteId: SiteId, slug: String, scope: SearchScope) {
         tagSubscriptionDao.delete(siteId.value, slug, scope)
         updateInboxDao.deleteBySource(InboxSourceKind.TAG_SUBSCRIPTION, "${siteId.value}:${scope.name}:$slug")
+        inboxDismissedDao?.deleteBySource(InboxSourceKind.TAG_SUBSCRIPTION, "${siteId.value}:${scope.name}:$slug")
     }
 
     /**
@@ -209,6 +213,7 @@ class SubscriptionRepository(
         transactionRunner {
             savedSearchDao.deleteById(id)
             updateInboxDao.deleteBySource(InboxSourceKind.SAVED_SEARCH, id)
+            inboxDismissedDao?.deleteBySource(InboxSourceKind.SAVED_SEARCH, id)
         }
     }
 
@@ -305,6 +310,33 @@ class SubscriptionRepository(
         updateInboxDao.deleteById(id)
     }
 
+    /**
+     * Removes an inbox entry and remembers it as dismissed, so the next sync does not re-add the
+     * same item as "newly discovered".
+     */
+    suspend fun dismissInboxItem(entry: UpdateInboxItem) {
+        val dao = inboxDismissedDao ?: run {
+            updateInboxDao.deleteById(entry.id)
+            return
+        }
+        transactionRunner {
+            updateInboxDao.deleteById(entry.id)
+            dao.upsert(
+                InboxDismissedEntity(
+                    entryKey = "${entry.sourceKind.name}:${entry.sourceId}:${entry.item.compositeKey}",
+                    sourceKind = entry.sourceKind,
+                    sourceId = entry.sourceId,
+                    itemKey = entry.item.compositeKey,
+                    dismissedAt = clock(),
+                ),
+            )
+            dao.prune(MAX_DISMISSED_INBOX_KEYS)
+        }
+    }
+
+    suspend fun dismissedInboxKeys(sourceKind: InboxSourceKind, sourceId: String): Set<String> =
+        inboxDismissedDao?.itemKeysForSource(sourceKind, sourceId)?.toSet() ?: emptySet()
+
     suspend fun clearInboxBySource(sourceKind: InboxSourceKind, sourceId: String) {
         updateInboxDao.deleteBySource(sourceKind, sourceId)
     }
@@ -380,11 +412,16 @@ class SubscriptionRepository(
         transactionRunner {
             dao.delete(siteId.value, seriesId)
             updateInboxDao.deleteBySource(com.raven.app.core.model.InboxSourceKind.SERIES_FOLLOW, "${siteId.value}:$seriesId")
+            inboxDismissedDao?.deleteBySource(
+                com.raven.app.core.model.InboxSourceKind.SERIES_FOLLOW,
+                "${siteId.value}:$seriesId",
+            )
         }
     }
 
     companion object {
         const val MAX_SAVED_SEARCH_NAME_LENGTH: Int = 80
         private const val SQLITE_BIND_CHUNK_SIZE: Int = 500
+        private const val MAX_DISMISSED_INBOX_KEYS: Int = 4_000
     }
 }

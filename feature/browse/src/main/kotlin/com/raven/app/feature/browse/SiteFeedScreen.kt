@@ -996,7 +996,13 @@ fun SiteFeedScreenContent(
         onToggleWatchLater = onToggleWatchLater,
         onToggleShelfMembership = onToggleShelfMembership,
         onCreateShelfAndAdd = onCreateShelfAndAdd,
-        onSearchSimilar = { slug -> navigator.openSearch(initialQuery = slug, crossSite = false) },
+        onSearchSimilar = { slug ->
+            navigator.openSearch(
+                initialQuery = slug,
+                crossSite = false,
+                sourceSiteId = uiState.site?.id,
+            )
+        },
         favoriteKeys = favoriteKeys,
         onToggleFavorite = onToggleFavorite,
         downloadStateByKey = downloadStates,

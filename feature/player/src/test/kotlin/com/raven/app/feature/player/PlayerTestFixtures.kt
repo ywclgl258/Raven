@@ -335,8 +335,15 @@ internal class FakePlayerPlaybackPort(
         _state.update { it.copy(isPlaying = true, playbackState = Player.STATE_READY) }
     }
 
+    var pauseCalls: Int = 0
+
     override fun pause() {
+        pauseCalls++
         _state.update { it.copy(isPlaying = false) }
+    }
+
+    fun simulatePlaybackError(message: String) {
+        _state.update { it.copy(errorMessage = message, isPlaying = false) }
     }
 
     override fun togglePlayPause() {
