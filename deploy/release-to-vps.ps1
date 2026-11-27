@@ -140,9 +140,9 @@ $notesPath = Join-Path ([IO.Path]::GetTempPath()) "raven-notes-$versionName.txt"
 [IO.File]::WriteAllText($notesPath, $Notes, [Text.UTF8Encoding]::new($false))
 
 $publishCommand = "cd /root/raven-update-deploy; " +
-    "python3 publish.py --apk $remoteApk --release-properties release.properties " +
-    "--web-root /var/www/raven-update/public --base-url $remoteUrl " +
-    "--release-notes `"`$(cat /root/raven-notes.txt)`""
+    "python3 publish_with_notes.py --notes-file /root/raven-notes.txt " +
+    "--apk $remoteApk --release-properties release.properties " +
+    "--web-root /var/www/raven-update/public --base-url $remoteUrl"
 
 if ($DryRun) {
     Write-Host "`n[DryRun] scp $apkPath ${VpsHost}:/root/raven-update-deploy/$remoteApk"
@@ -160,6 +160,8 @@ if ($LASTEXITCODE -ne 0) { Fail "scp APK failed" }
 if ($LASTEXITCODE -ne 0) { Fail "scp release.properties failed" }
 & scp $notesPath "${VpsHost}:/root/raven-notes.txt"
 if ($LASTEXITCODE -ne 0) { Fail "scp release notes failed" }
+& scp (Join-Path $repoRoot "deploy/update-server/publish_with_notes.py") "${VpsHost}:/root/raven-update-deploy/publish_with_notes.py"
+if ($LASTEXITCODE -ne 0) { Fail "scp publish wrapper failed" }
 
 Write-Host "Publishing update-channel manifest..."
 & ssh $VpsHost $publishCommand
