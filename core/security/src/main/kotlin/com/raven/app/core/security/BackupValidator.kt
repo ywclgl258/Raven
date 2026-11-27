@@ -512,6 +512,9 @@ class BackupValidator(
             "seek_cache",
             "tag_dict_auto_sync",
             "block_tags_globally",
+            // Pinned-site display order toggle; exported by exportPortableSettings and re-applied
+            // by applyPortableEntries, so the validator must accept it or backups fail to export.
+            "dynamic_site_sorting",
         )
 
         val STRING_SETTINGS_KEYS: Set<String> = setOf(

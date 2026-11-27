@@ -247,6 +247,8 @@ class BackupValidatorTest {
             settings = mapOf(
                 "tag_dict_auto_sync" to "true",
                 "block_tags_globally" to "false",
+                // Portable setting added with the site-switcher sort toggle; must stay backup-safe.
+                "dynamic_site_sorting" to "false",
             ),
             customTagTranslations = listOf(
                 TagTranslationEntry(
