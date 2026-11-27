@@ -1062,6 +1062,13 @@ private fun handleDownloadPrimaryAction(
     }
 }
 
+private fun DownloadItem.primaryActionLabel(): String = when (status) {
+    DownloadStatus.COMPLETED -> if (kind == DownloadKind.VIDEO) "离线播放" else "离线阅读"
+    DownloadStatus.DOWNLOADING, DownloadStatus.QUEUED, DownloadStatus.RETRY_WAIT -> "暂停下载"
+    DownloadStatus.PAUSED -> "继续下载"
+    DownloadStatus.FAILED, DownloadStatus.CANCELLED -> "重试下载"
+}
+
 @Composable
 private fun DownloadPosterCard(
     item: DownloadItem,
@@ -1086,7 +1093,7 @@ private fun DownloadPosterCard(
             .background(colors.surface1)
             .border(0.5.dp, colors.hairline, RavenShapes.CardShape)
             .ravenSpringPress()
-            .clickable(role = Role.Button, onClick = onPrimaryClick)
+            .clickable(role = Role.Button, onClickLabel = item.primaryActionLabel(), onClick = onPrimaryClick)
             .testTag("download_card_${item.id}"),
     ) {
         Box(
@@ -1196,7 +1203,7 @@ private fun DownloadPosterCard(
                 IconButton(
                     onClick = onPrimaryClick,
                     modifier = Modifier
-                        .size(34.dp)
+                        .size(48.dp)
                         .clip(CircleShape)
                         .background(colors.surface2),
                 ) {
@@ -1210,14 +1217,14 @@ private fun DownloadPosterCard(
                             DownloadStatus.FAILED,
                             DownloadStatus.CANCELLED -> Icons.Outlined.Refresh
                         },
-                        contentDescription = "执行快捷操作",
+                        contentDescription = item.primaryActionLabel(),
                         tint = if (item.status == DownloadStatus.COMPLETED) colors.success else colors.inkPrimary,
                         modifier = Modifier.size(18.dp),
                     )
                 }
                 IconButton(
                     onClick = onMenuClick,
-                    modifier = Modifier.size(34.dp),
+                    modifier = Modifier.size(48.dp),
                 ) {
                     Icon(
                         imageVector = Icons.Outlined.MoreVert,
@@ -1291,7 +1298,7 @@ private fun DownloadItemCard(
             .background(colors.surface1)
             .border(0.5.dp, colors.hairline, RavenShapes.CardShape)
             .ravenSpringPress()
-            .clickable(role = Role.Button, onClick = onPrimaryClick)
+            .clickable(role = Role.Button, onClickLabel = item.primaryActionLabel(), onClick = onPrimaryClick)
             .padding(12.dp)
             .testTag("download_card_${item.id}"),
         verticalArrangement = Arrangement.spacedBy(8.dp),
@@ -1381,7 +1388,7 @@ private fun DownloadItemCard(
                 IconButton(
                     onClick = onPrimaryClick,
                     modifier = Modifier
-                        .size(38.dp)
+                        .size(48.dp)
                         .clip(CircleShape)
                         .background(colors.surface2),
                 ) {
@@ -1395,14 +1402,14 @@ private fun DownloadItemCard(
                             DownloadStatus.FAILED,
                             DownloadStatus.CANCELLED -> Icons.Outlined.Refresh
                         },
-                        contentDescription = "执行快捷操作",
+                        contentDescription = item.primaryActionLabel(),
                         tint = if (item.status == DownloadStatus.COMPLETED) colors.success else colors.inkPrimary,
                         modifier = Modifier.size(18.dp),
                     )
                 }
                 IconButton(
                     onClick = onMenuClick,
-                    modifier = Modifier.size(34.dp),
+                    modifier = Modifier.size(48.dp),
                 ) {
                     Icon(
                         imageVector = Icons.Outlined.MoreVert,

@@ -72,9 +72,10 @@ class FeedbackClientTest {
     }
 
     @Test
-    fun viewModelRejectsShortInputAndSubmitsValidTicket() = runTest(mainDispatcherRule.dispatcher) {
+    fun viewModelValidatesInputAndPreservesDraftUntilRetrySucceeds() = runTest(mainDispatcherRule.dispatcher) {
         val log = folder.newFile("snap.txt").apply { writeText("log line") }
         var captured: FeedbackSubmission? = null
+        var attempts = 0
         val client = object : FeedbackClient(
             httpClient = OkHttpClient(),
             appInfo = appInfo,
@@ -82,6 +83,7 @@ class FeedbackClientTest {
         ) {
             override suspend fun submit(submission: FeedbackSubmission, logFile: File?): FeedbackAccepted {
                 captured = submission
+                if (++attempts == 1) throw FeedbackException("反馈服务暂时不可用，请稍后重试。")
                 return FeedbackAccepted(ok = true, id = "RV-20261127-DEF456", status = "new")
             }
         }
@@ -111,6 +113,13 @@ class FeedbackClientTest {
 
         vm.updateTitle("搜索重复")
         vm.updateBody("同一作品在搜索结果里出现两次")
+        vm.submit()
+        advanceUntilIdle()
+        assertEquals("搜索重复", vm.uiState.value.title)
+        assertEquals("同一作品在搜索结果里出现两次", vm.uiState.value.body)
+        assertNotNull(vm.uiState.value.errorMessage)
+        assertFalse(vm.uiState.value.isSubmitting)
+
         vm.submit()
         advanceUntilIdle()
         assertEquals("RV-20261127-DEF456", vm.uiState.value.acceptedId)

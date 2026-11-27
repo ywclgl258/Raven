@@ -5,11 +5,17 @@ import androidx.lifecycle.viewModelScope
 import com.raven.app.core.common.AppDispatchers
 import com.raven.app.core.common.log.RavenLog
 import java.io.File
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+
+internal const val FEEDBACK_TITLE_LIMIT = 120
+internal const val FEEDBACK_BODY_LIMIT = 8_000
+internal const val FEEDBACK_MIN_TITLE_LENGTH = 4
+internal const val FEEDBACK_MIN_BODY_LENGTH = 8
 
 enum class FeedbackCategory(val wire: String, val label: String) {
     BUG("bug", "缺陷"),
@@ -40,7 +46,10 @@ data class FeedbackUiState(
     val isSubmitting: Boolean = false,
     val acceptedId: String? = null,
     val errorMessage: String? = null,
-)
+) {
+    val hasValidDescription: Boolean
+        get() = title.trim().length >= FEEDBACK_MIN_TITLE_LENGTH && body.trim().length >= FEEDBACK_MIN_BODY_LENGTH
+}
 
 class FeedbackViewModel(
     private val feedbackClient: FeedbackClient,
@@ -56,8 +65,13 @@ class FeedbackViewModel(
         _uiState.update { it.copy(category = category, acceptedId = null, errorMessage = null) }
     }
 
-    fun updateTitle(value: String) = _uiState.update { it.copy(title = value.take(120), acceptedId = null) }
-    fun updateBody(value: String) = _uiState.update { it.copy(body = value.take(8000), acceptedId = null) }
+    fun updateTitle(value: String) = _uiState.update {
+        it.copy(title = value.take(FEEDBACK_TITLE_LIMIT), acceptedId = null, errorMessage = null)
+    }
+
+    fun updateBody(value: String) = _uiState.update {
+        it.copy(body = value.take(FEEDBACK_BODY_LIMIT), acceptedId = null, errorMessage = null)
+    }
     fun updateContact(value: String) = _uiState.update { it.copy(contact = value.take(160)) }
     fun setIncludeLog(enabled: Boolean) = _uiState.update { it.copy(includeLog = enabled) }
     fun clearError() = _uiState.update { it.copy(errorMessage = null) }
@@ -81,44 +95,48 @@ class FeedbackViewModel(
 
     fun submit() {
         val current = _uiState.value
+        if (current.isSubmitting || current.acceptedId != null) return
         val title = current.title.trim()
         val body = current.body.trim()
-        if (title.length < 4 || body.length < 8) {
-            _uiState.update { it.copy(errorMessage = "请至少写 4 个字的标题和 8 个字的描述") }
+        if (!current.hasValidDescription) {
+            _uiState.update {
+                it.copy(errorMessage = "标题至少写 $FEEDBACK_MIN_TITLE_LENGTH 字，描述至少写 $FEEDBACK_MIN_BODY_LENGTH 字。")
+            }
             return
         }
-        if (current.isSubmitting) return
         _uiState.update { it.copy(isSubmitting = true, errorMessage = null, acceptedId = null) }
         viewModelScope.launch(dispatchers.io) {
-            val log: File? = if (current.includeLog) diagnostics.snapshot() else null
-            val submission = FeedbackSubmission(
-                category = current.category.wire,
-                title = title,
-                body = body,
-                contact = current.contact.trim(),
-                appVersion = appInfo.versionName,
-                versionCode = appInfo.versionCode,
-                packageName = appInfo.packageName,
-                deviceModel = deviceSnapshot.model,
-                androidRelease = deviceSnapshot.androidRelease,
-                sdkInt = deviceSnapshot.sdkInt,
-                locale = deviceSnapshot.locale,
-                installId = diagnostics.installId(),
-            )
-            RavenLog.i(TAG, "feedback submit category=${submission.category} log=${log?.length() ?: 0}B")
-            runCatching { feedbackClient.submit(submission, log) }
-                .onSuccess { accepted ->
-                    RavenLog.i(TAG, "feedback accepted id=${accepted.id}")
-                    _uiState.update {
-                        it.copy(isSubmitting = false, acceptedId = accepted.id, title = "", body = "")
-                    }
+            try {
+                val log: File? = if (current.includeLog) diagnostics.snapshot() else null
+                val submission = FeedbackSubmission(
+                    category = current.category.wire,
+                    title = title,
+                    body = body,
+                    contact = current.contact.trim(),
+                    appVersion = appInfo.versionName,
+                    versionCode = appInfo.versionCode,
+                    packageName = appInfo.packageName,
+                    deviceModel = deviceSnapshot.model,
+                    androidRelease = deviceSnapshot.androidRelease,
+                    sdkInt = deviceSnapshot.sdkInt,
+                    locale = deviceSnapshot.locale,
+                    installId = diagnostics.installId(),
+                )
+                RavenLog.i(TAG, "feedback submit category=${submission.category} log=${log?.length() ?: 0}B")
+                val accepted = feedbackClient.submit(submission, log)
+                RavenLog.i(TAG, "feedback accepted id=${accepted.id}")
+                _uiState.update { it.copy(isSubmitting = false, acceptedId = accepted.id, title = "", body = "") }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                RavenLog.w(TAG, "feedback submit failed", error)
+                _uiState.update {
+                    it.copy(
+                        isSubmitting = false,
+                        errorMessage = (error as? FeedbackException)?.message ?: "发送失败，请检查网络后重试。",
+                    )
                 }
-                .onFailure { error ->
-                    RavenLog.w(TAG, "feedback submit failed", error)
-                    _uiState.update {
-                        it.copy(isSubmitting = false, errorMessage = error.message ?: "提交失败")
-                    }
-                }
+            }
         }
     }
 

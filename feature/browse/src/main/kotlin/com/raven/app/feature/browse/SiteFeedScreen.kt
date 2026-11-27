@@ -524,7 +524,12 @@ class SiteFeedViewModel(
 
             networkState.update { current ->
                 if (isRefresh && current.rawItems.isNotEmpty()) {
-                    current.copy(isRefreshing = true, isLoading = false, errorMessage = null)
+                    current.copy(
+                        isRefreshing = true,
+                        isLoading = false,
+                        errorMessage = null,
+                        isLoadingMore = false,
+                    )
                 } else {
                     SiteFeedNetworkState(isLoading = true)
                 }
@@ -939,6 +944,11 @@ fun SiteFeedScreenContent(
                     }
                 }
             }
+            BrowseRefreshFeedback(
+                errorMessage = uiState.errorMessage.takeUnless { uiState.items.isEmpty() || uiState.authGateRequired },
+                onRetry = onRefresh,
+                modifier = Modifier.align(Alignment.BottomCenter),
+            )
         }
     }
 

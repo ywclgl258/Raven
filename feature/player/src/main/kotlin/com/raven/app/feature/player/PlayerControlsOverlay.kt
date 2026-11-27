@@ -70,7 +70,10 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -178,6 +181,16 @@ internal fun PlayerControlsOverlay(
             return@Box
         }
 
+        val activeError = (uiState.loadError ?: uiState.playbackError).takeUnless { uiState.isRefreshingExpiredStream }
+        val waitingLabel = when {
+            uiState.isRefreshingExpiredStream -> "正在刷新播放地址…"
+            activeError != null -> null
+            uiState.isLoadingDetail -> "正在加载视频…"
+            uiState.isBuffering -> "正在缓冲…"
+            uiState.isInitialized && !uiState.isVideoFrameReady -> "正在恢复画面…"
+            else -> null
+        }
+
         val showChrome = controlsVisible && !uiState.showQueueNextOverlay
 
         // 2a. Top frosted header bar (slides cleanly from top edge)
@@ -211,7 +224,7 @@ internal fun PlayerControlsOverlay(
 
         // 2b. Center Play / Pause / Replay medallion
         AnimatedVisibility(
-            visible = showChrome && !uiState.isBuffering && uiState.loadError == null && uiState.playbackError == null,
+            visible = showChrome && waitingLabel == null && activeError == null,
             enter = if (motionReduced) {
                 EnterTransition.None
             } else {
@@ -374,43 +387,30 @@ internal fun PlayerControlsOverlay(
         }
 
         // 5. Buffering or loading spinner
-        val showBuffering = (uiState.isBuffering || uiState.isLoadingDetail || uiState.isRefreshingExpiredStream ||
-            (uiState.isInitialized && !uiState.isVideoFrameReady)) &&
-            uiState.loadError == null &&
-            uiState.playbackError == null
         AnimatedVisibility(
-            visible = showBuffering,
+            visible = waitingLabel != null,
             enter = if (motionReduced) EnterTransition.None else fadeIn(tween(150, easing = RavenMotion.HarmonyDecelerationEasing)),
             exit = if (motionReduced) ExitTransition.None else fadeOut(tween(120, easing = RavenMotion.HarmonyDecelerationEasing)),
             modifier = Modifier.align(Alignment.Center),
         ) {
             Column(
                 horizontalAlignment = Alignment.CenterHorizontally,
+                modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 RavenBloubLoadingIndicator(
                     size = 36.dp,
                     accentColor = colors.crimson,
                 )
-                val recoveryText = when {
-                    uiState.isRefreshingExpiredStream -> "正在刷新播放地址…"
-                    uiState.isInitialized && !uiState.isVideoFrameReady -> "正在恢复画面…"
-                    else -> null
-                }
-                if (recoveryText != null) {
-                    Text(
-                        text = recoveryText,
-                        style = MaterialTheme.typography.labelMedium,
-                        color = colors.inkPrimary,
-                    )
+                waitingLabel?.let { label ->
+                    Text(text = label, style = MaterialTheme.typography.labelMedium, color = colors.inkPrimary)
                 }
             }
         }
 
         // 6. Error overlay inside video viewport
-        val activeError = uiState.loadError ?: uiState.playbackError
         AnimatedVisibility(
-            visible = activeError != null && !uiState.isRefreshingExpiredStream,
+            visible = activeError != null,
             enter = if (motionReduced) EnterTransition.None else fadeIn(tween(180, easing = RavenMotion.HarmonyDecelerationEasing)),
             exit = if (motionReduced) ExitTransition.None else fadeOut(tween(140, easing = RavenMotion.HarmonyDecelerationEasing)),
             modifier = Modifier.align(Alignment.Center),

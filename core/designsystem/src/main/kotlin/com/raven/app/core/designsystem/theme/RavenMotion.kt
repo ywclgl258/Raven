@@ -196,6 +196,32 @@ object RavenMotion {
     const val CHIP_TRANSITION_DURATION_MS: Int = 180
     const val IMAGE_CROSSFADE_MILLIS: Int = 220
 
+    /**
+     * Rhythm budget. Every state change gets the shortest animation that still reads as a change:
+     * taps answer instantly, labels swap within one glance, content reveals stay under ~0.3s so a
+     * list never feels like it is "loading itself" in front of the user.
+     */
+    const val LABEL_EXIT_MS: Int = 110
+    const val LABEL_SWAP_MS: Int = 180
+    const val CONTENT_REVEAL_MS: Int = 260
+    const val STAGGER_STEP_MS: Int = 34
+    const val STAGGER_MAX_ITEMS: Int = 8
+    const val LABEL_SWAP_SLIDE_DP: Int = 6
+
+    /**
+     * Delay for the [index]th item in an initial reveal. Items past the budget use no delay.
+     */
+    fun listStaggerDelayMs(
+        index: Int,
+        stepMs: Int = STAGGER_STEP_MS,
+        maxItems: Int = STAGGER_MAX_ITEMS,
+    ): Int {
+        if (index <= 0 || stepMs <= 0 || maxItems <= 0) return 0
+        // Only the first screenful is choreographed; later rows (scrolled in) must appear instantly.
+        if (index >= maxItems) return 0
+        return stepMs * index
+    }
+
     const val TAB_ENTER_INITIAL_SCALE: Float = 0.985f
     const val TAB_SLIDE_OFFSET_FRACTION: Float = 0.055f
     const val PUSH_EXIT_PARALLAX_FRACTION: Float = 0.18f

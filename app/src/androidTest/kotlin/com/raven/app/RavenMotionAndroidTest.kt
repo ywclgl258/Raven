@@ -34,6 +34,7 @@ import androidx.compose.ui.unit.dp
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.rule.GrantPermissionRule
 import com.raven.app.core.designsystem.component.RavenAnimatedCounter
+import com.raven.app.core.designsystem.component.RavenAnimatedLabel
 import com.raven.app.core.designsystem.component.RavenExpandableSection
 import com.raven.app.core.designsystem.component.RavenPrimaryButton
 import com.raven.app.core.designsystem.component.RavenSegmentedTabs
@@ -141,6 +142,31 @@ class RavenMotionAndroidTest {
     }
 
     @Test
+    fun statusLabelExposesTheLatestTextWhileAnimating() {
+        val status = mutableStateOf("排队中")
+        val reduced = mutableStateOf(false)
+        compose.setContent {
+            CompositionLocalProvider(LocalMotionReduced provides reduced.value) {
+                RavenAnimatedLabel(status.value) { Text(it) }
+            }
+        }
+
+        compose.mainClock.autoAdvance = false
+        compose.runOnIdle { status.value = "下载中" }
+        compose.mainClock.advanceTimeBy(48)
+        compose.onNodeWithText("下载中").assertExists()
+        compose.onNodeWithText("排队中").assertDoesNotExist()
+
+        compose.runOnIdle {
+            status.value = "已完成"
+            reduced.value = true
+        }
+        compose.mainClock.advanceTimeByFrame()
+        compose.onNodeWithText("已完成").assertIsDisplayed()
+        compose.onNodeWithText("下载中").assertDoesNotExist()
+    }
+
+    @Test
     fun buttonLabelHoldsItsPositionAcrossLoadingAndResults() {
         val stage = mutableIntStateOf(0)
         compose.setContent {
@@ -205,6 +231,20 @@ class RavenMotionNavigationAndroidTest {
         compose.onNodeWithTag("settings_account_site_r34v").assertExists()
         accountToggle.performClick()
         compose.onNodeWithTag("settings_account_site_r34v").assertDoesNotExist()
+    }
+
+    @Test
+    fun feedbackValidationAppearsBesideSendButton() {
+        waitForTag("browse_home_screen")
+        compose.onNodeWithTag("nav_profile").performClick()
+        waitForTag("profile_settings_button")
+        compose.onNodeWithTag("profile_settings_button").performClick()
+        waitForTag("settings_list")
+        compose.onNodeWithTag("settings_list").performScrollToNode(hasTestTag("settings_feedback_row"))
+        compose.onNodeWithTag("settings_feedback_row").performClick()
+        waitForTag("feedback_screen")
+        compose.onNodeWithTag("feedback_submit").performScrollTo().performClick()
+        compose.onNodeWithText("标题至少写 4 字，描述至少写 8 字。").performScrollTo().assertIsDisplayed()
     }
 
     private fun waitForTag(tag: String) {

@@ -646,6 +646,8 @@ class ExploreViewModel(
                         isLoading = false,
                         errorMessage = null,
                         paginationErrorMessage = null,
+                        // A cancelled paginate job never reaches its own reset, so clear it here.
+                        isLoadingMore = false,
                     )
                 } else {
                     ExploreLoadState(loadedKey = key, isLoading = true)

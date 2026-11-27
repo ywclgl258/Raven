@@ -4,11 +4,13 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
-import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
@@ -23,6 +25,9 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
@@ -34,8 +39,7 @@ import com.raven.app.core.designsystem.component.RavenGroupedRow
 import com.raven.app.core.designsystem.component.RavenGroupedSection
 import com.raven.app.core.designsystem.component.RavenGroupedSwitchRow
 import com.raven.app.core.designsystem.component.RavenPrimaryButton
-import com.raven.app.core.designsystem.component.RavenStatusPill
-import com.raven.app.core.designsystem.component.RavenStatusTone
+import com.raven.app.core.designsystem.component.RavenStaggeredReveal
 import com.raven.app.core.designsystem.component.RavenTopBar
 import com.raven.app.core.designsystem.theme.LocalRavenColors
 import org.koin.androidx.compose.koinViewModel
@@ -77,7 +81,7 @@ fun FeedbackScreenContent(
     modifier: Modifier = Modifier,
 ) {
     val colors = LocalRavenColors.current
-    Column(modifier = modifier.fillMaxSize().testTag("feedback_screen")) {
+    Column(modifier = modifier.fillMaxSize().navigationBarsPadding().imePadding().testTag("feedback_screen")) {
         RavenTopBar(
             title = "反馈问题",
             subtitle = "发送到官网后台，可附带诊断日志",
@@ -87,20 +91,15 @@ fun FeedbackScreenContent(
                 }
             },
         )
-        LazyColumn(
-            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 14.dp),
+        Column(
             verticalArrangement = Arrangement.spacedBy(16.dp),
-            modifier = Modifier.fillMaxSize().testTag("feedback_list"),
+            modifier = Modifier
+                .fillMaxSize()
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = 16.dp, vertical = 14.dp)
+                .testTag("feedback_list"),
         ) {
-            item {
-                when {
-                    uiState.acceptedId != null ->
-                        RavenStatusPill(text = "已收到 ${uiState.acceptedId}", tone = RavenStatusTone.SUCCESS)
-                    !uiState.errorMessage.isNullOrBlank() ->
-                        RavenStatusPill(text = uiState.errorMessage, tone = RavenStatusTone.ERROR)
-                }
-            }
-            item {
+            RavenStaggeredReveal(index = 0) {
                 RavenGroupedSection(
                     title = "问题类型",
                     footer = "不会上传账号、Cookie 或备份。日志中的口令、Cookie 与令牌会在设备上先打码。",
@@ -114,13 +113,14 @@ fun FeedbackScreenContent(
                             RavenFilterChip(
                                 label = category.label,
                                 selected = uiState.category == category,
+                                enabled = !uiState.isSubmitting,
                                 onClick = { onSelectCategory(category) },
                             )
                         }
                     }
                 }
             }
-            item {
+            RavenStaggeredReveal(index = 1) {
                 RavenGroupedSection(title = "描述") {
                     Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                         SettingsTextField(
@@ -128,6 +128,8 @@ fun FeedbackScreenContent(
                             onValueChange = onTitleChange,
                             label = "标题",
                             placeholder = "一句话说明发生了什么",
+                            supportingText = "${uiState.title.length} / $FEEDBACK_TITLE_LIMIT 字 · 至少 $FEEDBACK_MIN_TITLE_LENGTH 字",
+                            enabled = !uiState.isSubmitting,
                             keyboardOptions = KeyboardOptions(imeAction = ImeAction.Next),
                             modifier = Modifier.testTag("feedback_title"),
                         )
@@ -136,6 +138,8 @@ fun FeedbackScreenContent(
                             onValueChange = onBodyChange,
                             label = "复现步骤或建议",
                             placeholder = "站点、操作、预期结果和实际结果",
+                            supportingText = "${uiState.body.length} / $FEEDBACK_BODY_LIMIT 字 · 至少 $FEEDBACK_MIN_BODY_LENGTH 字",
+                            enabled = !uiState.isSubmitting,
                             singleLine = false,
                             minLines = 5,
                             maxLines = 10,
@@ -145,6 +149,7 @@ fun FeedbackScreenContent(
                             value = uiState.contact,
                             onValueChange = onContactChange,
                             label = "联系方式（可选）",
+                            enabled = !uiState.isSubmitting,
                             placeholder = "邮箱或其他方便回复的方式",
                             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email),
                             modifier = Modifier.testTag("feedback_contact"),
@@ -152,7 +157,7 @@ fun FeedbackScreenContent(
                     }
                 }
             }
-            item {
+            RavenStaggeredReveal(index = 2) {
                 RavenGroupedSection(
                     title = "诊断日志",
                     footer = "日志只记录本应用的事件、错误和崩溃栈，不含浏览内容与账号凭据。",
@@ -167,6 +172,7 @@ fun FeedbackScreenContent(
                         },
                         icon = Icons.Outlined.BugReport,
                         checked = uiState.includeLog,
+                        enabled = !uiState.isSubmitting,
                         onCheckedChange = onIncludeLogChange,
                         modifier = Modifier.testTag("feedback_include_log"),
                     )
@@ -175,6 +181,7 @@ fun FeedbackScreenContent(
                         title = "记录详细日志",
                         subtitle = "仅本次运行有效：记录更多调试事件，便于复现播放、下载与网络问题",
                         checked = uiState.verboseLogging,
+                        enabled = !uiState.isSubmitting,
                         onCheckedChange = onVerboseChange,
                         modifier = Modifier.testTag("feedback_verbose_log"),
                     )
@@ -190,22 +197,27 @@ fun FeedbackScreenContent(
                     }
                 }
             }
-            item {
+            Column(
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
+            ) {
+                val sent = uiState.acceptedId != null
+                uiState.errorMessage?.let { error ->
+                    Text(text = error, color = colors.error, style = MaterialTheme.typography.bodyMedium)
+                }
                 RavenPrimaryButton(
-                    text = if (uiState.isSubmitting) "正在发送" else "发送反馈",
+                    text = when {
+                        uiState.isSubmitting -> "正在发送"
+                        sent -> "已发送 ${uiState.acceptedId}"
+                        uiState.errorMessage != null && uiState.hasValidDescription -> "重试发送"
+                        else -> "发送反馈"
+                    },
                     onClick = onSubmit,
-                    enabled = !uiState.isSubmitting,
+                    enabled = !uiState.isSubmitting && !sent,
                     loading = uiState.isSubmitting,
-                    leadingIcon = Icons.Outlined.UploadFile,
+                    success = sent,
+                    leadingIcon = Icons.Outlined.UploadFile.takeUnless { sent },
                     modifier = Modifier.fillMaxWidth().testTag("feedback_submit"),
-                )
-            }
-            item {
-                Text(
-                    text = "也可以在官网帮助页提交，两条入口共用同一套后台。",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = colors.inkTertiary,
-                    modifier = Modifier.padding(horizontal = 4.dp),
                 )
             }
         }

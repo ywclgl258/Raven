@@ -204,6 +204,8 @@ fun SiteAccountScreenContent(
                             AccountAuthStatusPill(
                                 isAuthenticated = uiState.authState.isAuthenticated,
                                 requiresAuthGate = uiState.requiresAuthGate,
+                                // 首次读取会话前显示"未登录"会误导已登录用户，先呈现检查中。
+                                loading = uiState.isLoading,
                             )
                         }
 
@@ -503,9 +505,14 @@ private fun AccountAuthStatusPill(
     isAuthenticated: Boolean,
     requiresAuthGate: Boolean,
     modifier: Modifier = Modifier,
+    loading: Boolean = false,
 ) {
     val colors = LocalRavenColors.current
     val motionReduced = LocalMotionReduced.current
+    if (loading) {
+        RavenStatusPill(text = "检查会话…", tone = RavenStatusTone.NEUTRAL, modifier = modifier)
+        return
+    }
     val tone = when {
         isAuthenticated -> RavenStatusTone.SUCCESS
         requiresAuthGate -> RavenStatusTone.WARNING

@@ -171,13 +171,19 @@ fun RavenStatusPill(
                 modifier = Modifier.size(13.dp),
             )
         }
-        Text(
+        // Status text swaps with a short rise so 排队→下载中→已完成 reads as a change, not a jump.
+        RavenAnimatedLabel(
             text = text,
-            style = if (tabular) RavenTabularTextStyle else MaterialTheme.typography.labelMedium,
-            color = contentColor,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-        )
+            contentAlignment = Alignment.CenterStart,
+        ) { label ->
+            Text(
+                text = label,
+                style = if (tabular) RavenTabularTextStyle else MaterialTheme.typography.labelMedium,
+                color = contentColor,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
     }
 }
 

@@ -81,10 +81,10 @@ open class FeedbackClient(
             .build()
         return withContext(dispatchers.io) {
             execute(httpClient.newCall(request)).use { response ->
-                val text = response.body?.string().orEmpty()
                 if (!response.isSuccessful) {
-                    throw FeedbackException(errorMessage(response.code, text))
+                    throw FeedbackException(errorMessage(response.code))
                 }
+                val text = response.body?.string().orEmpty()
                 val accepted = runCatching {
                     json.decodeFromString(FeedbackAccepted.serializer(), text)
                 }.getOrElse { throw FeedbackException("反馈服务返回了无法识别的结果", it) }
@@ -109,12 +109,12 @@ open class FeedbackClient(
         })
     }
 
-    private fun errorMessage(code: Int, body: String): String = when (code) {
-        413 -> "日志太大，请缩短后重试"
-        429 -> "提交过于频繁，请稍后再试"
-        else -> "提交失败（HTTP $code）"
-    }.let { message ->
-        if (body.isBlank()) message else "$message：${body.take(160)}"
+    private fun errorMessage(code: Int): String = when (code) {
+        400, 422 -> "反馈内容未通过校验，请检查后重试。"
+        413 -> "诊断日志过大，请关闭「附带诊断日志」后重试。"
+        429 -> "提交过于频繁，请稍后再试。"
+        in 500..599 -> "反馈服务暂时不可用，请稍后重试。"
+        else -> "发送失败（HTTP $code），请稍后重试。"
     }
 
     companion object {

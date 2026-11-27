@@ -369,6 +369,8 @@ class PlayerViewModel(
 
     fun retryLoad() {
         val target = activeTarget.value ?: return
+        // The previous failure must stop looking like the current state while the retry loads.
+        playback.clearPlaybackError()
         open(target, forceReload = true)
     }
 

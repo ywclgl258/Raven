@@ -278,7 +278,7 @@
   <main id="main" class="wrap" tabindex="-1">
     <section class="hero" aria-labelledby="title" data-od-id="hero">
       <div class="hero-copy">
-        <div class="version">ANDROID&nbsp; / &nbsp;v0.9.3</div>
+        <div class="version">ANDROID&nbsp; / &nbsp;v0.9.4</div>
         <h1 id="title">Raven<span>渡鸦</span></h1>
         <p class="hero-line">一个 App，浏览视频、漫画与图集</p>
         <p class="lede">跨站搜索想看的作品，接着上次的进度播放或阅读。把喜欢的内容收进鸦巢，也能下载到设备，留到离线时慢慢看。</p>
@@ -368,6 +368,20 @@
       </div>
       <div>
         <details class="release" open>
+          <summary><span class="version release-version">v0.9.4</span><span class="label">状态反馈与操作手感修正</span><time datetime="2026-11-27">2026-11-27</time></summary>
+          <div class="release-content">
+            <ul>
+              <li>成功状态不再被禁用样式盖灰，反馈发送、备份导出等操作完成即可看到绿色确认。</li>
+              <li>更新下载时误触背景不会静默中断，取消会明确提示；账号页首次进入不再先闪「未登录」。</li>
+              <li>浏览页刷新失败会保留当前内容并给出重试，修复分页过程中下拉刷新导致「正在加载更多」卡住。</li>
+              <li>收藏与下载结果提示会在几秒后自动收起，不再长期占住列表顶部。</li>
+              <li>播放器等待与错误提示互斥，重试会清除上一次错误；阅读器拖拽浮窗遵循系统减弱动效。</li>
+              <li>条漫连读时按当前可见章节高亮与判断，不再误开重复章节。</li>
+            </ul>
+            <a href="https://github.com/ywclgl258/Raven/releases/tag/v0.9.4">查看 v0.9.4 发布详情</a>
+          </div>
+        </details>
+        <details class="release">
           <summary><span class="version release-version">v0.9.3</span><span class="label">反馈入口与连载续读修正</span><time datetime="2026-11-27">2026-11-27</time></summary>
           <div class="release-content">
             <ul>
@@ -433,13 +447,13 @@
     <section id="download" class="section" aria-labelledby="download-title" data-od-id="download">
       <div class="download-panel">
         <div>
-          <div class="version">v0.9.3 · 正式版</div>
+          <div class="version">v0.9.4 · 正式版</div>
           <h2 id="download-title">下载 Raven</h2>
           <p>Android 7.0+ · APK 7.57 MiB · <code>com.raven.app</code></p>
         </div>
         <div class="actions">
-          <a class="btn btn-primary" href="https://github.com/ywclgl258/Raven/releases/download/v0.9.3/Raven-v0.9.3-release.apk">GitHub 下载</a>
-          <a class="btn" href="https://ywclgl258.us.ci/download/Raven-v0.9.3-release.apk" download>VPS 镜像下载</a>
+          <a class="btn btn-primary" href="https://github.com/ywclgl258/Raven/releases/download/v0.9.4/Raven-v0.9.4-release.apk">GitHub 下载</a>
+          <a class="btn" href="https://ywclgl258.us.ci/download/Raven-v0.9.4-release.apk" download>VPS 镜像下载</a>
         </div>
         <div class="install-guide">
           <details>
@@ -453,8 +467,8 @@
           <details>
             <summary>查看 APK 文件 SHA-256</summary>
             <p>两个下载渠道的安装包摘要相同，可用下方数值核对下载文件。</p>
-            <code class="hash">9b41d473bbe3fad7354e9ac17aa0ac027cd24e3f73232012196a626038695fd1</code>
-            <p><a href="https://github.com/ywclgl258/Raven/releases/download/v0.9.3/SHA256SUMS.txt">下载 SHA256SUMS.txt</a></p>
+            <code class="hash">d5a073b3432de86605291daaf4427550d0858dd1bf7ad7be9b373ecb108ec8f4</code>
+            <p><a href="https://github.com/ywclgl258/Raven/releases/download/v0.9.4/SHA256SUMS.txt">下载 SHA256SUMS.txt</a></p>
           </details>
         </div>
       </div>

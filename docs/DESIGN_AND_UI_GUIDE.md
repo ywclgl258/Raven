@@ -164,6 +164,25 @@ RavenTheme(reduceTransparency = appSettings.reduceTransparency) {
 - `clampAspectRatio(aspectRatio, defaultRatio, minRatio, maxRatio)`：防异常封面比例撑爆瀑布流。
 - `formatPageCount(pageCount: Int?)`（如 `"42P"`）与 `formatPageProgress(currentPage, totalPages)`（如 `"14 / 120"`）。
 
+### 2.7 节奏与状态反馈（Rhythm & State Feedback）
+
+按压反馈在手势开始时触发。动画时长用于描绘状态变化，实际响应速度通过界面测试和设备测量确认。
+
+| 令牌 | 值 | 用途 |
+|---|---:|---|
+| `LABEL_EXIT_MS` | `110` | 旧状态文字的淡出与位移 |
+| `LABEL_SWAP_MS` | `180` | 新状态文字的淡入与位移 |
+| `CONTENT_REVEAL_MS` | `260` | 稳定内容的入场动画 |
+| `STAGGER_STEP_MS` / `STAGGER_MAX_ITEMS` | `34` / `8` | 入场错峰间隔与可动画项上限 |
+| `TAB_TRANSITION_DURATION_MS` / `PUSH_TRANSITION_DURATION_MS` | `220` / `320` | 顶级切换与压栈页面 |
+
+1. 异步任务在操作附近显示等待与结果。失败时保留可用内容或草稿，并提示如何恢复。
+2. `RavenAnimatedLabel` 用于低频状态变化。动画期间只向无障碍服务暴露最新文本。下载百分比等高频数据保持稳定显示。
+3. 反馈页分区只在入场时错峰，滚动返回已显示的字段时保持稳定。
+4. 系统减弱动效开启时，状态文字和入场分区直接呈现终态。
+
+实现位置：`:core:designsystem` 的 `RavenStateMotion.kt`（`RavenAnimatedLabel`、`rememberStaggeredRevealModifier`、`RavenStaggeredReveal`）与 `theme/RavenMotion.kt`（令牌与 `listStaggerDelayMs`），回归测试见 `RavenMotionRhythmTest`。
+
 ---
 
 ## 3. `:core:designsystem` 组件速查目录

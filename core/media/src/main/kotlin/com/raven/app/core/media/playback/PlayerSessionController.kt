@@ -789,6 +789,14 @@ class PlayerSessionController(
         _state.update { it.copy(lastNotice = null) }
     }
 
+    /**
+     * Drops a stale playback error before a retry so the overlay can show its own loading state
+     * instead of leaving the old error card on screen.
+     */
+    fun clearPlaybackError() {
+        _state.update { it.copy(errorMessage = null, errorCode = null) }
+    }
+
     fun currentPositionMs(): Long = player?.currentPosition?.coerceAtLeast(0L) ?: _state.value.positionMs
 
     fun syncSnapshot(clearError: Boolean = false) {

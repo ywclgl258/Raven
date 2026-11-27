@@ -170,8 +170,9 @@ fun RavenPrimaryButton(
         colors = ButtonDefaults.buttonColors(
             containerColor = containerColor,
             contentColor = contentColor,
-            disabledContainerColor = colors.surface3,
-            disabledContentColor = colors.inkTertiary,
+            // Success usually disables the button; the disabled palette must not repaint it grey.
+            disabledContainerColor = if (success) colors.success else colors.surface3,
+            disabledContentColor = if (success) colors.canvas else colors.inkTertiary,
         ),
         modifier = modifier
             .minimumInteractiveComponentSize()

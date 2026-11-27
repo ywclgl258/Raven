@@ -704,6 +704,11 @@ private fun CinemaVideoHome(
                 }
                 }
             }
+            BrowseRefreshFeedback(
+                errorMessage = uiState.errorMessage.takeUnless { uiState.isEmpty || uiState.authGateRequired },
+                onRetry = onRefresh,
+                modifier = Modifier.align(Alignment.BottomCenter),
+            )
         }
 
         // Floating frosted top bar overlaying the full-bleed Hero Banner cleanly
@@ -1154,6 +1159,11 @@ private fun GalleryMasonryHome(
                     }
                 }
             }
+            BrowseRefreshFeedback(
+                errorMessage = uiState.errorMessage.takeUnless { uiState.primaryItems.isEmpty() || uiState.authGateRequired },
+                onRetry = onRefresh,
+                modifier = Modifier.align(Alignment.BottomCenter),
+            )
         }
     }
 }

@@ -1412,11 +1412,14 @@ private fun UpdateAvailableSheet(
     val readyFile = state.readyApk
     val progress = state.downloadProgress
 
+    val downloading = progress != null && readyFile == null
     RavenBottomSheet(
         onDismissRequest = onDismiss,
         presentation = com.raven.app.core.designsystem.component.RavenSheetPresentation.Center,
         title = "发现新版本 ${release.tagName}",
         subtitle = "${release.asset.fileName} · ${RavenFormatters.formatByteSize(release.asset.sizeBytes)}",
+        // 下载中误触背景会丢掉已下载的分块，必须走"取消下载"这个显式操作。
+        dismissOnScrimClick = !downloading,
         modifier = Modifier.testTag("settings_update_sheet"),
     ) {
         Column(

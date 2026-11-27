@@ -215,8 +215,10 @@ internal fun ReaderChaptersSheet(
     onDismiss: () -> Unit,
 ) {
     val detail = uiState.detail ?: return
-    val currentChapterHints = remember(detail.item, uiState.mediaId) {
+    // In strip mode the viewport may already be inside an appended chapter; highlight that one.
+    val currentChapterHints = remember(detail.item, uiState.mediaId, uiState.displayMediaId) {
         listOfNotNull(
+            uiState.displayMediaId,
             uiState.mediaId,
             detail.item.id,
             detail.item.extra["chapterId"],
@@ -241,7 +243,7 @@ internal fun ReaderChaptersSheet(
                 chapters = uiState.chapters,
                 loading = uiState.isChapterListLoading,
                 error = uiState.chapterListError,
-                currentChapterId = detail.item.id,
+                currentChapterId = uiState.displayMediaId,
                 currentChapterUrl = detail.item.extra["chapterUrl"].orEmpty(),
                 currentChapterHints = currentChapterHints,
                 onSelect = onSelectChapter,

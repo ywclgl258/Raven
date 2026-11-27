@@ -532,6 +532,11 @@ fun ExploreScreenContent(
                     }
                 }
             }
+            BrowseRefreshFeedback(
+                errorMessage = uiState.errorMessage.takeUnless { uiState.items.isEmpty() || uiState.authGateRequired },
+                onRetry = onRefresh,
+                modifier = Modifier.align(Alignment.BottomCenter),
+            )
         }
     }
 

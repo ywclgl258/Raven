@@ -239,11 +239,12 @@ class BackupRestoreViewModel(
     // ---- Export Flow ----
 
     fun updateExportPassword(value: String) {
-        _uiState.update { it.copy(exportPassword = value, exportError = null) }
+        // 开始下一次导出时就撤掉上一次的绿色成功态，避免旧结果被误读成本次结果。
+        _uiState.update { it.copy(exportPassword = value, exportError = null, exportCompleted = null) }
     }
 
     fun updateExportPasswordConfirm(value: String) {
-        _uiState.update { it.copy(exportPasswordConfirm = value, exportError = null) }
+        _uiState.update { it.copy(exportPasswordConfirm = value, exportError = null, exportCompleted = null) }
     }
 
     fun onExportPasswordRequired() {

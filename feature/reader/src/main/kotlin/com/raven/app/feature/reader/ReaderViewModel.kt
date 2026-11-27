@@ -1154,7 +1154,8 @@ class ReaderViewModel(
         )
         val isCurrent = isMatchingSerialChapter(
             chapter = chapter,
-            currentChapterId = mediaId,
+            // 连读时视口可能已经在追加的下一话里，判断需以可见章节为准。
+            currentChapterId = _uiState.value.displayMediaId,
             currentChapterUrl = detail.item.extra["chapterUrl"].orEmpty(),
             hints = hints,
         )

@@ -1520,6 +1520,7 @@ private fun ReaderBottomControlBar(
 ) {
     val colors = LocalRavenColors.current
     val reduceTransparency = LocalReduceTransparency.current
+    val motionReduced = LocalMotionReduced.current
     val pages = uiState.pageNumbers
     val maxIdx = (pages.size - 1).coerceAtLeast(0)
     val currentIdx = remember(pages, uiState.currentPage) {
@@ -1546,8 +1547,8 @@ private fun ReaderBottomControlBar(
         // Floating target page pill shown while dragging scrubber
         AnimatedVisibility(
             visible = isScrubbing,
-            enter = fadeIn(tween(100)),
-            exit = fadeOut(tween(120)),
+            enter = if (motionReduced) EnterTransition.None else fadeIn(tween(100)),
+            exit = if (motionReduced) ExitTransition.None else fadeOut(tween(120)),
         ) {
             RavenFrostedBox(
                 shape = RavenShapes.PillShape,

@@ -418,6 +418,10 @@ internal class FakePlayerPlaybackPort(
         }
     }
 
+    override fun clearPlaybackError() {
+        _state.update { it.copy(errorMessage = null, errorCode = null) }
+    }
+
     var selectedAudioTrackPair: Pair<Int, Int>? = null
     var selectedSubtitleTrackPair: Pair<Int, Int>? = null
     var subtitlesDisabledCount: Int = 0

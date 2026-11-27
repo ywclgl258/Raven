@@ -405,8 +405,12 @@ class SettingsViewModel(
 
     fun clearAppPin() {
         viewModelScope.launch {
-            withContext(dispatchers.io) {
-                runCatching { privacyLockStore?.clearPin() }
+            val cleared = withContext(dispatchers.io) {
+                runCatching { privacyLockStore?.clearPin() }.isSuccess
+            }
+            if (!cleared) {
+                auxState.update { it.copy(feedbackMessage = "清除应用锁 PIN 失败，请重试") }
+                return@launch
             }
             preferencesRepository.setAppLockEnabled(false)
             auxState.update {
@@ -835,10 +839,17 @@ class SettingsViewModel(
 
     fun dismissUpdateSheet() {
         val current = auxState.value.updateState
-        if (current is UpdateUiState.Available && current.isDownloading) {
+        val wasDownloading = current is UpdateUiState.Available && current.isDownloading
+        if (wasDownloading) {
             updateJob?.cancel()
         }
-        auxState.update { it.copy(updateState = UpdateUiState.Idle) }
+        auxState.update {
+            it.copy(
+                updateState = UpdateUiState.Idle,
+                // 取消必须留下痕迹，否则用户会以为下载仍在后台继续。
+                feedbackMessage = if (wasDownloading) "已取消更新下载" else it.feedbackMessage,
+            )
+        }
     }
 
     fun clearFeedback() {

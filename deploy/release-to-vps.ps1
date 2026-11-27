@@ -134,10 +134,15 @@ Write-Host "SHA-256: $sha256"
 Write-Host "Size: $size bytes"
 Write-Host "VPS: $VpsHost"
 
+# Notes travel as a UTF-8 file: inline shell variables lose quoting through two shells and
+# split on spaces/CJK punctuation, which publish.py then rejects as extra arguments.
+$notesPath = Join-Path ([IO.Path]::GetTempPath()) "raven-notes-$versionName.txt"
+[IO.File]::WriteAllText($notesPath, $Notes, [Text.UTF8Encoding]::new($false))
+
 $publishCommand = "cd /root/raven-update-deploy; " +
-    "NOTES=`$(echo $notesB64 | base64 -d); " +
     "python3 publish.py --apk $remoteApk --release-properties release.properties " +
-    "--web-root /var/www/raven-update/public --base-url $remoteUrl --release-notes `"`$NOTES`""
+    "--web-root /var/www/raven-update/public --base-url $remoteUrl " +
+    "--release-notes `"`$(cat /root/raven-notes.txt)`""
 
 if ($DryRun) {
     Write-Host "`n[DryRun] scp $apkPath ${VpsHost}:/root/raven-update-deploy/$remoteApk"
@@ -153,12 +158,15 @@ Write-Host "Uploading APK and release metadata..."
 if ($LASTEXITCODE -ne 0) { Fail "scp APK failed" }
 & scp $releaseFile "${VpsHost}:/root/raven-update-deploy/release.properties"
 if ($LASTEXITCODE -ne 0) { Fail "scp release.properties failed" }
+& scp $notesPath "${VpsHost}:/root/raven-notes.txt"
+if ($LASTEXITCODE -ne 0) { Fail "scp release notes failed" }
 
 Write-Host "Publishing update-channel manifest..."
 & ssh $VpsHost $publishCommand
 if ($LASTEXITCODE -ne 0) { Fail "Remote publish.py failed" }
 
 Write-Host "Mirroring APK on the official website..."
+& ssh $VpsHost "rm -f /root/raven-notes.txt"
 & ssh $VpsHost "install -m 0644 /root/raven-update-deploy/$remoteApk /var/www/raven-site/public/download/Raven-v$versionName-release.apk"
 if ($LASTEXITCODE -ne 0) { Fail "Website APK mirror failed" }
 

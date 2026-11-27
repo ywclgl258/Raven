@@ -269,6 +269,9 @@ interface PlayerPlaybackPort {
 
     fun syncSnapshot(clearError: Boolean = false)
 
+    /** Drops a stale playback error so a retry can show its own loading state. */
+    fun clearPlaybackError()
+
     fun selectAudioTrack(groupIndex: Int, trackIndex: Int)
 
     fun selectSubtitleTrack(groupIndex: Int, trackIndex: Int)
@@ -382,6 +385,8 @@ class Media3PlayerPlaybackPort(
     override fun currentPositionMs(): Long = controller.currentPositionMs()
 
     override fun syncSnapshot(clearError: Boolean) = controller.syncSnapshot(clearError)
+
+    override fun clearPlaybackError() = controller.clearPlaybackError()
 
     override fun selectAudioTrack(groupIndex: Int, trackIndex: Int) =
         controller.selectAudioTrack(groupIndex, trackIndex)

@@ -118,6 +118,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.raven.app.core.designsystem.component.RavenAnimatedLabel
 import com.raven.app.core.designsystem.component.RavenBottomSheet
 import com.raven.app.core.designsystem.component.RavenContentCrossfade
 import com.raven.app.core.designsystem.component.RavenCrimsonProgressBar
@@ -1128,12 +1129,18 @@ private fun GalleryHeroHeader(
                         modifier = Modifier.size(20.dp),
                     )
                     Spacer(modifier = Modifier.width(6.dp))
-                    Text(
+                    // 「继续阅读 (第 5 页)」会随位置更新，做一个短促替换，避免数字突兀跳变。
+                    RavenAnimatedLabel(
                         text = uiState.primaryCtaLabel,
-                        style = MaterialTheme.typography.labelLarge.tabular().copy(fontWeight = FontWeight.Bold),
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
+                        contentAlignment = Alignment.CenterStart,
+                    ) { label ->
+                        Text(
+                            text = label,
+                            style = MaterialTheme.typography.labelLarge.tabular().copy(fontWeight = FontWeight.Bold),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
                 }
             }
 

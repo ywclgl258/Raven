@@ -43,12 +43,18 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.SnackbarDuration
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.SnackbarResult
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -64,6 +70,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.raven.app.core.database.model.ShelfWithSummary
+import kotlinx.coroutines.delay
 import com.raven.app.core.designsystem.component.RavenBottomSheet
 import com.raven.app.core.designsystem.component.RavenCrimsonProgressBar
 import com.raven.app.core.designsystem.component.RavenFormatters
@@ -846,6 +853,8 @@ private fun BrowseMorphGroupedRow(
  * Compact inline banner used to surface favorite/download outcomes from the long-press sheet.
  * Mirrors the Library feedback banner styling so messages read consistently across features.
  */
+private const val BROWSE_MESSAGE_TIMEOUT_MS: Long = 3_200L
+
 @Composable
 internal fun BrowseActionMessageBanner(
     message: String?,
@@ -854,6 +863,11 @@ internal fun BrowseActionMessageBanner(
 ) {
     if (message.isNullOrBlank()) return
     val colors = LocalRavenColors.current
+    // 收藏/下载这类结果只是一次性确认：看完就收起，避免长期占住列表顶部。
+    LaunchedEffect(message) {
+        delay(BROWSE_MESSAGE_TIMEOUT_MS)
+        onDismiss()
+    }
     Row(
         modifier = modifier
             .fillMaxWidth()
@@ -892,6 +906,27 @@ internal fun BrowseActionMessageBanner(
             )
         }
     }
+}
+
+@Composable
+internal fun BrowseRefreshFeedback(
+    errorMessage: String?,
+    onRetry: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val host = remember { SnackbarHostState() }
+    val retry by rememberUpdatedState(onRetry)
+    LaunchedEffect(errorMessage) {
+        if (errorMessage.isNullOrBlank()) return@LaunchedEffect
+        val result = host.showSnackbar(
+            message = "刷新失败，已保留当前内容。$errorMessage",
+            actionLabel = "重试",
+            withDismissAction = true,
+            duration = SnackbarDuration.Long,
+        )
+        if (result == SnackbarResult.ActionPerformed) retry()
+    }
+    SnackbarHost(hostState = host, modifier = modifier)
 }
 
 /**
