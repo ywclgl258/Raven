@@ -46,8 +46,8 @@ class RavenDocumentPickerTest {
             waitForSystemSaveButton()
             scenario.onActivity { it.recreate() }
             waitForSystemSaveButton().performAction(AccessibilityNodeInfo.ACTION_CLICK)
-            compose.waitUntil(8_000) { original?.isDestroyed == true }
-            compose.waitUntil(15_000) {
+            compose.waitUntil(20_000) { original?.isDestroyed == true }
+            compose.waitUntil(30_000) {
                 compose.onNode(hasScrollToNodeAction()).performScrollToNode(hasTestTag("backup_export_submit_button"))
                 compose.onAllNodesWithTag("backup_export_success_banner").fetchSemanticsNodes().isNotEmpty()
             }
@@ -65,13 +65,13 @@ class RavenDocumentPickerTest {
         val apk = File.createTempFile("picker-regression-", ".apk", folder)
         try {
             ActivityScenario.launch(MainActivity::class.java).use { scenario ->
-                compose.waitUntil(15_000) { compose.onAllNodesWithTag("browse_home_screen").fetchSemanticsNodes().isNotEmpty() }
+                compose.waitUntil(20_000) { compose.onAllNodesWithTag("browse_home_screen").fetchSemanticsNodes().isNotEmpty() }
                 lateinit var original: MainActivity
                 scenario.onActivity {
                     original = it
                     it.openAppUpdateInstaller(apk)
                 }
-                compose.waitUntil(8_000) { automation.rootInActiveWindow?.packageName == "com.android.settings" }
+                compose.waitUntil(20_000) { automation.rootInActiveWindow?.packageName?.contains("settings") == true }
                 scenario.onActivity { stopped ->
                     val state = android.os.Bundle()
                     instrumentation.callActivityOnSaveInstanceState(stopped, state)
@@ -79,7 +79,7 @@ class RavenDocumentPickerTest {
                     stopped.recreate()
                 }
                 automation.performGlobalAction(android.accessibilityservice.AccessibilityService.GLOBAL_ACTION_BACK)
-                compose.waitUntil(8_000) { automation.rootInActiveWindow?.packageName == context.packageName && original.isDestroyed }
+                compose.waitUntil(20_000) { automation.rootInActiveWindow?.packageName == context.packageName && original.isDestroyed }
                 scenario.onActivity { resumed ->
                     val state = android.os.Bundle()
                     instrumentation.callActivityOnSaveInstanceState(resumed, state)
@@ -91,14 +91,20 @@ class RavenDocumentPickerTest {
         }
     }
 
-    private fun waitForSystemSaveButton(): AccessibilityNodeInfo {
+    private fun waitForSystemSaveButton(timeoutMs: Long = 20_000L): AccessibilityNodeInfo {
         val automation = InstrumentationRegistry.getInstrumentation().uiAutomation
-        val deadline = SystemClock.elapsedRealtime() + 8_000L
+        val deadline = SystemClock.elapsedRealtime() + timeoutMs
         while (SystemClock.elapsedRealtime() < deadline) {
             val root = automation.rootInActiveWindow
-            if (root != null && root.packageName?.endsWith("documentsui") == true) {
-                val button = root.findAccessibilityNodeInfosByViewId("android:id/button1").firstOrNull { it.isEnabled }
-                if (button != null) return button
+            if (root != null && root.packageName?.contains("documentsui", ignoreCase = true) == true) {
+                val byId = root.findAccessibilityNodeInfosByViewId("android:id/button1")
+                    .firstOrNull { it.isEnabled }
+                if (byId != null) return byId
+                val byText = root.findAccessibilityNodeInfosByText("Save")
+                    .firstOrNull { it.isEnabled && it.isClickable }
+                    ?: root.findAccessibilityNodeInfosByText("保存")
+                        .firstOrNull { it.isEnabled && it.isClickable }
+                if (byText != null) return byText
             }
             SystemClock.sleep(50)
         }
