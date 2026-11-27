@@ -10,6 +10,7 @@ WorkingDirectory=/opt/raven-feedback
 Environment=RAVEN_FEEDBACK_DATA=/var/lib/raven-feedback
 Environment=RAVEN_FEEDBACK_PORT=8765
 Environment=RAVEN_FEEDBACK_SECURE_COOKIE=1
+EnvironmentFile=-/etc/raven-feedback.env
 ExecStart=/opt/raven-feedback/.venv/bin/gunicorn --workers 1 --bind 127.0.0.1:8765 --timeout 60 "app:create_app()"
 Restart=on-failure
 RestartSec=3
