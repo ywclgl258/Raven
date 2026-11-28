@@ -194,6 +194,17 @@ class ReaderViewModel(
         offlineOnly = offlineOnly,
     )
 
+    /** Primary page buffer (see [ReaderPageBufferController]). */
+    private val pageBuffer = ReaderPageBufferController(
+        scope = viewModelScope,
+        dispatchers = dispatchers,
+        pageLoader = pageLoader,
+        state = uiState,
+        update = { transform -> _uiState.update(transform) },
+        offlineOnly = offlineOnly,
+        sharedRatios = { sharedAspectRatios },
+    )
+
     /** Auto-page / slideshow loop (see [ReaderAutoPageLoop]). */
     private val autoPageLoop = ReaderAutoPageLoop(
         scope = viewModelScope,
@@ -215,9 +226,9 @@ class ReaderViewModel(
         pageLoader = pageLoader,
         uiState = { _uiState.value },
         update = { transform -> _uiState.update(transform) },
-        memoryBudgetBytes = { activeMemoryBudgetBytes },
-        maxConcurrency = { activeImageConcurrency },
-        prefetchAhead = { activePrefetchPages },
+        memoryBudgetBytes = { pageBuffer.budgetBytes },
+        maxConcurrency = { pageBuffer.concurrency },
+        prefetchAhead = { pageBuffer.prefetchAhead },
     )
 
     /** Serial chapter list + next-chapter prefetch (see [ReaderChapterPrefetcher]). */
@@ -253,8 +264,6 @@ class ReaderViewModel(
         },
     )
 
-    private var readerBuffer: ReaderBuffer<LoadedReaderPage>? = null
-    private var bufferCollectJob: Job? = null
     private var loadJob: Job? = null
     private var exportJob: Job? = null
     private var chapterAdvanceJob: Job? = null
@@ -265,10 +274,6 @@ class ReaderViewModel(
 
     private var chapterTransitionEmitted: Boolean = false
 
-    private var activePreferOriginal: Boolean = false
-    private var activePrefetchPages: Int = ReaderBuffer.PREFETCH_AHEAD
-    private var activeMemoryBudgetBytes: Long = ReaderBuffer.DEFAULT_OFFSCREEN_BUDGET_BYTES
-    private var activeImageConcurrency: Int = ReaderBuffer.MAX_CONCURRENT_LOADS
     private var latestIncognitoMode: Boolean = false
     private var isUserZoomedOrDragging: Boolean = false
     private var hasPromptedQueueForCurrentBook: Boolean = false
@@ -328,24 +333,24 @@ class ReaderViewModel(
                 }
                 val detail = _uiState.value.detail
                 if (detail != null &&
-                    readerBuffer != null &&
-                    (activePrefetchPages != targetPrefetch ||
-                        activeMemoryBudgetBytes != targetBudgetBytes ||
-                        activeImageConcurrency != targetConcurrency)
+                    pageBuffer.current() != null &&
+                    (pageBuffer.prefetchAhead != targetPrefetch ||
+                        pageBuffer.budgetBytes != targetBudgetBytes ||
+                        pageBuffer.concurrency != targetConcurrency)
                 ) {
                     rebuildBuffer(
                         detail = detail,
                         pageNumbers = _uiState.value.pageNumbers,
                         sourceRoot = _uiState.value.sourceRoot,
-                        preferOriginal = activePreferOriginal,
+                        preferOriginal = pageBuffer.preferOriginal,
                         prefetchAhead = targetPrefetch,
                         offscreenBudgetBytes = targetBudgetBytes,
                         maxConcurrency = targetConcurrency,
                     )
                 } else {
-                    activePrefetchPages = targetPrefetch
-                    activeMemoryBudgetBytes = targetBudgetBytes
-                    activeImageConcurrency = targetConcurrency
+                    pageBuffer.prefetchAhead = targetPrefetch
+                    pageBuffer.budgetBytes = targetBudgetBytes
+                    pageBuffer.concurrency = targetConcurrency
                 }
             }
         }
@@ -375,7 +380,7 @@ class ReaderViewModel(
                 }
 
                 // Rebuild buffer cleanly when preferOriginal differs from active buffer while keeping sharedAspectRatios.
-                if (detail != null && readerBuffer != null && activePreferOriginal != nextPreferOriginal) {
+                if (detail != null && pageBuffer.current() != null && pageBuffer.preferOriginal != nextPreferOriginal) {
                     rebuildBuffer(
                         detail = detail,
                         pageNumbers = _uiState.value.pageNumbers,
@@ -506,8 +511,8 @@ class ReaderViewModel(
 
                 val currentSettings = runCatching { preferencesRepository.currentSettings() }.getOrNull()
                 if (currentSettings != null) {
-                    activePrefetchPages = currentSettings.readerPrefetchPages.coerceIn(1, 12)
-                    activeMemoryBudgetBytes = currentSettings.readerMemoryBudgetMb.coerceIn(16, 512).toLong() * 1024L * 1024L
+                    pageBuffer.prefetchAhead = currentSettings.readerPrefetchPages.coerceIn(1, 12)
+                    pageBuffer.budgetBytes = currentSettings.readerMemoryBudgetMb.coerceIn(16, 512).toLong() * 1024L * 1024L
                     latestIncognitoMode = currentSettings.incognitoMode
                 }
                 val preferOriginal = supportsOriginalImages && effectivePrefs.preferOriginalImages
@@ -798,58 +803,18 @@ class ReaderViewModel(
         pageNumbers: List<Int>,
         sourceRoot: String,
         preferOriginal: Boolean,
-        prefetchAhead: Int = activePrefetchPages,
-        offscreenBudgetBytes: Long = activeMemoryBudgetBytes,
-        maxConcurrency: Int = activeImageConcurrency,
-    ) {
-        bufferCollectJob?.cancel()
-        readerBuffer?.close()
-        activePreferOriginal = preferOriginal
-        activePrefetchPages = prefetchAhead
-        activeMemoryBudgetBytes = offscreenBudgetBytes
-        activeImageConcurrency = maxConcurrency.coerceIn(1, ReaderBuffer.MAX_CONCURRENT_LOADS)
-
-        val buffer = ReaderBuffer<LoadedReaderPage>(
-            pageNumbers = pageNumbers,
-            scope = viewModelScope,
-            byteSizeOf = { it.byteSize },
-            aspectRatioOf = { it.aspectRatio },
-            offscreenBudgetBytes = offscreenBudgetBytes,
-            maxConcurrency = activeImageConcurrency,
-            sharedRatios = sharedAspectRatios,
-            prefetchAhead = prefetchAhead,
-            loader = { pageNumber, forceReload ->
-                pageLoader.loadRenderedPage(
-                    detail = detail,
-                    pageIndex = pageNumber,
-                    preferOriginal = preferOriginal,
-                    forceReload = forceReload,
-                    offlineOnly = offlineOnly,
-                    sourceRoot = sourceRoot,
-                )
-            },
-        )
-        readerBuffer = buffer
-
-        bufferCollectJob = viewModelScope.launch(dispatchers.main) {
-            buffer.state.collectLatest { bufState ->
-                _uiState.update { state ->
-                    state.copy(
-                        bufferState = bufState,
-                        pageAspectRatios = if (bufState.ratios.isEmpty()) {
-                            sharedAspectRatios.toMap()
-                        } else {
-                            bufState.ratios
-                        },
-                    )
-                }
-            }
-        }
-
-        val current = _uiState.value.currentPage
-        val visible = _uiState.value.currentSheetPages.toSet()
-        buffer.updateWindow(page = current, visible = visible)
-    }
+        prefetchAhead: Int = pageBuffer.prefetchAhead,
+        offscreenBudgetBytes: Long = pageBuffer.budgetBytes,
+        maxConcurrency: Int = pageBuffer.concurrency,
+    ) = pageBuffer.rebuild(
+        detail = detail,
+        pageNumbers = pageNumbers,
+        sourceRoot = sourceRoot,
+        preferOriginal = preferOriginal,
+        prefetchAhead = prefetchAhead,
+        offscreenBudgetBytes = offscreenBudgetBytes,
+        maxConcurrency = maxConcurrency,
+    )
 
     // ---- Viewport, Page & Buffer Updates ----
 
@@ -858,7 +823,7 @@ class ReaderViewModel(
         _uiState.update { it.copy(isLandscapeViewport = isLandscape) }
         val state = _uiState.value
         if (state.pageNumbers.isNotEmpty()) {
-            readerBuffer?.updateWindow(
+            pageBuffer.current()?.updateWindow(
                 page = state.currentPage,
                 visible = state.currentSheetPages.toSet(),
             )
@@ -889,7 +854,7 @@ class ReaderViewModel(
             progressStore.schedule(page = safeAnchor, scrollOffsetPx = safeOffset)
             maybeTriggerQueueCompletion(safeAnchor)
         }
-        readerBuffer?.updateWindow(page = safeAnchor, visible = safeVisible)
+        pageBuffer.current()?.updateWindow(page = safeAnchor, visible = safeVisible)
     }
 
     fun consumePendingStripRestoreOffset() {
@@ -942,14 +907,14 @@ class ReaderViewModel(
             )
         }
         val visible = _uiState.value.currentSheetPages.toSet()
-        readerBuffer?.updateWindow(page = target, visible = visible)
+        pageBuffer.current()?.updateWindow(page = target, visible = visible)
         _events.tryEmit(ReaderEvent.ScrollToPage(page = target, scrollOffsetPx = safeOffset, chapterId = mediaId))
         progressStore.schedule(page = target, scrollOffsetPx = safeOffset)
         maybeTriggerQueueCompletion(target)
     }
 
     fun retryPage(pageNumber: Int) {
-        readerBuffer?.retry(pageNumber)
+        pageBuffer.current()?.retry(pageNumber)
     }
 
     fun onInteractionStateChanged(isZoomedOrDragging: Boolean) {
@@ -1126,7 +1091,7 @@ class ReaderViewModel(
                 )
             }
             val visible = _uiState.value.currentSheetPages.toSet()
-            readerBuffer?.updateWindow(page = preservedPage, visible = visible)
+            pageBuffer.current()?.updateWindow(page = preservedPage, visible = visible)
             _events.tryEmit(ReaderEvent.ScrollToPage(page = preservedPage, scrollOffsetPx = preservedOffset))
         }
     }
@@ -1140,7 +1105,7 @@ class ReaderViewModel(
         updatePreferences { it.copy(combineCover = combineCover) }
         val state = _uiState.value
         if (state.pageNumbers.isNotEmpty()) {
-            readerBuffer?.updateWindow(
+            pageBuffer.current()?.updateWindow(
                 page = state.currentPage,
                 visible = state.currentSheetPages.toSet(),
             )
@@ -1393,10 +1358,8 @@ class ReaderViewModel(
         chapterPrefetcher.cancelAll()
         chapterAdvanceJob?.cancel()
         progressStore.cancel()
-        bufferCollectJob?.cancel()
+        pageBuffer.close()
         flushProgress()
-        readerBuffer?.close()
-        readerBuffer = null
         appendedChapters.closeAll()
         super.onCleared()
     }
