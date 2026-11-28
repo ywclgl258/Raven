@@ -451,3 +451,25 @@ Raven 严禁 Feature 模块互相依赖，也严禁向 Feature Screen 传递 `Na
 2. **不搬状态**：拆分只移动声明，不引入新的 `remember` / 新的 `LaunchedEffect`，`ViewModel` 仍是唯一状态源。
 3. **拆分后用模块级编译验证**：`.\gradlew.bat :feature:<module>:compileDebugKotlin --no-daemon`；涉及测试时再跑 `:feature:<module>:testDebugUnitTest`。
 4. **`ViewModel` 不做机械拆分**：Kotlin 无局部类，状态机应按「队列 / 进度持久化 / 下载协调」提炼协作者（构造注入），属于设计性重构，需单独立项并补测试。
+
+### 6.1 ViewModel 协作者命名与拆分检查表
+
+超过约 1500 行的 `ViewModel` 按「协作职责」而不是「代码块」拆，协作者以构造注入，ViewModel 保留薄委托以维持公开 API：
+
+| 后缀 | 职责 | 已落地示例 |
+|---|---|---|
+| `*Runner` | 一次检索/任务流水线（含 Job 与结果状态） | `CrossSiteSearchRunner`、`SingleSiteSearchRunner` |
+| `*Controller` | 交互动作集合（弹层、队列、倒计时） | `GalleryTagActionController`、`PlayerQueueController` |
+| `*Planner` | 参数校验与提交计划 | `GalleryDownloadPlanner` |
+| `*Store` | 持久化与防抖管线 | `ReaderProgressStore` |
+| `*Cache` | 内存缓冲/解码窗口生命周期 | `ReaderAppendedChapterCache` |
+| `*Prefetcher` | 预取与相邻项准备 | `ReaderChapterPrefetcher` |
+| `*Timer` | 单调时钟倒计时 | `PlayerSleepTimer` |
+| `*State` / `*UiState` | UI 状态契约与事件 | `ReaderState`、`GalleryDetailState`、`SearchUiState` |
+
+拆分检查表（每次都要过一遍）：
+
+1. 被移动的 `private` 顶层声明改 `internal`；跨文件共享的私有常量/枚举一并提升。
+2. **保留 `androidx.compose.runtime.getValue` / `setValue` 导入** —— 它们只服务于 `by remember` 委托，文本检索不到简单名，自动清理 import 时极易被误删并导致编译失败。
+3. 新文件以「切分点前一个空行」为界，不要把下一个函数的 `@Composable`/`@OptIn`/KDoc 留在上一个文件尾部。
+4. 拆分后立即跑 `:module:compileDebugKotlin`，再跑对应 `*ViewModelTest`。
