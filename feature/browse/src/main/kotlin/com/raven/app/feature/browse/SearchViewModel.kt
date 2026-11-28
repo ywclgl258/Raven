@@ -261,7 +261,17 @@ class SearchViewModel(
             query = initialRoute.initialQuery?.trim().orEmpty(),
         ),
     )
-    private val singleSiteState = MutableStateFlow(SingleSiteResultState())
+
+    private val singleSiteRunner = SingleSiteSearchRunner(
+        scope = viewModelScope,
+        dispatchers = dispatchers,
+        siteRegistry = siteRegistry,
+        preferences = preferencesRepository,
+        blockedTerms = blockedTermsRepository,
+        tagDictionary = tagDictionary,
+        inputState = { inputState.value },
+        currentGeneration = { searchGeneration },
+    )
 
     private val crossSiteRunner = CrossSiteSearchRunner(
         scope = viewModelScope,
@@ -274,8 +284,6 @@ class SearchViewModel(
         currentGeneration = { searchGeneration },
     )
 
-    private var singleSearchJob: Job? = null
-    private var singlePaginateJob: Job? = null
     /**
      * Monotonic intent generation. Bumped on every submit/clear so a stale prepare phase (settings
      * fetch, history write) that finishes late cannot start a request or cancel a newer one.
@@ -380,7 +388,7 @@ class SearchViewModel(
     val uiState: StateFlow<SearchUiState> = combine(
         preferencesRepository.settings,
         combine(inputState, discoveryFlow) { input, discovery -> input to discovery },
-        singleSiteState,
+        singleSiteRunner.state,
         crossSiteRunner.state,
         dbContextFlow,
     ) { settings, inputAndDiscovery, single, cross, db ->
@@ -625,9 +633,7 @@ class SearchViewModel(
         if (siteRegistry.get(siteId) == null) return
         // An explicit pick overrides any gallery-derived source site for this search session.
         manualSiteOverride.value = siteId
-        singleSearchJob?.cancel()
-        singlePaginateJob?.cancel()
-        singleSiteState.value = SingleSiteResultState(siteId = siteId)
+        singleSiteRunner.reset(siteId)
         inputState.update {
             it.copy(
                 scope = SearchScope.ALL,
@@ -677,11 +683,10 @@ class SearchViewModel(
     fun clearQuery() {
         // Bump generation first so any in-flight prepare phase is invalidated before we reset state.
         searchGeneration++
-        singleSearchJob?.cancel()
-        singlePaginateJob?.cancel()
+        singleSiteRunner.cancel()
         crossSiteRunner.cancelAll()
         inputState.update { it.copy(query = "", submittedQuery = "", crossSiteFilterSiteId = null) }
-        singleSiteState.value = SingleSiteResultState(siteId = uiState.value.activeSite?.id)
+        singleSiteRunner.reset(uiState.value.activeSite?.id)
         crossSiteRunner.reset()
     }
 
@@ -713,7 +718,7 @@ class SearchViewModel(
         when (current.mode) {
             SearchMode.SINGLE_SITE -> {
                 if (!hasQuery && !hasFilters) return
-                val singleSnap = singleSiteState.value
+                val singleSnap = singleSiteRunner.current()
                 val plugin = singleSnap.siteId?.let { siteRegistry.get(it) }
                 if (singleSnap.hasSearched && plugin != null) {
                     val nativeSorts = resolveNativeSearchSorts(plugin, current.scope)
@@ -855,8 +860,7 @@ class SearchViewModel(
         } else {
             SearchMode.SINGLE_SITE
         }
-        singleSearchJob?.cancel()
-        singlePaginateJob?.cancel()
+        singleSiteRunner.cancel()
         crossSiteRunner.cancelAll()
         inputState.update {
             it.copy(
@@ -877,7 +881,7 @@ class SearchViewModel(
                 submitSearch(overrideMode = SearchMode.SINGLE_SITE)
             } else {
                 manualSiteOverride.value = siteId
-                singleSiteState.value = SingleSiteResultState(siteId = siteId)
+                singleSiteRunner.reset(siteId)
                 viewModelScope.launch {
                     preferencesRepository.selectActiveSiteAndRecordOpen(siteId)
                     submitSearch(overrideMode = SearchMode.SINGLE_SITE, overrideSingleSiteId = siteId)
@@ -1070,59 +1074,7 @@ class SearchViewModel(
         }
     }
 
-    fun loadNextSingleSitePage() {
-        val snap = singleSiteState.value
-        val siteId = snap.siteId ?: return
-        if (snap.isLoading || snap.isLoadingMore || snap.authRequired || !snap.hasMore) return
-        val plugin = siteRegistry.get(siteId) ?: return
-        val searchSource = plugin.searchSource ?: return
-
-        singlePaginateJob?.cancel()
-        singlePaginateJob = viewModelScope.launch {
-            singleSiteState.update { it.copy(isLoadingMore = true, paginationErrorMessage = null) }
-            val nextPageNumber = snap.nextPage ?: (snap.currentPage + 1)
-            val input = inputState.value
-            val settings = preferencesRepository.currentSettings()
-            val effectiveBlocked = blockedTermsRepository.observeEffectiveTermsBySite(siteId).first()
-            val request = buildSingleSiteRequest(
-                plugin = plugin,
-                query = input.submittedQuery,
-                page = nextPageNumber,
-                cursor = snap.nextCursor,
-                inputSnapshot = input,
-                siteLanguage = settings.languageFor(siteId),
-                effectiveBlockedTerms = effectiveBlocked,
-            )
-            try {
-                val page = withContext(dispatchers.io) { searchSource.search(request) }
-                singleSiteState.update { cur ->
-                    if (cur.siteId != siteId) return@update cur
-                    val merged = mergeUniqueMediaItems(cur.rawItems, page.items)
-                    val progressed = merged.size > cur.rawItems.size ||
-                        (page.nextCursor != null && page.nextCursor != cur.nextCursor)
-                    cur.copy(
-                        isLoadingMore = false,
-                        paginationErrorMessage = null,
-                        rawItems = merged,
-                        currentPage = nextPageNumber,
-                        nextPage = page.nextPage,
-                        nextCursor = page.nextCursor,
-                        hasMore = page.hasMore && progressed,
-                    )
-                }
-            } catch (ce: CancellationException) {
-                throw ce
-            } catch (error: Throwable) {
-                singleSiteState.update { cur ->
-                    if (cur.siteId != siteId) return@update cur
-                    cur.copy(
-                        isLoadingMore = false,
-                        paginationErrorMessage = error.toBrowseErrorMessage(),
-                    )
-                }
-            }
-        }
-    }
+    fun loadNextSingleSitePage() = singleSiteRunner.loadNextPage()
 
     private fun runSingleSiteSearch(
         targetSiteId: SiteId,
@@ -1130,84 +1082,13 @@ class SearchViewModel(
         inputSnapshot: SearchInputState,
         siteLanguage: ComicLanguage,
         generation: Long = searchGeneration,
-    ) {
-        // A stale caller must not cancel the current job nor overwrite the newer result state.
-        if (generation != searchGeneration) return
-        singleSearchJob?.cancel()
-        singlePaginateJob?.cancel()
-        singleSearchJob = viewModelScope.launch {
-            if (generation != searchGeneration) return@launch
-            val plugin = siteRegistry.get(targetSiteId)
-            val searchSource = plugin?.searchSource
-            if (plugin == null || searchSource == null) {
-                singleSiteState.value = SingleSiteResultState(
-                    siteId = targetSiteId,
-                    isLoading = false,
-                    hasSearched = true,
-                    errorMessage = "当前站点暂不支持搜索功能",
-                )
-                return@launch
-            }
-
-            singleSiteState.value = SingleSiteResultState(
-                siteId = targetSiteId,
-                isLoading = true,
-                hasSearched = true,
-            )
-
-            try {
-                if (plugin.authProvider.requiresAuthGate) {
-                    val auth = withContext(dispatchers.io) { plugin.authProvider.currentAuthState() }
-                    if (!auth.isAuthenticated) {
-                        singleSiteState.value = SingleSiteResultState(
-                            siteId = targetSiteId,
-                            isLoading = false,
-                            hasSearched = true,
-                            authRequired = true,
-                        )
-                        return@launch
-                    }
-                }
-
-                val effectiveBlocked = blockedTermsRepository.observeEffectiveTermsBySite(targetSiteId).first()
-                val request = buildSingleSiteRequest(
-                    plugin = plugin,
-                    query = query,
-                    page = 1,
-                    cursor = null,
-                    inputSnapshot = inputSnapshot,
-                    siteLanguage = siteLanguage,
-                    effectiveBlockedTerms = effectiveBlocked,
-                )
-                val page = withContext(dispatchers.io) { searchSource.search(request) }
-                // A newer submit/clear may have landed while the network call was running.
-                if (generation != searchGeneration) return@launch
-                singleSiteState.value = SingleSiteResultState(
-                    siteId = targetSiteId,
-                    isLoading = false,
-                    hasSearched = true,
-                    rawItems = page.items.distinctBy { it.compositeKey },
-                    fetchedSort = request.sort,
-                    isDirectoryResults = searchSource.isDirectorySearch ||
-                        page.items.any { it.isDirectoryEntryItem() },
-                    currentPage = 1,
-                    nextPage = page.nextPage,
-                    nextCursor = page.nextCursor,
-                    hasMore = page.hasMore,
-                )
-            } catch (ce: CancellationException) {
-                throw ce
-            } catch (error: Throwable) {
-                singleSiteState.value = SingleSiteResultState(
-                    siteId = targetSiteId,
-                    isLoading = false,
-                    hasSearched = true,
-                    authRequired = error is SiteException.AuthRequired,
-                    errorMessage = error.toBrowseErrorMessage(),
-                )
-            }
-        }
-    }
+    ) = singleSiteRunner.start(
+        targetSiteId = targetSiteId,
+        query = query,
+        inputSnapshot = inputSnapshot,
+        siteLanguage = siteLanguage,
+        generation = generation,
+    )
 
     private fun runCrossSiteSearch(
         targetSiteIds: List<SiteId>,
@@ -1224,44 +1105,6 @@ class SearchViewModel(
     fun retryCrossSite(siteId: SiteId) = crossSiteRunner.retry(siteId)
 
     fun loadMoreCrossSite(siteId: SiteId) = crossSiteRunner.loadMore(siteId)
-
-    private fun buildSingleSiteRequest(
-        plugin: SitePlugin,
-        query: String,
-        page: Int,
-        cursor: String?,
-        inputSnapshot: SearchInputState,
-        siteLanguage: ComicLanguage,
-        effectiveBlockedTerms: Collection<String> = emptyList(),
-    ): FeedRequest {
-        val searchSource = plugin.searchSource
-        val supportedScopes = searchSource?.supportedScopes ?: setOf(SearchScope.ALL)
-        val effectiveScope = if (inputSnapshot.scope in supportedScopes) {
-            inputSnapshot.scope
-        } else {
-            supportedScopes.firstOrNull() ?: SearchScope.ALL
-        }
-        val effectiveLanguage = requestLanguage(plugin, inputSnapshot, siteLanguage)
-        val nativeSorts = resolveNativeSearchSorts(plugin, effectiveScope)
-        val requestedSort = if (inputSnapshot.sort == FeedSort.DEFAULT) nativeSorts.first() else inputSnapshot.sort
-        val effectiveSort = resolveCompatibleServerSort(nativeSorts, requestedSort)
-        val effectiveFilters = buildServerExcludeFilters(
-            plugin = plugin,
-            baseFilters = inputSnapshot.advancedFilters,
-            effectiveBlockedTerms = effectiveBlockedTerms,
-        )
-        return FeedRequest(
-            siteId = plugin.id,
-            category = effectiveFilters.category?.takeIf { it.isNotBlank() },
-            sort = effectiveSort,
-            language = effectiveLanguage,
-            page = page,
-            cursor = cursor,
-            query = query.ifBlank { null },
-            scope = effectiveScope,
-            advancedFilters = effectiveFilters,
-        )
-    }
 
     private fun buildServerExcludeFilters(
         plugin: SitePlugin,
