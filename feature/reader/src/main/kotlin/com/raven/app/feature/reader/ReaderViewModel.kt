@@ -179,6 +179,21 @@ class ReaderViewModel(
      * Series identity resolves through the same `activeSeriesMetadata` cache the chapter
      * navigator uses, so opaque chapter ids keep their work identity.
      */
+    /** Export / SAF share flows (see [ReaderExportCoordinator]). */
+    private val exporter = ReaderExportCoordinator(
+        scope = viewModelScope,
+        dispatchers = dispatchers,
+        gateway = exportGateway,
+        state = uiState,
+        update = { transform -> _uiState.update(transform) },
+        emitEvent = { event -> _events.tryEmit(event) },
+        notice = ::emitSnackbar,
+        mediaId = mediaId,
+        supportsOriginalImages = supportsOriginalImages,
+        pageLoader = pageLoader,
+        offlineOnly = offlineOnly,
+    )
+
     /** Auto-page / slideshow loop (see [ReaderAutoPageLoop]). */
     private val autoPageLoop = ReaderAutoPageLoop(
         scope = viewModelScope,
@@ -1249,176 +1264,28 @@ class ReaderViewModel(
 
     // ---- Export & Share (GalleryExporter) ----
 
-    fun exportCurrentPage(mode: ExportMode) {
-        val state = _uiState.value
-        val detail = state.detail ?: return
-        // In STRIP mode the visible page may belong to an appended chapter; export must use that
-        // chapter's detail/pages/source so the exported bytes match the image on screen.
-        val ctx = resolveActivePageContext(state, detail, mediaId)
-        exportPages(pages = listOf(ctx.page), mode = mode, followActiveChapter = true)
-    }
+    fun exportCurrentPage(mode: ExportMode) = exporter.exportCurrentPage(mode)
 
-    fun exportCbz(rawRangeInput: String? = null) {
-        val state = _uiState.value
-        val total = state.totalPages
-        if (total <= 0) return
-
-        val targetPages = if (rawRangeInput.isNullOrBlank()) {
-            state.pageNumbers.ifEmpty { (1..total).toList() }
-        } else {
-            try {
-                PageSelectionParser.parse(rawRangeInput, total)
-            } catch (_: IllegalArgumentException) {
-                emitSnackbar("页码格式无效（有效范围 1..$total，如 1, 3, 5-8）")
-                return
-            }
-        }
-        // Whole-gallery archive: page numbers come from the opened gallery, never an appended one.
-        exportPages(pages = targetPages, mode = ExportMode.CBZ, followActiveChapter = false)
-    }
+    fun exportCbz(rawRangeInput: String? = null) = exporter.exportCbz(rawRangeInput)
 
     fun exportPages(
         pages: List<Int>,
         mode: ExportMode,
         followActiveChapter: Boolean = false,
-    ) {
-        val state = _uiState.value
-        val detail = state.detail ?: return
-        if (state.isExporting) return
-        // The current-page path follows the on-screen appended chapter; range/gallery exports keep
-        // the opened gallery's detail because their page numbers refer to it.
-        val ctx = if (followActiveChapter) resolveActivePageContext(state, detail, mediaId) else null
-
-        val unique = pages.distinct().sorted()
-        if (unique.isEmpty()) {
-            emitSnackbar("没有可导出的图页")
-            return
-        }
-
-        exportJob?.cancel()
-        exportJob = viewModelScope.launch(dispatchers.io) {
-            val actionName = when (mode) {
-                ExportMode.SAVE_IMAGES -> "保存原图"
-                ExportMode.SHARE_IMAGES -> "准备分享"
-                ExportMode.CBZ -> "打包 CBZ"
-            }
-            _uiState.update { it.copy(isExporting = true, exportStatusText = "正在$actionName…") }
-            try {
-                val preferOriginal = supportsOriginalImages && state.preferences.preferOriginalImages
-                // Non-following exports use the opened gallery's detail and root.
-                val exportDetail = ctx?.detail ?: detail
-                val exportSourceRoot = if (ctx != null && ctx.mediaId != mediaId) {
-                    state.appendedChapters.firstOrNull { it.mediaId == ctx.mediaId }?.sourceRoot
-                        ?: state.sourceRoot
-                } else {
-                    state.sourceRoot
-                }
-                val prepared = exportGateway.prepare(
-                    title = exportDetail.item.title,
-                    pages = unique,
-                    mode = mode,
-                    loadPageBytes = { pageIndex ->
-                        pageLoader.loadOriginalBytes(
-                            detail = exportDetail,
-                            pageIndex = pageIndex,
-                            preferOriginal = preferOriginal,
-                            offlineOnly = offlineOnly,
-                            sourceRoot = exportSourceRoot,
-                        )
-                    },
-                    onProgress = { text ->
-                        _uiState.update { it.copy(exportStatusText = text) }
-                    },
-                )
-                _uiState.update { it.copy(isExporting = false, exportStatusText = null) }
-                when (mode) {
-                    ExportMode.SHARE_IMAGES -> {
-                        _events.emit(
-                            ReaderEvent.RequestShareExport(
-                                prepared = prepared,
-                                subject = "${exportDetail.item.title} - 第 ${unique.first()} 页",
-                            ),
-                        )
-                    }
-                    ExportMode.CBZ -> {
-                        val file = prepared.files.single()
-                        _events.emit(
-                            ReaderEvent.RequestSaveDocument(
-                                prepared = prepared,
-                                suggestedFileName = file.file.name,
-                                mimeType = file.mimeType,
-                            ),
-                        )
-                    }
-                    ExportMode.SAVE_IMAGES -> {
-                        if (prepared.files.size == 1) {
-                            val file = prepared.files.single()
-                            _events.emit(
-                                ReaderEvent.RequestSaveDocument(
-                                    prepared = prepared,
-                                    suggestedFileName = file.file.name,
-                                    mimeType = file.mimeType,
-                                ),
-                            )
-                        } else {
-                            _events.emit(ReaderEvent.RequestOpenDocumentTree(prepared = prepared))
-                        }
-                    }
-                }
-            } catch (ce: CancellationException) {
-                _uiState.update { it.copy(isExporting = false, exportStatusText = null) }
-                throw ce
-            } catch (error: Throwable) {
-                _uiState.update { it.copy(isExporting = false, exportStatusText = null) }
-                emitSnackbar(error.message?.takeIf(String::isNotBlank) ?: "${actionName}失败")
-            }
-        }
-    }
+    ) = exporter.exportPages(pages, mode, followActiveChapter)
 
     fun prepareShareUris(
-        context: Context,
+        context: android.content.Context,
         authority: String,
         prepared: PreparedExport,
-    ): List<Uri> = exportGateway.prepareShareUris(
-        context = context,
-        authority = authority,
-        prepared = prepared,
-    )
+    ): List<android.net.Uri> = exporter.prepareShareUris(context, authority, prepared)
 
     fun completeSafExport(
         prepared: PreparedExport,
-        targetUri: Uri?,
+        targetUri: android.net.Uri?,
         isTree: Boolean,
-        contentResolver: ContentResolver,
-    ) {
-        viewModelScope.launch(dispatchers.io) {
-            if (targetUri == null) {
-                runCatching { exportGateway.removeStagingFolder(prepared.folder) }
-                emitSnackbar("已取消保存")
-                return@launch
-            }
-            _uiState.update { it.copy(isExporting = true, exportStatusText = "正在写入目标位置…") }
-            try {
-                val outcome = exportGateway.saveToSaf(
-                    prepared = prepared,
-                    targetUri = targetUri,
-                    isTree = isTree,
-                    contentResolver = contentResolver,
-                    onProgress = { text -> _uiState.update { it.copy(exportStatusText = text) } },
-                )
-                _uiState.update { it.copy(isExporting = false, exportStatusText = null) }
-                emitSnackbar("已成功保存 ${outcome.savedCount} 个文件")
-            } catch (ce: CancellationException) {
-                _uiState.update { it.copy(isExporting = false, exportStatusText = null) }
-                throw ce
-            } catch (error: Throwable) {
-                _uiState.update { it.copy(isExporting = false, exportStatusText = null) }
-                emitSnackbar(error.message?.takeIf(String::isNotBlank) ?: "保存文件失败")
-            }
-        }
-    }
-
-    // ---- Thumbnail Helper (Local / Offline Sheet Previews) ----
+        contentResolver: android.content.ContentResolver,
+    ) = exporter.completeSafExport(prepared, targetUri, isTree, contentResolver)
 
     suspend fun loadThumbnailBitmap(pageNumber: Int, targetSizePx: Int = 360): Bitmap? {
         val state = _uiState.value
