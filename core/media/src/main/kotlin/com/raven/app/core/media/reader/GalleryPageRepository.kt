@@ -126,7 +126,7 @@ class GalleryPageRepository(
     )
 
     @Serializable
-    private data class SelectionManifest(
+    internal data class SelectionManifest(
         val selected: List<Int> = emptyList(),
         val completed: List<Int> = emptyList(),
     )
@@ -205,6 +205,18 @@ class GalleryPageRepository(
     } else {
         null
     }
+
+    private val downloadAudit = GalleryDownloadAudit(
+        dispatchers = dispatchers,
+        storage = storageRootManager,
+        json = json,
+        requireAndroidImageDecoder = requireAndroidImageDecoder,
+        defaultLayout = ::downloadLayout,
+        bookFolder = ::bookFolder,
+        resolveReadingRoot = ::resolveReadingRoot,
+        readDiskBook = ::readDiskBook,
+        atomicWrite = ::atomicWriteBytes,
+    )
 
     private val readingCache = GalleryReadingCacheStore(
         baseDir = readingCacheBaseDir,
@@ -859,160 +871,36 @@ class GalleryPageRepository(
         siteId: SiteId,
         mediaId: String,
         sourceRoot: String = "",
-    ): GalleryAudit = withContext(dispatchers.io) {
-        val layout = storageRootManager.resolveSourceLayout(sourceRoot.ifBlank { resolveReadingRoot(siteId, mediaId) })
-        val folder = bookFolder(siteId, mediaId, layout)
-        val diskBook = readDiskBook(folder, expectedSiteId = siteId, expectedMediaId = mediaId)
-            ?: error("图集下载信息缺失，无法检查完整性")
-        val ctx = currentCoroutineContext()
-        diskBook.audit { ctx.ensureActive() }
-    }
+    ): GalleryAudit = downloadAudit.audit(siteId, mediaId, sourceRoot)
 
     suspend fun auditWriteTarget(
         siteId: SiteId,
         mediaId: String,
         layout: StorageLayout = downloadLayout(),
-    ): GalleryAudit? = withContext(dispatchers.io) {
-        val folder = bookFolder(siteId, mediaId, layout)
-        val diskBook = readDiskBook(folder, expectedSiteId = siteId, expectedMediaId = mediaId) ?: return@withContext null
-        val ctx = currentCoroutineContext()
-        diskBook.audit { ctx.ensureActive() }
-    }
+    ): GalleryAudit? = downloadAudit.auditWriteTarget(siteId, mediaId, layout)
 
     suspend fun commitDownload(
         siteId: SiteId,
         mediaId: String,
         layout: StorageLayout,
         requestedPages: Set<Int>,
-    ): GalleryAudit = withContext(dispatchers.io) {
-        val folder = bookFolder(siteId, mediaId, layout)
-        val diskBook = readDiskBook(folder, expectedSiteId = siteId, expectedMediaId = mediaId)
-            ?: error("图集下载信息缺失，无法提交完成状态")
-        val ctx = currentCoroutineContext()
-        val audit = diskBook.audit { ctx.ensureActive() }
-        check(audit.validPages.toSet().containsAll(requestedPages)) { "图集下载尚未完整保存" }
-        ctx.ensureActive()
-
-        if (audit.isComplete) {
-            atomicWriteBytes(File(folder, "readme.txt"), RECOVERY_NOTE.toByteArray())
-            val selFile = File(folder, "selection.json")
-            if (selFile.exists() && !selFile.delete()) {
-                throw GalleryStorageException("无法移除旧选页记录")
-            }
-            atomicWriteBytes(File(folder, "complete"), audit.totalPages.toString().toByteArray())
-        } else {
-            val manifest = SelectionManifest(selected = requestedPages.sorted(), completed = audit.validPages)
-            atomicWriteBytes(
-                File(folder, "selection.json"),
-                json.encodeToString(SelectionManifest.serializer(), manifest).toByteArray(),
-            )
-            File(folder, "complete").delete()
-            atomicWriteBytes(
-                File(folder, "readme.txt"),
-                ("此图集为部分保存，有效图页 ${audit.validPages.size} / ${audit.totalPages}。\n\n$RECOVERY_NOTE").toByteArray(),
-            )
-        }
-        audit
-    }
+    ): GalleryAudit = downloadAudit.commit(siteId, mediaId, layout, requestedPages)
 
     suspend fun removeDownload(
         siteId: SiteId,
         mediaId: String,
         sourceRoot: String = "",
         knownRoot: String = "",
-    ) = withContext(dispatchers.io) {
-        val relative = "${siteId.value}/${StorageRootManager.sha256Hex(mediaId)}"
-        val layouts = storageRootManager.galleryRemovalLayouts(sourceRoot, knownRoot, relative)
-        for (layout in layouts) {
-            val folder = bookFolder(siteId, mediaId, layout)
-            check(!folder.exists() || folder.deleteRecursively()) { "部分下载图页无法删除，请重试" }
-            if (layout.location == com.raven.app.core.model.StorageLocation.SHARED) {
-                storageRootManager.forgetSharedGallery(relative)
-            }
-        }
-        storageRootManager.removeComicSidecar(siteId, mediaId, sourceRoot)
-    }
+    ) = downloadAudit.remove(siteId, mediaId, sourceRoot, knownRoot)
 
     fun inspectDiskBookForRecovery(
         siteId: SiteId,
         folder: File,
         sourceRoot: String,
-    ): DiskSidecarRecord? {
-        val diskBook = readDiskBook(folder, expectedSiteId = siteId) ?: return null
-        val audit = diskBook.audit()
-        val isWhole = diskBook.hasCompleteMarker && audit.isComplete
-        val intactSelection = if (isWhole) {
-            emptyList()
-        } else {
-            diskBook.selection.takeIf { it.isNotEmpty() && audit.validPages.toSet().containsAll(it) }.orEmpty()
-        }
-        // A selective download never writes the `complete` marker, yet every picked page can be on
-        // disk. Reporting it as PAUSED made the user re-run a finished task.
-        val selectionComplete = !isWhole && intactSelection.isNotEmpty()
-        val item = diskBook.detail.item
-        val kind = if (item.kind == MediaKind.PHOTO) DownloadKind.PHOTO else DownloadKind.COMIC
-        val updatedAt = folder.listFiles().orEmpty().maxOfOrNull { it.lastModified() } ?: System.currentTimeMillis()
-        return DiskSidecarRecord(
-            kind = kind,
-            siteId = siteId,
-            mediaId = item.id,
-            title = item.title,
-            url = item.url,
-            coverUrl = item.coverUrl,
-            totalPages = audit.totalPages,
-            completedPages = audit.validPages.size,
-            bytes = audit.totalBytes,
-            updatedAt = updatedAt,
-            status = if (isWhole || selectionComplete) DownloadStatus.COMPLETED else DownloadStatus.PAUSED,
-            detail = if (isWhole || selectionComplete) {
-                ""
-            } else {
-                "已保存 ${audit.validPages.size} / ${audit.totalPages} 页"
-            },
-            sourceRoot = sourceRoot,
-            intactSelection = intactSelection,
-            // Reported even when incomplete so a reinstall keeps the user's picked range instead
-            // of silently widening the task to the whole book.
-            declaredSelection = diskBook.selection,
-        )
-    }
+    ): DiskSidecarRecord? = downloadAudit.inspectRecovery(siteId, folder, sourceRoot)
 
-    fun duplicateBookCandidates(shouldStop: () -> Boolean = { false }): List<DuplicateBookCandidate> = buildList {
-        for (layout in storageRootManager.readableLayouts()) {
-            if (!StorageRootManager.directChild(layout.root, layout.comicsDir)) continue
-            for (siteDir in layout.comicsDir.listFiles().orEmpty()) {
-                if (shouldStop()) return emptyList()
-                if (!siteDir.isDirectory || !StorageRootManager.directChild(layout.comicsDir, siteDir)) continue
-                val siteId = runCatching { SiteId.of(siteDir.name) }.getOrNull()?.takeIf { it.isKnown } ?: continue
-                for (folder in siteDir.listFiles().orEmpty()) {
-                    if (shouldStop()) return emptyList()
-                    if (!folder.isDirectory || !StorageRootManager.directChild(siteDir, folder)) continue
-                    val diskBook = readDiskBook(folder, expectedSiteId = siteId) ?: continue
-                    if (!diskBook.hasCompleteMarker || !diskBook.isComplete()) continue
-                    val pages = (1..diskBook.detail.pageCount).mapNotNull { pageIndex ->
-                        if (shouldStop()) return emptyList()
-                        diskBook.page(pageIndex)
-                    }
-                    if (pages.size != diskBook.detail.pageCount) continue
-                    val byFile = pages.associateBy { it.file }
-                    if (byFile.size != pages.size) continue
-                    val item = diskBook.detail.item
-                    add(
-                        DuplicateBookCandidate(
-                            source = DuplicateSource.DOWNLOAD,
-                            id = "${siteId.value}:${item.id}",
-                            siteId = siteId,
-                            mediaId = item.id,
-                            title = item.title,
-                            pageFiles = pages.map { it.file },
-                            validatePage = { file -> byFile[file]?.isValid(requireAndroidImageDecoder) == true },
-                            sourceRoot = layout.root.absolutePath,
-                        ),
-                    )
-                }
-            }
-        }
-    }
+    fun duplicateBookCandidates(shouldStop: () -> Boolean = { false }): List<DuplicateBookCandidate> =
+        downloadAudit.duplicateCandidates(shouldStop)
 
     // ---- Cache Inspection & Clearing ----
 
