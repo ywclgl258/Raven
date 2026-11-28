@@ -164,6 +164,20 @@ class PlayerViewModel(
     private val effectivePlaybackPrefs = MutableStateFlow(PlaybackPreferences())
     private val latestAppSettings = MutableStateFlow(AppSettings())
 
+    /** Sleep timer (see [PlayerSleepTimer]). */
+    private val sleepTimer = PlayerSleepTimer(
+        scope = viewModelScope,
+        backgroundScope = { applicationScope ?: fallbackFlushScope },
+        dispatchers = dispatchers,
+        elapsedRealtime = elapsedRealtimeMs,
+        localState = localState,
+        activeTarget = { activeTarget.value },
+        pausePlayback = { playback.pause() },
+        persistProgress = { target, force -> persistWatchProgressInternal(target, force = force) },
+        notice = ::postNotice,
+        emitSideEffect = { effect -> _sideEffects.tryEmit(effect) },
+    )
+
     /** Queue switching + auto-continue countdown (see [PlayerQueueController]). */
     private val queueController = PlayerQueueController(
         store = playbackQueueStore,
@@ -212,7 +226,6 @@ class PlayerViewModel(
     private var lastSavedPositionMs: Long = -1L
     private var lastSavedCompleted: Boolean = false
     private var lastHandledEndedKey: String? = null
-    private var backgroundSleepTimerJob: Job? = null
 
     private val dictRevisionFlow = tagDictionaryRepository?.observeRevision() ?: flowOf(0L)
 
@@ -478,7 +491,7 @@ class PlayerViewModel(
         }
         // With background audio (or PiP) the foreground ticker is cancelled by ON_STOP while
         // playback keeps running, so the sleep deadline needs its own armed job.
-        armBackgroundSleepTimer(playbackContinuesInBackground = isInPipMode || (keepBackgroundAudio && playingWhenLeaving))
+        sleepTimer.armBackground(playbackContinuesInBackground = isInPipMode || (keepBackgroundAudio && playingWhenLeaving))
         if (target != null) {
             (applicationScope ?: fallbackFlushScope).launch {
                 runCatching { persistWatchProgressInternal(target, force = true) }
@@ -492,8 +505,7 @@ class PlayerViewModel(
      * fallback must be disarmed to avoid two competing evaluators.
      */
     fun onForegroundResumed() {
-        backgroundSleepTimerJob?.cancel()
-        backgroundSleepTimerJob = null
+        sleepTimer.disarm()
     }
 
     // ---- Transport Controls ----
@@ -658,103 +670,13 @@ class PlayerViewModel(
 
     // ---- Sleep Timer (monotonic elapsedRealtime()) ----
 
-    fun setSleepTimerMinutes(minutes: Int): Boolean {
-        if (minutes !in MIN_SLEEP_MINUTES..MAX_SLEEP_MINUTES) {
-            _sideEffects.tryEmit(PlayerSideEffect.ShowMessage("睡眠定时支持 1 至 180 分钟"))
-            return false
-        }
-        val durationMs = minutes * 60_000L
-        val deadline = elapsedRealtimeMs() + durationMs
-        localState.update {
-            it.copy(
-                sleepTimerDeadlineElapsedMs = deadline,
-                sleepTimerDurationMinutes = minutes,
-                sleepTimerRemainingMs = durationMs,
-            )
-        }
-        postNotice("已设置 ${minutes} 分钟后暂停播放")
-        return true
-    }
+    fun setSleepTimerMinutes(minutes: Int): Boolean = sleepTimer.setMinutes(minutes)
 
-    fun cancelSleepTimer() {
-        if (localState.value.sleepTimerDeadlineElapsedMs == null) return
-        backgroundSleepTimerJob?.cancel()
-        backgroundSleepTimerJob = null
-        localState.update {
-            it.copy(
-                sleepTimerDeadlineElapsedMs = null,
-                sleepTimerDurationMinutes = null,
-                sleepTimerRemainingMs = 0L,
-            )
-        }
-        postNotice("已取消睡眠定时")
-    }
+    fun cancelSleepTimer() = sleepTimer.cancel()
 
-    /**
-     * Arms a background-resilient deadline watcher.
-     *
-     * The foreground `stallAndSleepJob` is bound to `repeatOnLifecycle(STARTED)` and therefore
-     * stops the moment the player is backgrounded. With background audio (or PiP) playback keeps
-     * running, so without this watcher the deadline could pass entirely unnoticed until the user
-     * returns to the screen. Uses the same injectable monotonic clock as [evaluateSleepTimerTick]
-     * and is disarmed by [onForegroundResumed] to avoid two competing evaluators.
-     */
-    private fun armBackgroundSleepTimer(playbackContinuesInBackground: Boolean) {
-        backgroundSleepTimerJob?.cancel()
-        backgroundSleepTimerJob = null
-        if (!playbackContinuesInBackground) return
-        if (localState.value.sleepTimerDeadlineElapsedMs == null) return
-        backgroundSleepTimerJob = (applicationScope ?: fallbackFlushScope).launch {
-            while (isActive) {
-                val deadline = localState.value.sleepTimerDeadlineElapsedMs ?: break
-                val remaining = deadline - elapsedRealtimeMs()
-                if (remaining <= 0L) {
-                    // `evaluateSleepTimerTick` pauses ExoPlayer and starts a persist launch, both
-                    // of which must run on the application thread. Re-read the clock inside the hop
-                    // so the expiry decision is not based on a timestamp captured before dispatch.
-                    withContext(dispatchers.main) { evaluateSleepTimerTick(elapsedRealtimeMs()) }
-                    break
-                }
-                delay(remaining.coerceAtMost(BACKGROUND_SLEEP_TIMER_POLL_MS))
-            }
-        }
-    }
-
-    /**
-     * Evaluates the monotonic sleep timer against [nowElapsedMs].
-     * Returns `true` when the timer expired and paused playback.
-     */
-    fun evaluateSleepTimerTick(nowElapsedMs: Long = elapsedRealtimeMs()): Boolean {
-        val deadline = localState.value.sleepTimerDeadlineElapsedMs ?: return false
-        val remaining = deadline - nowElapsedMs
-        return if (remaining <= 0L) {
-            localState.update {
-                it.copy(
-                    sleepTimerDeadlineElapsedMs = null,
-                    sleepTimerDurationMinutes = null,
-                    sleepTimerRemainingMs = 0L,
-                )
-            }
-            playback.pause()
-            val target = activeTarget.value
-            if (target != null) {
-                viewModelScope.launch {
-                    runCatching { persistWatchProgressInternal(target, force = true) }
-                }
-            }
-            val msg = "睡眠定时已到，已暂停播放"
-            postNotice(msg)
-            _sideEffects.tryEmit(PlayerSideEffect.ShowMessage(msg))
-            true
-        } else {
-            if (localState.value.sleepTimerRemainingMs != remaining) {
-                localState.update { it.copy(sleepTimerRemainingMs = remaining) }
-            }
-            false
-        }
-    }
-
-    // ---- Lock & Fullscreen State ----
+    /** Evaluates the monotonic sleep timer against [nowElapsedMs]. */
+    fun evaluateSleepTimerTick(nowElapsedMs: Long = elapsedRealtimeMs()): Boolean =
+        sleepTimer.evaluateTick(nowElapsedMs)
 
     fun setLocked(locked: Boolean) {
         localState.update { it.copy(isLocked = locked) }
