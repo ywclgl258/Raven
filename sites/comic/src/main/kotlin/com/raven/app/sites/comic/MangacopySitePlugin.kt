@@ -67,6 +67,8 @@ class MangacopySitePlugin(
 ) : SitePlugin {
 
     private val json = Json { ignoreUnknownKeys = true; isLenient = true }
+
+    private val desktopFallback = MangacopyDesktopFallback(httpClient, json)
     private val configMutex = Mutex()
 
     @Volatile
@@ -131,7 +133,7 @@ class MangacopySitePlugin(
                 pseudoId = pseudo,
                 epochMillis = clockMs(),
             )
-            val host = credentialHosts().first()
+            val host = mangacopyCredentialHosts().first()
             val response = try {
                 httpClient.postForm(
                     url = "https://$host/api/v3/login",
@@ -181,7 +183,7 @@ class MangacopySitePlugin(
             val token = sessionStore?.getBearerToken(SiteId.MANGACOPY)
             if (!token.isNullOrBlank()) {
                 runCatching {
-                    val host = credentialHosts().first()
+                    val host = mangacopyCredentialHosts().first()
                     httpClient.postForm(
                         url = "https://$host/api/v3/logout",
                         fields = emptyMap(),
@@ -212,7 +214,7 @@ class MangacopySitePlugin(
             // Token confinement: only the pinned, statically known CopyManga API hosts may ever see
             // the bearer token. Runtime-discovered hosts (network2), HotManga fallback hosts, image
             // CDNs and the web mirrors all stay credential-free.
-            if (!isCredentialHost(host)) return emptyMap()
+            if (!mangacopyIsCredentialHost(host)) return emptyMap()
             val token = sessionStore?.getBearerToken(SiteId.MANGACOPY)?.takeIf { it.isNotBlank() }
                 ?: return emptyMap()
             return mapOf("Authorization" to "Token $token")
@@ -231,10 +233,10 @@ class MangacopySitePlugin(
                     val comic = obj.safeObject("comic") ?: return@mapNotNull null
                     CopyHotApiSupport.parseComicSummary(comic, SiteId.MANGACOPY, descriptor.baseUrl)
                 }
-                val recs = parseSummaryList(homeData.safeObject("recComics")?.safeArray("list"))
-                val rankDay = parseSummaryList(homeData.safeObject("rankDayComics")?.safeArray("list"))
-                val newest = parseSummaryList(homeData.safeObject("newComics")?.safeArray("list"))
-                val finished = parseSummaryList(homeData.safeObject("finishComics")?.safeArray("list"))
+                val recs = mangacopyParseSummaryList(homeData.safeObject("recComics")?.safeArray("list"), descriptor)
+                val rankDay = mangacopyParseSummaryList(homeData.safeObject("rankDayComics")?.safeArray("list"), descriptor)
+                val newest = mangacopyParseSummaryList(homeData.safeObject("newComics")?.safeArray("list"), descriptor)
+                val finished = mangacopyParseSummaryList(homeData.safeObject("finishComics")?.safeArray("list"), descriptor)
 
                 val sections = buildList {
                     if (recs.isNotEmpty()) {
@@ -543,7 +545,7 @@ class MangacopySitePlugin(
             if (!top.isNullOrBlank()) add("top" to top)
         }
         val results = apiCopyOrHot(path = "comics", query = params)
-        val items = parseSummaryList(results.safeArray("list"))
+        val items = mangacopyParseSummaryList(results.safeArray("list"), descriptor)
         if (items.isEmpty()) {
             throw SiteException.ParseError("拷贝漫画列表结构不可识别", siteId = SiteId.MANGACOPY)
         }
@@ -569,7 +571,7 @@ class MangacopySitePlugin(
                 "platform" to "3",
             ),
         )
-        val items = parseSummaryList(results.safeArray("list"))
+        val items = mangacopyParseSummaryList(results.safeArray("list"), descriptor)
         val total = results.safeInt("total") ?: items.size
         return FeedPage(
             items = items,
@@ -605,7 +607,7 @@ class MangacopySitePlugin(
                 "platform" to "3",
             ),
         )
-        val items = parseSummaryList(results.safeArray("list"))
+        val items = mangacopyParseSummaryList(results.safeArray("list"), descriptor)
         val total = results.safeInt("total") ?: items.size
         return FeedPage(
             items = items,
@@ -643,7 +645,7 @@ class MangacopySitePlugin(
                 ),
             )
         }
-        val items = parseSummaryList(results.safeArray("list"))
+        val items = mangacopyParseSummaryList(results.safeArray("list"), descriptor)
         val total = results.safeInt("total") ?: 0
         val resolvedOffset = results.safeInt("offset") ?: offset
         return FeedPage(
@@ -654,11 +656,6 @@ class MangacopySitePlugin(
             title = query,
         )
     }
-
-    private fun parseSummaryList(array: JsonArray?): List<MediaItem> =
-        array.orEmpty().mapNotNull { el ->
-            (el as? JsonObject)?.let { CopyHotApiSupport.parseComicSummary(it, SiteId.MANGACOPY, descriptor.baseUrl) }
-        }
 
     private suspend fun fetchComicDetailResults(pathWord: String): JsonObject =
         detailCache.getOrPutSuspend(pathWord) {
@@ -847,30 +844,8 @@ class MangacopySitePlugin(
         return htmlImages
     }
 
-    private suspend fun loadChapterImagesFromDesktopHtml(pathWord: String, uuid: String): List<String> {
-        val html = fetchDesktopHtml("/comic/$pathWord/chapter/$uuid")
-        val key = KEY_REGEX.find(html)?.groupValues?.get(1)
-            ?: throw SiteException.ParseError("拷贝漫画章节密钥缺失", siteId = SiteId.MANGACOPY)
-        val contentKey = CONTENT_KEY_REGEX.find(html)?.groupValues?.get(1)
-            ?: throw SiteException.ParseError("拷贝漫画章节内容缺失", siteId = SiteId.MANGACOPY)
-        if (contentKey.length <= 16) return emptyList()
-        val plain = runCatching {
-            val cipherText = hexToBytes(contentKey.drop(16))
-            val cipher = Cipher.getInstance("AES/CBC/PKCS5Padding")
-            cipher.init(
-                Cipher.DECRYPT_MODE,
-                SecretKeySpec(key.toByteArray(Charsets.UTF_8), "AES"),
-                IvParameterSpec(contentKey.take(16).toByteArray(Charsets.UTF_8)),
-            )
-            cipher.doFinal(cipherText)
-        }.getOrNull() ?: throw SiteException.ParseError("拷贝漫画章节解密失败", siteId = SiteId.MANGACOPY)
-        val array = runCatching {
-            json.parseToJsonElement(String(plain, Charsets.UTF_8)).jsonArray
-        }.getOrNull() ?: throw SiteException.ParseError("拷贝漫画图页数据格式异常", siteId = SiteId.MANGACOPY)
-        return array.mapNotNull { element ->
-            (element as? JsonObject)?.safeString("url")?.takeIf { it.isNotBlank() }
-        }
-    }
+    private suspend fun loadChapterImagesFromDesktopHtml(pathWord: String, uuid: String): List<String> =
+        desktopFallback.loadChapterImagesFromDesktopHtml(pathWord, uuid)
 
     // -------------------------------------------------------------------------
     // API Transport with Multi-Node Routing, Dynamic Config & HotManga Fallback
@@ -909,7 +884,7 @@ class MangacopySitePlugin(
         query: List<Pair<String, String>>,
         allowDynamicRefresh: Boolean,
     ): JsonObject {
-        val candidates = currentCopyCandidates()
+        val candidates = mangacopyCopyCandidates(dynamicCopyHosts)
         val routeKey = httpClient.currentRouteKey(candidates.map { "https://$it/api/v3/comics" })
         val preferred = copyRouter.activeHost(routeKey)
         val ordered = buildList {
@@ -924,7 +899,7 @@ class MangacopySitePlugin(
             // Token confinement: only pinned official API hosts receive `Authorization: Token …`.
             // Runtime-discovered hosts still get the app signature headers (they need those), but
             // never the account credential.
-            val headers = buildCopyHeaders(token.takeIf { isCredentialHost(host) })
+            val headers = buildCopyHeaders(token.takeIf { mangacopyIsCredentialHost(host) })
             // `buildCopyHeaders` may persist the stable device identity on first use; capture the
             // epoch after that write so it cannot look like an account switch.
             val requestEpoch = if (token != null) sessionStore?.authEpoch(SiteId.MANGACOPY) else null
@@ -952,19 +927,8 @@ class MangacopySitePlugin(
         throw lastError ?: SiteException.Network("拷贝漫画接口节点均不可用", siteId = SiteId.MANGACOPY)
     }
 
-    private fun preferHigherPriorityError(current: Throwable?, incoming: Throwable): Throwable {
-        if (current == null) return incoming
-        fun rank(t: Throwable): Int = when (t) {
-            is SiteException.Forbidden -> if (t.isChallenge) 6 else 5
-            is SiteException.RateLimited -> 5
-            is SiteException.AuthRequired -> 4
-            is SiteException.ParseError -> 3
-            is SiteException.TlsError -> 2
-            is SiteException.Network -> 1
-            else -> 0
-        }
-        return if (rank(incoming) >= rank(current)) incoming else current
-    }
+    private fun preferHigherPriorityError(current: Throwable?, incoming: Throwable): Throwable =
+        desktopFallback.preferHigherPriorityError(current, incoming)
 
     private suspend fun apiHotFallback(
         path: String,
@@ -1123,24 +1087,6 @@ class MangacopySitePlugin(
         }
     }
 
-    private fun currentCopyCandidates(): List<String> = buildList {
-        dynamicCopyHosts.forEach { if (it !in this) add(it) }
-        CopyHotApiSupport.COPY_API_HOSTS.forEach { if (it !in this) add(it) }
-    }
-
-    /**
-     * Hosts allowed to receive account credentials (login password, logout, bearer token).
-     * Static allow-list only — runtime `network2` discoveries are transport candidates, not
-     * credential destinations.
-     */
-    private fun credentialHosts(): List<String> = CopyHotApiSupport.COPY_API_HOSTS
-
-    /** True when [host] is one of the pinned official CopyManga API hosts. */
-    private fun isCredentialHost(host: String): Boolean {
-        val normalized = host.trim().lowercase()
-        return CopyHotApiSupport.COPY_API_HOSTS.any { it.equals(normalized, ignoreCase = true) }
-    }
-
     private fun buildCopyHeaders(token: String?): Map<String, String> {
         val (device, pseudo) = CopyHotApiSupport.stableDeviceIdentity(sessionStore, SiteId.MANGACOPY)
         return CopyHotApiSupport.buildCopyAppHeaders(
@@ -1155,65 +1101,13 @@ class MangacopySitePlugin(
     /**
      * 桌面章节页在部分网络下会被主域重置（Connection reset），按镜像顺序逐个尝试。
      */
-    private suspend fun fetchDesktopHtml(path: String): String {
-        var lastError: SiteException? = null
-        for (host in WEB_HOSTS) {
-            val url = "https://$host$path"
-            try {
-                val response = httpClient.getText(
-                    url = url,
-                    siteId = SiteId.MANGACOPY,
-                    kind = SiteRequestKind.PAGE,
-                    headers = mapOf(
-                        "User-Agent" to SiteNetworkProfile.DESKTOP_WINDOWS_UA,
-                        "Referer" to "https://$host/",
-                        "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-                    ),
-                )
-                if (response.isSuccessful) return response.bodyText()
-                lastError = SiteException.Network(
-                    message = "拷贝漫画章节页请求失败：HTTP ${response.code}",
-                    siteId = SiteId.MANGACOPY,
-                )
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: SiteException) {
-                lastError = e
-            } catch (e: Exception) {
-                lastError = SiteException.Network(
-                    message = "拷贝漫画网络请求失败：${e.message ?: "未知错误"}",
-                    siteId = SiteId.MANGACOPY,
-                    cause = e,
-                )
-            }
-        }
-        throw lastError ?: SiteException.Network("拷贝漫画章节页不可用", siteId = SiteId.MANGACOPY)
-    }
+    private suspend fun fetchDesktopHtml(path: String): String = desktopFallback.fetchDesktopHtml(path)
 
-    private fun hexToBytes(hex: String): ByteArray {
-        val clean = hex.trim()
-        require(clean.length % 2 == 0) { "Invalid hex length" }
-        return ByteArray(clean.length / 2) { i ->
-            clean.substring(i * 2, i * 2 + 2).toInt(16).toByte()
-        }
-    }
+    private fun hexToBytes(hex: String): ByteArray = desktopFallback.hexToBytes(hex)
 
-    private fun extractPathWord(url: String): String? {
-        val parsed = ComicUrl.parse(url) ?: return null
-        val segments = parsed.pathSegments
-        val comicIdx = segments.indexOf("comic")
-        if (comicIdx >= 0 && comicIdx + 1 < segments.size) {
-            return segments[comicIdx + 1].takeIf { it.isNotBlank() }
-        }
-        return null
-    }
+    private fun extractPathWord(url: String): String? = desktopFallback.extractPathWord(url)
 
-    private fun parseChapterUuid(url: String): String? {
-        val parsed = ComicUrl.parse(url) ?: return null
-        val segments = parsed.pathSegments
-        val idx = segments.indexOf("chapter")
-        return segments.getOrNull(idx + 1)?.takeIf { idx >= 0 && it.isNotBlank() }
-    }
+    private fun parseChapterUuid(url: String): String? = desktopFallback.parseChapterUuid(url)
 
     companion object {
         val SITE_ID: SiteId = SiteId.MANGACOPY
@@ -1230,7 +1124,7 @@ class MangacopySitePlugin(
         private const val CONFIG_REFRESH_COOLDOWN_MS = 10 * 60 * 1_000L
         private const val CONFIG_PROBE_TIMEOUT_MS = 4_000L
 
-        private val WEB_HOSTS = listOf(
+        internal val WEB_HOSTS = listOf(
             "www.mangacopy.com",
             "www.copy4000.com",
             "www.copy5000.com",
@@ -1239,8 +1133,8 @@ class MangacopySitePlugin(
             "copymanga.fun",
         )
 
-        private val KEY_REGEX = Regex("""var cct = '([^']*)'""")
-        private val CONTENT_KEY_REGEX = Regex("""var contentKey = '([^']*)'""")
+        internal val KEY_REGEX = Regex("""var cct = '([^']*)'""")
+        internal val CONTENT_KEY_REGEX = Regex("""var contentKey = '([^']*)'""")
 
         val DESCRIPTOR: SiteDescriptor = SiteDescriptor(
             id = SITE_ID,
