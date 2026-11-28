@@ -1,0 +1,9 @@
+{
+  "xdtMaker": {
+    "builtinTools": {
+      "feishu_bot": {
+        "enabled": false
+      }
+    }
+  }
+}

@@ -79,10 +79,6 @@ enum class ReaderQuickPanel {
 
 /** Ordering mode for auto-page / slideshow playback. */
 
-private enum class SerialChapterDirection {
-    PREVIOUS,
-    NEXT,
-}
 
 class ReaderViewModel(
     private val route: RavenRoute.Reader,
@@ -183,6 +179,34 @@ class ReaderViewModel(
      * Series identity resolves through the same `activeSeriesMetadata` cache the chapter
      * navigator uses, so opaque chapter ids keep their work identity.
      */
+    /** Appended serial-chapter buffers for the continuous STRIP stream. */
+    private val appendedChapters = ReaderAppendedChapterCache(
+        scope = viewModelScope,
+        dispatchers = dispatchers,
+        pageLoader = pageLoader,
+        uiState = { _uiState.value },
+        update = { transform -> _uiState.update(transform) },
+        memoryBudgetBytes = { activeMemoryBudgetBytes },
+        maxConcurrency = { activeImageConcurrency },
+        prefetchAhead = { activePrefetchPages },
+    )
+
+    /** Serial chapter list + next-chapter prefetch (see [ReaderChapterPrefetcher]). */
+    private val chapterPrefetcher = ReaderChapterPrefetcher(
+        scope = viewModelScope,
+        dispatchers = dispatchers,
+        siteId = siteId,
+        mediaId = mediaId,
+        offlineOnly = offlineOnly,
+        isInvalidSiteId = isInvalidSiteId,
+        uiState = { _uiState.value },
+        update = { transform -> _uiState.update(transform) },
+        serialChapterLoader = serialChapterLoader,
+        pageLoader = pageLoader,
+        chapters = appendedChapters,
+        supportsOriginalImages = { supportsOriginalImages },
+    )
+
     private val progressStore = ReaderProgressStore(
         siteId = siteId,
         mediaId = mediaId,
@@ -205,24 +229,12 @@ class ReaderViewModel(
     private var loadJob: Job? = null
     private var autoPageJob: Job? = null
     private var exportJob: Job? = null
-    private var chapterListJob: Job? = null
     private var chapterAdvanceJob: Job? = null
-    private var appendNextChapterJob: Job? = null
     @Volatile
     private var activeSeriesMetadata: RavenRoute.ReaderParent? = null
-    private val appendedChapterBuffers: MutableMap<String, ReaderBuffer<LoadedReaderPage>> = ConcurrentHashMap()
-    private val appendedChapterCollectJobs: MutableMap<String, Job> = ConcurrentHashMap()
-    private val appendedChapterRatios: MutableMap<String, MutableMap<Int, Float>> = ConcurrentHashMap()
-    private val failedAppendChapterIds: MutableSet<String> = ConcurrentHashMap.newKeySet()
 
-    @Volatile
-    private var preparedNextChapter: MediaItem? = null
 
-    @Volatile
-    private var preparedPreviousChapter: MediaItem? = null
 
-    @Volatile
-    private var serialChaptersPrepared: Boolean = false
     private var chapterTransitionEmitted: Boolean = false
 
     private var activePreferOriginal: Boolean = false
@@ -367,11 +379,8 @@ class ReaderViewModel(
     fun loadGallery(forceRefresh: Boolean = false) {
         if (!forceRefresh && loadJob?.isActive == true) return
         loadJob?.cancel()
-        chapterListJob?.cancel()
+        chapterPrefetcher.reset()
         chapterAdvanceJob?.cancel()
-        preparedNextChapter = null
-        preparedPreviousChapter = null
-        serialChaptersPrepared = false
         chapterTransitionEmitted = false
         activeSeriesMetadata = null
         _uiState.update {
@@ -504,7 +513,7 @@ class ReaderViewModel(
 
                 _events.emit(ReaderEvent.ScrollToPage(page = initialPage, scrollOffsetPx = initialOffset))
                 progressStore.schedule(page = initialPage, scrollOffsetPx = initialOffset)
-                prepareSerialChapters(detail)
+                chapterPrefetcher.prepare(detail)
             } catch (ce: CancellationException) {
                 throw ce
             } catch (auth: SiteException.AuthRequired) {
@@ -528,258 +537,10 @@ class ReaderViewModel(
         }
     }
 
-    private fun prepareSerialChapters(detail: GalleryDetail) {
-        if (offlineOnly || detail.chaptersUrl.isNullOrBlank()) return
-        chapterListJob = viewModelScope.launch(dispatchers.io) {
-            _uiState.update {
-                it.copy(isChapterListLoading = true, chapterListError = null)
-            }
-            try {
-                cacheAdjacentChapters(serialChapterLoader.loadChapters(siteId, detail), detail)
-            } catch (ce: CancellationException) {
-                throw ce
-            } catch (error: Throwable) {
-                _uiState.update {
-                    it.copy(
-                        isChapterListLoading = false,
-                        chapterListError = error.message?.takeIf(String::isNotBlank) ?: "章节加载失败，请重试",
-                    )
-                }
-            }
-        }
-    }
-
-    private fun cacheAdjacentChapters(
-        chapters: List<MediaItem>,
-        detail: GalleryDetail,
-    ) {
-        val hints = listOfNotNull(
-            detail.item.extra["chapterId"],
-            detail.item.extra["chapterUuid"],
-            detail.item.extra["chapterHid"],
-        )
-        val chapterUrlHint = detail.item.extra["chapterUrl"]?.trim().orEmpty()
-        val currentIndex = chapters.indexOfFirst { chapter ->
-            chapter.id == mediaId ||
-                chapter.id == detail.item.id ||
-                (chapterUrlHint.isNotEmpty() && chapter.url == chapterUrlHint) ||
-                hints.any { hint ->
-                    hint.isNotBlank() && (chapter.id == hint || chapter.id.endsWith(":$hint"))
-                }
-        }
-        val previous = chapters.getOrNull(currentIndex - 1)?.takeIf { currentIndex > 0 && it.url.isNotBlank() }
-        val next = chapters.getOrNull(currentIndex + 1)?.takeIf { currentIndex >= 0 && it.url.isNotBlank() }
-        preparedPreviousChapter = previous
-                preparedNextChapter = next
-        serialChaptersPrepared = true
-        _uiState.update {
-            it.copy(
-                previousChapter = previous,
-                nextChapter = next,
-                chapters = chapters,
-                isChapterListReady = true,
-                isChapterListLoading = false,
-                chapterListError = null,
-                hasReachedFinalSerialChapter = next == null && it.appendedChapters.isEmpty(),
-            )
-        }
-    }
-
-    /**
-     * Seamlessly loads the next serial chapter and appends it to the continuous STRIP stream
-     * without reloading or interrupting the active reader viewport.
-     */
-    fun preloadNextSerialChapterIfNeeded(forceRetry: Boolean = false) {
-        val state = _uiState.value
-        if (offlineOnly || !state.isSerialComic || state.preferences.mode != ReaderMode.STRIP || isInvalidSiteId) return
-        if (appendNextChapterJob?.isActive == true) return
-        if (!forceRetry && state.hasReachedFinalSerialChapter) return
-
-        appendNextChapterJob = viewModelScope.launch(dispatchers.io) {
-            try {
-                chapterListJob?.join()
-                val baseDetail = _uiState.value.detail ?: return@launch
-                if (!serialChaptersPrepared) {
-                    _uiState.update { it.copy(isChapterListLoading = true, chapterListError = null) }
-                    cacheAdjacentChapters(serialChapterLoader.loadChapters(siteId, baseDetail), baseDetail)
-                }
-                val chapters = _uiState.value.chapters
-                if (chapters.isEmpty()) return@launch
-
-                val lastChapter = _uiState.value.appendedChapters.lastOrNull()
-                val tailMediaId = lastChapter?.mediaId ?: mediaId
-                val tailDetail = lastChapter?.detail ?: baseDetail
-                val tailHints = listOfNotNull(
-                    tailDetail.item.id,
-                    tailDetail.item.extra["chapterId"],
-                    tailDetail.item.extra["chapterUuid"],
-                    tailDetail.item.extra["chapterHid"],
-                )
-                val tailUrlHint = tailDetail.item.extra["chapterUrl"]?.trim().orEmpty()
-                val tailIndex = chapters.indexOfFirst { chapter ->
-                    isMatchingSerialChapter(
-                        chapter = chapter,
-                        currentChapterId = tailMediaId,
-                        currentChapterUrl = tailUrlHint,
-                        hints = tailHints,
-                    )
-                }
-                val nextChapterItem = chapters.getOrNull(tailIndex + 1)
-                    ?.takeIf { tailIndex >= 0 && it.url.isNotBlank() }
-
-                if (nextChapterItem == null) {
-                    _uiState.update {
-                        it.copy(
-                            isAppendingNextChapter = false,
-                            appendNextChapterError = null,
-                            hasReachedFinalSerialChapter = true,
-                        )
-                    }
-                    return@launch
-                }
-
-                if (!forceRetry && nextChapterItem.id in failedAppendChapterIds) return@launch
-                val alreadyLoaded = nextChapterItem.id == mediaId ||
-                    _uiState.value.appendedChapters.any { it.mediaId == nextChapterItem.id }
-                if (alreadyLoaded) return@launch
-
-                _uiState.update {
-                    it.copy(
-                        isAppendingNextChapter = true,
-                        appendNextChapterError = null,
-                    )
-                }
-
-                val snapshot = pageLoader.loadDetail(
-                    siteId = siteId,
-                    mediaId = nextChapterItem.id,
-                    url = nextChapterItem.url,
-                    offlineOnly = false,
-                )
-                val nextDetail = snapshot.detail
-                val resolvedMediaId = nextDetail.item.id.ifBlank { nextChapterItem.id }
-                val total = maxOf(nextDetail.pageCount, nextDetail.pages.size).coerceAtLeast(0)
-                val nextPages = if (nextDetail.pages.isNotEmpty()) {
-                    nextDetail.pages.map { it.index }.distinct().sorted()
-                } else {
-                    (1..total).toList()
-                }
-                if (nextPages.isEmpty()) {
-                    throw IllegalStateException("下一话暂无可加载图片")
-                }
-
-                val ratioMap = ConcurrentHashMap<Int, Float>()
-                for (page in nextDetail.pages) {
-                    val w = page.width
-                    val h = page.height
-                    if (w != null && h != null && w > 0 && h > 0) {
-                        ratioMap.putIfAbsent(page.index, w.toFloat() / h.toFloat())
-                    }
-                }
-                appendedChapterRatios[resolvedMediaId] = ratioMap
-                failedAppendChapterIds.remove(nextChapterItem.id)
-                failedAppendChapterIds.remove(resolvedMediaId)
-
-                val preferOriginal = supportsOriginalImages && _uiState.value.preferences.preferOriginalImages
-                val chapterTitle = nextChapterItem.title.ifBlank { nextDetail.item.title }
-                val newChapter = SerialStripChapter(
-                    mediaId = resolvedMediaId,
-                    title = chapterTitle,
-                    url = nextChapterItem.url,
-                    detail = nextDetail,
-                    sourceRoot = snapshot.sourceRoot,
-                    pageNumbers = nextPages,
-                    pageAspectRatios = ratioMap.toMap(),
-                )
-
-                val hasAnotherAfter = chapters.getOrNull(tailIndex + 2)?.url?.isNotBlank() == true
-                _uiState.update { state ->
-                    if (state.appendedChapters.any { it.mediaId == resolvedMediaId }) {
-                        state.copy(isAppendingNextChapter = false, appendNextChapterError = null)
-                    } else {
-                        state.copy(
-                            appendedChapters = state.appendedChapters + newChapter,
-                            isAppendingNextChapter = false,
-                            appendNextChapterError = null,
-                            hasReachedFinalSerialChapter = !hasAnotherAfter,
-                        )
-                    }
-                }
-
-                attachAppendedChapterBuffer(
-                    chapter = newChapter,
-                    preferOriginal = preferOriginal,
-                )
-            } catch (ce: CancellationException) {
-                throw ce
-            } catch (error: Throwable) {
-                val tailId = _uiState.value.chapters.let { list ->
-                    val lastId = _uiState.value.appendedChapters.lastOrNull()?.mediaId ?: mediaId
-                    val idx = list.indexOfFirst { it.id == lastId }
-                    list.getOrNull(idx + 1)?.id
-                }
-                if (!tailId.isNullOrBlank()) {
-                    failedAppendChapterIds.add(tailId)
-                }
-                _uiState.update {
-                    it.copy(
-                        isAppendingNextChapter = false,
-                        appendNextChapterError = error.message?.takeIf(String::isNotBlank) ?: "下一话加载失败，点击重试",
-                    )
-                }
-            }
-        }
-    }
-
     private fun attachAppendedChapterBuffer(
         chapter: SerialStripChapter,
         preferOriginal: Boolean,
-    ) {
-        val chapterId = chapter.mediaId
-        appendedChapterCollectJobs.remove(chapterId)?.cancel()
-        appendedChapterBuffers.remove(chapterId)?.close()
-        val ratioMap = appendedChapterRatios.getOrPut(chapterId) { ConcurrentHashMap() }
-        val perChapterBudget = (activeMemoryBudgetBytes / 2L).coerceAtLeast(16L * 1024L * 1024L)
-        val buffer = ReaderBuffer<LoadedReaderPage>(
-            pageNumbers = chapter.pageNumbers,
-            scope = viewModelScope,
-            byteSizeOf = { it.byteSize },
-            aspectRatioOf = { it.aspectRatio },
-            offscreenBudgetBytes = perChapterBudget,
-            maxConcurrency = activeImageConcurrency,
-            sharedRatios = ratioMap,
-            prefetchAhead = activePrefetchPages.coerceAtLeast(3),
-            loader = { pageNumber, forceReload ->
-                pageLoader.loadRenderedPage(
-                    detail = chapter.detail,
-                    pageIndex = pageNumber,
-                    preferOriginal = preferOriginal,
-                    forceReload = forceReload,
-                    offlineOnly = false,
-                    sourceRoot = chapter.sourceRoot,
-                )
-            },
-        )
-        appendedChapterBuffers[chapterId] = buffer
-        val collectJob = viewModelScope.launch(dispatchers.main) {
-            buffer.state.collectLatest { bufState ->
-                _uiState.update { state ->
-                    val idx = state.appendedChapters.indexOfFirst { it.mediaId == chapterId }
-                    if (idx < 0) return@update state
-                    val updated = state.appendedChapters.toMutableList()
-                    val current = updated[idx]
-                    updated[idx] = current.copy(
-                        bufferState = bufState,
-                        pageAspectRatios = if (bufState.ratios.isEmpty()) ratioMap.toMap() else bufState.ratios,
-                    )
-                    state.copy(appendedChapters = updated)
-                }
-            }
-        }
-        appendedChapterCollectJobs[chapterId] = collectJob
-        val firstPage = chapter.pageNumbers.firstOrNull() ?: 1
-        buffer.updateWindow(page = firstPage, visible = setOf(firstPage))
-    }
+    ) = appendedChapters.attach(chapter = chapter, preferOriginal = preferOriginal)
 
     fun onStripViewportProgress(
         anchorChapterId: String,
@@ -835,7 +596,7 @@ class ReaderViewModel(
         visiblePagesByChapter.forEach { (chapId, pages) ->
             if (chapId != mediaId && pages.isNotEmpty()) {
                 val chapter = state.appendedChapters.firstOrNull { it.mediaId == chapId }
-                val existingBuffer = appendedChapterBuffers[chapId]
+                val existingBuffer = appendedChapters.bufferFor(chapId)
                 if (existingBuffer != null) {
                     existingBuffer.updateWindow(page = pages.min(), visible = pages)
                 } else if (chapter != null) {
@@ -849,7 +610,7 @@ class ReaderViewModel(
 
         // Auto-preload next chapter smoothly when within 4 items of the bottom of the strip.
         if (state.isSerialComic && remainingItemsToBottom <= 4) {
-            preloadNextSerialChapterIfNeeded()
+            chapterPrefetcher.preloadNextSerialChapterIfNeeded()
         }
     }
 
@@ -858,16 +619,12 @@ class ReaderViewModel(
             retryPage(pageNumber)
             return
         }
-        val existing = appendedChapterBuffers[chapterMediaId]
-        if (existing != null) {
-            existing.retry(pageNumber)
-        } else {
-            val chapter = _uiState.value.appendedChapters.firstOrNull { it.mediaId == chapterMediaId } ?: return
-            attachAppendedChapterBuffer(
-                chapter = chapter,
-                preferOriginal = supportsOriginalImages && _uiState.value.preferences.preferOriginalImages,
-            )
-        }
+        if (appendedChapters.retry(chapterMediaId, pageNumber)) return
+        val chapter = _uiState.value.appendedChapters.firstOrNull { it.mediaId == chapterMediaId } ?: return
+        attachAppendedChapterBuffer(
+            chapter = chapter,
+            preferOriginal = supportsOriginalImages && _uiState.value.preferences.preferOriginalImages,
+        )
     }
 
     private fun scheduleAppendedChapterProgressSave(
@@ -939,12 +696,14 @@ class ReaderViewModel(
         if (!isCurrent) requestChapter(direction = null, requestedChapter = chapter)
     }
 
+    /** Kept for the reader UI retry affordance. */
+    fun preloadNextSerialChapterIfNeeded(forceRetry: Boolean = false) =
+        chapterPrefetcher.preloadNextSerialChapterIfNeeded(forceRetry)
+
     fun refreshChapters() {
         val detail = _uiState.value.detail ?: return
         if (offlineOnly || detail.chaptersUrl.isNullOrBlank() || isInvalidSiteId) return
-        chapterListJob?.cancel()
-        serialChaptersPrepared = false
-        prepareSerialChapters(detail)
+        chapterPrefetcher.refresh(detail)
     }
 
     private fun requestChapter(
@@ -958,16 +717,9 @@ class ReaderViewModel(
         chapterAdvanceJob = viewModelScope.launch(dispatchers.io) {
             _uiState.update { it.copy(isChapterTransitionLoading = true) }
             try {
-                chapterListJob?.join()
-                if (!serialChaptersPrepared) {
-                    _uiState.update { it.copy(isChapterListLoading = true, chapterListError = null) }
-                    cacheAdjacentChapters(serialChapterLoader.loadChapters(siteId, detail), detail)
-                }
-                val target = requestedChapter ?: when (direction) {
-                    SerialChapterDirection.PREVIOUS -> preparedPreviousChapter
-                    SerialChapterDirection.NEXT -> preparedNextChapter
-                    null -> null
-                }
+                chapterPrefetcher.awaitList()
+                chapterPrefetcher.ensurePrepared(detail)
+                val target = requestedChapter ?: chapterPrefetcher.prepared(direction)
                 if (target == null) {
                     emitSnackbar(
                         when (direction) {
@@ -1160,7 +912,7 @@ class ReaderViewModel(
                     activeQuickPanel = if (closeOverlays) ReaderQuickPanel.NONE else it.activeQuickPanel,
                 )
             }
-            val buffer = appendedChapterBuffers[activeChapter.mediaId]
+            val buffer = appendedChapters.bufferFor(activeChapter.mediaId)
             buffer?.updateWindow(page = target, visible = setOf(target))
             _events.tryEmit(ReaderEvent.ScrollToPage(page = target, scrollOffsetPx = safeOffset, chapterId = activeChapter.mediaId))
             scheduleAppendedChapterProgressSave(chapter = activeChapter, page = target, scrollOffsetPx = safeOffset)
@@ -1273,7 +1025,7 @@ class ReaderViewModel(
     fun onStripEndReached() {
         val state = _uiState.value
         if (state.isSerialComic && state.preferences.mode == ReaderMode.STRIP) {
-            preloadNextSerialChapterIfNeeded(forceRetry = true)
+            chapterPrefetcher.preloadNextSerialChapterIfNeeded(forceRetry = true)
             return
         }
         val lastPage = state.pageNumbers.lastOrNull() ?: return
@@ -1479,7 +1231,7 @@ class ReaderViewModel(
                     !latest.hasReachedFinalSerialChapter
                 if (pages.size <= 1) {
                     if (appendsSeamlessly) {
-                        preloadNextSerialChapterIfNeeded()
+                        chapterPrefetcher.preloadNextSerialChapterIfNeeded()
                         continue
                     }
                     val opensNextChapter = latest.slideshowOrder == SlideshowOrder.SEQUENTIAL &&
@@ -1511,7 +1263,7 @@ class ReaderViewModel(
                 if (nextPage != null) {
                     jumpToPage(nextPage)
                 } else if (appendsSeamlessly) {
-                    preloadNextSerialChapterIfNeeded()
+                    chapterPrefetcher.preloadNextSerialChapterIfNeeded()
                 } else {
                     val opensNextChapter = latest.slideshowOrder == SlideshowOrder.SEQUENTIAL &&
                         latest.queueSession?.hasNext != true &&
@@ -1918,18 +1670,14 @@ class ReaderViewModel(
 
     override fun onCleared() {
         autoPageJob?.cancel()
-        chapterListJob?.cancel()
+        chapterPrefetcher.cancelAll()
         chapterAdvanceJob?.cancel()
-        appendNextChapterJob?.cancel()
         progressStore.cancel()
         bufferCollectJob?.cancel()
-        appendedChapterCollectJobs.values.forEach { it.cancel() }
-        appendedChapterCollectJobs.clear()
         flushProgress()
         readerBuffer?.close()
         readerBuffer = null
-        appendedChapterBuffers.values.forEach { it.close() }
-        appendedChapterBuffers.clear()
+        appendedChapters.closeAll()
         super.onCleared()
     }
 
