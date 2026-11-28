@@ -168,6 +168,18 @@ class GalleryDetailViewModel(
     private val _events = MutableSharedFlow<GalleryDetailEvent>(extraBufferCapacity = 4)
     val events: SharedFlow<GalleryDetailEvent> = _events.asSharedFlow()
 
+    /** Selective download sheet + page-range validation (see [GalleryDownloadPlanner]). */
+    private val downloadPlanner = GalleryDownloadPlanner(
+        scope = viewModelScope,
+        dispatchers = dispatchers,
+        gateway = downloadGateway,
+        isLocal = { siteId.isLocal },
+        uiState = { _uiState.value },
+        update = { transform -> _uiState.update(transform) },
+        snackbar = ::emitSnackbar,
+    )
+
+
     /** Tag/author long-press sheet state + subscriptions/blocks (see [GalleryTagActionController]). */
     private val tagActions = GalleryTagActionController(
         siteId = siteId,
@@ -1019,132 +1031,15 @@ class GalleryDetailViewModel(
 
     // ---- Selective Page Download Sheet ----
 
-    fun openDownloadSheet() {
-        val detail = _uiState.value.detail ?: return
-        if (siteId.isLocal) {
-            emitSnackbar("本地导入作品已在设备本地保存")
-            return
-        }
-        if (detail.pageCount <= 0 && detail.pages.isEmpty()) {
-            emitSnackbar("该作品暂无可下载图页")
-            return
-        }
-        val totalPages = detail.pageCount.coerceAtLeast(1)
-        _uiState.update { state ->
-            state.copy(
-                downloadSheet = DownloadSheetState(
-                    visible = true,
-                    downloadAll = true,
-                    rangeInput = "1-$totalPages",
-                    parsedPages = (1..totalPages).toList(),
-                    validationError = null,
-                    isSubmitting = false,
-                ),
-            )
-        }
-    }
+    fun openDownloadSheet() = downloadPlanner.openDownloadSheet()
 
-    fun dismissDownloadSheet() {
-        _uiState.update { state ->
-            state.copy(downloadSheet = state.downloadSheet.copy(visible = false, isSubmitting = false))
-        }
-    }
+    fun dismissDownloadSheet() = downloadPlanner.dismissDownloadSheet()
 
-    fun setDownloadAll(downloadAll: Boolean) {
-        val totalPages = _uiState.value.detail?.pageCount ?: return
-        _uiState.update { state ->
-            if (downloadAll) {
-                state.copy(
-                    downloadSheet = state.downloadSheet.copy(
-                        downloadAll = true,
-                        validationError = null,
-                    ),
-                )
-            } else {
-                val input = state.downloadSheet.rangeInput
-                val validation = validateRange(input, totalPages)
-                state.copy(
-                    downloadSheet = state.downloadSheet.copy(
-                        downloadAll = false,
-                        parsedPages = validation.first,
-                        validationError = validation.second,
-                    ),
-                )
-            }
-        }
-    }
+    fun setDownloadAll(downloadAll: Boolean) = downloadPlanner.setDownloadAll(downloadAll)
 
-    fun updateDownloadRangeInput(raw: String) {
-        val totalPages = _uiState.value.detail?.pageCount ?: return
-        val (pages, error) = validateRange(raw, totalPages)
-        _uiState.update { state ->
-            state.copy(
-                downloadSheet = state.downloadSheet.copy(
-                    downloadAll = false,
-                    rangeInput = raw,
-                    parsedPages = pages,
-                    validationError = error,
-                ),
-            )
-        }
-    }
+    fun updateDownloadRangeInput(raw: String) = downloadPlanner.updateDownloadRangeInput(raw)
 
-    fun confirmDownload() {
-        val state = _uiState.value
-        val detail = state.detail ?: return
-        val sheet = state.downloadSheet
-        if (sheet.isSubmitting) return
-
-        val selectedPages: List<Int>? = if (sheet.downloadAll) {
-            null
-        } else {
-            val (pages, error) = validateRange(sheet.rangeInput, detail.pageCount)
-            if (error != null || pages.isEmpty()) {
-                _uiState.update {
-                    it.copy(
-                        downloadSheet = it.downloadSheet.copy(
-                            parsedPages = pages,
-                            validationError = error ?: "请输入有效页码范围",
-                        ),
-                    )
-                }
-                return
-            }
-            pages
-        }
-
-        _uiState.update { it.copy(downloadSheet = it.downloadSheet.copy(isSubmitting = true)) }
-        viewModelScope.launch(dispatchers.io) {
-            try {
-                downloadGateway.enqueueGallery(
-                    item = detail.item.copy(pageCount = detail.pageCount),
-                    selectedPages = selectedPages,
-                )
-                _uiState.update {
-                    it.copy(
-                        downloadSheet = it.downloadSheet.copy(visible = false, isSubmitting = false),
-                    )
-                }
-                val message = if (selectedPages == null) {
-                    "已加入整本下载队列（共 ${detail.pageCount} 页）"
-                } else {
-                    "已加入选页下载队列（共 ${selectedPages.size} 页）"
-                }
-                emitSnackbar(message)
-            } catch (ce: CancellationException) {
-                throw ce
-            } catch (error: Throwable) {
-                _uiState.update {
-                    it.copy(
-                        downloadSheet = it.downloadSheet.copy(
-                            isSubmitting = false,
-                            validationError = error.message?.takeIf(String::isNotBlank) ?: "加入下载队列失败",
-                        ),
-                    )
-                }
-            }
-        }
-    }
+    fun confirmDownload() = downloadPlanner.confirmDownload()
 
     /** Canonical subscription key; some plugins expose only a readable label without a slug. */
     private fun subscriptionSlug(tag: TagRef): String =
@@ -1274,17 +1169,6 @@ class GalleryDetailViewModel(
 
     private fun emitSnackbar(message: String) {
         _uiState.update { it.copy(snackbarMessage = message) }
-    }
-
-    private fun validateRange(raw: String, totalPages: Int): Pair<List<Int>, String?> {
-        if (totalPages <= 0) return emptyList<Int>() to "当前图集页数无效"
-        if (raw.isBlank()) return emptyList<Int>() to "请输入页码范围，例如 1, 3, 5-8"
-        return try {
-            val parsed = PageSelectionParser.parse(raw, totalPages)
-            parsed to null
-        } catch (error: IllegalArgumentException) {
-            emptyList<Int>() to (error.message?.let { "页码格式无效（有效范围 1..$totalPages）" } ?: "页码格式无效")
-        }
     }
 
     private fun cacheDetailTags(detail: GalleryDetail) {
