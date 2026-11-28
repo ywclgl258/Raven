@@ -778,24 +778,6 @@ class ReaderViewModel(
         }
     }
 
-    private fun resolveInitialPage(
-        requestedStartPage: Int,
-        pageNumbers: List<Int>,
-        startPosition: ReaderStartPosition,
-        savedProgress: ReadingProgress?,
-    ): Int {
-        if (pageNumbers.isEmpty()) return 1
-        val target = when {
-            requestedStartPage > 1 -> requestedStartPage
-            startPosition == ReaderStartPosition.LAST -> pageNumbers.last()
-            startPosition == ReaderStartPosition.FIRST -> pageNumbers.first()
-            savedProgress != null && !savedProgress.completed && savedProgress.currentPage in pageNumbers ->
-                savedProgress.currentPage
-            else -> pageNumbers.first()
-        }
-        return nearestPageIn(pageNumbers, target)
-    }
-
     private fun rebuildBuffer(
         detail: GalleryDetail,
         pageNumbers: List<Int>,
@@ -1202,53 +1184,10 @@ class ReaderViewModel(
      * scroll into an appended serial chapter; every page-scoped action (bookmark, image favorite,
      * share/export) must target *that* chapter's mediaId and pages, not the initially opened one.
      */
-    private data class ActivePageContext(
-        val mediaId: String,
-        val url: String,
-        val title: String,
-        val coverUrl: String,
-        val detail: GalleryDetail,
-        val page: Int,
-        val totalPages: Int,
-        val bufferState: ReaderBufferState<LoadedReaderPage>,
-    )
-
-    private fun resolveActivePageContext(state: ReaderUiState, fallbackDetail: GalleryDetail): ActivePageContext {
-        val chapterId = state.activeStripChapterId
-        val chapter = if (state.preferences.mode == ReaderMode.STRIP && chapterId != null) {
-            state.appendedChapters.firstOrNull { it.mediaId == chapterId }
-        } else {
-            null
-        }
-        return if (chapter != null) {
-            ActivePageContext(
-                mediaId = chapter.mediaId,
-                url = chapter.url,
-                title = chapter.title,
-                coverUrl = chapter.detail.item.coverUrl,
-                detail = chapter.detail,
-                page = state.activeStripChapterPage ?: state.currentPage,
-                totalPages = chapter.pageNumbers.size.coerceAtLeast(1),
-                bufferState = chapter.bufferState,
-            )
-        } else {
-            ActivePageContext(
-                mediaId = mediaId,
-                url = fallbackDetail.item.url,
-                title = fallbackDetail.item.title,
-                coverUrl = fallbackDetail.item.coverUrl,
-                detail = fallbackDetail,
-                page = state.currentPage,
-                totalPages = state.totalPages.coerceAtLeast(1),
-                bufferState = state.bufferState,
-            )
-        }
-    }
-
     fun toggleCurrentPageBookmark(note: String = "") {
         val state = _uiState.value
         val detail = state.detail ?: return
-        val ctx = resolveActivePageContext(state, detail)
+        val ctx = resolveActivePageContext(state, detail, mediaId)
         viewModelScope.launch(dispatchers.io) {
             val added = bookmarkRepository.togglePageBookmark(
                 PageBookmark(
@@ -1279,7 +1218,7 @@ class ReaderViewModel(
     fun toggleCurrentPageImageFavorite() {
         val state = _uiState.value
         val detail = state.detail ?: return
-        val ctx = resolveActivePageContext(state, detail)
+        val ctx = resolveActivePageContext(state, detail, mediaId)
         val page = ctx.page
         val loadedPage = ctx.bufferState.pages[page]?.page
         val detailPage = ctx.detail.pages.firstOrNull { it.index == page }
@@ -1315,7 +1254,7 @@ class ReaderViewModel(
         val detail = state.detail ?: return
         // In STRIP mode the visible page may belong to an appended chapter; export must use that
         // chapter's detail/pages/source so the exported bytes match the image on screen.
-        val ctx = resolveActivePageContext(state, detail)
+        val ctx = resolveActivePageContext(state, detail, mediaId)
         exportPages(pages = listOf(ctx.page), mode = mode, followActiveChapter = true)
     }
 
@@ -1348,7 +1287,7 @@ class ReaderViewModel(
         if (state.isExporting) return
         // The current-page path follows the on-screen appended chapter; range/gallery exports keep
         // the opened gallery's detail because their page numbers refer to it.
-        val ctx = if (followActiveChapter) resolveActivePageContext(state, detail) else null
+        val ctx = if (followActiveChapter) resolveActivePageContext(state, detail, mediaId) else null
 
         val unique = pages.distinct().sorted()
         if (unique.isEmpty()) {
@@ -1609,14 +1548,6 @@ class ReaderViewModel(
      */
     private fun resolveSeriesMetadata(detail: GalleryDetail): RavenRoute.ReaderParent? =
         resolveReaderParent(detail, route.parent)
-
-    private fun nearestPageIn(pages: List<Int>, target: Int): Int {
-        if (pages.isEmpty()) return 1
-        val idx = pages.binarySearch(target)
-        if (idx >= 0) return pages[idx]
-        val insert = (-idx - 1).coerceIn(0, pages.lastIndex)
-        return pages[insert]
-    }
 
     private data class ReaderMetadataSnapshot(
         val effective: ReaderPreferences,
