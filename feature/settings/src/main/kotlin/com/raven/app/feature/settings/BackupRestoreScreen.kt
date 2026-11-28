@@ -23,6 +23,7 @@ import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.outlined.CloudSync
 import androidx.compose.material.icons.outlined.CloudUpload
 import androidx.compose.material.icons.outlined.DeleteOutline
+import androidx.compose.material.icons.outlined.Devices
 import androidx.compose.material.icons.outlined.EnhancedEncryption
 import androidx.compose.material.icons.outlined.FileOpen
 import androidx.compose.material.icons.outlined.FileUpload
@@ -234,6 +235,19 @@ fun BackupRestoreScreenContent(
                     icon = Icons.Outlined.Shield,
                     tone = RavenStatusTone.NEUTRAL,
                 )
+            }
+
+            item(key = "backup_lan_sync_shortcut") {
+                RavenGroupedSection(title = "免导出快传") {
+                    RavenGroupedRow(
+                        title = "局域网多设备自动发现同步",
+                        subtitle = "同一 Wi-Fi 下自动发现附近设备并端到端加密合并",
+                        icon = Icons.Outlined.Devices,
+                        showChevron = true,
+                        onClick = navigator::openLanSync,
+                        modifier = Modifier.testTag("backup_lan_sync_shortcut_row"),
+                    )
+                }
             }
 
             when (uiState.activeTab) {

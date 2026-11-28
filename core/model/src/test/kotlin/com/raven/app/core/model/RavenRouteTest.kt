@@ -49,6 +49,7 @@ class RavenRouteTest {
             RavenRoute.BlockedTerms(siteId = SiteId.R34V.value),
             RavenRoute.TagDictionary,
             RavenRoute.BackupRestore,
+            RavenRoute.LanSync,
             RavenRoute.StorageMigration,
             RavenRoute.DuplicateScanner,
         )

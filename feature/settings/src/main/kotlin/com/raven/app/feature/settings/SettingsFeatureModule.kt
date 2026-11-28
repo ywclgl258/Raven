@@ -9,6 +9,11 @@ import com.raven.app.core.media.storage.LocalLibraryImporter
 import com.raven.app.core.media.storage.deleteLocalBookCompletely
 import com.raven.app.core.model.RavenRoute
 import com.raven.app.core.network.RavenOkHttpPool
+import com.raven.app.feature.settings.lansync.AndroidLanSyncDiscoveryBridge
+import com.raven.app.feature.settings.lansync.LanSyncClient
+import com.raven.app.feature.settings.lansync.LanSyncDiscoveryBridge
+import com.raven.app.feature.settings.lansync.LanSyncServer
+import com.raven.app.feature.settings.lansync.LanSyncViewModel
 import java.io.File
 import android.os.Build
 import org.koin.android.ext.koin.androidContext
@@ -213,6 +218,50 @@ val settingsFeatureModule: Module = module {
             copyDeleter = get(),
             siteRegistry = get(),
             dispatchers = get(),
+        )
+    }
+
+    factory<LanSyncDiscoveryBridge> {
+        AndroidLanSyncDiscoveryBridge(
+            context = androidContext(),
+            dispatchers = get(),
+        )
+    }
+
+    factory {
+        val info = getOrNull<RavenAppInfo>() ?: RavenAppInfo.fromContext(androidContext())
+        LanSyncServer(
+            backupDataRepository = get(),
+            backupValidator = get(),
+            trustStore = get(),
+            appVersion = info.versionName,
+            dispatchers = get(),
+            defaultDeviceName = Build.MODEL?.takeIf { it.isNotBlank() } ?: "Raven 设备",
+        )
+    }
+
+    factory {
+        val info = getOrNull<RavenAppInfo>() ?: RavenAppInfo.fromContext(androidContext())
+        LanSyncClient(
+            backupDataRepository = get(),
+            backupValidator = get(),
+            trustStore = get(),
+            appVersion = info.versionName,
+            dispatchers = get(),
+            defaultDeviceName = Build.MODEL?.takeIf { it.isNotBlank() } ?: "Raven 设备",
+        )
+    }
+
+    viewModel {
+        val info = getOrNull<RavenAppInfo>() ?: RavenAppInfo.fromContext(androidContext())
+        LanSyncViewModel(
+            server = get(),
+            client = get(),
+            discoveryBridge = get(),
+            trustStore = get(),
+            appInfo = info,
+            dispatchers = get(),
+            defaultDeviceName = Build.MODEL?.takeIf { it.isNotBlank() } ?: "Raven 设备",
         )
     }
 }

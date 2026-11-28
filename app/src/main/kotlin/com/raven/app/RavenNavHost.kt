@@ -74,6 +74,7 @@ import com.raven.app.feature.settings.SettingsScreen
 import com.raven.app.feature.settings.SiteAccountScreen
 import com.raven.app.feature.settings.StorageMigrationScreen
 import com.raven.app.feature.settings.TagDictionaryScreen
+import com.raven.app.feature.settings.lansync.LanSyncScreen
 import java.io.File
 import org.koin.androidx.compose.koinViewModel
 import org.koin.core.parameter.parametersOf
@@ -617,6 +618,10 @@ fun RavenAppShell(
                 navController.navigate(RavenRoute.BackupRestore) { launchSingleTop = true }
             }
 
+            override fun openLanSync() {
+                navController.navigate(RavenRoute.LanSync) { launchSingleTop = true }
+            }
+
             override fun openFeedback() {
                 navController.navigate(RavenRoute.Feedback) { launchSingleTop = true }
             }
@@ -853,6 +858,9 @@ fun RavenAppShell(
             }
             composable<RavenRoute.BackupRestore> {
                 BackupRestoreScreen(navigator = settingsNavigator)
+            }
+            composable<RavenRoute.LanSync> {
+                LanSyncScreen(navigator = settingsNavigator)
             }
             composable<RavenRoute.Feedback> {
                 FeedbackScreen(navigator = settingsNavigator)

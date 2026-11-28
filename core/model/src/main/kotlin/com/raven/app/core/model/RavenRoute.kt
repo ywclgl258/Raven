@@ -156,6 +156,9 @@ sealed interface RavenRoute {
     data object BackupRestore : RavenRoute
 
     @Serializable
+    data object LanSync : RavenRoute
+
+    @Serializable
     data object Feedback : RavenRoute
 
     @Serializable

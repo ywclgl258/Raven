@@ -37,6 +37,14 @@ val coreSecurityModule: Module = module {
             ),
         )
     }
+    single {
+        LanSyncTrustStore(
+            cipher = get(),
+            storage = SharedPreferencesVaultStorage(
+                androidContext().getSharedPreferences(LanSyncTrustStore.DEFAULT_PREFS_NAME, Context.MODE_PRIVATE),
+            ),
+        )
+    }
     single { BackupValidator(siteRegistryProvider = { get<SiteRegistry>() }) }
     single { BackupCodec(validator = get(), siteRegistryProvider = { get<SiteRegistry>() }) }
 }

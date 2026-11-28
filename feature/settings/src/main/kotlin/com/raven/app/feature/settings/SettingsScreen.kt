@@ -41,6 +41,7 @@ import androidx.compose.material.icons.outlined.CloudDownload
 import androidx.compose.material.icons.outlined.Contrast
 import androidx.compose.material.icons.outlined.DeleteSweep
 import androidx.compose.material.icons.outlined.Description
+import androidx.compose.material.icons.outlined.Devices
 import androidx.compose.material.icons.outlined.FileCopy
 import androidx.compose.material.icons.outlined.Folder
 import androidx.compose.material.icons.outlined.Fullscreen
@@ -876,6 +877,15 @@ fun SettingsScreenContent(
                         showChevron = true,
                         onClick = navigator::openBackupRestore,
                         modifier = Modifier.testTag("settings_backup_restore_row"),
+                    )
+                    RavenGroupedDivider(insetWithIcon = true)
+                    RavenGroupedRow(
+                        title = "局域网多设备同步",
+                        subtitle = "同一 Wi-Fi 自动发现附近渡鸦设备，端到端加密同步收藏、进度与片单",
+                        icon = Icons.Outlined.Devices,
+                        showChevron = true,
+                        onClick = navigator::openLanSync,
+                        modifier = Modifier.testTag("settings_lan_sync_row"),
                     )
                     RavenGroupedDivider(insetWithIcon = true)
                     RavenGroupedRow(
