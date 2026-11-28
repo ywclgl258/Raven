@@ -25,6 +25,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -239,15 +240,22 @@ internal fun PrivacyPinSetupSheet(
     onClearPin: () -> Unit,
     onDismiss: () -> Unit,
 ) {
-    var pinInput by rememberSaveable { mutableStateOf("") }
-    var pinConfirm by rememberSaveable { mutableStateOf("") }
-    var localError by rememberSaveable { mutableStateOf<String?>(null) }
-    var isSaving by rememberSaveable { mutableStateOf(false) }
+    var pinInput by remember { mutableStateOf("") }
+    var pinConfirm by remember { mutableStateOf("") }
+    var localError by remember { mutableStateOf<String?>(null) }
+    var isSaving by remember { mutableStateOf(false) }
+
+    val handleDismiss = {
+        pinInput = ""
+        pinConfirm = ""
+        localError = null
+        onDismiss()
+    }
 
     SecureWindowEffect(enabled = true)
 
     RavenBottomSheet(
-        onDismissRequest = onDismiss,
+        onDismissRequest = handleDismiss,
         presentation = com.raven.app.core.designsystem.component.RavenSheetPresentation.Center,
         title = if (hasExistingPin) "管理应用解锁 PIN" else "设置应用解锁 PIN",
         subtitle = "4 至 8 位数字，经加盐 PBKDF2 与 AndroidKeyStore 加密保存",
@@ -303,13 +311,18 @@ internal fun PrivacyPinSetupSheet(
                     SettingsSecondaryButton(
                         text = "清除并关闭",
                         destructive = true,
-                        onClick = onClearPin,
+                        onClick = {
+                            pinInput = ""
+                            pinConfirm = ""
+                            localError = null
+                            onClearPin()
+                        },
                         modifier = Modifier.weight(1f),
                     )
                 } else {
                     SettingsSecondaryButton(
                         text = "取消",
-                        onClick = onDismiss,
+                        onClick = handleDismiss,
                         modifier = Modifier.weight(1f),
                     )
                 }
@@ -328,9 +341,15 @@ internal fun PrivacyPinSetupSheet(
                         } else {
                             isSaving = true
                             localError = null
-                            onSavePin(pinInput) { saved ->
+                            val candidate = pinInput
+                            onSavePin(candidate) { saved ->
                                 isSaving = false
-                                if (!saved) localError = "保存 PIN 失败，请重试"
+                                if (saved) {
+                                    pinInput = ""
+                                    pinConfirm = ""
+                                } else {
+                                    localError = "保存 PIN 失败，请重试"
+                                }
                             }
                         }
                     },
@@ -354,7 +373,7 @@ internal fun UpdateAvailableSheet(
     val readyFile = state.readyApk
     val progress = state.downloadProgress
 
-    val downloading = progress != null && readyFile == null
+    val downloading = state.isDownloading
     RavenBottomSheet(
         onDismissRequest = onDismiss,
         presentation = com.raven.app.core.designsystem.component.RavenSheetPresentation.Center,

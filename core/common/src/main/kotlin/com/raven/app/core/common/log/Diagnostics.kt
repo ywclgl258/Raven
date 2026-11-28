@@ -31,7 +31,7 @@ class Diagnostics(
         CrashRecorder.install()
     }
 
-    fun bytes(): Long = timelineSink.totalBytes() + crashSink.tail(1).length
+    fun bytes(): Long = timelineSink.totalBytes() + crashSink.totalBytes()
 
     /** Writes one upload-ready report and returns it. Empty log is still a valid report. */
     fun writeSnapshot(target: File): File {
@@ -47,7 +47,7 @@ class Diagnostics(
             header = headerValues,
             logcat = runCatching { logcat() }.getOrNull(),
             crashTail = crashTail,
-        ) + "\n\n== 日志文件尾部（滚动文件）==\n" + timelineSink.tail(120_000)
+        ) + "\n\n== 日志文件尾部（滚动文件）==\n" + LogRedactor.redactMultiline(timelineSink.tail(120_000), 120_000)
         target.writeText(report)
         return target
     }

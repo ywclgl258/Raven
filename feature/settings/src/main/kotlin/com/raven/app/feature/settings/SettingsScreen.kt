@@ -155,8 +155,7 @@ fun SettingsScreen(
         onToggleStreamCache = viewModel::setStreamCacheEnabled,
         onToggleSeekCache = viewModel::setSeekCacheEnabled,
         onClearReadingCache = viewModel::clearAllReadingCaches,
-        onClearStreamingCache = viewModel::clearStreamingCache,
-        onClearSeekCache = viewModel::clearSeekCaches,
+        onClearStreamingAndSeekCaches = viewModel::clearStreamingAndSeekCaches,
         onClearImageCache = viewModel::clearImageCache,
         onClearAllCaches = viewModel::clearAllCaches,
         onToggleDownloadUnmeteredOnly = viewModel::setDownloadUnmeteredOnly,
@@ -214,8 +213,7 @@ fun SettingsScreenContent(
     onInstallUpdate: (File) -> Unit,
     onDismissUpdateSheet: () -> Unit,
     onDismissFeedback: () -> Unit,
-    onClearStreamingCache: () -> Unit = {},
-    onClearSeekCache: () -> Unit = {},
+    onClearStreamingAndSeekCaches: () -> Unit = {},
     onClearImageCache: () -> Unit = {},
     onClearAllCaches: () -> Unit = {},
     onToggleBackgroundSync: (Boolean) -> Unit = {},
@@ -558,10 +556,7 @@ fun SettingsScreenContent(
                         trailingContent = {
                             if (uiState.mediaCache.streamBytes + uiState.mediaCache.seekBytes > 0L) {
                                 TextButton(
-                                    onClick = {
-                                        onClearStreamingCache()
-                                        onClearSeekCache()
-                                    },
+                                    onClick = onClearStreamingAndSeekCaches,
                                     enabled = !uiState.mediaCache.isClearing,
                                     modifier = Modifier.testTag("settings_clear_media_cache"),
                                 ) {

@@ -129,7 +129,11 @@ class R34vSitePlugin(
     override val videoSource: VideoSource = object : VideoSource {
         override suspend fun loadVideoDetail(url: String): VideoDetail {
             val target = VideoSiteSupport.resolveAbsolute(BASE_URL, url)
-                .ifBlank { throw SiteException.ParseError("无法识别 Rule34Video 视频地址", siteId = SiteId.R34V) }
+                .takeIf { resolved ->
+                    val parsed = UrlSanitizer.parseUriOrNull(resolved)
+                    parsed != null && UrlSanitizer.isHttpsUrl(resolved) && descriptor.matchesHost(parsed.host.orEmpty())
+                }
+                ?: throw SiteException.ParseError("无法识别 Rule34Video 视频地址", siteId = SiteId.R34V)
             val (_, html) = VideoSiteSupport.fetchHtml(
                 http = http,
                 siteId = SiteId.R34V,
@@ -268,7 +272,12 @@ class R34vSitePlugin(
                     throw SiteException.AuthRequired("登录未返回新的有效会话，请检查账号状态", siteId = SiteId.R34V)
                 }
 
-                sessionStore.replaceCookies(SiteId.R34V, freshCookies)
+                sessionStore.storeSessionSnapshot(
+                    siteId = SiteId.R34V,
+                    cookies = freshCookies,
+                    secrets = mapOf(SESSION_MARKER_KEY to "1"),
+                    bumpEpoch = true,
+                )
                 sessionStore.saveUsername(SiteId.R34V, trimmedUser)
                 AuthState(
                     isAuthenticated = true,
@@ -286,10 +295,13 @@ class R34vSitePlugin(
         }
 
         override suspend fun currentAuthState(): AuthState {
-            val hasSession = sessionStore.getCookies(SiteId.R34V).containsKey("PHPSESSID")
+            val hasSessionCookie = sessionStore.getCookies(SiteId.R34V)["PHPSESSID"]?.isNotBlank() == true
+            val hasMarker = sessionStore.getSecret(SiteId.R34V, SESSION_MARKER_KEY) == "1"
+            val username = sessionStore.getUsername(SiteId.R34V)?.takeIf { it.isNotBlank() }
+            val hasSession = hasSessionCookie && (hasMarker || username != null)
             return AuthState(
                 isAuthenticated = hasSession,
-                username = if (hasSession) sessionStore.getUsername(SiteId.R34V) else null,
+                username = if (hasSession) username else null,
                 epoch = sessionStore.authEpoch(SiteId.R34V),
             )
         }
@@ -447,6 +459,7 @@ class R34vSitePlugin(
 
     companion object {
         const val BASE_URL: String = "https://rule34video.com"
+        private const val SESSION_MARKER_KEY: String = "r34v_logged_in"
         private val videoIdRegex = Regex("/video/(\\d+)/?")
         private val pageOfRegex = Regex("Page\\s+([\\d,]+)\\s+of\\s+([\\d,]+)")
         private val pathPageRegex = Regex("/(\\d+)/?(?:\\?.*)?$")

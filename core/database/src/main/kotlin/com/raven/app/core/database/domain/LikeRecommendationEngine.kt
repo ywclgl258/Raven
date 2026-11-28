@@ -55,6 +55,8 @@ object LikeRecommendationEngine {
         """(?i)(?:第\s*\d+\s*[话話章卷集回部期]|(?:ch|chapter|ep|episode|vol|volume|part)\.?\s*\d+|\b\d+\s*[p页頁]\b)""",
     )
     private val NON_WORD_REGEX = Regex("""[^\p{L}\p{N}]+""")
+    private val TITLE_SEPARATORS_REGEX = Regex("""[|｜/／\-—–_:：]+""")
+    private val WHITESPACE_RUN_REGEX = Regex("""\s+""")
 
     enum class SimilarMatchTier(val priority: Int, val label: String) {
         SAME_AUTHOR(3, "同作者"),
@@ -159,9 +161,9 @@ object LikeRecommendationEngine {
     fun extractCoreTitleQuery(title: String): String {
         val stripped = BRACKET_NOISE_REGEX.replace(title, " ")
             .let { CHAPTER_NOISE_REGEX.replace(it, " ") }
-            .replace(Regex("""[|｜/／\-—–_:：]+"""), " ")
+            .let { TITLE_SEPARATORS_REGEX.replace(it, " ") }
             .trim()
-            .replace(Regex("""\s+"""), " ")
+            .let { WHITESPACE_RUN_REGEX.replace(it, " ") }
         val candidate = if (stripped.length >= 2) stripped else title.trim()
         return candidate.take(32).trim()
     }
@@ -198,9 +200,13 @@ object LikeRecommendationEngine {
         val likedWeightMap = likedTagWeights.associate { (canonicalTagKey(it.tag) ?: "") to it.weight }
         val sourceTagKeys = sourceTags.mapNotNull(::canonicalTagKey).toSet()
 
+        val sourceSitePrefix = sourceCompositeKey.substringBefore(':', "")
         val ranked = candidates
             .asSequence()
-            .filterNot { it.compositeKey == sourceCompositeKey || it.id == sourceMediaId }
+            .filterNot {
+                it.compositeKey == sourceCompositeKey ||
+                    (it.id == sourceMediaId && (sourceSitePrefix.isEmpty() || it.siteId.value == sourceSitePrefix))
+            }
             .distinctBy { it.compositeKey }
             .map { item ->
                 val itemAuthorNorm = normalizeToken(item.author?.name.orEmpty())
@@ -341,7 +347,7 @@ object LikeRecommendationEngine {
     fun canonicalTagKey(tag: TagRef): String? {
         val raw = tag.slug.trim().ifEmpty { tag.label.trim() }.lowercase(Locale.ROOT)
         if (raw.isEmpty()) return null
-        return raw.replace('_', ' ').replace(Regex("""\s+"""), " ")
+        return WHITESPACE_RUN_REGEX.replace(raw.replace('_', ' '), " ")
     }
 
     private fun tagSignalMultiplier(tag: TagRef): Double {

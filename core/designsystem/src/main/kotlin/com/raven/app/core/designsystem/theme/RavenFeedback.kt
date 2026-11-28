@@ -241,6 +241,7 @@ class AndroidRavenFeedbackController(
     private val appContext = context.applicationContext
     private val audioManager = appContext.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
     private val released = AtomicBoolean(false)
+    private val poolLock = Any()
     private val soundIds = ConcurrentHashMap<RavenFeedbackEffect, Int>()
     private val loadedIds = ConcurrentHashMap.newKeySet<Int>()
 
@@ -295,10 +296,12 @@ class AndroidRavenFeedbackController(
                 if (!targetFile.isFile || targetFile.length() != wavBytes.size.toLong()) {
                     targetFile.writeBytes(wavBytes)
                 }
-                if (!released.get()) {
-                    val id = pool.load(targetFile.absolutePath, 1)
-                    if (id > 0) {
-                        soundIds[effect] = id
+                synchronized(poolLock) {
+                    if (!released.get()) {
+                        val id = pool.load(targetFile.absolutePath, 1)
+                        if (id > 0) {
+                            soundIds[effect] = id
+                        }
                     }
                 }
             }
@@ -316,7 +319,11 @@ class AndroidRavenFeedbackController(
         if (soundId !in loadedIds) return
 
         runCatching {
-            pool.play(soundId, effect.volume, effect.volume, 1, 0, 1.0f)
+            synchronized(poolLock) {
+                if (!released.get()) {
+                    pool.play(soundId, effect.volume, effect.volume, 1, 0, 1.0f)
+                }
+            }
         }
     }
 
@@ -345,7 +352,9 @@ class AndroidRavenFeedbackController(
         if (!released.compareAndSet(false, true)) return
         loadedIds.clear()
         soundIds.clear()
-        runCatching { soundPool?.release() }
+        synchronized(poolLock) {
+            runCatching { soundPool?.release() }
+        }
         runCatching { executor.shutdownNow() }
     }
 

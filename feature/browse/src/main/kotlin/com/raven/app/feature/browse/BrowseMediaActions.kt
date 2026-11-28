@@ -63,6 +63,7 @@ internal class BrowseMediaActions(
 ) {
     private val _messages = MutableStateFlow<String?>(null)
     val messages: StateFlow<String?> = _messages.asStateFlow()
+    private val enqueuingKeys = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
 
     /** Composite keys (`siteId:mediaId`) of favorited works, optionally scoped to one site. */
     fun favoriteKeysFlow(siteId: SiteId? = null): Flow<Set<String>> {
@@ -103,6 +104,8 @@ internal class BrowseMediaActions(
                     favoriteRepository.toggle(item.toFavoriteItem(clockMs()))
                 }
                 postMessage(if (added) "已收藏「${item.title}」" else "已取消收藏「${item.title}」")
+            } catch (ce: kotlinx.coroutines.CancellationException) {
+                throw ce
             } catch (error: Throwable) {
                 postMessage("收藏操作失败：${error.message ?: "未知错误"}")
             }
@@ -114,6 +117,8 @@ internal class BrowseMediaActions(
      * exists for the same work, and reports when one is already complete.
      */
     fun download(item: MediaItem) {
+        val key = item.compositeKey
+        if (!enqueuingKeys.add(key)) return
         scope.launch {
             try {
                 val existing = withContext(ioDispatcher) {
@@ -135,8 +140,12 @@ internal class BrowseMediaActions(
                         "已加入视频下载队列：${item.title}"
                     },
                 )
+            } catch (ce: kotlinx.coroutines.CancellationException) {
+                throw ce
             } catch (error: Throwable) {
                 postMessage("下载失败：${error.message ?: "未知错误"}")
+            } finally {
+                enqueuingKeys.remove(key)
             }
         }
     }

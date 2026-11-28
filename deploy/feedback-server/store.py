@@ -246,6 +246,14 @@ class FeedbackStore:
             row = self._conn.execute("SELECT * FROM tickets WHERE id = ?", (ticket_id,)).fetchone()
         return _public_ticket(row) if row else None
 
+    def attach_log(self, ticket_id: str, name: str, size: int, digest: str) -> None:
+        with self._lock:
+            self._conn.execute(
+                "UPDATE tickets SET log_name = ?, log_bytes = ?, log_sha256 = ? WHERE id = ?",
+                (name, size, digest, ticket_id),
+            )
+            self._conn.commit()
+
     def list_tickets(
         self,
         status: str | None = None,

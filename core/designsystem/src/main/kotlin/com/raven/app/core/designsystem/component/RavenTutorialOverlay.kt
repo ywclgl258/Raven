@@ -100,12 +100,12 @@ fun RavenFeatureTutorialDialog(
                     .widthIn(max = 460.dp)
                     .fillMaxWidth()
                     .testTag("raven_feature_tutorial_dialog")
-                    .clip(RavenShapes.SheetShape)
+                    .clip(RavenShapes.DialogShape)
                     .background(colors.surface2)
                     .border(
                         width = 1.dp,
                         color = colors.crimson.copy(alpha = 0.30f),
-                        shape = RavenShapes.SheetShape,
+                        shape = RavenShapes.DialogShape,
                     )
                     .padding(20.dp),
                 verticalArrangement = Arrangement.spacedBy(16.dp),
@@ -139,7 +139,7 @@ fun RavenFeatureTutorialDialog(
                     }
                     IconButton(
                         onClick = onComplete,
-                        modifier = Modifier.size(32.dp),
+                        modifier = Modifier.size(48.dp),
                     ) {
                         Icon(
                             imageVector = Icons.Outlined.Close,

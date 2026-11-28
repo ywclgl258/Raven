@@ -115,6 +115,7 @@ class MainActivity : ComponentActivity(), MainActivityHostActions {
             LaunchedEffect(startupUpdate?.release?.tagName, lockState.isLocked, lockState.lockInitialized) {
                 val available = startupUpdate ?: return@LaunchedEffect
                 if (lockState.isLocked || !lockState.lockInitialized) return@LaunchedEffect
+                if (!StartupUpdateNotifier.consumeToastFor(available.release.tagName)) return@LaunchedEffect
                 Toast.makeText(
                     this@MainActivity,
                     "发现新版本 ${available.release.tagName}，可在设置中查看",

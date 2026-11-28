@@ -136,7 +136,7 @@ internal class ReaderChapterPrefetcher(
                 isChapterListReady = true,
                 isChapterListLoading = false,
                 chapterListError = null,
-                hasReachedFinalSerialChapter = next == null && it.chapters.isEmpty(),
+                hasReachedFinalSerialChapter = next == null && chapters.isNotEmpty() && currentIndex >= 0,
             )
         }
     }
@@ -269,10 +269,29 @@ internal class ReaderChapterPrefetcher(
             } catch (ce: CancellationException) {
                 throw ce
             } catch (error: Throwable) {
-                val tailId = uiState().chapters.let { list ->
-                    val lastId = uiState().appendedChapters.lastOrNull()?.mediaId ?: mediaId
-                    val idx = list.indexOfFirst { it.id == lastId }
-                    list.getOrNull(idx + 1)?.id
+                val tailId = uiState().let { state ->
+                    val list = state.chapters
+                    val lastChapter = state.appendedChapters.lastOrNull()
+                    val lastId = lastChapter?.mediaId ?: mediaId
+                    val tailDetail = lastChapter?.detail ?: state.detail
+                    val tailHints = tailDetail?.let { detail ->
+                        listOfNotNull(
+                            detail.item.id,
+                            detail.item.extra["chapterId"],
+                            detail.item.extra["chapterUuid"],
+                            detail.item.extra["chapterHid"],
+                        )
+                    }.orEmpty()
+                    val tailUrlHint = tailDetail?.item?.extra?.get("chapterUrl")?.trim().orEmpty()
+                    val idx = list.indexOfFirst { chapter ->
+                        isMatchingSerialChapter(
+                            chapter = chapter,
+                            currentChapterId = lastId,
+                            currentChapterUrl = tailUrlHint,
+                            hints = tailHints,
+                        )
+                    }
+                    if (idx >= 0) list.getOrNull(idx + 1)?.id else null
                 }
                 if (!tailId.isNullOrBlank()) {
                     chapters.markFailed(tailId)

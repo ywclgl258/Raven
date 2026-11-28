@@ -35,16 +35,12 @@ import com.raven.app.core.sitespi.SitePlugin
 import com.raven.app.core.sitespi.SiteRequestKind
 import com.raven.app.core.sitespi.SiteSessionStore
 import java.security.SecureRandom
-import javax.crypto.Cipher
-import javax.crypto.spec.IvParameterSpec
-import javax.crypto.spec.SecretKeySpec
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
-import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 
 /**
@@ -133,32 +129,44 @@ class MangacopySitePlugin(
                 pseudoId = pseudo,
                 epochMillis = clockMs(),
             )
-            val host = mangacopyCredentialHosts().first()
-            val response = try {
-                httpClient.postForm(
-                    url = "https://$host/api/v3/login",
-                    fields = mapOf(
-                        "username" to cleanUser,
-                        "password" to encodedPassword,
-                        "salt" to salt.toString(),
-                    ),
-                    siteId = SiteId.MANGACOPY,
-                    headers = headers,
-                    followRedirects = false,
-                )
-            } catch (ce: CancellationException) {
-                throw ce
-            } catch (se: SiteException) {
-                throw se
-            } catch (e: Exception) {
-                throw SiteException.Network(
-                    message = "拷贝漫画登录请求失败：${e.message ?: "未知错误"}",
-                    siteId = SiteId.MANGACOPY,
-                    cause = e,
-                )
+            val credentialHosts = mangacopyCredentialHosts()
+            var response: com.raven.app.core.sitespi.SiteHttpResponse? = null
+            var lastFailure: SiteException? = null
+            for (host in credentialHosts) {
+                val attempt = try {
+                    httpClient.postForm(
+                        url = "https://$host/api/v3/login",
+                        fields = mapOf(
+                            "username" to cleanUser,
+                            "password" to encodedPassword,
+                            "salt" to salt.toString(),
+                        ),
+                        siteId = SiteId.MANGACOPY,
+                        headers = headers,
+                        followRedirects = false,
+                    )
+                } catch (ce: CancellationException) {
+                    throw ce
+                } catch (se: SiteException) {
+                    lastFailure = se
+                    if (se is SiteException.Network || se is SiteException.TlsError || se is SiteException.RateLimited) {
+                        continue
+                    }
+                    throw se
+                } catch (e: Exception) {
+                    lastFailure = SiteException.Network(
+                        message = "拷贝漫画登录请求失败：${e.message ?: "未知错误"}",
+                        siteId = SiteId.MANGACOPY,
+                        cause = e,
+                    )
+                    continue
+                }
+                response = attempt
+                break
             }
-            response.throwIfNotSuccessful(SiteId.MANGACOPY, descriptor.displayName)
-            val root = runCatching { json.parseToJsonElement(response.bodyText()).jsonObject }.getOrNull()
+            val finalResponse = response ?: throw (lastFailure ?: SiteException.Network("拷贝漫画登录请求失败", siteId = SiteId.MANGACOPY))
+            finalResponse.throwIfNotSuccessful(SiteId.MANGACOPY, descriptor.displayName)
+            val root = runCatching { json.parseToJsonElement(finalResponse.bodyText()).jsonObject }.getOrNull()
                 ?: throw SiteException.ParseError("拷贝漫画登录响应格式异常", siteId = SiteId.MANGACOPY)
             val code = root.safeInt("code") ?: 200
             val msg = root.safeString("message")
@@ -182,16 +190,18 @@ class MangacopySitePlugin(
         override suspend fun logout() {
             val token = sessionStore?.getBearerToken(SiteId.MANGACOPY)
             if (!token.isNullOrBlank()) {
-                runCatching {
-                    val host = mangacopyCredentialHosts().first()
-                    httpClient.postForm(
-                        url = "https://$host/api/v3/logout",
-                        fields = emptyMap(),
-                        siteId = SiteId.MANGACOPY,
-                        headers = buildCopyHeaders(token),
-                        followRedirects = false,
-                    )
-                }.onFailure { if (it is CancellationException) throw it }
+                for (host in mangacopyCredentialHosts()) {
+                    val sent = runCatching {
+                        httpClient.postForm(
+                            url = "https://$host/api/v3/logout",
+                            fields = emptyMap(),
+                            siteId = SiteId.MANGACOPY,
+                            headers = buildCopyHeaders(token),
+                            followRedirects = false,
+                        )
+                    }.onFailure { if (it is CancellationException) throw it }.isSuccess
+                    if (sent) break
+                }
             }
             sessionStore?.clearSite(SiteId.MANGACOPY)
         }
@@ -1044,7 +1054,7 @@ class MangacopySitePlugin(
                             apiRoutes.forEach { routeGroup ->
                                 (routeGroup as? JsonArray).orEmpty().forEach { entry ->
                                     val host = entry.safePrimitiveContent()?.trim()?.lowercase().orEmpty()
-                                    if (host.isNotBlank() && '.' in host && host !in this) {
+                                    if (isValidDiscoveredHost(host) && host !in this) {
                                         add(host)
                                     }
                                 }
@@ -1098,21 +1108,25 @@ class MangacopySitePlugin(
         )
     }
 
-    /**
-     * 桌面章节页在部分网络下会被主域重置（Connection reset），按镜像顺序逐个尝试。
-     */
-    private suspend fun fetchDesktopHtml(path: String): String = desktopFallback.fetchDesktopHtml(path)
-
-    private fun hexToBytes(hex: String): ByteArray = desktopFallback.hexToBytes(hex)
-
     private fun extractPathWord(url: String): String? = desktopFallback.extractPathWord(url)
 
     private fun parseChapterUuid(url: String): String? = desktopFallback.parseChapterUuid(url)
+
+    private fun isValidDiscoveredHost(host: String): Boolean {
+        if (host.isEmpty() || host.length > 253) return false
+        if (!DISCOVERED_HOSTNAME_REGEX.matches(host)) return false
+        if (IPV4_HOST_REGEX.matches(host)) return false
+        return true
+    }
 
     companion object {
         val SITE_ID: SiteId = SiteId.MANGACOPY
         const val BASE_URL: String = "https://www.mangacopy.com"
         const val API_BASE: String = "https://api.copy202601.com/api/v3"
+
+        private val DISCOVERED_HOSTNAME_REGEX =
+            Regex("^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$")
+        private val IPV4_HOST_REGEX = Regex("^\\d+\\.\\d+\\.\\d+\\.\\d+$")
 
         private const val PAGE_SIZE = 30
         private const val CHAPTER_PAGE_SIZE = 100

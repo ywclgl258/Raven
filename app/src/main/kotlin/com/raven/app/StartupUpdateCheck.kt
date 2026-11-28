@@ -12,10 +12,20 @@ internal object StartupUpdateNotifier {
     private val _latestUpdate = MutableStateFlow<UpdateCheckOutcome.UpdateAvailable?>(null)
     val latestUpdate: StateFlow<UpdateCheckOutcome.UpdateAvailable?> = _latestUpdate.asStateFlow()
 
+    @Volatile
+    private var lastToastTagName: String? = null
+
     fun publish(outcome: UpdateCheckOutcome) {
         if (outcome is UpdateCheckOutcome.UpdateAvailable) {
             _latestUpdate.value = outcome
         }
+    }
+
+    @Synchronized
+    fun consumeToastFor(tagName: String): Boolean {
+        if (tagName.isBlank() || lastToastTagName == tagName) return false
+        lastToastTagName = tagName
+        return true
     }
 }
 

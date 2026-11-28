@@ -316,4 +316,49 @@ class MediaRedirectCacheTest {
         vault.saveCookies(SiteId.EXHENTAI, mapOf("ipb_member_id" to "1"))
         assertEquals(SiteId.EHENTAI, invoked.get())
     }
+
+    @Test
+    fun `does not cache stale redirect when epoch changes mid-flight`() {
+        val origin = MockWebServer()
+        val cdn = MockWebServer()
+        origin.start()
+        cdn.start()
+        try {
+            val epoch = java.util.concurrent.atomic.AtomicLong(1L)
+            val cache = MediaRedirectCache(
+                eligible = { true },
+                accountResolver = { SiteId.R34V },
+                credentialEpochProvider = { epoch.get() },
+            )
+            val cdnUrl = "http://cdn.example:${cdn.port}/signed-old"
+            origin.enqueue(MockResponse().setResponseCode(302).setHeader("Location", cdnUrl))
+            cdn.enqueue(
+                MockResponse()
+                    .setResponseCode(200)
+                    .setBody("ok"),
+            )
+            val client = OkHttpClient.Builder()
+                .dns(object : Dns {
+                    override fun lookup(hostname: String): List<InetAddress> =
+                        listOf(InetAddress.getLoopbackAddress())
+                })
+                .addInterceptor { chain ->
+                    // Simulate logout/account switch right after application interceptor tagged epoch=1.
+                    val resp = cache.interceptor.intercept(chain)
+                    resp
+                }
+                .addNetworkInterceptor { chain ->
+                    epoch.set(2L)
+                    cache.networkInterceptor.intercept(chain)
+                }
+                .build()
+
+            val originUrl = origin.url("/get-file/race").toString()
+            assertEquals("ok", fetchBody(client, originUrl))
+            assertNull("Stale epoch redirect must not be cached under new epoch", cache.getCachedRedirect(originUrl))
+        } finally {
+            origin.shutdown()
+            cdn.shutdown()
+        }
+    }
 }

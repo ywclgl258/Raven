@@ -57,6 +57,7 @@ import com.raven.app.core.model.RavenRoute
 import com.raven.app.core.model.SiteId
 import com.raven.app.core.sitespi.SitePlugin
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.filter
 
 /** 搜索结果主体：单站结果、加载态与跨站结果分组。 */
 @Composable
@@ -122,6 +123,29 @@ internal fun SingleSiteResultsBody(
                             .distinctUntilChanged()
                             .collect { atTop -> currentCallback(atTop) }
                     }
+                }
+                LaunchedEffect(
+                    dirListState,
+                    uiState.singleSiteHasMore,
+                    uiState.singleSiteLoadingMore,
+                    uiState.singleSitePaginationError,
+                    uiState.singleSiteItems.size,
+                ) {
+                    snapshotFlow {
+                        val total = dirListState.layoutInfo.totalItemsCount
+                        val lastVisible = dirListState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0
+                        total > 0 && lastVisible >= total - 3
+                    }
+                        .distinctUntilChanged()
+                        .filter { it }
+                        .collect {
+                            if (uiState.singleSiteHasMore &&
+                                !uiState.singleSiteLoadingMore &&
+                                uiState.singleSitePaginationError == null
+                            ) {
+                                onLoadMore()
+                            }
+                        }
                 }
                 LazyColumn(
                     state = dirListState,

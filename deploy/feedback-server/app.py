@@ -62,8 +62,9 @@ URL_SECRET_QUERY = re.compile(
 )
 COOKIE_PAIR = re.compile(r"(?i)\b([A-Za-z0-9_-]{2,24})=(?:[A-Za-z0-9%._-]{20,})")
 PRIVATE_KEY_BLOCK = re.compile(
-    r"-----BEGIN [A-Z ]*PRIVATE KEY-----.*?-----END [A-Z ]*PRIVATE KEY-----", re.S
+    r"-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----.*?-----END [A-Z0-9 ]*PRIVATE KEY-----", re.S
 )
+PRIVATE_KEY_UNCLOSED = re.compile(r"-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----.*", re.S)
 
 
 class RateLimiter:
@@ -160,10 +161,14 @@ def create_app(
             log_name = f"{ticket['id']}.log"
             target = app.log_dir / log_name
             temporary = target.with_suffix(".log.part")
-            temporary.write_bytes(log_bytes)
-            os.replace(temporary, target)
-            os.chmod(target, 0o640)
-            _attach_log(app.store, ticket["id"], log_name, len(log_bytes), log_sha)
+            try:
+                temporary.write_bytes(log_bytes)
+                os.chmod(temporary, 0o640)
+                os.replace(temporary, target)
+                app.store.attach_log(ticket["id"], log_name, len(log_bytes), log_sha)
+            except Exception:
+                temporary.unlink(missing_ok=True)
+                raise
             ticket = app.store.get_ticket(ticket["id"]) or ticket
         return jsonify(ok=True, id=ticket["id"], status=ticket["status"]), 201
 
@@ -319,10 +324,13 @@ def _read_submission() -> tuple[dict, bytes]:
 
 
 def _client_ip() -> str:
+    remote = request.remote_addr or ""
     forwarded = request.headers.get("X-Forwarded-For", "")
-    if forwarded:
-        return forwarded.split(",")[0].strip()[:64]
-    return (request.remote_addr or "")[:64]
+    if forwarded and remote in {"127.0.0.1", "::1"}:
+        parts = [part.strip() for part in forwarded.split(",") if part.strip()]
+        if parts:
+            return parts[-1][:64]
+    return remote[:64]
 
 
 def _redact_log(raw: bytes) -> bytes:
@@ -332,6 +340,7 @@ def _redact_log(raw: bytes) -> bytes:
     # Same intent as core:common LogRedactor: headers, key/value pairs, bearer/basic credentials,
     # signed query strings, cookie pairs and private keys are replaced before the log is stored.
     text = PRIVATE_KEY_BLOCK.sub("[redacted](private key)", text)
+    text = PRIVATE_KEY_UNCLOSED.sub("[redacted](private key)", text)
     text = SECRET_HEADER.sub(lambda match: match.group(1) + "[redacted]", text)
     text = SECRET_KEY_VALUE.sub(
         lambda match: f"{match.group(1)}{match.group(2)}{match.group(3)}[redacted]", text
@@ -340,15 +349,6 @@ def _redact_log(raw: bytes) -> bytes:
     text = URL_SECRET_QUERY.sub(lambda match: match.group(1) + "[redacted]", text)
     text = COOKIE_PAIR.sub(lambda match: f"{match.group(1)}=[redacted]", text)
     return text.encode("utf-8")
-
-
-def _attach_log(store: FeedbackStore, ticket_id: str, name: str, size: int, digest: str) -> None:
-    with store._lock:
-        store._conn.execute(
-            "UPDATE tickets SET log_name = ?, log_bytes = ?, log_sha256 = ? WHERE id = ?",
-            (name, size, digest, ticket_id),
-        )
-        store._conn.commit()
 
 
 def main() -> None:

@@ -35,6 +35,10 @@ if [[ ! -s "$ENV_FILE" ]]; then
         printf 'Set RAVEN_FEEDBACK_ADMIN_PASSWORD before the first install.\n' >&2
         exit 1
     fi
+    if [[ "${RAVEN_FEEDBACK_ADMIN_PASSWORD}" == *$'\n'* || "${RAVEN_FEEDBACK_ADMIN_PASSWORD}" == *$'\r'* ]]; then
+        printf 'RAVEN_FEEDBACK_ADMIN_PASSWORD must not contain newline characters.\n' >&2
+        exit 1
+    fi
     install -m 0640 /dev/null "$ENV_FILE"
     chown root:raven-feedback "$ENV_FILE"
     printf 'RAVEN_FEEDBACK_ADMIN_PASSWORD=%s\n' "$RAVEN_FEEDBACK_ADMIN_PASSWORD" > "$ENV_FILE"

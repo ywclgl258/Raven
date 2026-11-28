@@ -126,6 +126,7 @@ class RouvideoSitePlugin(
             page: Int,
             query: String?,
         ): List<DirectoryEntry> {
+            if (page > 1) return emptyList()
             if (section != "category" && section != "series") return emptyList()
             val url = "$BASE_URL/cat"
             val (_, html) = VideoSiteSupport.fetchHtml(

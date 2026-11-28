@@ -165,12 +165,12 @@ object RavenLog {
         appendLine()
         if (!crashTail.isNullOrBlank()) {
             appendLine("== 上次崩溃 ==")
-            appendLine(LogRedactor.redact(crashTail))
+            appendLine(LogRedactor.redactMultiline(crashTail, 60_000))
             appendLine()
         }
         if (!logcat.isNullOrBlank()) {
             appendLine("== logcat（应用进程最近日志，已过滤）==")
-            appendLine(LogRedactor.redact(logcat).takeLast(500_000))
+            appendLine(LogRedactor.redactMultiline(logcat, 500_000))
         }
     }
 

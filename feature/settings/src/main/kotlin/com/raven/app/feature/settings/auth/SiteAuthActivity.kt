@@ -297,7 +297,9 @@ class SiteAuthActivity : ComponentActivity() {
      */
     @SuppressLint("SetJavaScriptEnabled")
     private fun createSecureWebView(): WebView? = try {
-        check(WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT))
+        if (!WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)) {
+            return null
+        }
         val web = WebView(this).apply {
             settings.javaScriptEnabled = true
             settings.domStorageEnabled = true

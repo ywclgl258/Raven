@@ -37,8 +37,8 @@ All versions in [libs.versions.toml](../gradle/libs.versions.toml) are verified 
 | **AndroidX** | `core-ktx` / `activity` / `lifecycle` / `navigation` | `1.18.0` / `1.13.0` / `2.10.0` / `2.9.8` | Type-safe `@Serializable` Compose navigation |
 | **Persistence** | `room` / `datastore-preferences` / `work` | `2.8.5` / `1.3.0` / `2.12.0` | Exported Room schemas in `core/database/schemas` |
 | **Media & Image** | `media3` / `coil3` | `1.11.1` / `3.4.0` | Media3 `exoplayer`, `hls`, `dash`, `datasource-okhttp`, `ui`, `database`, `session`; Coil3 `compose`, `network-okhttp`, `gif` |
-| **Network & Parse** | `okhttp` / `jsoup` / `serialization` / `coroutines` | `4.12.0` / `1.18.3` / `1.10.0` / `1.10.2` | Single OkHttp `4.12.0` across Network, Coil3, and Media3 |
-| **Test Stack** | `junit` / `coroutines-test` / `turbine` / `mockwebserver` | `4.13.2` / `1.10.2` / `1.2.1` / `4.12.0` | Pure JVM fast-path tests in every module |
+| **Network & Parse** | `okhttp` / `jsoup` / `serialization` / `coroutines` | `4.12.0` / `1.24.1` / `1.10.0` / `1.11.0` | Single OkHttp `4.12.0` across Network, Coil3, and Media3 |
+| **Test Stack** | `junit` / `coroutines-test` / `turbine` / `mockwebserver` | `4.13.2` / `1.11.0` / `1.2.1` / `4.12.0` | Pure JVM fast-path tests in every module |
 
 > **Local Environment Note**: `local.properties` sets `sdk.dir=D\:/Android/Sdk` and is git-ignored. `gradle.properties` enables parallel + build caching with `-Xmx4g` and **never** hardcodes localhost proxy ports.
 

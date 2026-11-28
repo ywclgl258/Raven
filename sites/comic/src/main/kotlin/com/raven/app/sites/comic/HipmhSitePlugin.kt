@@ -472,10 +472,21 @@ class HipmhSitePlugin(
                     if (throwOnError) throw error
                     return emptyList()
                 }
+                if (throwOnError) throw error
                 break
             }
-            if (body.isBlank()) break
-            val root = runCatching { json.parseToJsonElement(body).jsonObject }.getOrNull() ?: break
+            if (body.isBlank()) {
+                if (page > 1 && throwOnError) {
+                    throw SiteException.ParseError("HipMH 第 $page 页章节列表响应为空", siteId = SiteId.HIPMH)
+                }
+                break
+            }
+            val root = runCatching { json.parseToJsonElement(body).jsonObject }.getOrNull() ?: run {
+                if (page > 1 && throwOnError) {
+                    throw SiteException.ParseError("HipMH 第 $page 页章节列表格式异常", siteId = SiteId.HIPMH)
+                }
+                break
+            }
             val data = root.safeObject("data") ?: break
             val items = data.safeArray("items").orEmpty()
             if (items.isEmpty()) break

@@ -89,7 +89,7 @@ internal class GalleryDownloadAudit(
             File(folder, "complete").delete()
             atomicWrite(
                 File(folder, "readme.txt"),
-                ("此图集为部分保存，有效图页 ${audit.validPages.size} / ${audit.totalPages}。\n\n$GalleryPageRepository.RECOVERY_NOTE").toByteArray(),
+                ("此图集为部分保存，有效图页 ${audit.validPages.size} / ${audit.totalPages}。\n\n${GalleryPageRepository.RECOVERY_NOTE}").toByteArray(),
             )
         }
         audit

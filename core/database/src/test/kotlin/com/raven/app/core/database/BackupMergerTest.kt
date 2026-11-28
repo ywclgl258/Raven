@@ -458,4 +458,19 @@ class BackupMergerTest {
         assertEquals("work", conflictMerged.seriesId)
         assertEquals(null, conflictMerged.seriesTitle)
     }
+
+    @Test
+    fun `anonymous time bookmarks receive distinct non-blank ids during merge`() {
+        val incoming = RavenBackupPayload(
+            exportedAt = 1_000L,
+            timeBookmarks = listOf(
+                TimeBookmark("", SiteId.R34V, "v1", "https://rule34video.com/v1", "V1", positionMs = 1_000L, label = "A", createdAt = 100L),
+                TimeBookmark("", SiteId.R34V, "v1", "https://rule34video.com/v1", "V1", positionMs = 2_000L, label = "B", createdAt = 200L),
+            ),
+        )
+        val merged = BackupMerger.merge(RavenBackupPayload(exportedAt = 500L), incoming, now = 2_000L)
+        assertEquals(2, merged.timeBookmarks.size)
+        assertTrue(merged.timeBookmarks.all { it.id.isNotBlank() })
+        assertEquals(2, merged.timeBookmarks.map { it.id }.distinct().size)
+    }
 }

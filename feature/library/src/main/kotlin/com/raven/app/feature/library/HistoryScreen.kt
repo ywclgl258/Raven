@@ -117,6 +117,7 @@ data class HistoryUiState(
     val message: String? = null,
     /** True while the just-deleted entry can still be restored from the undo snackbar. */
     val undoAvailable: Boolean = false,
+    val undoToken: Long = 0L,
 )
 
 private data class HistoryControls(
@@ -128,6 +129,7 @@ private data class HistoryControls(
     val selectedKeys: Set<String> = emptySet(),
     val message: String? = null,
     val undoAvailable: Boolean = false,
+    val undoToken: Long = 0L,
 )
 
 class HistoryViewModel(
@@ -222,6 +224,7 @@ class HistoryViewModel(
             selectedKeys = ctrl.selectedKeys.intersect(validKeys),
             message = ctrl.message,
             undoAvailable = ctrl.undoAvailable,
+            undoToken = ctrl.undoToken,
         )
     }.flowOn(dispatchers.default).stateIn(
         scope = viewModelScope,
@@ -283,7 +286,9 @@ class HistoryViewModel(
         val readings: List<ReadingProgress> = emptyList(),
     )
 
+    @Volatile
     private var pendingUndo: PendingUndo? = null
+    private val undoTokenGenerator = java.util.concurrent.atomic.AtomicLong(0L)
 
     private suspend fun captureForUndo(entry: HistoryEntryUi): PendingUndo =
         if (entry.kind.isVideo) {
@@ -297,16 +302,17 @@ class HistoryViewModel(
 
     fun removeEntry(entry: HistoryEntryUi) {
         viewModelScope.launch(dispatchers.io) {
-            runCatching {
+            try {
                 val captured = captureForUndo(entry)
                 deleteEntry(entry)
-                captured
-            }.onSuccess { captured ->
+                val token = undoTokenGenerator.incrementAndGet()
                 pendingUndo = captured
                 controls.update {
-                    it.copy(message = null, undoAvailable = true)
+                    it.copy(message = null, undoAvailable = true, undoToken = token)
                 }
-            }.onFailure { error ->
+            } catch (ce: kotlinx.coroutines.CancellationException) {
+                throw ce
+            } catch (error: Throwable) {
                 controls.update { it.copy(message = "删除失败：${error.message ?: "请重试"}", undoAvailable = false) }
             }
         }
@@ -321,15 +327,19 @@ class HistoryViewModel(
     }
 
     fun undoLastRemoval() {
-        val pending = pendingUndo ?: return
-        pendingUndo = null
+        val pending = synchronized(this) {
+            val snapshot = pendingUndo
+            pendingUndo = null
+            snapshot
+        } ?: return
         viewModelScope.launch(dispatchers.io) {
-            runCatching {
+            try {
                 pending.watches.forEach { historyRepository.saveWatchProgress(it) }
                 pending.readings.forEach { historyRepository.saveReadingProgress(it) }
-            }.onSuccess {
                 controls.update { it.copy(message = "已恢复刚才删除的历史记录", undoAvailable = false) }
-            }.onFailure { error ->
+            } catch (ce: kotlinx.coroutines.CancellationException) {
+                throw ce
+            } catch (error: Throwable) {
                 controls.update {
                     it.copy(message = "恢复失败：${error.message ?: "请重试"}", undoAvailable = false)
                 }
@@ -337,9 +347,15 @@ class HistoryViewModel(
         }
     }
 
-    fun dismissUndo() {
-        pendingUndo = null
-        controls.update { it.copy(undoAvailable = false) }
+    fun dismissUndo(expectedToken: Long? = null) {
+        synchronized(this) {
+            if (expectedToken != null && controls.value.undoToken != expectedToken) return
+            pendingUndo = null
+        }
+        controls.update { current ->
+            if (expectedToken != null && current.undoToken != expectedToken) current
+            else current.copy(undoAvailable = false)
+        }
     }
 
     fun removeSelected() {
@@ -634,8 +650,9 @@ fun HistoryScreen(
         }
 
         // 单条删除给出可恢复路径；剧集/连载的整条历史按作品删除，撤销会恢复所有章节。
-        LaunchedEffect(uiState.undoAvailable) {
+        LaunchedEffect(uiState.undoAvailable, uiState.undoToken) {
             if (!uiState.undoAvailable) return@LaunchedEffect
+            val token = uiState.undoToken
             val result = snackbarHost.showSnackbar(
                 message = "已删除该条历史记录",
                 actionLabel = "撤销",
@@ -643,7 +660,7 @@ fun HistoryScreen(
             )
             when (result) {
                 SnackbarResult.ActionPerformed -> viewModel.undoLastRemoval()
-                SnackbarResult.Dismissed -> viewModel.dismissUndo()
+                SnackbarResult.Dismissed -> viewModel.dismissUndo(expectedToken = token)
             }
         }
 

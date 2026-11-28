@@ -22,7 +22,7 @@ import java.io.File
 private val preparedExportSaver = listSaver<PreparedExport?, String>(
     save = { export ->
         if (export == null) return@listSaver emptyList()
-        val prefix = export.files.map { it.file.name }.reduce { left, right -> left.commonPrefixWith(right) }
+        val prefix = export.files.map { it.file.name }.reduceOrNull { left, right -> left.commonPrefixWith(right) }.orEmpty()
         buildList {
             add(export.folder.absolutePath)
             add(export.mode.name)
@@ -65,12 +65,16 @@ internal fun rememberExportDocumentPicker(
             if (tree) {
                 treePicker.launch(null)
             } else {
-                val file = prepared.files.single()
-                filePicker.launch(Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
-                    addCategory(Intent.CATEGORY_OPENABLE)
-                    type = file.mimeType
-                    putExtra(Intent.EXTRA_TITLE, file.file.name)
-                })
+                val file = prepared.files.singleOrNull()
+                if (file == null) {
+                    finish(null, false)
+                } else {
+                    filePicker.launch(Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
+                        addCategory(Intent.CATEGORY_OPENABLE)
+                        type = file.mimeType
+                        putExtra(Intent.EXTRA_TITLE, file.file.name)
+                    })
+                }
             }
         } catch (_: ActivityNotFoundException) {
             finish(null, tree)

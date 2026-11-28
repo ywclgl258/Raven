@@ -558,7 +558,7 @@ fun SearchScreenContent(
                         contentPadding = PaddingValues(horizontal = 16.dp),
                         horizontalArrangement = Arrangement.spacedBy(6.dp),
                     ) {
-                        items(uiState.tagSuggestions, key = { it.slug }) { sug ->
+                        items(uiState.tagSuggestions, key = { "${it.namespace}:${it.slug}" }) { sug ->
                             Row(
                                 modifier = Modifier
                                     .heightIn(min = 48.dp)

@@ -89,14 +89,15 @@ internal fun GalleryMasonryHome(
     onSaveBrowsePosition: (String, Int, String) -> Unit,
     onDismissRestoredPosition: () -> Unit,
     onItemLongClick: (MediaItem) -> Unit,
+    snackbarHostState: SnackbarHostState = remember { SnackbarHostState() },
 ) {
     val colors = LocalRavenColors.current
     val feedback = LocalRavenFeedback.current
     val gridState = key(activeSite.id) { rememberLazyStaggeredGridState() }
     val coroutineScope = rememberCoroutineScope()
     val pullState = rememberPullToRefreshState()
-    val restoredHost = remember { SnackbarHostState() }
-    var isRestoringPosition by remember { mutableStateOf(false) }
+    val restoredHost = snackbarHostState
+    var isRestoringPosition by remember(activeSite.id) { mutableStateOf(false) }
     val aspectRatioCache = remember(activeSite.id) { mutableStateMapOf<String, Float>() }
 
     // Collapsible language bar state driven by vertical scroll direction
@@ -147,6 +148,8 @@ internal fun GalleryMasonryHome(
     // Reading the visible item key keeps the saved anchor aligned with the actual work.
     val currentGalleryItems by rememberUpdatedState(uiState.primaryItems)
     val currentGalleryPage by rememberUpdatedState(uiState.currentPage)
+    val currentGalleryHasMore by rememberUpdatedState(uiState.hasMore)
+    val currentGalleryIsLoadingMore by rememberUpdatedState(uiState.isLoadingMore)
     LaunchedEffect(gridState, activeSite.id) {
         snapshotFlow {
             gridState.layoutInfo.visibleItemsInfo
@@ -421,19 +424,23 @@ internal fun GalleryMasonryHome(
                                             if (!isRestoringPosition) {
                                                 isRestoringPosition = true
                                                 scope.launch {
-                                                    jumpToSavedWork(
-                                                        targetId = restoredPos.workId,
-                                                        readItems = { uiState.primaryItems },
-                                                        hasMore = { uiState.hasMore },
-                                                        onLoadNextPage = onLoadNextPage,
-                                                        onFound = { itemIndex ->
-                                                            val headerCount = (if (uiState.resumeReading != null) 1 else 0) +
-                                                                (if (additionalReading.isNotEmpty()) 1 else 0) + 1
-                                                            scope.launch { gridState.animateScrollToItem(headerCount + itemIndex) }
-                                                        },
-                                                        host = host,
-                                                    )
-                                                    isRestoringPosition = false
+                                                    try {
+                                                        jumpToSavedWork(
+                                                            targetId = restoredPos.workId,
+                                                            readItems = { currentGalleryItems },
+                                                            hasMore = { currentGalleryHasMore },
+                                                            isLoadingMore = { currentGalleryIsLoadingMore },
+                                                            onLoadNextPage = onLoadNextPage,
+                                                            onFound = { itemIndex ->
+                                                                val headerCount = (if (uiState.resumeReading != null) 1 else 0) +
+                                                                    (if (additionalReading.isNotEmpty()) 1 else 0) + 1
+                                                                scope.launch { gridState.animateScrollToItem(headerCount + itemIndex) }
+                                                            },
+                                                            host = host,
+                                                        )
+                                                    } finally {
+                                                        isRestoringPosition = false
+                                                    }
                                                 }
                                             }
                                         },

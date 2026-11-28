@@ -3,6 +3,9 @@ name: Raven Release Verification
 on:
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 concurrency:
   group: raven-release-verify-${{ github.ref }}
   cancel-in-progress: false
@@ -55,8 +58,12 @@ jobs:
         run: |
           set -euo pipefail
           APK="app/build/outputs/apk/release/app-release.apk"
-          APKSIGNER="${ANDROID_HOME}/build-tools/36.0.0/apksigner"
-          AAPT2="${ANDROID_HOME}/build-tools/36.0.0/aapt2"
+          BUILD_TOOLS="${ANDROID_HOME}/build-tools/36.0.0"
+          if [ ! -d "${BUILD_TOOLS}" ]; then
+            BUILD_TOOLS="$(ls -d "${ANDROID_HOME}/build-tools/"* | sort -V | tail -1)"
+          fi
+          APKSIGNER="${BUILD_TOOLS}/apksigner"
+          AAPT2="${BUILD_TOOLS}/aapt2"
 
           verification="$("${APKSIGNER}" verify --verbose --print-certs "${APK}")"
           printf '%s\n' "${verification}"
@@ -69,15 +76,15 @@ jobs:
           printf '%s\n' "${v1_verification}" | grep -E '^(Verifies|Verified using|Number of signers:|Signer #1 certificate (DN|SHA-256 digest):)'
           printf '%s\n' "${v1_verification}" | grep -E 'Verified using v1 scheme.*: true'
 
-          expected_cert="$(grep '^releaseCertificate=' release.properties | cut -d= -f2 | tr -d ':' | tr '[:lower:]' '[:upper:]')"
+          expected_cert="$(grep '^releaseCertificate=' release.properties | cut -d= -f2 | tr -d ':\r' | tr '[:lower:]' '[:upper:]')"
           actual_cert="$(printf '%s\n' "${verification}" | grep 'Signer #1 certificate SHA-256 digest:' | cut -d: -f2- | tr -d ' ' | tr '[:lower:]' '[:upper:]')"
           actual_v1_cert="$(printf '%s\n' "${v1_verification}" | grep 'Signer #1 certificate SHA-256 digest:' | cut -d: -f2- | tr -d ' ' | tr '[:lower:]' '[:upper:]')"
           test -n "${actual_cert}"
           test "${actual_cert}" = "${expected_cert}"
           test "${actual_v1_cert}" = "${expected_cert}"
 
-          expected_name="$(grep '^versionName=' release.properties | cut -d= -f2)"
-          expected_code="$(grep '^versionCode=' release.properties | cut -d= -f2)"
+          expected_name="$(grep '^versionName=' release.properties | cut -d= -f2 | tr -d '\r')"
+          expected_code="$(grep '^versionCode=' release.properties | cut -d= -f2 | tr -d '\r')"
           package_line="$("${AAPT2}" dump badging "${APK}" | grep -m1 '^package:')"
           printf '%s\n' "${package_line}"
           printf '%s' "${package_line}" | grep -F "name='com.raven.app'"

@@ -88,6 +88,8 @@ class GalleryDownloadEngine(
     private val _changes = MutableStateFlow(0L)
     val changes: StateFlow<Long> = _changes.asStateFlow()
 
+    internal fun isNotificationPrivacySensitive(): Boolean = notificationPrivacyProvider()
+
     val canRun: Boolean
         get() = galleryPageRepository.downloadsAllowed && networkAllowedProvider()
 
@@ -461,7 +463,9 @@ class GalleryDownloadEngine(
 
             updateIf(task.id, predicate = { it.status == DownloadStatus.DOWNLOADING }) { current ->
                 current.copy(
+                    completedUnits = 0,
                     totalUnits = totalRequested,
+                    progressFraction = 0f,
                     updatedAt = clockMs(),
                 )
             }
@@ -498,9 +502,9 @@ class GalleryDownloadEngine(
                                 val fraction = (completedCount.toFloat() / totalRequested.toFloat()).coerceIn(0f, 1f)
                                 updateIf(task.id, predicate = { it.status == DownloadStatus.DOWNLOADING }) { current ->
                                     current.copy(
-                                        completedUnits = maxOf(current.completedUnits, completedCount),
+                                        completedUnits = completedCount.coerceAtMost(totalRequested),
                                         totalUnits = totalRequested,
-                                        progressFraction = maxOf(current.progressFraction, fraction),
+                                        progressFraction = fraction,
                                         downloadedBytes = maxOf(current.downloadedBytes, totalBytes),
                                         errorCategory = null,
                                         errorMessage = null,
@@ -897,10 +901,11 @@ class GalleryDownloadService : Service() {
     }
 
     private fun buildNotification(task: DownloadItem?, activeCount: Int): Notification {
+        val privacySensitive = engine.isNotificationPrivacySensitive()
         val statusText = when {
             task == null -> "正在准备图集下载任务"
             else -> DownloadNotifications.formatGalleryProgressText(
-                title = task.title,
+                title = if (privacySensitive) "" else task.title,
                 completedUnits = task.completedUnits,
                 totalUnits = task.totalUnits,
                 downloadedBytes = task.downloadedBytes,
@@ -923,7 +928,7 @@ class GalleryDownloadService : Service() {
         val indeterminate = task == null ||
             task.totalUnits <= 0 ||
             task.errorCategory == DownloadErrorCategory.STORAGE
-        return NotificationCompat.Builder(this, NOTIFICATION_CHANNEL_ID)
+        val builder = NotificationCompat.Builder(this, NOTIFICATION_CHANNEL_ID)
             .setSmallIcon(android.R.drawable.stat_sys_download)
             .setContentTitle(titleText)
             .setContentText(statusText)
@@ -932,7 +937,8 @@ class GalleryDownloadService : Service() {
             .setOngoing(true)
             .setSilent(true)
             .setProgress(task?.totalUnits ?: 0, task?.completedUnits ?: 0, indeterminate)
-            .build()
+        if (privacySensitive) builder.setVisibility(NotificationCompat.VISIBILITY_SECRET)
+        return builder.build()
     }
 
     companion object {

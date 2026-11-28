@@ -805,4 +805,40 @@ class NewSerialComicSitesPluginTest {
         }.exceptionOrNull()
         assertTrue(relaDecorateErr is SiteException.Cancelled)
     }
+
+    @Test
+    fun `manwa2 ignores foreign redirect host and mangacopy rejects invalid dynamic host`() = runTest {
+        val mwHttp = FakeHttpClientAdapter()
+        mwHttp.onMatch({ req -> req.url.contains("/cate?page=1") }) { req ->
+            SiteHttpResponse(
+                code = 200,
+                finalUrl = "https://evil.example/parked",
+                headers = emptyMap(),
+                body = "<html></html>".toByteArray(),
+            )
+        }
+        mwHttp.onMatch({ req -> req.url.startsWith("https://manwauu.cc/api/cate") }) { req ->
+            jsonResp(
+                req,
+                """{"code":200,"data":{"total":1,"list":[{"id":1,"title":"MwOk","pic":"/en_images/cover/1.webp"}]}}""",
+            )
+        }
+        val mwPlugin = Manwa2SitePlugin(mwHttp)
+        mwPlugin.feedSource.loadFeed(FeedRequest(siteId = SiteId.MANWA2, section = "latest"))
+        assertTrue(mwHttp.recordedRequests.none { it.url.contains("evil.example") })
+
+        val mcHttp = FakeHttpClientAdapter()
+        mcHttp.onMatch({ req -> req.url.contains("/api/v3/system/network2") }) { req ->
+            jsonResp(req, """{"code":200,"results":{"api":[["127.0.0.1:8080","bad/host"]]}}""")
+        }
+        mcHttp.onMatch({ req -> req.url.contains("/api/v3/h5/homeIndex2") }) { req ->
+            jsonResp(req, """{"code":200,"results":{}}""")
+        }
+        mcHttp.onMatch({ req -> req.url.contains("/api/v3/comics") }) { req ->
+            jsonResp(req, """{"code":200,"results":{"total":1,"offset":0,"list":[{"name":"McOk","path_word":"mc-ok","cover":"https://img.example.com/1.jpg"}]}}""")
+        }
+        val mcPlugin = MangacopySitePlugin(mcHttp)
+        mcPlugin.feedSource.loadFeed(FeedRequest(siteId = SiteId.MANGACOPY, section = "latest"))
+        assertTrue(mcHttp.recordedRequests.none { it.url.contains("127.0.0.1") || it.url.contains("bad/host") })
+    }
 }

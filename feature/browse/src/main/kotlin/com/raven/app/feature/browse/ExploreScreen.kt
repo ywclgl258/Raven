@@ -400,11 +400,11 @@ fun ExploreScreenContent(
                         horizontalArrangement = Arrangement.spacedBy(6.dp),
                     ) {
                         items(
-                            items = uiState.activeFilterSummary,
-                            key = { it },
-                        ) { summary ->
+                            count = uiState.activeFilterSummary.size,
+                            key = { index -> "filter_${index}_${uiState.activeFilterSummary[index]}" },
+                        ) { index ->
                             RavenStatusPill(
-                                text = summary,
+                                text = uiState.activeFilterSummary[index],
                                 tone = RavenStatusTone.ACCENT,
                             )
                         }

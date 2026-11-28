@@ -35,6 +35,7 @@ internal class ReaderProgressStore(
     private val clock: () -> Long,
     private val state: () -> ReaderUiState,
     private val incognito: () -> Boolean,
+    private val persistedIncognito: suspend () -> Boolean = { incognito() },
     private val seriesFor: (GalleryDetail) -> RavenRoute.ReaderParent?,
 ) {
     private var progressSaveJob: Job? = null
@@ -117,7 +118,7 @@ internal class ReaderProgressStore(
                 // The appended chapter still owns the viewport: flush it under NonCancellable so a
                 // fast exit cannot lose its position while the delayed job is cancelled.
                 scope.launch(dispatchers.io + NonCancellable) {
-                    flushPending()
+                    flushPending(pendingChapter)
                     if (pendingAppended?.mediaId == pendingChapter.mediaId) {
                         pendingAppended = null
                     }
@@ -168,7 +169,7 @@ internal class ReaderProgressStore(
         withContext(dispatchers.io + NonCancellable) {
             val pendingChapter = pendingAppended
             if (pendingChapter != null && activeChapterId == pendingChapter.mediaId) {
-                flushPending()
+                flushPending(pendingChapter)
             }
             pendingAppended = null
             if (activeChapterId == null) {
@@ -239,8 +240,11 @@ internal class ReaderProgressStore(
         scrollOffsetPx: Int,
         series: RavenRoute.ReaderParent?,
     ) {
-        if (isInvalidSiteId || incognito()) {
-            hasDirtyProgress = false
+        val isPrimary = mediaId == this.mediaId
+        if (isInvalidSiteId || persistedIncognito()) {
+            if (isPrimary) {
+                hasDirtyProgress = false
+            }
             return
         }
         val clampedPage = currentPage.coerceIn(1, totalPages.coerceAtLeast(1))
@@ -263,15 +267,16 @@ internal class ReaderProgressStore(
                     seriesUrl = series?.url?.takeIf(String::isNotBlank),
                 ),
             )
-            hasDirtyProgress = false
-            lastSavedPage = clampedPage
-            lastSavedOffsetPx = clampedOffset
+            if (isPrimary) {
+                hasDirtyProgress = false
+                lastSavedPage = clampedPage
+                lastSavedOffsetPx = clampedOffset
+            }
         }
     }
 
     /** Persists the pending appended-chapter anchor synchronously; safe under cancellation. */
-    private suspend fun flushPending() {
-        val pending = pendingAppended ?: return
+    private suspend fun flushPending(pending: PendingAppendedChapterProgress) {
         persistProgressEntity(
             siteId = siteId,
             mediaId = pending.mediaId,

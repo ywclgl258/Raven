@@ -398,4 +398,29 @@ class BackupValidatorTest {
             validator.validate(RavenBackupPayload(exportedAt = 1L, readingProgress = manyWorks))
         }
     }
+
+    @Test
+    fun `rejects protocol relative url bypass and blank site id in settings`() {
+        val protocolRelative = RavenBackupPayload(
+            exportedAt = 100L,
+            favorites = listOf(
+                FavoriteItem(
+                    siteId = SiteId.R34V,
+                    targetId = "1",
+                    kind = FavoriteKind.VIDEO,
+                    title = "Bad",
+                    url = "//evil.example/video/1",
+                    addedAt = 1L,
+                ),
+            ),
+        )
+        assertThrows(BackupValidationException::class.java) { validator.validate(protocolRelative) }
+
+        val blankSiteSetting = RavenBackupPayload(
+            exportedAt = 100L,
+            settings = mapOf("cross_search_site_ids" to "\"   \""),
+        )
+        // Quoted whitespace trims to empty and yields empty list without throwing IAE.
+        validator.validate(blankSiteSetting)
+    }
 }

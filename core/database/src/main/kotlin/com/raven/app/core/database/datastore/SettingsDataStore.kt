@@ -436,6 +436,14 @@ class SettingsDataStore(
             put(KEY_AUTO_UPDATE_CHECK, current.autoUpdateCheck.toString())
             put(KEY_TAG_DICT_AUTO_SYNC, current.tagDictAutoSync.toString())
             put(KEY_BLOCK_TAGS_GLOBALLY, current.blockTagsGlobally.toString())
+            put(KEY_AUTOPLAY_VIDEO, current.autoplayVideo.toString())
+            put(KEY_AUTO_CONTINUE_QUEUE, current.autoContinueQueue.toString())
+            put(KEY_BACKGROUND_AUDIO_PLAYBACK, current.backgroundAudioPlayback.toString())
+            put(KEY_READER_TAP_ZONES_ENABLED, current.readerTapZonesEnabled.toString())
+            put(KEY_READER_SHOW_STATUS_BAR, current.readerShowStatusBar.toString())
+            put(KEY_READER_PREFETCH_PAGES, current.readerPrefetchPages.toString())
+            put(KEY_READER_AUTO_SPLIT_WIDE_PAGES, current.readerAutoSplitWidePages.toString())
+            put(KEY_BACKGROUND_SUBSCRIPTION_SYNC, current.backgroundSubscriptionSync.toString())
             legacyPortable.forEach { (k, v) -> put(k, v) }
         }
     }
@@ -574,6 +582,33 @@ class SettingsDataStore(
         }
         settingsMap[KEY_BLOCK_TAGS_GLOBALLY]?.toBooleanStrictOrNull()?.let {
             prefs[Keys.BLOCK_TAGS_GLOBALLY] = it
+        }
+        settingsMap[KEY_AUTOPLAY_VIDEO]?.toBooleanStrictOrNull()?.let {
+            prefs[Keys.AUTOPLAY_VIDEO] = it
+        }
+        settingsMap[KEY_AUTO_CONTINUE_QUEUE]?.toBooleanStrictOrNull()?.let {
+            prefs[Keys.AUTO_CONTINUE_QUEUE] = it
+        }
+        settingsMap[KEY_BACKGROUND_AUDIO_PLAYBACK]?.toBooleanStrictOrNull()?.let {
+            prefs[Keys.BACKGROUND_AUDIO_PLAYBACK] = it
+        }
+        settingsMap[KEY_READER_TAP_ZONES_ENABLED]?.toBooleanStrictOrNull()?.let {
+            prefs[Keys.READER_TAP_ZONES_ENABLED] = it
+        }
+        settingsMap[KEY_READER_SHOW_STATUS_BAR]?.toBooleanStrictOrNull()?.let {
+            prefs[Keys.READER_SHOW_STATUS_BAR] = it
+        }
+        settingsMap[KEY_READER_PREFETCH_PAGES]?.toIntOrNull()?.let { pages ->
+            prefs[Keys.READER_PREFETCH_PAGES] = pages.coerceIn(
+                AppSettings.MIN_READER_PREFETCH_PAGES,
+                AppSettings.MAX_READER_PREFETCH_PAGES,
+            )
+        }
+        settingsMap[KEY_READER_AUTO_SPLIT_WIDE_PAGES]?.toBooleanStrictOrNull()?.let {
+            prefs[Keys.READER_AUTO_SPLIT_WIDE_PAGES] = it
+        }
+        settingsMap[KEY_BACKGROUND_SUBSCRIPTION_SYNC]?.toBooleanStrictOrNull()?.let {
+            prefs[Keys.BACKGROUND_SUBSCRIPTION_SYNC] = it
         }
     }
 
@@ -804,6 +839,14 @@ class SettingsDataStore(
             KEY_AUTO_UPDATE_CHECK,
             KEY_TAG_DICT_AUTO_SYNC,
             KEY_BLOCK_TAGS_GLOBALLY,
+            KEY_AUTOPLAY_VIDEO,
+            KEY_AUTO_CONTINUE_QUEUE,
+            KEY_BACKGROUND_AUDIO_PLAYBACK,
+            KEY_READER_TAP_ZONES_ENABLED,
+            KEY_READER_SHOW_STATUS_BAR,
+            KEY_READER_PREFETCH_PAGES,
+            KEY_READER_AUTO_SPLIT_WIDE_PAGES,
+            KEY_BACKGROUND_SUBSCRIPTION_SYNC,
         )
 
         private val json = RavenTypeConverters.json

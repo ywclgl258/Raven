@@ -232,7 +232,7 @@ class DownloadsViewModel(
         val ctrl = source.controls
         val allDownloads = source.downloads
         val queryTerms = ctrl.searchQuery.trim().lowercase(Locale.ROOT)
-            .split(Regex("\\s+"))
+            .split(WHITESPACE_REGEX)
             .filter(String::isNotEmpty)
         val groups = allDownloads
             .mapNotNull { it.groupName.trim().takeIf(String::isNotEmpty) }
@@ -470,7 +470,14 @@ class DownloadsViewModel(
             var paused = 0
             var failed = 0
             targets.forEach { item ->
-                runCatching { downloadGateway.pause(item.id) }.onSuccess { paused++ }.onFailure { failed++ }
+                try {
+                    downloadGateway.pause(item.id)
+                    paused++
+                } catch (ce: CancellationException) {
+                    throw ce
+                } catch (_: Throwable) {
+                    failed++
+                }
             }
             val scope = scopeLabel()?.let { "「$it」 " }.orEmpty()
             controls.update {
@@ -494,7 +501,14 @@ class DownloadsViewModel(
             var resumed = 0
             var failed = 0
             targets.forEach { item ->
-                runCatching { downloadGateway.resume(item.id) }.onSuccess { resumed++ }.onFailure { failed++ }
+                try {
+                    downloadGateway.resume(item.id)
+                    resumed++
+                } catch (ce: CancellationException) {
+                    throw ce
+                } catch (_: Throwable) {
+                    failed++
+                }
             }
             val scope = scopeLabel()?.let { "「$it」 " }.orEmpty()
             controls.update {
@@ -548,26 +562,36 @@ class DownloadsViewModel(
     }
 
     fun syncFromDisk() {
-        if (controls.value.isSyncingDisk) return
+        var claimed = false
+        controls.update { current ->
+            if (current.isSyncingDisk) {
+                current
+            } else {
+                claimed = true
+                current.copy(isSyncingDisk = true)
+            }
+        }
+        if (!claimed) return
         viewModelScope.launch(dispatchers.io) {
-            controls.update { it.copy(isSyncingDisk = true) }
-            runCatching { downloadGateway.syncFromDisk() }
-                .onSuccess { recovered ->
-                    controls.update {
-                        it.copy(
-                            isSyncingDisk = false,
-                            message = "磁盘同步完成（校验 ${recovered.size} 条离线记录）",
-                        )
-                    }
+            try {
+                val recovered = downloadGateway.syncFromDisk()
+                controls.update {
+                    it.copy(
+                        isSyncingDisk = false,
+                        message = "磁盘同步完成（校验 ${recovered.size} 条离线记录）",
+                    )
                 }
-                .onFailure { e ->
-                    controls.update {
-                        it.copy(
-                            isSyncingDisk = false,
-                            message = e.message ?: "同步磁盘记录失败",
-                        )
-                    }
+            } catch (ce: CancellationException) {
+                controls.update { it.copy(isSyncingDisk = false) }
+                throw ce
+            } catch (e: Throwable) {
+                controls.update {
+                    it.copy(
+                        isSyncingDisk = false,
+                        message = e.message ?: "同步磁盘记录失败",
+                    )
                 }
+            }
         }
     }
 
@@ -716,34 +740,46 @@ class DownloadsViewModel(
     }
 
     fun deleteCompletedDownloads() {
-        if (controls.value.isCleaningCompleted) return
         val targets = scopedItems().filter { it.status == DownloadStatus.COMPLETED }
         if (targets.isEmpty()) {
             controls.update { it.copy(message = "当前没有可清理的已完成下载") }
             return
         }
+        var claimed = false
+        controls.update { current ->
+            if (current.isCleaningCompleted) {
+                current
+            } else {
+                claimed = true
+                current.copy(isCleaningCompleted = true)
+            }
+        }
+        if (!claimed) return
         viewModelScope.launch(dispatchers.io) {
-            controls.update { it.copy(isCleaningCompleted = true) }
             var deletedCount = 0
             var releasedBytes = 0L
             var failedCount = 0
-            targets.forEach { item ->
-                try {
-                    downloadGateway.delete(item.id, item.localPath.orEmpty())
-                    deletedCount += 1
-                    releasedBytes += downloadBytes(item)
-                } catch (ce: CancellationException) {
-                    throw ce
-                } catch (_: Throwable) {
-                    failedCount += 1
+            try {
+                targets.forEach { item ->
+                    try {
+                        downloadGateway.delete(item.id, item.localPath.orEmpty())
+                        deletedCount += 1
+                        releasedBytes += downloadBytes(item)
+                    } catch (ce: CancellationException) {
+                        throw ce
+                    } catch (_: Throwable) {
+                        failedCount += 1
+                    }
                 }
-            }
-            val scope = scopeLabel()?.let { "「$it」 " }.orEmpty()
-            controls.update {
-                it.copy(
-                    isCleaningCompleted = false,
-                    message = completedCleanupMessage(deletedCount, releasedBytes, failedCount, scope),
-                )
+                val scope = scopeLabel()?.let { "「$it」 " }.orEmpty()
+                controls.update {
+                    it.copy(
+                        isCleaningCompleted = false,
+                        message = completedCleanupMessage(deletedCount, releasedBytes, failedCount, scope),
+                    )
+                }
+            } finally {
+                controls.update { it.copy(isCleaningCompleted = false) }
             }
         }
     }
@@ -986,6 +1022,8 @@ private fun sortDownloads(items: List<DownloadItem>, sort: DownloadSort): List<D
         )
     }
 }
+
+private val WHITESPACE_REGEX = Regex("\\s+")
 
 private fun downloadBytes(item: DownloadItem): Long = (item.totalBytes ?: item.downloadedBytes).coerceAtLeast(0L)
 

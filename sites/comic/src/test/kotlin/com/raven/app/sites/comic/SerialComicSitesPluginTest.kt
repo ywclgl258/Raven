@@ -722,4 +722,20 @@ class SerialComicSitesPluginTest {
         }
         return null
     }
+
+    @Test
+    fun `guazimanhua resolves chapters fragment and forwards forceReload cache flag`() = runTest {
+        val http = FakeHttpClientAdapter()
+        http.onUrlText("https://www.guazimanhua.com/chapter.php?id=954976", guaziChapterHtml)
+        val plugin = GuazimanhuaSitePlugin(http)
+        val chapLink = plugin.linkResolver.resolve("https://www.guazimanhua.com/comic.php?id=18741#chapters")
+        assertTrue(chapLink is com.raven.app.core.sitespi.ResolvedLink.Feed)
+        val page = plugin.gallerySource.resolvePageImage(
+            "https://www.guazimanhua.com/chapter.php?id=954976#1",
+            preferOriginal = false,
+            forceReload = true,
+        )
+        assertEquals(1, page.index)
+        assertFalse(http.recordedRequests.last().allowCache)
+    }
 }

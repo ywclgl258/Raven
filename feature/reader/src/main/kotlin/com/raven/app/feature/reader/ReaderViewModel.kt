@@ -214,6 +214,7 @@ class ReaderViewModel(
         random = random,
         isUserInteracting = { isUserZoomedOrDragging },
         jumpToPage = ::jumpToPage,
+        jumpToChapterPage = { chapterId, page -> jumpToPage(page = page, chapterId = chapterId) },
         preloadNextChapter = { chapterPrefetcher.preloadNextSerialChapterIfNeeded() },
         requestNextChapterAtBoundary = ::requestNextChapterAtBoundary,
         notice = ::emitSnackbar,
@@ -259,13 +260,16 @@ class ReaderViewModel(
         clock = clock,
         state = { _uiState.value },
         incognito = { latestIncognitoMode },
+        persistedIncognito = {
+            latestIncognitoMode ||
+                runCatching { preferencesRepository.currentSettings().incognitoMode }.getOrDefault(false)
+        },
         seriesFor = { detail ->
             activeSeriesMetadata ?: resolveSeriesMetadata(detail).also { activeSeriesMetadata = it }
         },
     )
 
     private var loadJob: Job? = null
-    private var exportJob: Job? = null
     private var chapterAdvanceJob: Job? = null
     @Volatile
     private var activeSeriesMetadata: RavenRoute.ReaderParent? = null
@@ -346,6 +350,10 @@ class ReaderViewModel(
                         prefetchAhead = targetPrefetch,
                         offscreenBudgetBytes = targetBudgetBytes,
                         maxConcurrency = targetConcurrency,
+                    )
+                    appendedChapters.reattachLiveBuffers(
+                        chapters = _uiState.value.appendedChapters,
+                        preferOriginal = pageBuffer.preferOriginal,
                     )
                 } else {
                     pageBuffer.prefetchAhead = targetPrefetch
@@ -639,6 +647,10 @@ class ReaderViewModel(
                 }
             }
         }
+        appendedChapters.trimAround(
+            activeChapterId = if (anchorChapterId == mediaId) null else anchorChapterId,
+            orderedChapterIds = state.appendedChapters.map { it.mediaId },
+        )
 
         // Auto-preload next chapter smoothly when within 4 items of the bottom of the strip.
         if (state.isSerialComic && remainingItemsToBottom <= 4) {
@@ -872,7 +884,7 @@ class ReaderViewModel(
         val state = _uiState.value
         val safeOffset = scrollOffsetPx.coerceAtLeast(0)
         if (chapterId != mediaId) {
-            if (state.preferences.mode != ReaderMode.STRIP || chapterId != state.displayMediaId) return
+            if (state.preferences.mode != ReaderMode.STRIP) return
             val activeChapter = state.appendedChapters.firstOrNull { it.mediaId == chapterId } ?: return
             val target = nearestPageIn(activeChapter.pageNumbers, page)
             if (state.activeStripChapterId == null) {
@@ -880,14 +892,24 @@ class ReaderViewModel(
             }
             _uiState.update {
                 it.copy(
+                    activeStripChapterId = activeChapter.mediaId,
+                    activeStripChapterTitle = activeChapter.title,
                     activeStripChapterPage = target,
                     activeStripChapterOffsetPx = safeOffset,
+                    activeStripChapterTotalPages = activeChapter.pageNumbers.size,
                     activeSheet = if (closeOverlays) ReaderSheet.NONE else it.activeSheet,
                     activeQuickPanel = if (closeOverlays) ReaderQuickPanel.NONE else it.activeQuickPanel,
                 )
             }
             val buffer = appendedChapters.bufferFor(activeChapter.mediaId)
-            buffer?.updateWindow(page = target, visible = setOf(target))
+            if (buffer != null) {
+                buffer.updateWindow(page = target, visible = setOf(target))
+            } else {
+                attachAppendedChapterBuffer(
+                    chapter = activeChapter,
+                    preferOriginal = supportsOriginalImages && state.preferences.preferOriginalImages,
+                )
+            }
             _events.tryEmit(ReaderEvent.ScrollToPage(page = target, scrollOffsetPx = safeOffset, chapterId = activeChapter.mediaId))
             scheduleAppendedChapterProgressSave(chapter = activeChapter, page = target, scrollOffsetPx = safeOffset)
             return
@@ -1357,6 +1379,7 @@ class ReaderViewModel(
         autoPageLoop.cancel()
         chapterPrefetcher.cancelAll()
         chapterAdvanceJob?.cancel()
+        exporter.cancel()
         progressStore.cancel()
         pageBuffer.close()
         flushProgress()

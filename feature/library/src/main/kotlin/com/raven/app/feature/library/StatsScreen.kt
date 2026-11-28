@@ -213,7 +213,10 @@ fun StatsScreen(
                                         .fillMaxWidth()
                                         .clickable(
                                             role = Role.Button,
-                                            onClick = { navigator.openSiteFunctions(stat.siteId) },
+                                            onClick = {
+                                                if (stat.siteId.isLocal) navigator.openLocalLibrary()
+                                                else navigator.openSiteFunctions(stat.siteId)
+                                            },
                                         )
                                         .padding(horizontal = 14.dp, vertical = 12.dp)
                                         .testTag("stats_site_row_${stat.siteId.value}"),

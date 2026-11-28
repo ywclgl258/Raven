@@ -122,14 +122,12 @@ data class RavenReleaseAsset(
 ) {
     init {
         require(releaseId > 0L && assetId > 0L && sizeBytes > 0L) { "更新资产元数据无效" }
-        require(expectedSha256 == null || SHA256_REGEX.matches(expectedSha256)) { "更新资产 SHA-256 摘要格式无效" }
+        require(expectedSha256 == null || RavenUpdater.SHA256_REGEX.matches(expectedSha256)) { "更新资产 SHA-256 摘要格式无效" }
     }
 
     fun cacheDirectory(updatesRoot: File): File = File(updatesRoot, "apk/$releaseId-$assetId")
 
     companion object {
-        private val SHA256_REGEX = Regex("^[0-9a-f]{64}$")
-
         fun fromDto(releaseId: Long, dto: GitHubReleaseAssetDto): RavenReleaseAsset {
             val rawDigest = dto.digest?.trim()?.lowercase(Locale.ROOT)?.takeIf { it.isNotEmpty() }
             val sha256 = when {
@@ -458,7 +456,7 @@ class RavenUpdater(
                 stateStore.write(prevState.copy(lastCheckedAtMs = clockMs()))
 
                 val remoteTag = resolvedRelease.tagName.trim()
-                if (remoteTag.isEmpty() || resolvedRelease.draft) {
+                if (remoteTag.isEmpty() || resolvedRelease.draft || resolvedRelease.prerelease) {
                     return@withContext UpdateCheckOutcome.Error("未获取到有效的正式版本发布信息")
                 }
                 if (!isRemoteVersionNewer(remoteTag, appInfo.versionName)) {
@@ -709,7 +707,7 @@ class RavenUpdater(
         const val AUTO_CHECK_INTERVAL_MS: Long = 12L * 60L * 60L * 1_000L
         internal const val MAX_METADATA_BYTES = 1024L * 1024L
         private const val MAX_RELEASE_NOTES_CHARS: Int = 2_000
-        private val SHA256_REGEX = Regex("^[0-9a-f]{64}$")
+        internal val SHA256_REGEX = Regex("^[0-9a-f]{64}$")
         private val KNOWN_ABIS = listOf("arm64-v8a", "armeabi-v7a", "x86_64", "x86")
 
         /**

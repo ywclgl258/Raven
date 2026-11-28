@@ -26,6 +26,7 @@ internal class ReaderAutoPageLoop(
     private val random: Random,
     private val isUserInteracting: () -> Boolean,
     private val jumpToPage: (Int) -> Unit,
+    private val jumpToChapterPage: (chapterId: String, page: Int) -> Unit = { _, page -> jumpToPage(page) },
     private val preloadNextChapter: () -> Unit,
     private val requestNextChapterAtBoundary: () -> Boolean,
     private val notice: (String) -> Unit,
@@ -80,16 +81,65 @@ internal class ReaderAutoPageLoop(
                 }
 
                 val pages = latest.pageNumbers
-                // 条漫连读时章末应无缝追加下一话，而不是开一个新的 Reader 打断节奏。
-                val appendsSeamlessly = latest.isSerialComic &&
+                // 条漫连读时章末应无缝追加下一话并逐话顺延翻页，避免每轮空转重复触发 preloadNextChapter。
+                val continuousStripSequential = latest.isSerialComic &&
                     latest.preferences.mode == ReaderMode.STRIP &&
-                    latest.slideshowOrder == SlideshowOrder.SEQUENTIAL &&
-                    !latest.hasReachedFinalSerialChapter
-                if (pages.size <= 1) {
-                    if (appendsSeamlessly) {
-                        preloadNextChapter()
+                    latest.slideshowOrder == SlideshowOrder.SEQUENTIAL
+                if (continuousStripSequential) {
+                    val orderedChapters = buildList {
+                        add(latest.mediaId to latest.pageNumbers)
+                        latest.appendedChapters.forEach { add(it.mediaId to it.pageNumbers) }
+                    }
+                    val activeId = latest.activeStripChapterId
+                    val curIdx = if (activeId != null) {
+                        orderedChapters.indexOfFirst { it.first == activeId }.takeIf { it >= 0 } ?: 0
+                    } else {
+                        0
+                    }
+                    val (curChapId, curPages) = orderedChapters[curIdx]
+                    val curPage = if (curIdx == 0) {
+                        latest.currentPage
+                    } else {
+                        latest.activeStripChapterPage ?: curPages.firstOrNull() ?: 1
+                    }
+                    val nextInCurrent = curPages.firstOrNull { it > curPage }
+                    if (nextInCurrent != null) {
+                        jumpToChapterPage(curChapId, nextInCurrent)
                         continue
                     }
+                    val nextAppended = orderedChapters.getOrNull(curIdx + 1)
+                    val firstOfNext = nextAppended?.second?.firstOrNull()
+                    if (nextAppended != null && firstOfNext != null) {
+                        jumpToChapterPage(nextAppended.first, firstOfNext)
+                        continue
+                    }
+                    if (latest.hasReachedFinalSerialChapter) {
+                        update {
+                            it.copy(
+                                autoPageIntervalSeconds = 0,
+                                showQueueNextCard = it.queueSession?.hasNext == true,
+                            )
+                        }
+                        notice("自动翻页已到达末尾")
+                        break
+                    }
+                    if (latest.appendNextChapterError != null && !latest.isAppendingNextChapter) {
+                        update { it.copy(autoPageIntervalSeconds = 0) }
+                        notice("下一话加载失败，自动翻页已暂停")
+                        break
+                    }
+                    val prevCount = latest.appendedChapters.size
+                    preloadNextChapter()
+                    state.first { s ->
+                        s.autoPageIntervalSeconds <= 0 ||
+                            s.appendedChapters.size > prevCount ||
+                            s.hasReachedFinalSerialChapter ||
+                            (!s.isAppendingNextChapter && s.appendNextChapterError != null)
+                    }
+                    continue
+                }
+
+                if (pages.size <= 1) {
                     val opensNextChapter = latest.slideshowOrder == SlideshowOrder.SEQUENTIAL &&
                         latest.queueSession?.hasNext != true &&
                         requestNextChapterAtBoundary()
@@ -118,8 +168,6 @@ internal class ReaderAutoPageLoop(
 
                 if (nextPage != null) {
                     jumpToPage(nextPage)
-                } else if (appendsSeamlessly) {
-                    preloadNextChapter()
                 } else {
                     val opensNextChapter = latest.slideshowOrder == SlideshowOrder.SEQUENTIAL &&
                         latest.queueSession?.hasNext != true &&

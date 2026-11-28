@@ -1056,4 +1056,17 @@ class R34vAndHanimeSitePluginTest {
         assertEquals("UID 8002", store.getUsername(SiteId.HANIME1))
         assertEquals("UID 8002", plugin.authProvider.currentAuthState().username)
     }
+
+    @Test
+    fun `r34v and hanime1 reject foreign detail hosts and anonymous r34v PHPSESSID`() = runTest {
+        val r34Store = InMemorySiteSessionStore().apply {
+            saveCookies(SiteId.R34V, mapOf("PHPSESSID" to "guest_cookie_only"))
+        }
+        val r34 = R34vSitePlugin(FakeHttpClientAdapter(), r34Store, rateLimitBackoffMs = 0L)
+        assertFalse(r34.authProvider.currentAuthState().isAuthenticated)
+        assertTrue(runCatching { r34.videoSource.loadVideoDetail("https://evil.example/video/1/") }.isFailure)
+
+        val hanime = HanimeSitePlugin(FakeHttpClientAdapter(), InMemorySiteSessionStore(), rateLimitBackoffMs = 0L)
+        assertTrue(runCatching { hanime.videoSource.loadVideoDetail("https://evil.example/watch?v=1") }.isFailure)
+    }
 }

@@ -132,6 +132,7 @@ class TagDictionary(
         communityBare: Map<String, String> = emptyMap(),
         communityNamespaced: Map<String, String> = emptyMap(),
     ) {
+        val explicitBare = LinkedHashMap<String, String>(communityBare.size)
         val normBare = LinkedHashMap<String, String>(communityBare.size)
         val normNs = LinkedHashMap<String, String>(communityNamespaced.size)
 
@@ -139,10 +140,11 @@ class TagDictionary(
             val bare = normalizeBareSlug(k)
             val zh = v.trim()
             if (bare.isNotEmpty() && zh.isNotEmpty()) {
+                explicitBare[bare] = zh
                 normBare[bare] = zh
             }
         }
-        val explicitBareCount = normBare.size
+        val explicitBareCount = explicitBare.size
         communityNamespaced.forEach { (k, v) ->
             val (ns, bare) = parseNamespacedKey(k)
             val zh = v.trim()
@@ -151,13 +153,14 @@ class TagDictionary(
                     normNs["$ns:$bare"] = zh
                     normBare.putIfAbsent(bare, zh)
                 } else {
+                    explicitBare[bare] = zh
                     normBare[bare] = zh
                 }
             }
         }
 
         val reverse = buildReverseIndex(normBare, normNs)
-        val suggestions = buildSuggestionIndex(normBare, normNs, TagTranslationSource.COMMUNITY_EHTAG)
+        val suggestions = buildSuggestionIndex(explicitBare, normNs, TagTranslationSource.COMMUNITY_EHTAG)
         val buckets = buildPrefixBuckets(suggestions)
         val count = explicitBareCount + normNs.size
         communityLayer = CommunityLayer(
@@ -351,7 +354,7 @@ class TagDictionary(
 
         fun consider(list: List<SuggestionIndexEntry>, containsOnly: Boolean = false) {
             for (entry in list) {
-                if (nsFilter.isNotEmpty() && entry.namespace.isNotEmpty() && entry.namespace != nsFilter) {
+                if (nsFilter.isNotEmpty() && entry.namespace != nsFilter) {
                     continue
                 }
                 if (containsOnly) {

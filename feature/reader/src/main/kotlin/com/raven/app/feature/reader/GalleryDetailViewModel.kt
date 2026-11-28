@@ -393,7 +393,7 @@ class GalleryDetailViewModel(
                     } ?: emptyList()
                     state.copy(
                         isFavorite = isWorkFav,
-                        favoritedTagSlugs = emptySet(),
+                        favoritedTagSlugs = favTagSlugs,
                         subscribedTagSlugs = snapshot.subscribedSlugs,
                         blockedTerms = snapshot.blockedTerms,
                         tagDictionaryRevision = snapshot.dictRevision,

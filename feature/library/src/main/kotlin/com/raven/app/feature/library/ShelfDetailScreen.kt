@@ -215,40 +215,58 @@ internal fun ShelfDetailScreenBody(
                 }
             },
             actions = {
-                IconButton(
-                    onClick = { showOfflinePrepSheet = true },
-                    modifier = Modifier.testTag("shelf_offline_prep_button"),
-                ) {
-                    Icon(
-                        imageVector = Icons.Outlined.CloudDownload,
-                        contentDescription = "离线准备",
-                        tint = colors.inkPrimary,
-                    )
-                }
-                IconButton(
-                    onClick = { showSortSheet = true },
-                    modifier = Modifier.testTag("shelf_sort_button"),
-                ) {
-                    Icon(
-                        imageVector = Icons.AutoMirrored.Rounded.Sort,
-                        contentDescription = "视图排序",
-                        tint = colors.inkPrimary,
-                    )
-                }
-                IconButton(
-                    onClick = { showEditSheet = true },
-                    modifier = Modifier.testTag("shelf_edit_button"),
-                ) {
-                    Icon(
-                        imageVector = Icons.Outlined.Edit,
-                        contentDescription = "编辑片单",
-                        tint = colors.inkPrimary,
-                    )
+                if (!uiState.isNotFound) {
+                    IconButton(
+                        onClick = { showOfflinePrepSheet = true },
+                        modifier = Modifier.testTag("shelf_offline_prep_button"),
+                    ) {
+                        Icon(
+                            imageVector = Icons.Outlined.CloudDownload,
+                            contentDescription = "离线准备",
+                            tint = colors.inkPrimary,
+                        )
+                    }
+                    IconButton(
+                        onClick = { showSortSheet = true },
+                        modifier = Modifier.testTag("shelf_sort_button"),
+                    ) {
+                        Icon(
+                            imageVector = Icons.AutoMirrored.Rounded.Sort,
+                            contentDescription = "视图排序",
+                            tint = colors.inkPrimary,
+                        )
+                    }
+                    IconButton(
+                        onClick = { showEditSheet = true },
+                        modifier = Modifier.testTag("shelf_edit_button"),
+                    ) {
+                        Icon(
+                            imageVector = Icons.Outlined.Edit,
+                            contentDescription = "编辑片单",
+                            tint = colors.inkPrimary,
+                        )
+                    }
                 }
             },
         )
 
-        LazyColumn(
+        if (uiState.isNotFound) {
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(24.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.Center,
+            ) {
+                RavenEmptyState(
+                    title = if (uiState.isSmartShelf) "智能片单不存在" else "片单不存在",
+                    message = "该片单可能已被删除，或当前路径无效。",
+                    actionLabel = "返回",
+                    onActionClick = navigator::navigateBack,
+                )
+            }
+        } else {
+            LazyColumn(
             modifier = Modifier.fillMaxSize(),
             contentPadding = PaddingValues(top = 10.dp, bottom = 28.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp),
@@ -415,6 +433,7 @@ internal fun ShelfDetailScreenBody(
                     )
                 }
             }
+        }
         }
     }
 

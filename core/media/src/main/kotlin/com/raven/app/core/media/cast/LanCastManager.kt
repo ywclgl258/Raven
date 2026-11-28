@@ -318,7 +318,11 @@ class LanCastManager(
         while (true) {
             ctx.ensureActive()
             val sizeLine = readHttpLine(input) ?: throw IOException("分块响应不完整")
-            val chunkSize = sizeLine.substringBefore(';').trim().toLongOrNull(16)
+            val sizeToken = sizeLine.substringBefore(';').trim()
+            if (sizeToken.isEmpty() || !sizeToken.all { it in '0'..'9' || it in 'a'..'f' || it in 'A'..'F' }) {
+                throw IOException("非法分块长度")
+            }
+            val chunkSize = sizeToken.toLongOrNull(16)?.takeIf { it >= 0L }
                 ?: throw IOException("非法分块长度")
             if (chunkSize == 0L) {
                 while (true) {

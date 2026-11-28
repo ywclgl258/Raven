@@ -315,7 +315,7 @@ class SessionVault(
             sitesToBump.addAll(epochFlows.keys)
             for (key in storage.keysWithPrefix(KEY_PREFIX)) {
                 val rawId = key.removePrefix(KEY_PREFIX)
-                if (rawId.isNotBlank()) sitesToBump.add(SiteId.of(rawId))
+                if (rawId.isNotBlank()) sitesToBump.add(SiteId.of(rawId).accountId)
             }
             recordCache.clear()
             storage.clear()

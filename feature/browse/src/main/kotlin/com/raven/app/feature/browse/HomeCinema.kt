@@ -85,14 +85,15 @@ internal fun CinemaVideoHome(
     onSaveBrowsePosition: (String, Int, String) -> Unit,
     onDismissRestoredPosition: () -> Unit,
     onItemLongClick: (MediaItem) -> Unit,
+    snackbarHostState: SnackbarHostState = remember { SnackbarHostState() },
 ) {
     val colors = LocalRavenColors.current
     val feedback = LocalRavenFeedback.current
     val listState = key(activeSite.id) { rememberLazyListState() }
     val coroutineScope = rememberCoroutineScope()
     val pullState = rememberPullToRefreshState()
-    val restoredHost = remember { SnackbarHostState() }
-    var isRestoringPosition by remember { mutableStateOf(false) }
+    val restoredHost = snackbarHostState
+    var isRestoringPosition by remember(activeSite.id) { mutableStateOf(false) }
 
     // Keyed on `listState` so switching sites (which rebuilds the state via `key(activeSite.id)`)
     // never leaves the top bar bound to the previous site's scroll position.
@@ -126,6 +127,8 @@ internal fun CinemaVideoHome(
     // ranked shelves and the section header, so a raw index would select the wrong flat item.
     val currentPrimaryItems by rememberUpdatedState(uiState.primaryItems)
     val currentPageNum by rememberUpdatedState(uiState.currentPage)
+    val currentHasMore by rememberUpdatedState(uiState.hasMore)
+    val currentIsLoadingMore by rememberUpdatedState(uiState.isLoadingMore)
     LaunchedEffect(listState, activeSite.id) {
         snapshotFlow {
             listState.layoutInfo.visibleItemsInfo
@@ -286,24 +289,28 @@ internal fun CinemaVideoHome(
                                             if (!isRestoringPosition) {
                                                 isRestoringPosition = true
                                                 scope.launch {
-                                                    jumpToSavedWork(
-                                                        targetId = restoredPos.workId,
-                                                        readItems = { uiState.primaryItems },
-                                                        hasMore = { uiState.hasMore },
-                                                        onLoadNextPage = onLoadNextPage,
-                                                        onFound = { itemIndex ->
-                                                            val rowIdx = itemIndex / gridColumns
-                                                            val headerCount = 1 +
-                                                                (if (uiState.showSiteSwitchTutorial) 1 else 0) +
-                                                                1 +
-                                                                (if (uiState.continueWatching.isNotEmpty()) 1 else 0) +
-                                                                uiState.sections.size +
-                                                                1
-                                                            scope.launch { listState.animateScrollToItem(headerCount + rowIdx) }
-                                                        },
-                                                        host = host,
-                                                    )
-                                                    isRestoringPosition = false
+                                                    try {
+                                                        jumpToSavedWork(
+                                                            targetId = restoredPos.workId,
+                                                            readItems = { currentPrimaryItems },
+                                                            hasMore = { currentHasMore },
+                                                            isLoadingMore = { currentIsLoadingMore },
+                                                            onLoadNextPage = onLoadNextPage,
+                                                            onFound = { itemIndex ->
+                                                                val rowIdx = itemIndex / gridColumns
+                                                                val headerCount = 1 +
+                                                                    (if (uiState.showSiteSwitchTutorial) 1 else 0) +
+                                                                    1 +
+                                                                    (if (uiState.continueWatching.isNotEmpty()) 1 else 0) +
+                                                                    uiState.sections.size +
+                                                                    1
+                                                                scope.launch { listState.animateScrollToItem(headerCount + rowIdx) }
+                                                            },
+                                                            host = host,
+                                                        )
+                                                    } finally {
+                                                        isRestoringPosition = false
+                                                    }
                                                 }
                                             }
                                         },

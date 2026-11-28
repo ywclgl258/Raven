@@ -105,7 +105,7 @@ class BackupValidator(
                 }
                 return
             }
-            if (allowRelative && url.startsWith('/')) {
+            if (allowRelative && url.startsWith('/') && !url.startsWith("//")) {
                 return
             }
             val uri = UrlSanitizer.parseUriOrNull(url)
@@ -303,6 +303,7 @@ class BackupValidator(
             checkRule(follow.seriesId.isNotBlank() && follow.seriesId.length <= MAX_ID_LENGTH) { "追更作品 ID 无效" }
             checkRule(follow.title.length <= MAX_TEXT_LENGTH) { "追更标题过长" }
             validateSiteUrl(follow.url, follow.siteId, allowBlank = true, allowRelative = true)
+            validateSiteUrl(follow.coverUrl, follow.siteId, allowBlank = true, allowRelative = true)
             checkRule(follow.seenChapterIds.size <= MAX_INBOX_ITEMS) { "已见章节列表超过上限" }
             for (chapterId in follow.seenChapterIds) {
                 checkRule(chapterId.isNotBlank() && chapterId.length <= MAX_ID_LENGTH) { "已见章节 ID 无效" }
@@ -389,10 +390,14 @@ class BackupValidator(
                 checkRule(parsed != null && parsed in 0.25f..3.0f) { "默认倍速设置无效：$value" }
             }
             if ((key == "active_site_id" || key == "startup_default_site_id") && value.isNotBlank()) {
-                validateSite(SiteId.of(value))
+                validateSite(parseSiteIdOrThrow(value))
             }
             if (key == "cross_search_site_ids" || key == "cross_search_sites" || key == "pinned_site_ids") {
                 parseSiteIdList(value).forEach(::validateSite)
+            }
+            if (key == "reader_prefetch_pages") {
+                val parsed = value.toIntOrNull()
+                checkRule(parsed != null && parsed in 1..20) { "预读页数设置无效：$value" }
             }
         }
 
@@ -480,6 +485,16 @@ class BackupValidator(
         return false
     }
 
+    private fun parseSiteIdOrThrow(raw: String): SiteId {
+        val cleaned = raw.trim()
+        checkRule(cleaned.isNotEmpty()) { "备份站点 ID 不能为空" }
+        return try {
+            SiteId.of(cleaned)
+        } catch (error: IllegalArgumentException) {
+            throw BackupValidationException(error.message ?: "备份站点 ID 无效：$raw")
+        }
+    }
+
     private fun parseSiteIdList(raw: String): List<SiteId> {
         val trimmed = raw.trim()
         if (trimmed.isEmpty() || trimmed == "[]") return emptyList()
@@ -489,9 +504,9 @@ class BackupValidator(
             trimmed
         }
         return unwrapped.split(',')
-            .map { it.trim().trim('"') }
+            .map { it.trim().trim('"').trim() }
             .filter { it.isNotEmpty() }
-            .map { SiteId.of(it) }
+            .map(::parseSiteIdOrThrow)
     }
 
     private inline fun checkRule(condition: Boolean, lazyMessage: () -> String) {
@@ -548,6 +563,13 @@ class BackupValidator(
             // Pinned-site display order toggle; exported by exportPortableSettings and re-applied
             // by applyPortableEntries, so the validator must accept it or backups fail to export.
             "dynamic_site_sorting",
+            "autoplay_video",
+            "auto_continue_queue",
+            "background_audio_playback",
+            "reader_tap_zones_enabled",
+            "reader_show_status_bar",
+            "reader_auto_split_wide_pages",
+            "background_subscription_sync",
         )
 
         val STRING_SETTINGS_KEYS: Set<String> = setOf(
@@ -561,6 +583,7 @@ class BackupValidator(
             "default_playback_speed",
             "native_speed",
             "download_view",
+            "reader_prefetch_pages",
         )
 
         val ALLOWED_SETTINGS_KEYS: Set<String> = BOOLEAN_SETTINGS_KEYS + STRING_SETTINGS_KEYS

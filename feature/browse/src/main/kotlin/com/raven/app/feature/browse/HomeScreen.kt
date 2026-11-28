@@ -187,6 +187,7 @@ fun HomeScreenContent(
     val colors = LocalRavenColors.current
     var showSiteSwitcher by rememberSaveable { mutableStateOf(false) }
     var actionTargetItem by remember { mutableStateOf<MediaItem?>(null) }
+    val snackbarHostState = remember { androidx.compose.material3.SnackbarHostState() }
 
     val activeSite = uiState.activeSite
 
@@ -242,6 +243,7 @@ fun HomeScreenContent(
                         onSaveBrowsePosition = onSaveBrowsePosition,
                         onDismissRestoredPosition = onDismissRestoredPosition,
                         onItemLongClick = { actionTargetItem = it },
+                        snackbarHostState = snackbarHostState,
                     )
                 }
                 else -> {
@@ -261,10 +263,17 @@ fun HomeScreenContent(
                         onSaveBrowsePosition = onSaveBrowsePosition,
                         onDismissRestoredPosition = onDismissRestoredPosition,
                         onItemLongClick = { actionTargetItem = it },
+                        snackbarHostState = snackbarHostState,
                     )
                 }
             }
         }
+        androidx.compose.material3.SnackbarHost(
+            hostState = snackbarHostState,
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .padding(bottom = 16.dp),
+        )
     }
 
     if (showSiteSwitcher && activeSite != null) {

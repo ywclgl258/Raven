@@ -20,7 +20,9 @@ rejects any sender that is not listed *before* a subprocess is spawned.
 
 from __future__ import annotations
 
+import asyncio
 import os
+import shlex
 import subprocess
 import sys
 from pathlib import Path
@@ -32,12 +34,12 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-APP_ID = os.environ["QQ_BOT_APP_ID"]
-APP_SECRET = os.environ["QQ_BOT_APP_SECRET"]
+APP_ID = os.environ.get("QQ_BOT_APP_ID", "").strip()
+APP_SECRET = os.environ.get("QQ_BOT_APP_SECRET", "").strip()
 REPO_ROOT = Path(os.environ.get("OMP_REPO_ROOT", "D:/Raven"))
 OMP_COMMAND = os.environ.get("OMP_COMMAND", "omp")
 OMP_TIMEOUT = int(os.environ.get("OMP_TIMEOUT_SECONDS", "300"))
-OMP_EXTRA_ARGS = os.environ.get("OMP_EXTRA_ARGS", "--no-session").split()
+OMP_EXTRA_ARGS = shlex.split(os.environ.get("OMP_EXTRA_ARGS", "--no-session"))
 
 # Variables the child process needs to find tools and honour the console code page.
 # Everything else (QQ_BOT_APP_SECRET included) stays in this process only.
@@ -101,7 +103,8 @@ class OmpBridge(botpy.Client):
 
     async def _run_omp(self, prompt: str) -> str:
         try:
-            result = subprocess.run(
+            result = await asyncio.to_thread(
+                subprocess.run,
                 [OMP_COMMAND, "-p", prompt, *OMP_EXTRA_ARGS],
                 cwd=str(REPO_ROOT),
                 capture_output=True,
@@ -138,7 +141,7 @@ class OmpBridge(botpy.Client):
             await self._reply(message, "未授权的会话：请联系维护者把 QQ 号或群号加入 allowlist。")
             return
         # Prefix with the Raven project context so every QQ request stays scoped.
-        full_prompt = f"在 D:/Raven 仓库中处理以下请求：{prompt}"
+        full_prompt = f"在 {REPO_ROOT} 仓库中处理以下请求：{prompt}"
         answer = await self._run_omp(full_prompt)
         await self._reply(message, answer)
 
@@ -156,6 +159,9 @@ def require_allowlist() -> None:
 
 
 def main():
+    if not APP_ID or not APP_SECRET:
+        print("拒绝启动：缺少 QQ_BOT_APP_ID 或 QQ_BOT_APP_SECRET。", file=sys.stderr)
+        raise SystemExit(2)
     require_allowlist()
     intents = botpy.Intents(public_messages=True, direct_message=True, public_guild_messages=True)
     client = OmpBridge(intents=intents)

@@ -42,7 +42,11 @@ class MediaRedirectCache(
         val credentialEpoch: Long? = null,
     )
 
-    internal data class RedirectOriginTag(val originUrl: String, val accountId: SiteId? = null)
+    internal data class RedirectOriginTag(
+        val originUrl: String,
+        val accountId: SiteId? = null,
+        val dispatchEpoch: Long? = null,
+    )
 
     init {
         require(ttlMs > 0L) { "ttlMs must be positive" }
@@ -106,7 +110,7 @@ class MediaRedirectCache(
         val key = original.url.toString()
         val accountId = resolveAccount(original.url)
         val epoch = accountId?.let { currentEpoch(it) }
-        val tag = RedirectOriginTag(key, accountId)
+        val tag = RedirectOriginTag(key, accountId, epoch)
         val hit = getActive(key, accountId, epoch)
         if (hit != null) {
             val crossHost = !hit.targetUrl.host.equals(original.url.host, ignoreCase = true)
@@ -142,7 +146,10 @@ class MediaRedirectCache(
             val origin = originKey.toHttpUrlOrNull()
             if (origin != null && !request.url.host.equals(origin.host, ignoreCase = true)) {
                 val accountId = originTag.accountId
-                putIfAbsentOrExpired(originKey, request.url, accountId, accountId?.let { currentEpoch(it) })
+                val current = accountId?.let { currentEpoch(it) }
+                if (accountId == null || originTag.dispatchEpoch == current) {
+                    putIfAbsentOrExpired(originKey, request.url, accountId, current)
+                }
             }
         }
         return response

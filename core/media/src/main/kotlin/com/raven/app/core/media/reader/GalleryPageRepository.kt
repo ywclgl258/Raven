@@ -1087,6 +1087,7 @@ class GalleryPageRepository(
     @Synchronized
     private fun rememberDownloadLink(folder: File, page: GalleryPage) = appendDownloadLink(folder, page, json)
 
+    @Synchronized
     private fun rememberCacheLink(siteId: SiteId, galleryUrl: String, page: GalleryPage) {
         if (galleryUrl.isBlank()) return
         appendCacheLink(File(readingCacheDir(siteId), "${StorageRootManager.sha256Hex(galleryUrl)}.links.json"), page, json)

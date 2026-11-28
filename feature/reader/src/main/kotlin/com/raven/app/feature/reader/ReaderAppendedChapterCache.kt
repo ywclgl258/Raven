@@ -105,6 +105,42 @@ internal class ReaderAppendedChapterCache(
         buffers[chapterId]?.updateWindow(page = page, visible = visible)
     }
 
+    /** Trims decoded buffers outside [keepRadius] of [activeChapterId] while keeping cached aspect ratios. */
+    fun trimAround(
+        activeChapterId: String?,
+        orderedChapterIds: List<String>,
+        keepRadius: Int = 1,
+    ) {
+        if (orderedChapterIds.isEmpty()) return
+        val keepIds = if (activeChapterId == null) {
+            orderedChapterIds.take((keepRadius + 1).coerceAtLeast(1)).toSet()
+        } else {
+            val activeIdx = orderedChapterIds.indexOf(activeChapterId)
+            if (activeIdx < 0) {
+                orderedChapterIds.take((keepRadius + 1).coerceAtLeast(1)).toSet()
+            } else {
+                val from = (activeIdx - keepRadius).coerceAtLeast(0)
+                val to = (activeIdx + keepRadius).coerceAtMost(orderedChapterIds.lastIndex)
+                orderedChapterIds.subList(from, to + 1).toSet()
+            }
+        }
+        val toEvict = buffers.keys.filter { it !in keepIds }
+        for (chapterId in toEvict) {
+            collectJobs.remove(chapterId)?.cancel()
+            buffers.remove(chapterId)?.close()
+        }
+    }
+
+    /** Reattaches currently live appended chapter buffers (e.g. after budget/prefetch/concurrency changes). */
+    fun reattachLiveBuffers(chapters: List<SerialStripChapter>, preferOriginal: Boolean) {
+        val byId = chapters.associateBy { it.mediaId }
+        val activeIds = buffers.keys.toList()
+        for (chapterId in activeIds) {
+            val chapter = byId[chapterId] ?: continue
+            attach(chapter = chapter, preferOriginal = preferOriginal)
+        }
+    }
+
     /** Cancels collectors and closes every buffer; safe to call from `onCleared`. */
     fun closeAll() {
         collectJobs.values.forEach { it.cancel() }

@@ -1,4 +1,4 @@
-# Raven 源码静态基线统计（只读：不构建、不运行测试、不改文件）
+﻿# Raven 源码静态基线统计（只读：不构建、不运行测试、不改文件）
 # 用法：pwsh -File .\scripts\audit-stats.ps1
 # 目的：README / docs 中的模块、表、路由、Key、测试数量必须与源码一致；改代码后先跑本脚本再改文档。
 
@@ -22,8 +22,10 @@ function Get-GroupLines($Files) {
 function Get-MatchCount($Files, [string]$Pattern) {
     $items = @($Files | Where-Object { $_ -ne $null })
     if ($items.Count -eq 0) { return 0 }
-    (($items | Select-String -Pattern $Pattern -AllMatches) |
+    $sum = (($items | Select-String -Pattern $Pattern -AllMatches) |
         ForEach-Object { $_.Matches.Count } | Measure-Object -Sum).Sum
+    if ($null -eq $sum) { return 0 }
+    return [int]$sum
 }
 
 # 1. 模块与代码量（模块清单来自 settings.gradle.kts）

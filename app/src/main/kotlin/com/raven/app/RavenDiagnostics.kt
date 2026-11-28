@@ -33,8 +33,12 @@ object RavenDiagnostics : FeedbackDiagnosticSource {
     @Volatile
     private var appInfo: RavenAppInfo? = null
 
+    @Volatile
+    private var installedAtElapsedMs: Long = 0L
+
     fun install(context: Context, info: RavenAppInfo, debuggable: Boolean) {
         if (diagnostics != null) return
+        installedAtElapsedMs = android.os.SystemClock.elapsedRealtime()
         val appContext = context.applicationContext
         val dir = File(appContext.filesDir, "diagnostics").apply { mkdirs() }
         val engine = Diagnostics(
@@ -112,8 +116,10 @@ object RavenDiagnostics : FeedbackDiagnosticSource {
     }
 
     private fun runtimeSinceStart(): String {
-        val uptimeMs = android.os.SystemClock.elapsedRealtime()
-        return "${uptimeMs / 1000}s"
+        val started = installedAtElapsedMs
+        val now = android.os.SystemClock.elapsedRealtime()
+        val elapsedSec = if (started > 0L && now >= started) (now - started) / 1000L else 0L
+        return "${elapsedSec}s"
     }
 
     private fun memorySnapshot(context: Context): String = runCatching {
@@ -141,8 +147,11 @@ object RavenDiagnostics : FeedbackDiagnosticSource {
             "-v",
             "threadtime",
         ).redirectErrorStream(true).start()
-        val text = process.inputStream.bufferedReader().use { it.readText() }
-        text
+        try {
+            process.inputStream.bufferedReader().use { it.readText() }
+        } finally {
+            runCatching { process.destroy() }
+        }
     }.getOrDefault("")
 
     /** Mirrors every captured entry into logcat with the original tag, so `adb logcat` still works. */

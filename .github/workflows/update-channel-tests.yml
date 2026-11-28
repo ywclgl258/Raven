@@ -13,6 +13,9 @@ on:
       - 'release.properties'
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 concurrency:
   group: raven-update-channel-${{ github.ref }}
   cancel-in-progress: true

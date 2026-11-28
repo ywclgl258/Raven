@@ -135,4 +135,16 @@ class RavenLogTest {
         assertFalse(CrashRecorder.install())
         assertTrue(CrashRecorder.isInstalled())
     }
+
+    @Test
+    fun redactMultilinePreservesNewestTailAndRedactsMultiCookieHeaders() {
+        val oldPrefix = "old-line ".repeat(700)
+        val tailSecret = "Cookie: a=1; sid=short123; long=abcdefghijklmnopqrstuvwxyz\n" +
+            "recent crash line at tail"
+        val redacted = LogRedactor.redactMultiline("$oldPrefix\n$tailSecret", maxTailChars = 500)
+        assertTrue(redacted.contains("recent crash line at tail"))
+        assertFalse(redacted.contains("short123"))
+        assertFalse(redacted.contains("abcdefghijklmnopqrstuvwxyz"))
+        assertTrue(redacted.contains("Cookie: [redacted]"))
+    }
 }

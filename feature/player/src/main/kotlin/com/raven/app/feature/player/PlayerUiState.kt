@@ -163,6 +163,7 @@ data class PlayerUiState(
     // Engine playback snapshot
     val isInitialized: Boolean = false,
     val isPlaying: Boolean = false,
+    val playWhenReady: Boolean = false,
     val isBuffering: Boolean = false,
     val isEnded: Boolean = false,
     val positionMs: Long = 0L,

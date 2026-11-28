@@ -242,17 +242,20 @@ open class SubscriptionSyncRunner(
             val existing = subscriptionRepository
                 .observeInboxBySource(InboxSourceKind.TAG_SUBSCRIPTION, sourceId)
                 .first()
-            val isBaseline = existing.isEmpty() && sourceId !in baselinedSources
+            val dismissedKeys = subscriptionRepository.dismissedInboxKeys(InboxSourceKind.TAG_SUBSCRIPTION, sourceId)
+            val isBaseline = existing.isEmpty() && dismissedKeys.isEmpty() && sourceId !in baselinedSources
             val knownKeys = existing.mapTo(mutableSetOf()) { it.item.compositeKey }
             // Items the user removed stay gone; without this the next sync re-reports them as new.
-            knownKeys += subscriptionRepository.dismissedInboxKeys(InboxSourceKind.TAG_SUBSCRIPTION, sourceId)
+            knownKeys += dismissedKeys
 
             val rawItems = fetchTagItems(plugin, sub, settings)
             val allowed = filterBlocked(rawItems, blockedBySite, cachedTagsByKey)
             val now = clockMs()
 
             if (isBaseline) {
-                val baselineEntries = allowed.mapIndexed { idx, media ->
+                val baselineEntries = allowed
+                    .filter { it.compositeKey !in knownKeys }
+                    .mapIndexed { idx, media ->
                     UpdateInboxItem(
                         id = inboxEntryId(InboxSourceKind.TAG_SUBSCRIPTION, sourceId, media.compositeKey),
                         sourceKind = InboxSourceKind.TAG_SUBSCRIPTION,
@@ -305,11 +308,13 @@ open class SubscriptionSyncRunner(
             val existing = subscriptionRepository
                 .observeInboxBySource(InboxSourceKind.SAVED_SEARCH, sourceId)
                 .first()
+            val dismissedKeys = subscriptionRepository.dismissedInboxKeys(InboxSourceKind.SAVED_SEARCH, sourceId)
             val isBaseline = saved.lastCheckedAt == null &&
                 existing.isEmpty() &&
+                dismissedKeys.isEmpty() &&
                 sourceId !in baselinedSources
             val knownKeys = existing.mapTo(mutableSetOf()) { it.item.compositeKey }
-            knownKeys += subscriptionRepository.dismissedInboxKeys(InboxSourceKind.SAVED_SEARCH, sourceId)
+            knownKeys += dismissedKeys
 
             val collected = linkedMapOf<String, MediaItem>()
             var anySucceeded = false
@@ -349,7 +354,9 @@ open class SubscriptionSyncRunner(
             val now = clockMs()
 
             if (isBaseline) {
-                val baselineEntries = allowed.mapIndexed { idx, media ->
+                val baselineEntries = allowed
+                    .filter { it.compositeKey !in knownKeys }
+                    .mapIndexed { idx, media ->
                     UpdateInboxItem(
                         id = inboxEntryId(InboxSourceKind.SAVED_SEARCH, sourceId, media.compositeKey),
                         sourceKind = InboxSourceKind.SAVED_SEARCH,

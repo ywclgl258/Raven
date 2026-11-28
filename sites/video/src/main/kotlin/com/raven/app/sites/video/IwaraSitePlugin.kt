@@ -562,6 +562,7 @@ class IwaraSitePlugin(
             if (currentSalt != usedSalt) return@withLock currentSalt
             val now = clockMs()
             if (now - lastSaltCheckMs < SALT_REFRESH_COOLDOWN_MS) return@withLock null
+            lastSaltCheckMs = now
             try {
                 withTimeoutOrNull(5_000L) {
                     val (_, homeHtml) = VideoSiteSupport.fetchHtml(
@@ -581,7 +582,6 @@ class IwaraSitePlugin(
                         allowCache = false,
                         rateLimitBackoffMs = rateLimitBackoffMs,
                     )
-                    lastSaltCheckMs = clockMs()
                     extractSaltFromScript(scriptText)?.takeIf { it != usedSalt }
                 }
             } catch (ce: CancellationException) {

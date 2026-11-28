@@ -514,6 +514,40 @@ class SettingsViewModel(
         }
     }
 
+    fun clearStreamingAndSeekCaches() {
+        viewModelScope.launch {
+            auxState.update { it.copy(mediaCache = it.mediaCache.copy(isClearing = true)) }
+            val errors = mutableListOf<Throwable>()
+            withContext(dispatchers.io) {
+                try {
+                    downloadCaches?.clearStreamingCache()
+                } catch (ce: CancellationException) {
+                    throw ce
+                } catch (e: Exception) {
+                    errors += e
+                }
+                try {
+                    downloadCaches?.clearSeekCaches()
+                } catch (ce: CancellationException) {
+                    throw ce
+                } catch (e: Exception) {
+                    errors += e
+                }
+            }
+            auxState.update { it.copy(mediaCache = it.mediaCache.copy(isClearing = false)) }
+            refreshMediaCacheStats()
+            auxState.update {
+                it.copy(
+                    feedbackMessage = if (errors.isEmpty()) {
+                        "已清理视频流式与 Seek 缓存"
+                    } else {
+                        "部分流媒体缓存清理失败：${errors.first().message ?: "请重试"}"
+                    },
+                )
+            }
+        }
+    }
+
     fun clearImageCache() {
         viewModelScope.launch {
             auxState.update { it.copy(mediaCache = it.mediaCache.copy(isClearing = true)) }
@@ -534,29 +568,39 @@ class SettingsViewModel(
                     mediaCache = it.mediaCache.copy(isClearing = true),
                 )
             }
-            val result = runCatching {
-                withContext(dispatchers.io) {
-                    galleryPageRepository.clearAllReadingCaches()
-                    runCatching { downloadCaches?.clearStreamingCache() }
-                    runCatching { downloadCaches?.clearSeekCaches() }
-                    runCatching { imageLoader?.memoryCache?.clear() }
-                    runCatching { imageLoader?.diskCache?.clear() }
+            val errors = mutableListOf<Throwable>()
+            withContext(dispatchers.io) {
+                suspend fun runStep(block: suspend () -> Unit) {
+                    try {
+                        block()
+                    } catch (ce: CancellationException) {
+                        throw ce
+                    } catch (e: Exception) {
+                        errors += e
+                    }
                 }
+                runStep { galleryPageRepository.clearAllReadingCaches() }
+                runStep { downloadCaches?.clearStreamingCache() }
+                runStep { downloadCaches?.clearSeekCaches() }
+                runStep { imageLoader?.memoryCache?.clear() }
+                runStep { imageLoader?.diskCache?.clear() }
             }
-            if (result.isSuccess) {
-                auxState.update {
-                    it.copy(
-                        readingCache = ReadingCacheSummary(),
-                        mediaCache = MediaCacheSummary(),
-                        feedbackMessage = "已清理全部阅读、流媒体、Seek 与封面缓存",
-                    )
-                }
-            } else {
-                refreshReadingCacheStats()
-                refreshMediaCacheStats()
-                auxState.update {
-                    it.copy(feedbackMessage = result.exceptionOrNull()?.message ?: "清理缓存失败，请重试")
-                }
+            auxState.update {
+                it.copy(
+                    readingCache = it.readingCache.copy(isClearing = false),
+                    mediaCache = it.mediaCache.copy(isClearing = false),
+                )
+            }
+            refreshReadingCacheStats()
+            refreshMediaCacheStats()
+            auxState.update {
+                it.copy(
+                    feedbackMessage = if (errors.isEmpty()) {
+                        "已清理全部阅读、流媒体、Seek 与封面缓存"
+                    } else {
+                        "部分缓存清理失败：${errors.first().message ?: "请重试"}"
+                    },
+                )
             }
         }
     }

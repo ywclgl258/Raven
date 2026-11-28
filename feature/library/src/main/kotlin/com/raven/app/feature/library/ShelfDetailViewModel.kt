@@ -536,9 +536,9 @@ class ShelfDetailViewModel(
         val rawEntries = when (target) {
             is ShelfDetailTarget.Custom -> source.customItems.map { item ->
                 val key = item.compositeKey
-                val watch = watchByKey[key]
-                val chapterReading = readingByChapterKey[key]
-                val workReading = readingByWorkKey["${item.siteId.value}:${item.mediaId}"]
+                val watch = if (item.kind.isVideo) watchByKey[key] else null
+                val chapterReading = if (item.kind.isGallery) readingByChapterKey[key] else null
+                val workReading = if (item.kind.isGallery) readingByWorkKey["${item.siteId.value}:${item.mediaId}"] else null
                 val reading = chapterReading ?: workReading
                 val chapterMatch = chapterReading != null
                 val dls = downloadsByKey[key].orEmpty()
@@ -577,7 +577,11 @@ class ShelfDetailViewModel(
 
             is ShelfDetailTarget.Smart -> source.smartEntries.mapIndexed { index, entry ->
                 val key = entry.compositeKey
-                val reading = readingByWorkKey["${entry.siteId.value}:${entry.mediaId}"] ?: readingByChapterKey[key]
+                val reading = if (entry.kind.isGallery) {
+                    readingByWorkKey["${entry.siteId.value}:${entry.mediaId}"] ?: readingByChapterKey[key]
+                } else {
+                    null
+                }
                 val dls = downloadsByKey[key].orEmpty()
                 val bestStatus = resolveAggregateDownloadStatus(dls) ?: entry.downloadStatus
                 ShelfEntryUi(

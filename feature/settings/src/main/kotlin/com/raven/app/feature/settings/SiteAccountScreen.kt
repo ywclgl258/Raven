@@ -400,7 +400,7 @@ fun SiteAccountScreenContent(
                 item(key = "account_security_notes") {
                     SettingsNoticeBanner(
                         title = "站点级凭据隔离",
-                        message = "当前站点凭据与其它 18 个站点完全隔离，经 AndroidKeyStore AES-256-GCM 硬件密钥加密存储，绝不附加到图片/视频 CDN 或 GitHub 更新请求。",
+                        message = "当前站点凭据与其它站点完全隔离，经 AndroidKeyStore AES-256-GCM 硬件密钥加密存储，绝不附加到图片/视频 CDN 或 GitHub 更新请求。",
                         icon = Icons.Outlined.Shield,
                         tone = RavenStatusTone.NEUTRAL,
                     )

@@ -26,6 +26,7 @@ import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 import kotlinx.coroutines.CancellableContinuation
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import okhttp3.CacheControl
@@ -42,6 +43,7 @@ import okhttp3.ResponseBody
  * Coroutine-cancellable OkHttp [Call.enqueue] bridge shared by feature modules (`RavenUpdater`,
  * `TagDictionarySyncer`, `WebDavSyncClient`).
  */
+@OptIn(ExperimentalCoroutinesApi::class)
 suspend fun Call.awaitResponse(): Response = suspendCancellableCoroutine { continuation ->
     continuation.invokeOnCancellation { cancel() }
     enqueue(object : Callback {
@@ -56,7 +58,9 @@ suspend fun Call.awaitResponse(): Response = suspendCancellableCoroutine { conti
                 response.close()
                 return
             }
-            continuation.resume(response)
+            continuation.resume(response) { _, _, _ ->
+                response.close()
+            }
         }
     })
 }
@@ -280,7 +284,7 @@ class SiteHttpClient(
                 throw ce
             } catch (se: SiteException) {
                 throw se
-            } catch (e: Throwable) {
+            } catch (e: Exception) {
                 if (logging) {
                     Log.w(NET_LOG_TAG, "✗ ${SystemClock.elapsedRealtime() - startedAt}ms ${request.url} :: ${e.javaClass.simpleName}: ${e.message}")
                 }
@@ -371,7 +375,11 @@ class SiteHttpClient(
         // OkHttp response cache: that cache is keyed by URL only, so a personalized PAGE/API body
         // fetched for account A would otherwise be replayed to account B or after a logout.
         // Plugin-level `allowCache = false` is honoured as well.
-        if (!request.allowCache || request.authEpoch != null) {
+        val hasSiteSession = effectiveSiteId != null &&
+            request.allowCookies &&
+            request.sessionScope == RequestSessionScope.SITE &&
+            sessionStore.hasSession(effectiveSiteId)
+        if (!request.allowCache || request.authEpoch != null || hasSiteSession) {
             builder.cacheControl(CacheControl.Builder().noCache().noStore().build())
         }
 
@@ -451,7 +459,7 @@ class SiteHttpClient(
         if (contentLength > maxBytes) {
             throw IOException("响应体过大 ($contentLength bytes)，超过上限 $maxBytes bytes")
         }
-        val initialCapacity = if (contentLength in 1..Int.MAX_VALUE) contentLength.toInt() else 8_192
+        val initialCapacity = if (contentLength in 1..65_536L) contentLength.toInt() else 8_192
         val out = ByteArrayOutputStream(initialCapacity)
         val buf = ByteArray(8_192)
         var total = 0L

@@ -336,7 +336,7 @@ class SiteDirectoryViewModel(
 
             loadState.update { current ->
                 if (isRefresh && current.rawEntries.isNotEmpty()) {
-                    current.copy(isRefreshing = true, isLoading = false, errorMessage = null)
+                    current.copy(isRefreshing = true, isLoading = false, isLoadingMore = false, errorMessage = null)
                 } else {
                     DirectoryLoadState(isLoading = true)
                 }

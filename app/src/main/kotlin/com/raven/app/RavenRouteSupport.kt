@@ -62,10 +62,16 @@ internal val ReaderParentNavType: NavType<RavenRoute.ReaderParent?> =
 
         override fun parseValue(value: String): RavenRoute.ReaderParent? =
             value.takeIf { it.isNotBlank() && it != "null" }
-                ?.let { Json.decodeFromString<RavenRoute.ReaderParent>(it) }
+                ?.let { raw ->
+                    runCatching { Json.decodeFromString<RavenRoute.ReaderParent>(raw) }
+                        .getOrElse {
+                            val decoded = Uri.decode(raw)
+                            runCatching { Json.decodeFromString<RavenRoute.ReaderParent>(decoded) }.getOrNull()
+                        }
+                }
 
         override fun serializeAsValue(value: RavenRoute.ReaderParent?): String =
-            value?.let { Json.encodeToString(it) } ?: "null"
+            value?.let { Uri.encode(Json.encodeToString(it)) } ?: "null"
     }
 
 /** Search destination used by Gallery Detail tag actions; canonical slug is preferred over translations. */

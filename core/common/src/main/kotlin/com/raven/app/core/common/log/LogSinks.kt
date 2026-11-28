@@ -93,6 +93,10 @@ class CrashFileSink(
         runCatching { if (file.isFile) file.readText().takeLast(maxChars) else "" }.getOrDefault("")
     }
 
+    fun totalBytes(): Long = synchronized(this) {
+        if (file.isFile) file.length() else 0L
+    }
+
     fun clear() = synchronized(this) { runCatching { file.delete() }; Unit }
 }
 

@@ -96,35 +96,51 @@ class RelamanhuaSitePlugin(
 
             val salt = SecureRandom().nextInt(9000) + 1000
             val encodedPassword = CopyHotApiSupport.encodeLoginPassword(password, salt)
-            val host = apiRouter.activeHost(httpClient.currentRouteKey(listOf("https://${CopyHotApiSupport.HOTMANGA_API_HOSTS.first()}/api/v3/comics")))
-            val response = try {
-                httpClient.postForm(
-                    url = "https://$host/api/v3/login",
-                    fields = mapOf(
-                        "username" to cleanUser,
-                        "password" to encodedPassword,
-                        "salt" to salt.toString(),
-                        "source" to "Official",
-                        "version" to "2.2.0",
-                        "platform" to "3",
-                    ),
-                    siteId = SiteId.RELAMANHUA,
-                    headers = CopyHotApiSupport.buildHotmangaHeaders(),
-                    followRedirects = false,
-                )
-            } catch (ce: CancellationException) {
-                throw ce
-            } catch (se: SiteException) {
-                throw se
-            } catch (e: Exception) {
-                throw SiteException.Network(
-                    message = "热辣漫画登录请求失败：${e.message ?: "未知错误"}",
-                    siteId = SiteId.RELAMANHUA,
-                    cause = e,
-                )
+            val preferredHost = apiRouter.activeHost(httpClient.currentRouteKey(listOf("https://${CopyHotApiSupport.HOTMANGA_API_HOSTS.first()}/api/v3/comics")))
+            val hosts = buildList {
+                if (preferredHost in CopyHotApiSupport.HOTMANGA_API_HOSTS) add(preferredHost)
+                CopyHotApiSupport.HOTMANGA_API_HOSTS.forEach { if (it !in this) add(it) }
             }
-            response.throwIfNotSuccessful(SiteId.RELAMANHUA, descriptor.displayName)
-            val root = runCatching { json.parseToJsonElement(response.bodyText()).jsonObject }.getOrNull()
+            var response: com.raven.app.core.sitespi.SiteHttpResponse? = null
+            var lastFailure: SiteException? = null
+            for (host in hosts) {
+                val attempt = try {
+                    httpClient.postForm(
+                        url = "https://$host/api/v3/login",
+                        fields = mapOf(
+                            "username" to cleanUser,
+                            "password" to encodedPassword,
+                            "salt" to salt.toString(),
+                            "source" to "Official",
+                            "version" to "2.2.0",
+                            "platform" to "3",
+                        ),
+                        siteId = SiteId.RELAMANHUA,
+                        headers = CopyHotApiSupport.buildHotmangaHeaders(),
+                        followRedirects = false,
+                    )
+                } catch (ce: CancellationException) {
+                    throw ce
+                } catch (se: SiteException) {
+                    lastFailure = se
+                    if (se is SiteException.Network || se is SiteException.TlsError || se is SiteException.RateLimited) {
+                        continue
+                    }
+                    throw se
+                } catch (e: Exception) {
+                    lastFailure = SiteException.Network(
+                        message = "热辣漫画登录请求失败：${e.message ?: "未知错误"}",
+                        siteId = SiteId.RELAMANHUA,
+                        cause = e,
+                    )
+                    continue
+                }
+                response = attempt
+                break
+            }
+            val finalResponse = response ?: throw (lastFailure ?: SiteException.Network("热辣漫画登录请求失败", siteId = SiteId.RELAMANHUA))
+            finalResponse.throwIfNotSuccessful(SiteId.RELAMANHUA, descriptor.displayName)
+            val root = runCatching { json.parseToJsonElement(finalResponse.bodyText()).jsonObject }.getOrNull()
                 ?: throw SiteException.ParseError("热辣漫画登录响应格式异常", siteId = SiteId.RELAMANHUA)
             val code = root.safeInt("code") ?: 200
             CopyHotApiSupport.parseApiErrorOrNull(code, root.safeString("message"), SiteId.RELAMANHUA)?.let { throw it }
@@ -147,16 +163,18 @@ class RelamanhuaSitePlugin(
         override suspend fun logout() {
             val token = sessionStore?.getBearerToken(SiteId.RELAMANHUA)
             if (!token.isNullOrBlank()) {
-                runCatching {
-                    val host = CopyHotApiSupport.HOTMANGA_API_HOSTS.first()
-                    httpClient.postForm(
-                        url = "https://$host/api/v3/logout",
-                        fields = emptyMap(),
-                        siteId = SiteId.RELAMANHUA,
-                        headers = CopyHotApiSupport.buildHotmangaHeaders(token),
-                        followRedirects = false,
-                    )
-                }.onFailure { if (it is CancellationException) throw it }
+                for (host in CopyHotApiSupport.HOTMANGA_API_HOSTS) {
+                    val sent = runCatching {
+                        httpClient.postForm(
+                            url = "https://$host/api/v3/logout",
+                            fields = emptyMap(),
+                            siteId = SiteId.RELAMANHUA,
+                            headers = CopyHotApiSupport.buildHotmangaHeaders(token),
+                            followRedirects = false,
+                        )
+                    }.onFailure { if (it is CancellationException) throw it }.isSuccess
+                    if (sent) break
+                }
             }
             sessionStore?.clearSite(SiteId.RELAMANHUA)
         }

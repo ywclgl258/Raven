@@ -169,6 +169,8 @@ val validateReleaseSigningTask = tasks.register("validateReleaseSigning") {
         }
         val cert = keyStore.getCertificate(signing.keyAlias)
             ?: throw GradleException("Key alias '${signing.keyAlias}' not found in release keystore.")
+        keyStore.getKey(signing.keyAlias, signing.keyPassword.toCharArray())
+            ?: throw GradleException("Private key for alias '${signing.keyAlias}' could not be loaded from release keystore.")
         val actualSha256 = MessageDigest.getInstance("SHA-256")
             .digest(cert.encoded)
             .joinToString("") { b -> String.format(Locale.ROOT, "%02X", b) }

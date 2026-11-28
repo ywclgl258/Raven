@@ -204,8 +204,8 @@ internal fun PlayerControlsOverlay(
             uiState.isRefreshingExpiredStream -> "正在刷新播放地址…"
             activeError != null -> null
             uiState.isLoadingDetail -> "正在加载视频…"
-            // 暂停时的 BUFFERING 不等于还在缓冲，继续显示会遮住播放键并让用户以为卡死。
-            uiState.isBuffering && uiState.isPlaying -> "正在缓冲…"
+            // 暂停/未意图播放时的 BUFFERING 不等于还在缓冲，继续显示会遮住播放键并让用户以为卡死。
+            uiState.isBuffering && uiState.playWhenReady -> "正在缓冲…"
             uiState.isInitialized && !uiState.isVideoFrameReady -> "正在恢复画面…"
             else -> null
         }

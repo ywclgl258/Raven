@@ -35,9 +35,11 @@ internal class GalleryReadingCacheStore(
     }
 
     fun clearSite(siteId: SiteId) {
-        siteDir(siteId).listFiles().orEmpty()
-            .filter { it.isFile }
-            .forEach { file -> check(file.delete()) { "部分图页缓存无法删除，请重试" } }
+        synchronized(trimLock) {
+            siteDir(siteId).listFiles().orEmpty()
+                .filter { it.isFile }
+                .forEach { file -> check(file.delete() || !file.exists()) { "部分图页缓存无法删除，请重试" } }
+        }
     }
 
     fun clearAll() {

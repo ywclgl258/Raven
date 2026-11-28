@@ -145,7 +145,7 @@ class PrivacyLockStore(
         nowMs: Long = System.currentTimeMillis(),
         maxAttempts: Int,
         lockoutDurationMs: Long,
-    ): PinAttemptState {
+    ): PinAttemptState = synchronized(lock) {
         val current = attemptState(nowMs)
         val nextAttempts = current.failedAttempts + 1
         val lockoutUntil = if (nextAttempts >= maxAttempts) {
@@ -160,13 +160,11 @@ class PrivacyLockStore(
         val plain = json.encodeToString(AttemptRecord.serializer(), record).toByteArray(Charsets.UTF_8)
         try {
             val sealed = cipher.encrypt(plain, ATTEMPT_AAD_BYTES)
-            synchronized(lock) {
-                storage.putString(KEY_ATTEMPT_RECORD, Base64Codec.encode(sealed))
-            }
+            storage.putString(KEY_ATTEMPT_RECORD, Base64Codec.encode(sealed))
         } finally {
             plain.fill(0)
         }
-        return PinAttemptState(nextAttempts, lockoutUntil)
+        PinAttemptState(nextAttempts, lockoutUntil)
     }
 
     fun clearAttempts() {

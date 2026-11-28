@@ -126,7 +126,8 @@ internal class ReaderExportCoordinator(
                         )
                     }
                     ExportMode.CBZ -> {
-                        val file = prepared.files.single()
+                        val file = prepared.files.singleOrNull()
+                            ?: throw IllegalStateException("未生成可保存的 CBZ 导出文件")
                         emitEvent(
                             ReaderEvent.RequestSaveDocument(
                                 prepared = prepared,
@@ -137,7 +138,8 @@ internal class ReaderExportCoordinator(
                     }
                     ExportMode.SAVE_IMAGES -> {
                         if (prepared.files.size == 1) {
-                            val file = prepared.files.single()
+                            val file = prepared.files.singleOrNull()
+                                ?: throw IllegalStateException("未生成可保存的导出文件")
                             emitEvent(
                                 ReaderEvent.RequestSaveDocument(
                                     prepared = prepared,
@@ -145,8 +147,10 @@ internal class ReaderExportCoordinator(
                                     mimeType = file.mimeType,
                                 ),
                             )
-                        } else {
+                        } else if (prepared.files.isNotEmpty()) {
                             emitEvent(ReaderEvent.RequestOpenDocumentTree(prepared = prepared))
+                        } else {
+                            throw IllegalStateException("未生成可保存的导出文件")
                         }
                     }
                 }
@@ -170,13 +174,16 @@ internal class ReaderExportCoordinator(
         prepared = prepared,
     )
 
+    private var safExportJob: Job? = null
+
     fun completeSafExport(
         prepared: PreparedExport,
         targetUri: Uri?,
         isTree: Boolean,
         contentResolver: ContentResolver,
     ) {
-        scope.launch(dispatchers.io) {
+        safExportJob?.cancel()
+        safExportJob = scope.launch(dispatchers.io) {
             if (targetUri == null) {
                 runCatching { gateway.removeStagingFolder(prepared.folder) }
                 notice("已取消保存")
@@ -209,5 +216,7 @@ internal class ReaderExportCoordinator(
     fun cancel() {
         exportJob?.cancel()
         exportJob = null
+        safExportJob?.cancel()
+        safExportJob = null
     }
 }

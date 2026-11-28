@@ -67,8 +67,10 @@ internal class CrossSiteSearchRunner(
         val plugin = siteRegistry.get(siteId) ?: return
         val searchSource = plugin.searchSource ?: return
 
+        val runGeneration = currentGeneration()
         perSiteJobs[siteId]?.cancel()
         perSiteJobs[siteId] = scope.launch {
+            if (runGeneration != currentGeneration()) return@launch
             updateBucket(siteId) { existing ->
                 (existing ?: CrossSiteBucketState(
                     site = plugin.descriptor,
@@ -87,6 +89,7 @@ internal class CrossSiteSearchRunner(
                 page = 1,
                 cursor = null,
             )
+            if (runGeneration != currentGeneration()) return@launch
             updateBucket(siteId) { resultBucket }
         }
     }
@@ -106,8 +109,10 @@ internal class CrossSiteSearchRunner(
             requested = requestedSort,
         )
 
+        val runGeneration = currentGeneration()
         perSiteJobs[siteId]?.cancel()
         perSiteJobs[siteId] = scope.launch {
+            if (runGeneration != currentGeneration()) return@launch
             updateBucket(siteId) { bucket ->
                 bucket?.copy(isLoadingMore = true, errorMessage = null) ?: existing
             }
@@ -141,6 +146,7 @@ internal class CrossSiteSearchRunner(
                     Result.failure(error)
                 }
             }
+            if (runGeneration != currentGeneration()) return@launch
             result.fold(
                 onSuccess = { feedPage ->
                     updateBucket(siteId) { current ->

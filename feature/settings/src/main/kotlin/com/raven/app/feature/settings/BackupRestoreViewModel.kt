@@ -617,6 +617,7 @@ class BackupRestoreViewModel(
                 }
                 return@launch
             }
+            cachedWebDavPreview = null
             _uiState.update {
                 it.copy(
                     webDavEndpointUrl = "",
@@ -625,6 +626,7 @@ class BackupRestoreViewModel(
                     webDavPassphrase = "",
                     webDavRemoteFileName = WebDavConfig.DEFAULT_REMOTE_FILE_NAME,
                     webDavSaved = false,
+                    webDavPullPreview = null,
                     isWebDavBusy = false,
                     webDavError = null,
                     webDavStatusMessage = "已清除本地保存的 WebDAV 凭据",

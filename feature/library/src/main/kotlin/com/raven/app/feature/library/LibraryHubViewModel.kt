@@ -507,10 +507,21 @@ class LibraryHubViewModel(
                     }
                 }
 
+                val blockedBySite = candidatesByKey.values
+                    .map { it.siteId }
+                    .distinct()
+                    .associateWith { siteId ->
+                        try {
+                            blockedTermsRepository?.observeEffectiveTermsBySite(siteId)?.first().orEmpty()
+                        } catch (ce: kotlinx.coroutines.CancellationException) {
+                            throw ce
+                        } catch (_: Throwable) {
+                            blockedGlobal
+                        }
+                    }
+
                 val allowedCandidates = candidatesByKey.values.filter { item ->
-                    val siteBlocked = runCatching {
-                        blockedTermsRepository?.observeEffectiveTermsBySite(item.siteId)?.first().orEmpty()
-                    }.getOrDefault(blockedGlobal)
+                    val siteBlocked = blockedBySite[item.siteId] ?: blockedGlobal
                     ContentFilter.isAllowed(
                         item = item,
                         blockedTerms = siteBlocked,

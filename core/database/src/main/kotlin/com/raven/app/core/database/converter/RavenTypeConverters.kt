@@ -75,7 +75,8 @@ class RavenTypeConverters {
 
     @TypeConverter
     fun toMediaItem(raw: String): MediaItem =
-        json.decodeFromString(MediaItem.serializer(), raw)
+        runCatching { json.decodeFromString(MediaItem.serializer(), raw) }
+            .getOrElse { CORRUPT_MEDIA_ITEM }
 
     // ---- Domain enums ----
 
@@ -202,5 +203,13 @@ class RavenTypeConverters {
         internal fun decodeTagRefList(raw: String): List<TagRef> =
             if (raw.isBlank() || raw == "[]") emptyList()
             else runCatching { json.decodeFromString(tagRefListSerializer, raw) }.getOrDefault(emptyList())
+
+        private val CORRUPT_MEDIA_ITEM: MediaItem = MediaItem(
+            siteId = com.raven.app.core.model.SiteId.LOCAL,
+            id = "__corrupt__",
+            url = "",
+            kind = MediaKind.COMIC,
+            title = "损坏条目",
+        )
     }
 }

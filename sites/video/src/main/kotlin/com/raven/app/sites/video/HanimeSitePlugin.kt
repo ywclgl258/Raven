@@ -140,7 +140,11 @@ class HanimeSitePlugin(
     override val videoSource: VideoSource = object : VideoSource {
         override suspend fun loadVideoDetail(url: String): VideoDetail {
             val target = VideoSiteSupport.resolveAbsolute(BASE_URL, url)
-                .ifBlank { throw SiteException.ParseError("无法识别 Hanime1 视频地址", siteId = SiteId.HANIME1) }
+                .takeIf { resolved ->
+                    val parsed = UrlSanitizer.parseUriOrNull(resolved)
+                    parsed != null && UrlSanitizer.isHttpsUrl(resolved) && descriptor.matchesHost(parsed.host.orEmpty())
+                }
+                ?: throw SiteException.ParseError("无法识别 Hanime1 视频地址", siteId = SiteId.HANIME1)
             val (_, html) = VideoSiteSupport.fetchHtml(
                 http = http,
                 siteId = SiteId.HANIME1,

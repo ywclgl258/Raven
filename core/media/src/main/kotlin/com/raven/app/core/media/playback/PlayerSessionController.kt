@@ -95,6 +95,7 @@ data class MediaTrackOption(
 data class PlayerEngineState(
     val isInitialized: Boolean = false,
     val isPlaying: Boolean = false,
+    val playWhenReady: Boolean = false,
     val isBuffering: Boolean = false,
     val playbackState: Int = Player.STATE_IDLE,
     val positionMs: Long = 0L,
@@ -632,6 +633,7 @@ class PlayerSessionController(
         val freshStreams = try {
             refresher()
         } catch (ce: CancellationException) {
+            _state.update { it.copy(hasRefreshedExpiredStream = false) }
             throw ce
         } catch (_: Throwable) {
             emptyList()
@@ -836,6 +838,7 @@ class PlayerSessionController(
             current.copy(
                 isInitialized = true,
                 isPlaying = exo.isPlaying,
+                playWhenReady = exo.playWhenReady,
                 isBuffering = exo.playbackState == Player.STATE_BUFFERING,
                 playbackState = exo.playbackState,
                 positionMs = exo.currentPosition.coerceAtLeast(0L),

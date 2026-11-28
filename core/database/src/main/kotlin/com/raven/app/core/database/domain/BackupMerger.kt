@@ -468,18 +468,6 @@ object BackupMerger {
         )
     }
 
-    /**
-     * Watch-later is seeded on a fresh install with `createdAt == modifiedAt == install time`
-     * and no user content. Treating that as "newest" would overwrite a customized backup copy,
-     * so a pristine seed always loses to the incoming shelf.
-     */
-    private fun Shelf.isPristineWatchLaterSeed(): Boolean =
-        id == Shelf.WATCH_LATER_ID &&
-            note.isBlank() &&
-            coverCompositeKey.isNullOrBlank() &&
-            !isPinned &&
-            name == RavenDatabase.DEFAULT_WATCH_LATER_NAME
-
     private fun mergeSmartShelves(
         local: List<SmartShelf>,
         incoming: List<SmartShelf>,
@@ -596,12 +584,14 @@ object BackupMerger {
                     existing.label == mark.label &&
                     existing.groupName == mark.groupName
             }
-            if (!duplicate) byId[UUID.randomUUID().toString()] = mark
+            if (!duplicate) {
+                val safeId = UUID.randomUUID().toString()
+                byId[safeId] = mark.copy(id = safeId)
+            }
         }
 
         return byId.values
             .sortedByDescending { it.createdAt }
-            .take(RavenBackupPayload.MAX_TIME_BOOKMARKS)
     }
 
     private fun mergeImageFavorites(

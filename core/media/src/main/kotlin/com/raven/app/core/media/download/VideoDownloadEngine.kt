@@ -167,6 +167,8 @@ class VideoDownloadEngine(
     private val _changes = MutableStateFlow(0L)
     val changes: StateFlow<Long> = _changes.asStateFlow()
 
+    internal fun isNotificationPrivacySensitive(): Boolean = notificationPrivacyProvider()
+
     val manager: DownloadManager by lazy {
         val downloaderFactory = HlsDownloadSupport.createDownloaderFactory(
             cache = downloadCaches.downloadCache(),
@@ -397,13 +399,15 @@ class VideoDownloadEngine(
         manager.pauseDownloads()
     }
 
-    suspend fun awaitWriteQuiescence(timeoutMs: Long = 5_000L) = withContext(dispatchers.io) {
+    suspend fun awaitWriteQuiescence(timeoutMs: Long = 5_000L) {
         val start = clockMs()
         while (clockMs() - start < timeoutMs) {
-            val active = runCatching { manager.currentDownloads }.getOrNull().orEmpty().any { dl ->
-                dl.state == Download.STATE_DOWNLOADING ||
-                    dl.state == Download.STATE_QUEUED ||
-                    dl.state == Download.STATE_RESTARTING
+            val active = withContext(dispatchers.main) {
+                runCatching { manager.currentDownloads }.getOrNull().orEmpty().any { dl ->
+                    dl.state == Download.STATE_DOWNLOADING ||
+                        dl.state == Download.STATE_QUEUED ||
+                        dl.state == Download.STATE_RESTARTING
+                }
             }
             if (!active) break
             kotlinx.coroutines.delay(100)
@@ -547,7 +551,9 @@ class VideoDownloadEngine(
         val meta = (current?.let(::decodeMeta) ?: recoverMetaFromDiskOrDb(id))
             ?: error("无法读取视频下载元数据")
         if (current != null && current.state == Download.STATE_COMPLETED) {
-            runCatching { manager.removeDownload(id) }
+            withContext(dispatchers.main) {
+                runCatching { manager.removeDownload(id) }
+            }
         }
         val freshStream = refreshStream(meta) ?: error("原清晰度 ${meta.quality} 暂不可用")
         val recheckState = runCatching { manager.downloadIndex.getDownload(id)?.state }.getOrNull()
@@ -893,7 +899,8 @@ class VideoDownloadService : DownloadService(
                 it.state == Download.STATE_QUEUED ||
                 it.state == Download.STATE_RESTARTING
         }
-        val title = primary?.let { engine.decodeMeta(it)?.title }.orEmpty()
+        val privacySensitive = engine.isNotificationPrivacySensitive()
+        val title = if (privacySensitive) "" else primary?.let { engine.decodeMeta(it)?.title }.orEmpty()
         val waitingForNetwork = notMetRequirements != 0
         val fraction = primary?.let {
             DownloadNotifications.computeVideoProgressFraction(
@@ -923,7 +930,7 @@ class VideoDownloadService : DownloadService(
         )
         val determinate = !waitingForNetwork && fraction > 0f
         val progressPercent = (fraction * 100f).roundToInt().coerceIn(0, 100)
-        return NotificationCompat.Builder(this, NOTIFICATION_CHANNEL_ID)
+        val builder = NotificationCompat.Builder(this, NOTIFICATION_CHANNEL_ID)
             .setSmallIcon(android.R.drawable.stat_sys_download)
             .setContentTitle(channelTitle)
             .setContentText(statusText)
@@ -932,7 +939,8 @@ class VideoDownloadService : DownloadService(
             .setOngoing(true)
             .setSilent(true)
             .setProgress(if (determinate) 100 else 0, if (determinate) progressPercent else 0, !determinate)
-            .build()
+        if (privacySensitive) builder.setVisibility(NotificationCompat.VISIBILITY_SECRET)
+        return builder.build()
     }
 
     override fun onTimeout(startId: Int, fgsType: Int) {

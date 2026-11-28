@@ -674,7 +674,9 @@ class Manwa2SitePlugin(
                         ),
                     )
                     if (resp.isSuccessful) {
-                        val finalHost = ComicUrl.parse(resp.finalUrl)?.host ?: candidate
+                        val parsedFinal = ComicUrl.parseStrictHttps(resp.finalUrl)
+                            ?.takeIf { descriptor.matchesHost(it.host) }
+                        val finalHost = parsedFinal?.host ?: candidate
                         mirrorRouter.reportHostSuccess(candidate, routeKey)
                         cachedActualHost = finalHost
                         cachedRouteKey = routeKey

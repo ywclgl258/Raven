@@ -21,6 +21,7 @@ internal suspend fun jumpToSavedWork(
     targetId: String,
     readItems: () -> List<com.raven.app.core.model.MediaItem>,
     hasMore: () -> Boolean,
+    isLoadingMore: () -> Boolean = { false },
     onLoadNextPage: () -> Unit,
     onFound: (Int) -> Unit,
     host: SnackbarHostState,
@@ -32,8 +33,18 @@ internal suspend fun jumpToSavedWork(
             return
         }
         if (!hasMore()) break
+        val prevCount = readItems().size
         onLoadNextPage()
-        kotlinx.coroutines.delay(250)
+        kotlinx.coroutines.withTimeoutOrNull(8_000L) {
+            androidx.compose.runtime.snapshotFlow {
+                readItems().size > prevCount || !isLoadingMore() || !hasMore()
+            }
+            // Wait a brief moment first so `isLoadingMore` can flip true if triggered asynchronously.
+            kotlinx.coroutines.delay(50)
+            while (isLoadingMore() && readItems().size == prevCount && hasMore()) {
+                kotlinx.coroutines.delay(100)
+            }
+        }
     }
     host.showSnackbar("当前已加载的内容里没有该位置，请继续向下浏览或重试", duration = SnackbarDuration.Short)
 }

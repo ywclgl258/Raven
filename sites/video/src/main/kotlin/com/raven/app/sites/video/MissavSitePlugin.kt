@@ -177,14 +177,15 @@ class MissavSitePlugin(
             val kind = if (section == "genres") SearchScope.TAG else SearchScope.AUTHOR
             val entries = doc.select("a[href*=$segment]").mapNotNull { a ->
                 val rawHref = a.attr("href")
-                val slug = rawHref.substringAfter(segment).substringBefore('?').substringBefore('#').trimEnd('/')
-                if (slug.isBlank() || slug == "ranking" || slug.contains('/')) return@mapNotNull null
-                val label = HtmlUrlCleaner.cleanText(a.text()).ifBlank { HtmlUrlCleaner.decodeUrlComponent(slug) }
+                val rawSlug = rawHref.substringAfter(segment).substringBefore('?').substringBefore('#').trimEnd('/')
+                if (rawSlug.isBlank() || rawSlug == "ranking" || rawSlug.contains('/')) return@mapNotNull null
+                val slug = HtmlUrlCleaner.decodeUrlComponent(rawSlug)
+                val label = HtmlUrlCleaner.cleanText(a.text()).ifBlank { slug }
                 DirectoryEntry(
                     siteId = SiteId.MISSAV,
                     id = slug,
                     title = label,
-                    url = "$BASE_URL$segment$slug",
+                    url = "$BASE_URL$segment$rawSlug",
                     kind = kind,
                 )
             }.distinctBy { it.id }
@@ -538,17 +539,19 @@ class MissavSitePlugin(
             )
 
             val authors = doc.select("a[href*=/actresses/]").mapNotNull { a ->
-                val slug = a.attr("href").substringAfter("/actresses/").substringBefore('?').substringBefore('#').trimEnd('/')
-                if (slug.isBlank() || slug == "ranking" || slug.contains('/')) return@mapNotNull null
-                val name = HtmlUrlCleaner.cleanText(a.text()).ifBlank { HtmlUrlCleaner.decodeUrlComponent(slug) }
-                AuthorRef(id = slug, name = name, role = "actress", url = "$BASE_URL/actresses/$slug")
+                val rawSlug = a.attr("href").substringAfter("/actresses/").substringBefore('?').substringBefore('#').trimEnd('/')
+                if (rawSlug.isBlank() || rawSlug == "ranking" || rawSlug.contains('/')) return@mapNotNull null
+                val slug = HtmlUrlCleaner.decodeUrlComponent(rawSlug)
+                val name = HtmlUrlCleaner.cleanText(a.text()).ifBlank { slug }
+                AuthorRef(id = slug, name = name, role = "actress", url = "$BASE_URL/actresses/$rawSlug")
             }.distinctBy { it.id }
 
             val tags = doc.select("a[href*=/genres/]").mapNotNull { a ->
-                val slug = a.attr("href").substringAfter("/genres/").substringBefore('?').substringBefore('#').trimEnd('/')
-                if (slug.isBlank() || slug.contains('/')) return@mapNotNull null
-                val label = HtmlUrlCleaner.cleanText(a.text()).ifBlank { HtmlUrlCleaner.decodeUrlComponent(slug) }
-                TagRef(slug = slug, label = label, url = "$BASE_URL/genres/$slug")
+                val rawSlug = a.attr("href").substringAfter("/genres/").substringBefore('?').substringBefore('#').trimEnd('/')
+                if (rawSlug.isBlank() || rawSlug.contains('/')) return@mapNotNull null
+                val slug = HtmlUrlCleaner.decodeUrlComponent(rawSlug)
+                val label = HtmlUrlCleaner.cleanText(a.text()).ifBlank { slug }
+                TagRef(slug = slug, label = label, url = "$BASE_URL/genres/$rawSlug")
             }.distinctBy { it.slug }
 
             val related = parseCards(doc, assetOrigin).filter { it.id != id }

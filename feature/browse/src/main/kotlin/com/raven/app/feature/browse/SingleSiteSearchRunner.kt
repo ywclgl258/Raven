@@ -186,6 +186,7 @@ internal class SingleSiteSearchRunner(
             } catch (ce: CancellationException) {
                 throw ce
             } catch (error: Throwable) {
+                if (generation != currentGeneration()) return@launch
                 _state.value = SingleSiteResultState(
                     siteId = targetSiteId,
                     isLoading = false,

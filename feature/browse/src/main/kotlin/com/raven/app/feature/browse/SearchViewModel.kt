@@ -55,6 +55,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
@@ -279,54 +280,62 @@ class SearchViewModel(
 
     private val discoveryFlow = discoveryController.flow
 
-    private val dbContextFlow = activeSiteIdFlow.flatMapLatest { siteId ->
-        val mergedHistoryFlow = searchHistoryRepository
-            .observeAll(limit = MAX_HISTORY_CHIPS)
-            .map { entries -> mergeSearchHistoryEntries(entries, limit = MAX_HISTORY_CHIPS) }
+    private val mergedHistoryFlow = searchHistoryRepository
+        .observeAll(limit = MAX_HISTORY_CHIPS)
+        .map { entries -> mergeSearchHistoryEntries(entries, limit = MAX_HISTORY_CHIPS) }
 
-        val topFour = combine(
-            mergedHistoryFlow,
-            subscriptionRepository.observeSavedSearches(),
-            blockedTermsRepository.observeAllGrouped(),
-            blockedTermsRepository.observeEffectiveTermsBySite(siteId),
-        ) { history, saved, groupedBlocked, activeEffectiveBlocked ->
-            SearchTopDbSlice(
-                history = history,
-                savedSearches = saved,
-                blockedTermsBySite = groupedBlocked,
-                activeSiteEffectiveBlocked = activeEffectiveBlocked,
-            )
-        }
+    private val sharedWatchProgressMapFlow = historyRepository
+        .observeAllWatchProgress()
+        .map { watches -> watches.associate { it.compositeKey to it.progressFraction } }
 
-        val bottomFour = combine(
-            historyRepository.observeAllWatchProgress(),
-            historyRepository.observeAllReadingProgress(),
-            shelfRepository.observeShelfItemKeys(Shelf.WATCH_LATER_ID),
-            cachedTagsFlow,
-            dictRevisionFlow,
-        ) { watches, readings, watchLater, cachedTags, dictRevision ->
-            SearchBottomDbSlice(
-                watchProgressMap = watches.associate { it.compositeKey to it.progressFraction },
-                readingProgressMap = readings.associate { it.compositeKey to it.progressFraction },
-                watchLaterKeys = watchLater,
-                cachedTagsByKey = cachedTags,
-                dictRevision = dictRevision,
-            )
-        }
+    private val sharedReadingProgressMapFlow = historyRepository
+        .observeAllReadingProgress()
+        .map { readings -> readings.associate { it.compositeKey to it.progressFraction } }
 
-        combine(topFour, bottomFour) { left, right ->
-            SearchDbContext(
-                history = left.history,
-                savedSearches = left.savedSearches,
-                blockedTermsBySite = left.blockedTermsBySite,
-                activeSiteEffectiveBlocked = left.activeSiteEffectiveBlocked,
-                cachedTagsByKey = right.cachedTagsByKey,
-                watchProgressMap = right.watchProgressMap,
-                readingProgressMap = right.readingProgressMap,
-                watchLaterKeys = right.watchLaterKeys,
-                dictRevision = right.dictRevision,
-            )
-        }
+    private val sharedTopDbFlow = combine(
+        mergedHistoryFlow,
+        subscriptionRepository.observeSavedSearches(),
+        blockedTermsRepository.observeAllGrouped(),
+    ) { history, saved, groupedBlocked ->
+        Triple(history, saved, groupedBlocked)
+    }
+
+    private val sharedBottomDbFlow = combine(
+        sharedWatchProgressMapFlow,
+        sharedReadingProgressMapFlow,
+        shelfRepository.observeShelfItemKeys(Shelf.WATCH_LATER_ID),
+        cachedTagsFlow,
+        dictRevisionFlow,
+    ) { watches, readings, watchLater, cachedTags, dictRevision ->
+        SearchBottomDbSlice(
+            watchProgressMap = watches,
+            readingProgressMap = readings,
+            watchLaterKeys = watchLater,
+            cachedTagsByKey = cachedTags,
+            dictRevision = dictRevision,
+        )
+    }
+
+    private val activeEffectiveBlockedFlow = activeSiteIdFlow.flatMapLatest { siteId ->
+        blockedTermsRepository.observeEffectiveTermsBySite(siteId)
+    }
+
+    private val dbContextFlow = combine(
+        sharedTopDbFlow,
+        activeEffectiveBlockedFlow,
+        sharedBottomDbFlow,
+    ) { (history, saved, groupedBlocked), activeEffectiveBlocked, right ->
+        SearchDbContext(
+            history = history,
+            savedSearches = saved,
+            blockedTermsBySite = groupedBlocked,
+            activeSiteEffectiveBlocked = activeEffectiveBlocked,
+            cachedTagsByKey = right.cachedTagsByKey,
+            watchProgressMap = right.watchProgressMap,
+            readingProgressMap = right.readingProgressMap,
+            watchLaterKeys = right.watchLaterKeys,
+            dictRevision = right.dictRevision,
+        )
     }
 
     val uiState: StateFlow<SearchUiState> = combine(
@@ -541,7 +550,7 @@ class SearchViewModel(
             showSearchTutorial = !settings.hasSeenTutorial(com.raven.app.core.model.FeatureTutorialIds.SEARCH_DISCOVER),
             lastSavedSearchNotice = input.lastSavedNotice,
         )
-    }.stateIn(
+    }.flowOn(dispatchers.default).stateIn(
         scope = viewModelScope,
         started = SharingStarted.WhileSubscribed(5_000L),
         initialValue = SearchUiState(
@@ -567,6 +576,9 @@ class SearchViewModel(
 
     fun setMode(mode: SearchMode) {
         if (inputState.value.mode == mode) return
+        searchGeneration++
+        singleSiteRunner.cancel()
+        crossSiteRunner.cancelAll()
         inputState.update { it.copy(mode = mode, crossSiteFilterSiteId = null) }
         val q = inputState.value.query.trim()
         if (q.isNotEmpty()) {
@@ -805,6 +817,7 @@ class SearchViewModel(
         } else {
             SearchMode.SINGLE_SITE
         }
+        searchGeneration++
         singleSiteRunner.cancel()
         crossSiteRunner.cancelAll()
         inputState.update {
@@ -912,12 +925,17 @@ class SearchViewModel(
         val validSites = savedSearch.siteIds.filter { it in searchableIdSet }
         val targetMode = if (validSites.size > 1) SearchMode.CROSS_SITE else SearchMode.SINGLE_SITE
 
+        searchGeneration++
+        singleSiteRunner.cancel()
+        crossSiteRunner.cancelAll()
         viewModelScope.launch {
             if (targetMode == SearchMode.SINGLE_SITE && validSites.size == 1) {
                 manualSiteOverride.value = validSites.first()
                 preferencesRepository.setActiveSiteId(validSites.first())
             } else if (targetMode == SearchMode.CROSS_SITE) {
-                preferencesRepository.setCrossSearchSiteIds(validSites)
+                crossSitesMutex.withLock {
+                    preferencesRepository.setCrossSearchSiteIds(normalizeCrossSiteSelection(validSites))
+                }
             }
             inputState.update {
                 it.copy(

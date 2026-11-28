@@ -377,6 +377,9 @@ class PlayerViewModel(
         // leaves the old video audible behind an error card for a different title.
         if (previousTarget != null && previousTarget.compositeKey != args.compositeKey) {
             playback.pause()
+            if (localState.value.activeCastDevice != null) {
+                castController.stop()
+            }
         }
         loadJob?.cancel()
         metadataEnrichJob?.cancel()
@@ -500,12 +503,13 @@ class PlayerViewModel(
         val target = activeTarget.value
         val keepBackgroundAudio = latestAppSettings.value.backgroundAudioPlayback
         val playingWhenLeaving = playback.state.value.isPlaying
-        if (!isInPipMode && !keepBackgroundAudio && playingWhenLeaving) {
+        val playbackIntentActive = playingWhenLeaving || playback.state.value.playWhenReady
+        if (!isInPipMode && !keepBackgroundAudio) {
             playback.pause()
         }
         // With background audio (or PiP) the foreground ticker is cancelled by ON_STOP while
         // playback keeps running, so the sleep deadline needs its own armed job.
-        sleepTimer.armBackground(playbackContinuesInBackground = isInPipMode || (keepBackgroundAudio && playingWhenLeaving))
+        sleepTimer.armBackground(playbackContinuesInBackground = isInPipMode || (keepBackgroundAudio && playbackIntentActive))
         if (target != null) {
             (applicationScope ?: fallbackFlushScope).launch {
                 runCatching { persistWatchProgressInternal(target, force = true) }
@@ -1791,6 +1795,7 @@ class PlayerViewModel(
             requiresAuth = local.requiresAuth,
             isInitialized = engine.isInitialized,
             isPlaying = engine.isPlaying,
+            playWhenReady = engine.playWhenReady,
             isBuffering = engine.isBuffering,
             isEnded = engine.isEnded,
             positionMs = engine.positionMs,
@@ -1855,6 +1860,7 @@ class PlayerViewModel(
     }
 
     override fun onCleared() {
+        sleepTimer.disarm()
         val target = activeTarget.value
         val snapshot = if (target != null && !latestAppSettings.value.incognitoMode) {
             buildWatchProgressSnapshot(target, force = true)

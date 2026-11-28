@@ -168,7 +168,7 @@ class GuazimanhuaSitePlugin(
             if (chapterId.isBlank()) {
                 throw SiteException.ParseError("瓜子漫画章节信息缺失", siteId = SiteId.GUAZIMANHUA)
             }
-            val pages = loadChapterPages(chapterId)
+            val pages = loadChapterPages(chapterId, allowCache = !forceReload)
             return pages.firstOrNull { it.index == pageIndex }
                 ?: throw SiteException.NotFound("页码超出范围：$pageIndex / ${pages.size}", siteId = SiteId.GUAZIMANHUA)
         }
@@ -180,7 +180,7 @@ class GuazimanhuaSitePlugin(
         ): GalleryPage {
             val identity = parseChapterPageIdentity(pageUrl)
                 ?: throw SiteException.ParseError("无法识别瓜子漫画图页地址：$pageUrl", siteId = SiteId.GUAZIMANHUA)
-            val pages = loadChapterPages(identity.chapterId)
+            val pages = loadChapterPages(identity.chapterId, allowCache = !forceReload)
             return pages.firstOrNull { it.index == identity.pageIndex }
                 ?: throw SiteException.NotFound("页码超出范围：${identity.pageIndex} / ${pages.size}", siteId = SiteId.GUAZIMANHUA)
         }
@@ -195,12 +195,22 @@ class GuazimanhuaSitePlugin(
         override fun canonicalize(url: String): String? {
             val parsed = ComicUrl.parse(url)?.takeIf { descriptor.matchesHost(it.host) } ?: return null
             val id = extractComicId(parsed.toString()) ?: return null
-            return "${descriptor.baseUrl}/comic.php?id=$id"
+            val base = "${descriptor.baseUrl}/comic.php?id=$id"
+            return if (parsed.fragment.equals(CHAPTERS_FRAGMENT, ignoreCase = true)) {
+                "$base#$CHAPTERS_FRAGMENT"
+            } else {
+                base
+            }
         }
 
         override fun resolve(url: String): ResolvedLink? {
             val parsed = ComicUrl.parse(url)?.takeIf { descriptor.matchesHost(it.host) } ?: return null
             val id = extractComicId(parsed.toString()) ?: return null
+            if (parsed.fragment.equals(CHAPTERS_FRAGMENT, ignoreCase = true)) {
+                return ResolvedLink.Feed(
+                    FeedRequest(siteId = SiteId.GUAZIMANHUA, section = CHAPTERS_SECTION, category = id),
+                )
+            }
             return ResolvedLink.Gallery(SiteId.GUAZIMANHUA, id, "${descriptor.baseUrl}/comic.php?id=$id")
         }
     }
@@ -219,17 +229,22 @@ class GuazimanhuaSitePlugin(
                 "&sort=$sort&page=$page"
         }
         val params = mutableListOf<String>()
+        val rawCategory = request.category?.trim()?.lowercase().orEmpty()
+        val dimToken = section.takeIf {
+            it.startsWith("cid_") || it.startsWith("city_") || it.startsWith("aud_") || it.startsWith("end_")
+        } ?: rawCategory
         when {
-            section.startsWith("cid_") && section.removePrefix("cid_").let { it.isNotEmpty() && it.all(Char::isDigit) } ->
-                params += "cid=${section.removePrefix("cid_")}"
-            section.startsWith("city_") && section.removePrefix("city_").let { it.isNotEmpty() && it.all(Char::isDigit) } ->
-                params += "city=${section.removePrefix("city_")}"
-            section.startsWith("aud_") && section.removePrefix("aud_").let { it.isNotEmpty() && it.all(Char::isDigit) } ->
-                params += "audience=${section.removePrefix("aud_")}"
-            section.startsWith("end_") && section.removePrefix("end_").let { it.isNotEmpty() && it.all(Char::isDigit) } ->
-                params += "is_end=${section.removePrefix("end_")}"
+            dimToken.startsWith("cid_") && dimToken.removePrefix("cid_").let { it.isNotEmpty() && it.all(Char::isDigit) } ->
+                params += "cid=${dimToken.removePrefix("cid_")}"
+            dimToken.startsWith("city_") && dimToken.removePrefix("city_").let { it.isNotEmpty() && it.all(Char::isDigit) } ->
+                params += "city=${dimToken.removePrefix("city_")}"
+            dimToken.startsWith("aud_") && dimToken.removePrefix("aud_").let { it.isNotEmpty() && it.all(Char::isDigit) } ->
+                params += "audience=${dimToken.removePrefix("aud_")}"
+            dimToken.startsWith("end_") && dimToken.removePrefix("end_").let { it.isNotEmpty() && it.all(Char::isDigit) } ->
+                params += "is_end=${dimToken.removePrefix("end_")}"
+            rawCategory.isNotEmpty() && rawCategory.all(Char::isDigit) ->
+                params += "cid=$rawCategory"
         }
-        request.category?.trim()?.takeIf { it.isNotEmpty() && it.all(Char::isDigit) }?.let { params += "cid=$it" }
         params += "sort=$sort"
         params += "page=$page"
         return "${descriptor.baseUrl}/category.php?" + params.joinToString("&")
@@ -342,10 +357,13 @@ class GuazimanhuaSitePlugin(
         ComicUrl.parse(url)?.encodedPath?.endsWith("/chapter.php") == true
 
     private suspend fun loadChapterDetail(url: String): GalleryDetail {
-        val chapterId = ComicUrl.parse(url)?.queryParameter("id")?.takeIf { it.isNotEmpty() && it.all(Char::isDigit) }
+        val parsed = ComicUrl.parseStrictHttps(url)?.takeIf { descriptor.matchesHost(it.host) }
             ?: throw SiteException.ParseError("无法识别瓜子漫画章节地址：$url", siteId = SiteId.GUAZIMANHUA)
-        val html = fetchHtml(url)
-        val doc = Jsoup.parse(html, url)
+        val chapterId = parsed.queryParameter("id")?.takeIf { it.isNotEmpty() && it.all(Char::isDigit) }
+            ?: throw SiteException.ParseError("无法识别瓜子漫画章节地址：$url", siteId = SiteId.GUAZIMANHUA)
+        val canonicalChapterUrl = "${descriptor.baseUrl}/chapter.php?id=$chapterId"
+        val html = fetchHtml(canonicalChapterUrl)
+        val doc = Jsoup.parse(html, canonicalChapterUrl)
         val comicId = doc.selectFirst("a[href*='comic.php?id=']")?.attr("href")
             ?.substringAfter("id=", "")?.substringBefore("&")
             ?.takeIf { it.isNotEmpty() && it.all(Char::isDigit) }
@@ -357,7 +375,7 @@ class GuazimanhuaSitePlugin(
             item = MediaItem(
                 siteId = SiteId.GUAZIMANHUA,
                 id = if (comicId.isNotBlank()) "$comicId:$chapterId" else chapterId,
-                url = url,
+                url = canonicalChapterUrl,
                 kind = MediaKind.SERIAL_COMIC,
                 title = title,
                 pageCount = pages.size,
@@ -376,9 +394,10 @@ class GuazimanhuaSitePlugin(
     private suspend fun loadChapterPages(
         chapterId: String,
         preloadedHtml: String? = null,
+        allowCache: Boolean = true,
     ): List<GalleryPage> {
         val url = "${descriptor.baseUrl}/chapter.php?id=$chapterId"
-        val html = preloadedHtml ?: fetchHtml(url)
+        val html = preloadedHtml ?: fetchHtml(url, allowCache = allowCache)
         val seen = LinkedHashMap<String, Int>()
         CHAPTER_IMAGE_REGEX.findAll(html).forEach { match ->
             val imageUrl = match.value.replace("&amp;", "&")
@@ -407,12 +426,13 @@ class GuazimanhuaSitePlugin(
         return parsed.pathSegments.lastOrNull()?.takeIf { it.isNotEmpty() && it.all(Char::isDigit) }
     }
 
-    private suspend fun fetchHtml(url: String): String {
+    private suspend fun fetchHtml(url: String, allowCache: Boolean = true): String {
         val response = try {
             httpClient.getText(
                 url = url,
                 siteId = SiteId.GUAZIMANHUA,
                 kind = SiteRequestKind.PAGE,
+                allowCache = allowCache,
                 headers = mapOf(
                     "Referer" to "${descriptor.baseUrl}/",
                     "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",

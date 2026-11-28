@@ -627,13 +627,13 @@ class BaozimhSitePlugin(
                 }
                 ?.attr("href")
                 ?.takeIf { it.isNotBlank() }
-            val resolvedNext = nextHref?.let { ComicUrl.parse(currentUrl)?.resolve(it)?.toString() }
-            // Same-chapter sub-pages are `{slot}.html` (first page) and `{slot}_{n}.html` (follow-ups).
-            // Matching only `{slot}_` dropped the first page from the chain, so a cycle back to page 1
-            // looked like a normal end-of-chapter and the truncated prefix was cached.
+            val nextParsed = nextHref
+                ?.let { ComicUrl.parse(currentUrl)?.resolve(it) }
+                ?.takeIf { it.isHttps && descriptor.matchesHost(it.host) }
+            val resolvedNext = nextParsed?.toString()
             currentUrl = if (resolvedNext != null &&
-                resolvedNext.contains("/comic/chapter/$comicId/${slot}.html") ||
-                (resolvedNext != null && resolvedNext.contains("/comic/chapter/$comicId/${slot}_"))
+                (resolvedNext.contains("/comic/chapter/$comicId/${slot}.html") ||
+                    resolvedNext.contains("/comic/chapter/$comicId/${slot}_"))
             ) {
                 resolvedNext
             } else {
