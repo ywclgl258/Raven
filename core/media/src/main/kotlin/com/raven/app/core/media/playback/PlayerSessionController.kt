@@ -26,6 +26,7 @@ import androidx.media3.exoplayer.SeekParameters
 import androidx.media3.exoplayer.hls.HlsMediaSource
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.exoplayer.source.MediaSource
+import androidx.media3.exoplayer.trackselection.DefaultTrackSelector
 import androidx.media3.session.MediaSession
 import com.raven.app.core.common.AppDispatchers
 import com.raven.app.core.common.DefaultAppDispatchers
@@ -161,6 +162,9 @@ class PlayerSessionController(
     private var activeSeekCacheEnabled: Boolean = true
     private var lastObservedVideoPositionMs: Long = -1L
     private var lastObservedVideoGeneration: Long = -1L
+    private val attemptedFallbackUrls = LinkedHashSet<String>()
+    private var watchdogRecoveryAttempted: Boolean = false
+    private var noVideoFrameSinceMs: Long = -1L
     @Volatile
     private var loadGeneration: Long = 0L
 
@@ -184,9 +188,10 @@ class PlayerSessionController(
 
         override fun onTracksChanged(tracks: Tracks) {
             currentTracks = tracks
+            val disabledTypes = player?.trackSelectionParameters?.disabledTrackTypes ?: emptySet()
             val (audio, subtitles, textDisabled) = extractTrackOptions(
                 tracks = tracks,
-                textTrackDisabled = C.TRACK_TYPE_TEXT in (player?.trackSelectionParameters?.disabledTrackTypes ?: emptySet()),
+                textTrackDisabled = C.TRACK_TYPE_TEXT in disabledTypes,
             )
             _state.update {
                 it.copy(
@@ -195,10 +200,31 @@ class PlayerSessionController(
                     subtitlesEnabled = !textDisabled && subtitles.any(MediaTrackOption::selected),
                 )
             }
+            if (hasUnsupportedUnselectedVideoTrack(tracks, videoTrackDisabled = C.TRACK_TYPE_VIDEO in disabledTypes)) {
+                val snapshot = _state.value
+                RavenLog.w(
+                    "Player",
+                    "video track present but unselected for ${snapshot.siteId?.value}/${snapshot.mediaId} " +
+                        "stream=${snapshot.currentStream?.label}",
+                )
+                if (!tryFallbackToCompatibleStream("当前清晰度无法在本机解码")) {
+                    stallTracker.onBufferingChanged(false, clockMs())
+                    player?.pause()
+                    _state.update {
+                        it.copy(
+                            isPlaying = false,
+                            isBuffering = false,
+                            errorMessage = "当前设备无法解码该视频画面，请换一个清晰度或使用外部播放器",
+                            errorCode = PlaybackException.ERROR_CODE_DECODING_FORMAT_UNSUPPORTED,
+                        )
+                    }
+                }
+            }
         }
 
         override fun onVideoSizeChanged(videoSize: VideoSize) {
             if (videoSize.width > 0 && videoSize.height > 0) {
+                noVideoFrameSinceMs = -1L
                 _state.update {
                     it.copy(
                         videoWidth = videoSize.width,
@@ -214,16 +240,11 @@ class PlayerSessionController(
             newPosition: PositionInfo,
             reason: Int,
         ) {
-            if (reason == Player.DISCONTINUITY_REASON_SEEK ||
-                reason == Player.DISCONTINUITY_REASON_SEEK_ADJUSTMENT ||
-                reason == Player.DISCONTINUITY_REASON_AUTO_TRANSITION
-            ) {
-                beginVideoRecovery(clearRenderedFrame = true)
-            }
             syncSnapshot()
         }
 
         override fun onRenderedFirstFrame() {
+            noVideoFrameSinceMs = -1L
             _state.update { it.copy(isVideoFrameReady = true) }
         }
 
@@ -238,6 +259,11 @@ class PlayerSessionController(
                     "state=${_state.value.siteId?.value}/${_state.value.mediaId}",
                 error,
             )
+            if (isDecoderErrorCode(error.errorCode) &&
+                tryFallbackToCompatibleStream("当前清晰度解码失败")
+            ) {
+                return
+            }
             stallTracker.onBufferingChanged(false, clockMs())
             _state.update {
                 it.copy(
@@ -282,8 +308,9 @@ class PlayerSessionController(
         val isNewMedia = _state.value.siteId != siteId || _state.value.mediaId != mediaId
         if (isNewMedia) {
             stallTracker.reset()
-            beginVideoRecovery(clearRenderedFrame = true)
+            resetVideoPresentationForNewMedia()
         }
+        attemptedFallbackUrls.add(chosen.url)
 
         activeStreamCacheEnabled = streamCacheEnabled
         activeSeekCacheEnabled = seekCacheEnabled
@@ -419,7 +446,7 @@ class PlayerSessionController(
         loadGeneration += 1L
         stallTracker.reset()
         closeActiveHlsSeekSession()
-        beginVideoRecovery(clearRenderedFrame = true)
+        resetVideoPresentationForNewMedia()
         activeLocalFilePath = null
         activeCacheKey = cacheKey
         activeSourceRoot = sourceRoot
@@ -517,7 +544,7 @@ class PlayerSessionController(
         loadGeneration += 1L
         stallTracker.reset()
         closeActiveHlsSeekSession()
-        beginVideoRecovery(clearRenderedFrame = true)
+        resetVideoPresentationForNewMedia()
         activeLocalFilePath = file.absolutePath
         activeCacheKey = null
         activeSourceRoot = ""
@@ -586,8 +613,8 @@ class PlayerSessionController(
         val wasPlaying = player?.playWhenReady ?: snapshot.isPlaying
         val speed = player?.playbackParameters?.speed ?: snapshot.playbackSpeed
         val key = cacheKey(siteId, mediaId, stream.quality.ifBlank { stream.label })
-        // Keep the last painted frame while the new stream prepares instead of blanking the surface.
-        beginVideoRecovery(clearRenderedFrame = false)
+        attemptedFallbackUrls.add(stream.url)
+        noVideoFrameSinceMs = -1L
         activeCacheKey = key
 
         val plan = BufferPlanner.planFor(stream, linkSpeedEstimator.estimateKbps())
@@ -676,7 +703,6 @@ class PlayerSessionController(
         val duration = exo.duration.takeIf { it > 0L }
         val clamped = if (duration != null) positionMs.coerceIn(0L, duration) else positionMs.coerceAtLeast(0L)
         exo.seekTo(clamped)
-        beginVideoRecovery(clearRenderedFrame = true)
         // Manual seek outside an active A-B loop clears the loop range.
         val loop = _state.value.loopRange
         if (loop.isActive && !loop.contains(clamped)) {
@@ -729,7 +755,6 @@ class PlayerSessionController(
             return false
         }
         if (loop.shouldRepeat(pos, exo.isPlaying)) {
-            beginVideoRecovery(clearRenderedFrame = true)
             exo.seekTo(loop.startMs)
             syncSnapshot()
             return true
@@ -765,6 +790,8 @@ class PlayerSessionController(
         PlaybackException.ERROR_CODE_IO_FILE_NOT_FOUND -> "视频地址已失效或需要登录，请刷新后重试"
         PlaybackException.ERROR_CODE_DECODING_FAILED,
         PlaybackException.ERROR_CODE_DECODER_INIT_FAILED,
+        PlaybackException.ERROR_CODE_DECODER_QUERY_FAILED,
+        PlaybackException.ERROR_CODE_DECODING_FORMAT_EXCEEDS_CAPABILITIES,
         PlaybackException.ERROR_CODE_DECODING_FORMAT_UNSUPPORTED -> "当前设备无法解码该清晰度，试试较低画质"
         PlaybackException.ERROR_CODE_PARSING_CONTAINER_MALFORMED,
         PlaybackException.ERROR_CODE_PARSING_CONTAINER_UNSUPPORTED,
@@ -772,13 +799,38 @@ class PlayerSessionController(
         else -> error.localizedMessage ?: "播放失败（${error.errorCodeName}）"
     }
 
-    private fun beginVideoRecovery(clearRenderedFrame: Boolean) {
-        if (clearRenderedFrame) {
-            player?.clearVideoSurface()
-            // A detached texture/surface must be rebound before ExoPlayer can render a new frame.
-            _state.update { it.copy(videoRecoveryGeneration = it.videoRecoveryGeneration + 1) }
-        }
+    private fun resetVideoPresentationForNewMedia() {
+        attemptedFallbackUrls.clear()
+        watchdogRecoveryAttempted = false
+        noVideoFrameSinceMs = -1L
+        lastObservedVideoPositionMs = -1L
+        lastObservedVideoGeneration = -1L
         _state.update { it.copy(isVideoFrameReady = false) }
+    }
+
+    private fun tryFallbackToCompatibleStream(reasonPrefix: String): Boolean {
+        val snapshot = _state.value
+        if (snapshot.isOffline || snapshot.isLocal) return false
+        val current = snapshot.currentStream ?: return false
+        attemptedFallbackUrls.add(current.url)
+        val fallback = pickCompatibleFallbackStream(
+            available = snapshot.availableStreams,
+            current = current,
+            attemptedUrls = attemptedFallbackUrls,
+        ) ?: return false
+        attemptedFallbackUrls.add(fallback.url)
+        val label = fallback.label.ifBlank { fallback.quality }
+        RavenLog.w(
+            "Player",
+            "auto-fallback ${snapshot.siteId?.value}/${snapshot.mediaId}: " +
+                "${current.label} -> $label ($reasonPrefix)",
+        )
+        switchStream(
+            stream = fallback,
+            preservePosition = true,
+            notice = "$reasonPrefix，已自动切换至 $label",
+        )
+        return true
     }
 
     /**
@@ -834,6 +886,11 @@ class PlayerSessionController(
             lastObservedVideoPositionMs = videoPosition
             lastObservedVideoGeneration = recoveryGeneration
         }
+        val snapshot = _state.value
+        val frameReady = snapshot.isVideoFrameReady || hasFreshVideoPosition
+        if (frameReady) {
+            noVideoFrameSinceMs = -1L
+        }
         _state.update { current ->
             current.copy(
                 isInitialized = true,
@@ -849,6 +906,29 @@ class PlayerSessionController(
                 errorMessage = if (clearError) null else current.errorMessage,
                 errorCode = if (clearError) null else current.errorCode,
             )
+        }
+
+        // Black-screen watchdog: audio/timeline progresses in READY state with no rendered frame.
+        if (!frameReady &&
+            exo.playbackState == Player.STATE_READY &&
+            exo.isPlaying &&
+            _state.value.videoWidth == 0
+        ) {
+            val now = clockMs()
+            if (noVideoFrameSinceMs < 0L) {
+                noVideoFrameSinceMs = now
+            } else if (now - noVideoFrameSinceMs >= NO_VIDEO_FRAME_WATCHDOG_MS) {
+                noVideoFrameSinceMs = now
+                if (!tryFallbackToCompatibleStream("当前画质长时间无画面") && !watchdogRecoveryAttempted) {
+                    watchdogRecoveryAttempted = true
+                    RavenLog.w(
+                        "Player",
+                        "black-screen watchdog triggering surface rebind for " +
+                            "${_state.value.siteId?.value}/${_state.value.mediaId}",
+                    )
+                    _state.update { it.copy(videoRecoveryGeneration = it.videoRecoveryGeneration + 1L) }
+                }
+            }
         }
     }
 
@@ -930,8 +1010,15 @@ class PlayerSessionController(
             ?: 256
         val renderersFactory = DefaultRenderersFactory(appContext)
             .setEnableDecoderFallback(true)
+        val trackSelector = DefaultTrackSelector(appContext).apply {
+            parameters = buildUponParameters()
+                .setExceedRendererCapabilitiesIfNecessary(true)
+                .setExceedVideoConstraintsIfNecessary(true)
+                .build()
+        }
 
         val created = ExoPlayer.Builder(appContext, renderersFactory)
+            .setTrackSelector(trackSelector)
             .setLoadControl(BufferPlanner.createUnifiedLoadControl(memoryClassMb))
             .setBandwidthMeter(linkSpeedEstimator.meter)
             .setSeekParameters(SeekParameters.CLOSEST_SYNC)
@@ -999,7 +1086,7 @@ class PlayerSessionController(
                 }
             }.createMediaSource(mediaItem)
         } else {
-            val sessionKey = if (seekCacheEnabled) cacheKey else null
+            val sessionKey = if (seekCacheEnabled) seekSessionKey(cacheKey, stream.url) else null
             val factory = downloadCaches.createPlaybackDataSourceFactory(
                 offline = false,
                 siteId = siteId,
@@ -1039,9 +1126,59 @@ class PlayerSessionController(
         const val MAX_SPEED: Float = 4.0f
         const val MIN_PIP_RATIO: Float = 1f / 2.39f
         const val MAX_PIP_RATIO: Float = 2.39f
+        const val NO_VIDEO_FRAME_WATCHDOG_MS: Long = 3_500L
 
         fun cacheKey(siteId: SiteId, mediaId: String, quality: String): String =
             "${siteId.value}:$mediaId:$quality"
+
+        fun seekSessionKey(cacheKey: String, streamUrl: String): String {
+            val urlHash = streamUrl.hashCode().toUInt().toString(16)
+            return "$cacheKey#$urlHash"
+        }
+
+        fun isDecoderErrorCode(errorCode: Int): Boolean =
+            errorCode == PlaybackException.ERROR_CODE_DECODER_INIT_FAILED ||
+                errorCode == PlaybackException.ERROR_CODE_DECODER_QUERY_FAILED ||
+                errorCode == PlaybackException.ERROR_CODE_DECODING_FAILED ||
+                errorCode == PlaybackException.ERROR_CODE_DECODING_FORMAT_EXCEEDS_CAPABILITIES ||
+                errorCode == PlaybackException.ERROR_CODE_DECODING_FORMAT_UNSUPPORTED
+
+        fun hasUnsupportedUnselectedVideoTrack(
+            tracks: Tracks,
+            videoTrackDisabled: Boolean = false,
+        ): Boolean {
+            if (videoTrackDisabled) return false
+            val videoGroups = tracks.groups.filter { it.type == C.TRACK_TYPE_VIDEO }
+            if (videoGroups.isEmpty()) return false
+            return videoGroups.none { it.isSelected }
+        }
+
+        /**
+         * Selects the best alternative [VideoStream] when the current stream fails to decode or
+         * renders audio-only: prefers same-tier alternate packaging (`HLS <-> MP4`) first, then the
+         * highest lower-resolution tier, and finally any untried candidate.
+         */
+        fun pickCompatibleFallbackStream(
+            available: List<VideoStream>,
+            current: VideoStream,
+            attemptedUrls: Set<String> = emptySet(),
+        ): VideoStream? {
+            val candidates = available.filter { it.url != current.url && it.url !in attemptedUrls }
+            if (candidates.isEmpty()) return null
+            val currentHeight = StreamSelector.extractHeight(current)
+            if (currentHeight > 0) {
+                val sameTier = candidates.firstOrNull { StreamSelector.extractHeight(it) == currentHeight }
+                if (sameTier != null) return sameTier
+                val lowerTier = candidates
+                    .filter { StreamSelector.extractHeight(it) in 1 until currentHeight }
+                    .maxByOrNull { StreamSelector.extractHeight(it) }
+                if (lowerTier != null) return lowerTier
+            }
+            return candidates
+                .filter { StreamSelector.extractHeight(it) in 1..1080 }
+                .maxByOrNull { StreamSelector.extractHeight(it) }
+                ?: candidates.firstOrNull()
+        }
 
         internal fun extractTrackOptions(
             tracks: Tracks,

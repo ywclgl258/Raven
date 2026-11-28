@@ -304,7 +304,6 @@ fun VideoPlayerScreen(
 
     val currentExoPlayer by rememberUpdatedState(exoPlayer)
     val currentKeepScreenOn by rememberUpdatedState(uiState.isPlaying)
-    val currentVideoFrameReady by rememberUpdatedState(uiState.isVideoFrameReady)
     val currentVideoRecoveryGeneration by rememberUpdatedState(uiState.videoRecoveryGeneration)
     val currentResizeMode by rememberUpdatedState(resizeMode)
     val currentBoundsCallback by rememberUpdatedState(onVideoBoundsChanged)
@@ -315,10 +314,8 @@ fun VideoPlayerScreen(
             Media3PlayerSurface(
                 player = currentExoPlayer,
                 keepScreenOn = currentKeepScreenOn,
-                isVideoFrameReady = currentVideoFrameReady,
                 videoRecoveryGeneration = currentVideoRecoveryGeneration,
                 resizeMode = currentResizeMode,
-                motionReduced = motionReduced,
                 transformProvider = { zoomScale to panOffset },
                 modifier = Modifier
                     .fillMaxSize()
@@ -775,10 +772,8 @@ private fun Media3PlayerSurface(
     player: ExoPlayer?,
     keepScreenOn: Boolean,
     modifier: Modifier = Modifier,
-    isVideoFrameReady: Boolean = true,
     videoRecoveryGeneration: Long = 0L,
     resizeMode: VideoResizeMode = VideoResizeMode.FIT,
-    motionReduced: Boolean = false,
     transformProvider: () -> Pair<Float, Offset> = { 1f to Offset.Zero },
 ) {
     val targetResizeMode = when (resizeMode) {
@@ -801,19 +796,27 @@ private fun Media3PlayerSurface(
                     ViewGroup.LayoutParams.MATCH_PARENT,
                     ViewGroup.LayoutParams.MATCH_PARENT,
                 )
+                // Keep PlayerView always visible (alpha = 1f) so Android HWUI guarantees
+                // TextureView SurfaceTexture creation; PlayerView's native shutterView covers
+                // unrendered gaps cleanly without starving surface callbacks.
+                alpha = 1f
+                setTag(RECOVERY_GENERATION_TAG_ID, videoRecoveryGeneration)
                 this.player = player
                 this.keepScreenOn = keepScreenOn
-                alpha = if (isVideoFrameReady) 1f else 0f
             }
         },
         update = { view ->
-            if (view.getTag(RECOVERY_GENERATION_TAG_ID) != videoRecoveryGeneration) {
-                // Reattach after clearVideoSurface so TextureView resumes rendering deterministically.
+            val lastRecoveryGen = view.getTag(RECOVERY_GENERATION_TAG_ID) as? Long
+            if (videoRecoveryGeneration > 0L && lastRecoveryGen != videoRecoveryGeneration) {
+                // Watchdog-only deterministic surface rebind when playback is running with no rendered frame.
                 view.player = null
                 view.player = player
                 view.setTag(RECOVERY_GENERATION_TAG_ID, videoRecoveryGeneration)
             } else if (view.player !== player) {
                 view.player = player
+            }
+            if (lastRecoveryGen == null) {
+                view.setTag(RECOVERY_GENERATION_TAG_ID, videoRecoveryGeneration)
             }
             if (view.keepScreenOn != keepScreenOn) {
                 view.keepScreenOn = keepScreenOn
@@ -821,20 +824,11 @@ private fun Media3PlayerSurface(
             if (view.resizeMode != targetResizeMode) {
                 view.resizeMode = targetResizeMode
             }
-            if (!isVideoFrameReady) {
-                view.animate().cancel()
-                if (view.alpha != 0f) view.alpha = 0f
-            } else if (view.alpha < 0.99f) {
-                if (motionReduced) {
-                    view.animate().cancel()
-                    view.alpha = 1f
-                } else {
-                    view.animate().alpha(1f).setDuration(180L).start()
-                }
+            if (view.alpha != 1f) {
+                view.alpha = 1f
             }
         },
         onRelease = { view ->
-            view.animate().cancel()
             view.player = null
             view.keepScreenOn = false
         },

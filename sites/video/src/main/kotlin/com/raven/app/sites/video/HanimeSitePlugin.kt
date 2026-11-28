@@ -794,31 +794,44 @@ class HanimeSitePlugin(
             val id = videoId(fallbackUrl)
                 ?: throw SiteException.ParseError("详情页无法识别：缺少视频 ID", siteId = SiteId.HANIME1)
 
-            val sourceTags = doc.select("video#player source[src]")
-            val streams = sourceTags.mapNotNull { src ->
+            val sourceTags = doc.select("video#player source[src], video source[src]")
+            val directVideoTags = if (sourceTags.isEmpty()) {
+                doc.select("video#player[src], video[src]")
+            } else {
+                emptyList()
+            }
+            val streams = (sourceTags.ifEmpty { directVideoTags }).mapNotNull { src ->
                 val rawUrl = src.attr("src").ifBlank { src.absUrl("src") }.trim()
                 val resolved = VideoSiteSupport.resolveAbsolute(baseUrl, rawUrl)
                 if (!resolved.startsWith("http")) return@mapNotNull null
                 val size = src.attr("size").trim()
                 val type = src.attr("type").trim()
-                val isHls = resolved.substringBefore('?').endsWith(".m3u8", ignoreCase = true) ||
+                val cleanPath = resolved.substringBefore('?').substringBefore('#')
+                val isHls = cleanPath.endsWith(".m3u8", ignoreCase = true) ||
                     type.contains("mpegurl", ignoreCase = true)
-                // `size` may be 1080, 1920x1080, or the 2K/4K aliases; fall back to the file name so
-                // 2K sources without an attribute keep their own tier instead of colliding on "原画".
+                // `size` may be 1080, 1920x1080, or the 2K/4K aliases; fall back to explicit resolution
+                // tokens in the filename only (never misread numeric video IDs like 9001.mp4 as height).
                 val height = VideoSiteSupport.parseStreamHeight(size)
                     .takeIf { it > 0 }
-                    ?: VideoSiteSupport.parseStreamHeight(resolved.substringAfterLast('/'))
+                    ?: VideoSiteSupport.parseStreamHeightFromFilename(cleanPath.substringAfterLast('/'))
                 val label = when {
                     height > 0 -> "${height}p"
                     isHls -> "自动"
                     else -> "原画"
+                }
+                val resolvedMimeHint = when {
+                    isHls -> "application/vnd.apple.mpegurl"
+                    type.startsWith("video/", ignoreCase = true) -> type.substringBefore(';').trim().lowercase(Locale.ROOT)
+                    cleanPath.endsWith(".mp4", ignoreCase = true) -> "video/mp4"
+                    cleanPath.endsWith(".webm", ignoreCase = true) -> "video/webm"
+                    else -> null
                 }
                 VideoStream(
                     quality = label,
                     label = label,
                     url = resolved,
                     isHls = isHls,
-                    mimeTypeHint = if (isHls) "application/vnd.apple.mpegurl" else "video/mp4",
+                    mimeTypeHint = resolvedMimeHint,
                 )
             }.distinctBy { it.url }.let { parsed ->
                 // Two sources at the same tier (e.g. 1080p HLS + 1080p MP4) must stay selectable.
@@ -837,14 +850,21 @@ class HanimeSitePlugin(
                 val scriptSource = JsExtractor.extractJsStringVar(html, "source")
                     ?: sourceLiteralRegex.find(html)?.groupValues?.get(2)?.let { JsExtractor.unescapeJsString(it) }
                 if (!scriptSource.isNullOrBlank() && scriptSource.startsWith("http")) {
-                    val isHls = scriptSource.substringBefore('?').endsWith(".m3u8", ignoreCase = true)
+                    val cleanScriptPath = scriptSource.substringBefore('?').substringBefore('#')
+                    val isHls = cleanScriptPath.endsWith(".m3u8", ignoreCase = true)
+                    val scriptMimeHint = when {
+                        isHls -> "application/vnd.apple.mpegurl"
+                        cleanScriptPath.endsWith(".mp4", ignoreCase = true) -> "video/mp4"
+                        cleanScriptPath.endsWith(".webm", ignoreCase = true) -> "video/webm"
+                        else -> null
+                    }
                     listOf(
                         VideoStream(
                             quality = if (isHls) "auto" else "原画",
                             label = if (isHls) "自动" else "原画",
                             url = scriptSource,
                             isHls = isHls,
-                            mimeTypeHint = if (isHls) "application/vnd.apple.mpegurl" else "video/mp4",
+                            mimeTypeHint = scriptMimeHint,
                         ),
                     )
                 } else {

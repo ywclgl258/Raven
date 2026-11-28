@@ -382,6 +382,27 @@ internal object VideoSiteSupport {
     private val explicitHeightRegex = Regex("(\\d{3,4})\\s*p", RegexOption.IGNORE_CASE)
 
     /**
+     * Vertical height parsed strictly from explicit filename tokens (`4K`, `2K`, `1080p`,
+     * `1920x1080`). Rejects bare numeric video IDs or query parameters so files like
+     * `9001.mp4?expires=1760` never collide with a bogus height.
+     */
+    fun parseStreamHeightFromFilename(rawFilename: String): Int {
+        val clean = rawFilename.substringBefore('?').substringBefore('#').trim()
+        if (clean.isEmpty()) return 0
+        if (fourKRegex.containsMatchIn(clean)) return 2160
+        if (twoKRegex.containsMatchIn(clean)) return 1440
+        explicitHeightRegex.find(clean)?.groupValues?.get(1)?.toIntOrNull()
+            ?.takeIf { it in 144..4320 }?.let { return it }
+        resolutionPairRegex.find(clean)?.groupValues?.let { groups ->
+            val width = groups.getOrNull(1)?.toIntOrNull() ?: 0
+            val height = groups.getOrNull(2)?.toIntOrNull() ?: 0
+            if (height in 144..4320) return height
+            if (width in 144..4320) return width
+        }
+        return 0
+    }
+
+    /**
      * Vertical height for sorting/labels. Accepts `1080p`, `1080`, `1920x1080`, and the `2K`/`4K`
      * aliases Hanime1 uses, so alias labels sort and match like their numeric height.
      */

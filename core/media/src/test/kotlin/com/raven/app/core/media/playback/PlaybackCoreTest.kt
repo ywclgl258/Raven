@@ -3,6 +3,7 @@
 package com.raven.app.core.media.playback
 
 import androidx.media3.common.MimeTypes
+import androidx.media3.common.PlaybackException
 import com.raven.app.core.model.MediaKind
 import com.raven.app.core.model.SiteDescriptor
 import com.raven.app.core.model.SiteId
@@ -346,5 +347,45 @@ class PlaybackCoreTest {
         }
         val refreshed = source.refreshDownloadStreams("https://rule34video.com/video/1/")
         assertEquals(listOf("https://cdn.example/dl.mp4", "https://cdn.example/view.m3u8"), refreshed.map { it.url })
+    }
+
+    @Test
+    fun `compatible fallback prefers same-tier alternate packaging then lower tiers without cycling`() {
+        val hls1440 = VideoStream("1440p", "1440p · HLS", "https://cdn.example/1440.m3u8", isHls = true)
+        val mp4_1440 = VideoStream("1440p", "1440p · MP4", "https://cdn.example/1440.mp4", isHls = false)
+        val hls1080 = VideoStream("1080p", "1080p · HLS", "https://cdn.example/1080.m3u8", isHls = true)
+        val mp4_1080 = VideoStream("1080p", "1080p · MP4", "https://cdn.example/1080.mp4", isHls = false)
+        val mp4_720 = VideoStream("720p", "720p", "https://cdn.example/720.mp4", isHls = false)
+        val streams = listOf(hls1440, mp4_1440, hls1080, mp4_1080, mp4_720)
+
+        // First fallback from 1440p HLS tries alternate 1440p MP4 first
+        val step1 = PlayerSessionController.pickCompatibleFallbackStream(
+            available = streams,
+            current = hls1440,
+            attemptedUrls = setOf(hls1440.url),
+        )
+        assertEquals(mp4_1440, step1)
+
+        // Second fallback drops to highest lower tier (1080p)
+        val step2 = PlayerSessionController.pickCompatibleFallbackStream(
+            available = streams,
+            current = mp4_1440,
+            attemptedUrls = setOf(hls1440.url, mp4_1440.url),
+        )
+        assertEquals(hls1080, step2)
+
+        // Exhausting all alternatives returns null (never cycles)
+        assertNull(
+            PlayerSessionController.pickCompatibleFallbackStream(
+                available = streams,
+                current = mp4_720,
+                attemptedUrls = streams.map { it.url }.toSet(),
+            ),
+        )
+
+        assertTrue(PlayerSessionController.isDecoderErrorCode(PlaybackException.ERROR_CODE_DECODING_FAILED))
+        assertTrue(PlayerSessionController.isDecoderErrorCode(PlaybackException.ERROR_CODE_DECODER_INIT_FAILED))
+        assertTrue(PlayerSessionController.isDecoderErrorCode(PlaybackException.ERROR_CODE_DECODING_FORMAT_EXCEEDS_CAPABILITIES))
+        assertFalse(PlayerSessionController.isDecoderErrorCode(PlaybackException.ERROR_CODE_IO_BAD_HTTP_STATUS))
     }
 }

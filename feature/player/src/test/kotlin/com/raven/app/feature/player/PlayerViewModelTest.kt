@@ -1,6 +1,7 @@
 package com.raven.app.feature.player
 
 import app.cash.turbine.test
+import androidx.media3.common.PlaybackException
 import com.raven.app.core.media.download.OfflineMediaHandle
 import com.raven.app.core.media.playback.VideoLoopRange
 import com.raven.app.core.model.PlaybackPreferences
@@ -1214,5 +1215,31 @@ class PlayerViewModelTest {
         advanceUntilIdle()
         assertNull(harness.playbackPort.state.value.errorMessage)
         assertTrue(harness.playbackPort.onlineLoads.size >= 2)
+    }
+
+    @Test
+    fun `decoder error does not trigger expired stream URL refresh`() = runTest {
+        val harness = PlayerTestHarness(mainDispatcherRule.dispatcher)
+        var refreshCalls = 0
+        val (registry, _) = buildRegistry(
+            r34vRefreshHandler = {
+                refreshCalls += 1
+                sampleStreams("v-dec")
+            },
+        )
+        val vm = harness.createViewModel(
+            registry,
+            initialArgs = PlayerLaunchArgs(SiteId.R34V, "v-dec", "https://r34v.example/video/v-dec"),
+        )
+        advanceUntilIdle()
+
+        harness.playbackPort.simulatePlaybackError(
+            message = "当前设备无法解码该清晰度，试试较低画质",
+            errorCode = PlaybackException.ERROR_CODE_DECODING_FAILED,
+        )
+        advanceUntilIdle()
+
+        assertEquals(0, refreshCalls)
+        assertFalse(harness.playbackPort.state.value.hasRefreshedExpiredStream)
     }
 }

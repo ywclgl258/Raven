@@ -1116,8 +1116,10 @@ class PlayerViewModel(
             playback.state.collect { engine ->
                 val target = activeTarget.value ?: return@collect
 
-                // 1. 1-time automatic expired stream URL refresh on online playback errors
+                // 1. 1-time automatic expired stream URL refresh on non-decoder online playback errors
+                val isDecoderError = engine.errorCode?.let(PlayerSessionController::isDecoderErrorCode) == true
                 if (engine.errorMessage != null &&
+                    !isDecoderError &&
                     !engine.isOffline &&
                     !engine.isLocal &&
                     !engine.hasRefreshedExpiredStream &&

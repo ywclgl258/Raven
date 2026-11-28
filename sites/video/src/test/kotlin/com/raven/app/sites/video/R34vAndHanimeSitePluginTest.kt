@@ -453,6 +453,27 @@ class R34vAndHanimeSitePluginTest {
     }
 
     @Test
+    fun `hanime1 rejects numeric video ids as resolution keeps query mime sniffing and parses direct video src`() = runTest {
+        val fakeHttp = FakeHttpClientAdapter()
+        val store = InMemorySiteSessionStore()
+        fakeHttp.onGet(
+            "https://hanime1.me/watch?v=9001",
+            body = """
+                <html><body>
+                    <h3 id="shareBtn-title">Numeric ID Filename</h3>
+                    <video id="player" src="https://vdownload.hembed.com/9001?expires=1760"></video>
+                </body></html>
+            """.trimIndent(),
+        )
+        val plugin = HanimeSitePlugin(fakeHttp, store, rateLimitBackoffMs = 0L)
+        val detail = plugin.videoSource.loadVideoDetail("https://hanime1.me/watch?v=9001")
+        assertEquals(1, detail.streams.size)
+        // Must NOT misread "9001" as resolution height and must NOT force video/mp4 when extensionless.
+        assertEquals("原画", detail.streams[0].label)
+        assertNull(detail.streams[0].mimeTypeHint)
+    }
+
+    @Test
     fun `hanime1 login verifies 404 on second login GET and persists session`() = runTest {
         val fakeHttp = FakeHttpClientAdapter()
         val store = InMemorySiteSessionStore()
