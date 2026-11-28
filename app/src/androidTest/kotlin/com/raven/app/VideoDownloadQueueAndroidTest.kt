@@ -23,8 +23,11 @@ import java.util.concurrent.TimeUnit
 import android.net.Uri
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
@@ -138,8 +141,8 @@ class VideoDownloadQueueAndroidTest {
             second.countDown()
             third.countDown()
             await { listOf("active-2", "C").all { repository.getById(it)?.status == DownloadStatus.PAUSED } }
-            scope.cancel()
             withContext(Dispatchers.Main) { engine.manager.release() }
+            scope.coroutineContext[Job]?.cancelAndJoin()
             caches.close()
             db.close()
 
@@ -153,16 +156,18 @@ class VideoDownloadQueueAndroidTest {
             assertEquals("B", nextStarted.poll(12, TimeUnit.SECONDS))
             assertEquals("A", nextStarted.poll(12, TimeUnit.SECONDS))
         } finally {
-            first.countDown()
-            second.countDown()
-            third.countDown()
-            scope.cancel()
-            withContext(Dispatchers.Main) { engine.manager.release() }
-            caches.close()
-            index.close()
-            db.close()
-            context.deleteDatabase(databaseName)
-            root.deleteRecursively()
+            withContext(NonCancellable) {
+                first.countDown()
+                second.countDown()
+                third.countDown()
+                runCatching { withContext(Dispatchers.Main) { engine.manager.release() } }
+                scope.coroutineContext[Job]?.cancelAndJoin()
+                runCatching { caches.close() }
+                runCatching { index.close() }
+                runCatching { db.close() }
+                context.deleteDatabase(databaseName)
+                root.deleteRecursively()
+            }
         }
     }
 }
