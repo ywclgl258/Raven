@@ -168,6 +168,26 @@ class GalleryDetailViewModel(
     private val _events = MutableSharedFlow<GalleryDetailEvent>(extraBufferCapacity = 4)
     val events: SharedFlow<GalleryDetailEvent> = _events.asSharedFlow()
 
+    /** Tag/author long-press sheet state + subscriptions/blocks (see [GalleryTagActionController]). */
+    private val tagActions = GalleryTagActionController(
+        siteId = siteId,
+        scope = viewModelScope,
+        dispatchers = dispatchers,
+        clock = clock,
+        favorites = favoriteRepository,
+        subscriptions = subscriptionRepository,
+        preferences = preferencesRepository,
+        blockedTerms = blockedTermsRepository,
+        tagDictionaryRepository = tagDictionaryRepository,
+        dictionary = tagDictionary,
+        state = { _uiState.value },
+        update = { transform -> _uiState.update(transform) },
+        snackbar = ::emitSnackbar,
+        label = ::formatTagLabel,
+        translateLabel = ::formatTagLabelInternal,
+    )
+
+
     private var loadJob: Job? = null
     private var exportJob: Job? = null
     private var chaptersJob: Job? = null
@@ -829,13 +849,8 @@ class GalleryDetailViewModel(
     fun isTagBlocked(tag: TagRef): Boolean =
         matchesBlockedTerms(tag, _uiState.value.blockedTerms)
 
-    private fun formatTagLabelInternal(tag: TagRef, translateTags: Boolean): String {
-        val raw = tag.label.ifBlank { tag.slug }
-        if (!translateTags) return raw
-        val translated = tagDictionary.translate(tag.slug, tag.namespace)
-            ?: tagDictionary.translate(raw, tag.namespace)
-        return translated ?: raw
-    }
+    private fun formatTagLabelInternal(tag: TagRef, translateTags: Boolean): String =
+        tagDisplayLabel(tag, translateTags, tagDictionary)
 
     fun toggleFavorite() {
         val detail = _uiState.value.detail ?: return
@@ -1135,140 +1150,24 @@ class GalleryDetailViewModel(
     private fun subscriptionSlug(tag: TagRef): String =
         tag.slug.trim().ifBlank { tag.label.trim() }
 
-    // ---- Tag Long-Press Action Sheet ----
+    // ---- Tag / Author Long-Press Action Sheet（实现见 GalleryTagActionController）----
 
-    fun openTagActions(tag: TagRef) {
-        val state = _uiState.value
-        val normSlug = subscriptionSlug(tag).lowercase()
-        _uiState.update {
-            it.copy(
-                tagAction = TagActionState(
-                    tag = tag,
-                    translatedLabel = formatTagLabel(tag),
-                    isFavorited = normSlug in state.favoritedTagSlugs,
-                    isSubscribed = normSlug in state.subscribedTagSlugs,
-                    isBlocked = matchesBlockedTerms(tag, state.blockedTerms),
-                ),
-                authorAction = null,
-            )
-        }
-    }
+    fun openTagActions(tag: TagRef) = tagActions.open(tag)
 
-    fun dismissTagActions() {
-        _uiState.update { it.copy(tagAction = null) }
-    }
+    fun dismissTagActions() = tagActions.dismissTag()
 
-    // ---- Author Long-Press Action Sheet ----
+    fun openAuthorActions(author: AuthorRef) = tagActions.openAuthor(author)
 
-    fun openAuthorActions(author: AuthorRef) {
-        _uiState.update { it.copy(authorAction = author, tagAction = null) }
-    }
+    fun dismissAuthorActions() = tagActions.dismissAuthor()
 
-    fun dismissAuthorActions() {
-        _uiState.update { it.copy(authorAction = null) }
-    }
+    fun toggleTagFavorite(tag: TagRef) = tagActions.toggleFavorite(tag)
 
-    fun toggleTagFavorite(tag: TagRef) {
-        viewModelScope.launch(dispatchers.io) {
-            val label = formatTagLabel(tag)
-            val added = favoriteRepository.toggle(
-                FavoriteItem(
-                    siteId = siteId,
-                    targetId = tag.slug,
-                    kind = FavoriteKind.TAG,
-                    title = label,
-                    url = tag.url,
-                    addedAt = clock(),
-                    extra = buildMap {
-                        if (tag.namespace.isNotBlank()) put("namespace", tag.namespace)
-                    },
-                ),
-            )
-            emitSnackbar(if (added) "已收藏标签「$label」" else "已取消收藏标签「$label」")
-        }
-    }
+    fun toggleTagSubscription(tag: TagRef) = tagActions.toggleSubscription(tag)
 
-    fun toggleTagSubscription(tag: TagRef) {
-        viewModelScope.launch(dispatchers.io) {
-            val label = formatTagLabel(tag)
-            val slug = subscriptionSlug(tag)
-            if (slug.isEmpty()) {
-                emitSnackbar("无法订阅标签「$label」：缺少标签标识")
-                return@launch
-            }
-            val subscribed = subscriptionRepository.toggleSubscription(
-                TagSubscription(
-                    siteId = siteId,
-                    slug = slug,
-                    label = label,
-                    url = tag.url,
-                    scope = SearchScope.TAG,
-                    createdAt = clock(),
-                ),
-            )
-            emitSnackbar(if (subscribed) "已订阅标签「$label」" else "已取消订阅标签「$label」")
-        }
-    }
+    fun toggleTagBlocked(tag: TagRef) = tagActions.toggleBlocked(tag)
 
-    fun toggleTagBlocked(tag: TagRef) {
-        viewModelScope.launch(dispatchers.io) {
-            val label = formatTagLabel(tag)
-            val term = tag.slug.trim().ifBlank { tag.label.trim() }
-            if (term.isEmpty()) return@launch
-            val settings = preferencesRepository.currentSettings()
-            val primaryScope = if (settings.blockTagsGlobally) SiteId.GLOBAL else siteId
-            val normalized = ContentFilter.normalizeTerm(term)
-            val globalTerms = blockedTermsRepository.observeGlobalTerms().first()
-            val siteTerms = blockedTermsRepository.observeTermsBySite(siteId).first()
-            val matchingGlobal = globalTerms.filter { isMatchingTermForTag(tag, it) }
-            val matchingSite = siteTerms.filter { isMatchingTermForTag(tag, it) }
-            val nowBlocked = if (matchingGlobal.isNotEmpty() || matchingSite.isNotEmpty()) {
-                matchingGlobal.forEach { blockedTermsRepository.removeTerm(SiteId.GLOBAL, it) }
-                matchingSite.forEach { blockedTermsRepository.removeTerm(siteId, it) }
-                false
-            } else {
-                blockedTermsRepository.addTerm(primaryScope, normalized)
-                true
-            }
-            val msg = when {
-                !nowBlocked -> "已取消屏蔽「$label」"
-                settings.blockTagsGlobally -> "已全局屏蔽「$label」"
-                else -> "已在当前站点屏蔽「$label」"
-            }
-            emitSnackbar(msg)
-        }
-    }
-
-    fun saveCustomTagTranslation(tag: TagRef, chineseName: String) {
-        val repo = tagDictionaryRepository ?: return
-        val slug = tag.slug.trim().ifBlank { tag.label.trim() }
-        val cleanZh = chineseName.trim()
-        if (slug.isEmpty() || cleanZh.isEmpty()) {
-            emitSnackbar("请输入有效的中文译名")
-            return
-        }
-        viewModelScope.launch(dispatchers.io) {
-            val saved = repo.upsertCustomTranslation(
-                rawSlug = slug,
-                chineseName = cleanZh,
-                namespace = tag.namespace,
-            )
-            if (saved) {
-                repo.hydrateRuntimeDictionary()
-                _uiState.update { state ->
-                    val updatedAction = state.tagAction?.let { action ->
-                        if (action.tag.slug == tag.slug && action.tag.namespace == tag.namespace) {
-                            action.copy(translatedLabel = formatTagLabelInternal(action.tag, state.translateTags))
-                        } else {
-                            action
-                        }
-                    }
-                    state.copy(tagAction = updatedAction)
-                }
-                emitSnackbar("已更新中文译名：$cleanZh")
-            }
-        }
-    }
+    fun saveCustomTagTranslation(tag: TagRef, chineseName: String) =
+        tagActions.saveCustomTranslation(tag, chineseName)
 
     // ---- CBZ Export ----
 
@@ -1414,34 +1313,10 @@ class GalleryDetailViewModel(
         }
     }
 
-    private fun matchesBlockedTerms(tag: TagRef, blockedTerms: Set<String>): Boolean {
-        if (blockedTerms.isEmpty()) return false
-        return blockedTerms.any { isMatchingTermForTag(tag, it) }
-    }
+    private fun matchesBlockedTerms(tag: TagRef, blockedTerms: Set<String>): Boolean =
+        tagMatchesBlockedTerms(tag, blockedTerms, tagDictionary)
 
-    private fun isMatchingTermForTag(tag: TagRef, blockedTerm: String): Boolean {
-        val slugOrLabel = tag.slug.ifBlank { tag.label }
-        val tagCandidates = buildSet {
-            val norm = ContentFilter.normalizeTerm(slugOrLabel)
-            if (norm.isNotEmpty()) add(norm)
-            val bare = ContentFilter.canonicalizeForMatching(slugOrLabel)
-            if (bare.isNotEmpty()) add(bare)
-            addAll(tagDictionary.expandSynonyms(slugOrLabel))
-            if (tag.label.isNotBlank() && tag.label != slugOrLabel) {
-                addAll(tagDictionary.expandSynonyms(tag.label))
-            }
-        }
-        val bNorm = ContentFilter.normalizeTerm(blockedTerm)
-        val bBare = ContentFilter.canonicalizeForMatching(blockedTerm)
-        if (bNorm in tagCandidates || bBare in tagCandidates) return true
-        return tagDictionary.expandSynonyms(blockedTerm).any { it in tagCandidates }
-    }
-
-    private fun favoriteKindFor(kind: MediaKind): FavoriteKind = when (kind) {
-        MediaKind.PHOTO -> FavoriteKind.PHOTO
-        MediaKind.VIDEO -> FavoriteKind.VIDEO
-        MediaKind.COMIC, MediaKind.SERIAL_COMIC -> FavoriteKind.COMIC
-    }
+    private fun favoriteKindFor(kind: MediaKind): FavoriteKind = favoriteKindOf(kind)
 
     private data class PersonalBaseSnapshot(
         val progress: ReadingProgress?,

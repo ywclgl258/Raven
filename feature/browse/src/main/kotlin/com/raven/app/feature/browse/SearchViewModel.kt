@@ -834,11 +834,7 @@ class SearchViewModel(
     }
 
     private fun normalizeCrossSiteSelection(ids: List<SiteId>): List<SiteId> =
-        if (ids.size == searchableDescriptors.size && ids.toSet() == searchableIdSet) {
-            emptyList()
-        } else {
-            ids
-        }
+        normalizeCrossSiteSelection(ids, searchableDescriptors, searchableIdSet)
 
     fun toggleCrossSiteResultFilter(siteId: SiteId) {
         inputState.update { current ->
@@ -1496,22 +1492,8 @@ class SearchViewModel(
         plugin: SitePlugin,
         baseFilters: AdvancedSearchFilters,
         effectiveBlockedTerms: Collection<String>,
-    ): AdvancedSearchFilters {
-        val searchSource = plugin.searchSource ?: return baseFilters
-        val supportsExclude = searchSource.supportsExcludeTags ||
-            AdvancedFilterField.EXCLUDE_TAGS in searchSource.supportedFilters
-        if (!supportsExclude || effectiveBlockedTerms.isEmpty()) return baseFilters
-        val merged = mergeBlockedExcludeTags(
-            existingExcludeTags = baseFilters.excludeTags,
-            effectiveBlockedTerms = effectiveBlockedTerms,
-            tagDictionary = tagDictionary,
-        )
-        return if (merged == baseFilters.excludeTags) {
-            baseFilters
-        } else {
-            baseFilters.copy(excludeTags = merged)
-        }
-    }
+    ): AdvancedSearchFilters =
+        serverExcludeFiltersFor(plugin, baseFilters, effectiveBlockedTerms, tagDictionary)
 
     private fun updateCrossBucket(
         siteId: SiteId,
@@ -1529,23 +1511,8 @@ class SearchViewModel(
         crossPerSiteJobs.clear()
     }
 
-    private fun interleaveBuckets(buckets: List<CrossSiteBucketState>): List<MediaItem> {
-        val lists = buckets.map { it.items }.filter { it.isNotEmpty() }
-        if (lists.isEmpty()) return emptyList()
-        if (lists.size == 1) return lists.first()
-        val maxLen = lists.maxOf { it.size }
-        val result = ArrayList<MediaItem>(lists.sumOf { it.size })
-        val seen = HashSet<String>()
-        for (i in 0 until maxLen) {
-            for (list in lists) {
-                val item = list.getOrNull(i) ?: continue
-                if (seen.add(item.compositeKey)) {
-                    result.add(item)
-                }
-            }
-        }
-        return result
-    }
+    private fun interleaveBuckets(buckets: List<CrossSiteBucketState>): List<MediaItem> =
+        interleaveCrossSiteBuckets(buckets)
 
     private suspend fun fetchDiscoveryWorks(plugin: SitePlugin): List<MediaItem> {
         val siteId = plugin.id
@@ -1662,11 +1629,7 @@ class SearchViewModel(
     }
 
     private fun resolveActiveSiteId(preferred: SiteId): SiteId =
-        if (siteRegistry.get(preferred) != null) {
-            preferred
-        } else {
-            allDescriptors.firstOrNull()?.id ?: preferred
-        }
+        resolveActiveSite(preferred, siteRegistry, allDescriptors)
 
     companion object {
         const val MAX_CONCURRENT_CROSS_SITE_SEARCHES: Int = 3

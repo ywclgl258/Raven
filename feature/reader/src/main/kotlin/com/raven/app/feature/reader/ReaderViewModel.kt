@@ -43,7 +43,6 @@ import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -179,18 +178,36 @@ class ReaderViewModel(
     private val _events = MutableSharedFlow<ReaderEvent>(extraBufferCapacity = 8)
     val events: SharedFlow<ReaderEvent> = _events.asSharedFlow()
 
+    /**
+     * Reading-progress pipeline (750ms debounce, appended-chapter anchor, immediate flush).
+     * Series identity resolves through the same `activeSeriesMetadata` cache the chapter
+     * navigator uses, so opaque chapter ids keep their work identity.
+     */
+    private val progressStore = ReaderProgressStore(
+        siteId = siteId,
+        mediaId = mediaId,
+        routeUrl = url,
+        isInvalidSiteId = isInvalidSiteId,
+        historyRepository = historyRepository,
+        dispatchers = dispatchers,
+        viewModelScope = viewModelScope,
+        persistenceScope = persistenceScope,
+        clock = clock,
+        state = { _uiState.value },
+        incognito = { latestIncognitoMode },
+        seriesFor = { detail ->
+            activeSeriesMetadata ?: resolveSeriesMetadata(detail).also { activeSeriesMetadata = it }
+        },
+    )
+
     private var readerBuffer: ReaderBuffer<LoadedReaderPage>? = null
     private var bufferCollectJob: Job? = null
     private var loadJob: Job? = null
-    private var progressSaveJob: Job? = null
     private var autoPageJob: Job? = null
     private var exportJob: Job? = null
     private var chapterListJob: Job? = null
     private var chapterAdvanceJob: Job? = null
     private var appendNextChapterJob: Job? = null
-    private var appendedProgressSaveJob: Job? = null
-    // Latest appended-chapter anchor awaiting the debounce; flushed on early exit / onCleared.
-    private var pendingAppendedProgress: PendingAppendedProgress? = null
     @Volatile
     private var activeSeriesMetadata: RavenRoute.ReaderParent? = null
     private val appendedChapterBuffers: MutableMap<String, ReaderBuffer<LoadedReaderPage>> = ConcurrentHashMap()
@@ -208,9 +225,6 @@ class ReaderViewModel(
     private var serialChaptersPrepared: Boolean = false
     private var chapterTransitionEmitted: Boolean = false
 
-    private var hasDirtyProgress: Boolean = false
-    private var lastSavedPage: Int = -1
-    private var lastSavedOffsetPx: Int = -1
     private var activePreferOriginal: Boolean = false
     private var activePrefetchPages: Int = ReaderBuffer.PREFETCH_AHEAD
     private var activeMemoryBudgetBytes: Long = ReaderBuffer.DEFAULT_OFFSCREEN_BUDGET_BYTES
@@ -489,7 +503,7 @@ class ReaderViewModel(
                 )
 
                 _events.emit(ReaderEvent.ScrollToPage(page = initialPage, scrollOffsetPx = initialOffset))
-                scheduleProgressSave(page = initialPage, scrollOffsetPx = initialOffset)
+                progressStore.schedule(page = initialPage, scrollOffsetPx = initialOffset)
                 prepareSerialChapters(detail)
             } catch (ce: CancellationException) {
                 throw ce
@@ -860,80 +874,11 @@ class ReaderViewModel(
         chapter: SerialStripChapter,
         page: Int,
         scrollOffsetPx: Int,
-    ) {
-        val series = activeSeriesMetadata ?: resolveSeriesMetadata(chapter.detail).also {
-            activeSeriesMetadata = it
-        }
-        // Remember the newest appended-chapter anchor so an early exit (before the debounce elapses)
-        // can still flush it instead of only persisting the first chapter's stale position.
-        pendingAppendedProgress = PendingAppendedProgress(
-            mediaId = chapter.mediaId,
-            url = chapter.url,
-            title = chapter.title,
-            coverUrl = chapter.detail.item.coverUrl,
-            kind = chapter.detail.item.kind,
-            page = page,
-            totalPages = chapter.pageNumbers.size.coerceAtLeast(1),
-            scrollOffsetPx = scrollOffsetPx,
-            series = series,
-        )
-        appendedProgressSaveJob?.cancel()
-        appendedProgressSaveJob = viewModelScope.launch(dispatchers.io) {
-            delay(PROGRESS_SAVE_DEBOUNCE_MS)
-            // Reverse scrolling back to the primary chapter (or into a different appended chapter)
-            // must not let this delayed write promote an outdated chapter in history.
-            if (_uiState.value.activeStripChapterId != chapter.mediaId) {
-                if (pendingAppendedProgress?.mediaId == chapter.mediaId) {
-                    pendingAppendedProgress = null
-                }
-                return@launch
-            }
-            persistProgressEntity(
-                siteId = siteId,
-                mediaId = chapter.mediaId,
-                url = chapter.url,
-                title = chapter.title,
-                coverUrl = chapter.detail.item.coverUrl,
-                kind = chapter.detail.item.kind,
-                currentPage = page,
-                totalPages = chapter.pageNumbers.size.coerceAtLeast(1),
-                scrollOffsetPx = scrollOffsetPx,
-                series = series,
-            )
-            if (pendingAppendedProgress?.mediaId == chapter.mediaId) {
-                pendingAppendedProgress = null
-            }
-        }
-    }
-
-    private data class PendingAppendedProgress(
-        val mediaId: String,
-        val url: String,
-        val title: String,
-        val coverUrl: String,
-        val kind: com.raven.app.core.model.MediaKind,
-        val page: Int,
-        val totalPages: Int,
-        val scrollOffsetPx: Int,
-        val series: RavenRoute.ReaderParent?,
+    ) = progressStore.scheduleAppended(
+        chapter = chapter,
+        page = page,
+        scrollOffsetPx = scrollOffsetPx,
     )
-
-    /** Persists the pending appended-chapter anchor synchronously; safe under cancellation. */
-    private suspend fun flushPendingAppendedProgress() {
-        val pending = pendingAppendedProgress ?: return
-        persistProgressEntity(
-            siteId = siteId,
-            mediaId = pending.mediaId,
-            url = pending.url,
-            title = pending.title,
-            coverUrl = pending.coverUrl,
-            kind = pending.kind,
-            currentPage = pending.page,
-            totalPages = pending.totalPages,
-            scrollOffsetPx = pending.scrollOffsetPx,
-            series = pending.series,
-        )
-    }
 
     fun completeReaderTutorial() {
         _uiState.update { it.copy(showReaderTutorial = false) }
@@ -1180,7 +1125,7 @@ class ReaderViewModel(
                     stripScrollOffsetPx = if (it.preferences.mode == ReaderMode.STRIP) safeOffset else it.stripScrollOffsetPx,
                 )
             }
-            scheduleProgressSave(page = safeAnchor, scrollOffsetPx = safeOffset)
+            progressStore.schedule(page = safeAnchor, scrollOffsetPx = safeOffset)
             maybeTriggerQueueCompletion(safeAnchor)
         }
         readerBuffer?.updateWindow(page = safeAnchor, visible = safeVisible)
@@ -1238,7 +1183,7 @@ class ReaderViewModel(
         val visible = _uiState.value.currentSheetPages.toSet()
         readerBuffer?.updateWindow(page = target, visible = visible)
         _events.tryEmit(ReaderEvent.ScrollToPage(page = target, scrollOffsetPx = safeOffset, chapterId = mediaId))
-        scheduleProgressSave(page = target, scrollOffsetPx = safeOffset)
+        progressStore.schedule(page = target, scrollOffsetPx = safeOffset)
         maybeTriggerQueueCompletion(target)
     }
 
@@ -1954,159 +1899,14 @@ class ReaderViewModel(
         _uiState.update { it.copy(queueSession = previous, showQueueNextCard = true) }
     }
 
-    // ---- 750ms Debounced Progress Persistence + Immediate Flush on Dispose ----
+    // ---- 进度持久化（750ms 防抖 + 立即冲刷；实现见 ReaderProgressStore）----
 
-    private fun scheduleProgressSave(page: Int, scrollOffsetPx: Int) {
-        if (_uiState.value.detail == null) return
-        hasDirtyProgress = true
-        progressSaveJob?.cancel()
-        progressSaveJob = viewModelScope.launch(dispatchers.io) {
-            delay(PROGRESS_SAVE_DEBOUNCE_MS)
-            persistProgressInternal(page = page, scrollOffsetPx = scrollOffsetPx)
-        }
-    }
-
-    /**
-     * Cancels any pending 750ms debounce timer and flushes the latest reading progress immediately.
-     * Safe to invoke from `DisposableEffect.onDispose`, `ON_STOP`, and `onCleared`.
-     */
-    fun flushProgress() {
-        progressSaveJob?.cancel()
-        progressSaveJob = null
-        appendedProgressSaveJob?.cancel()
-        appendedProgressSaveJob = null
-        val state = _uiState.value
-        val detail = state.detail ?: return
-        val activeChapterId = state.activeStripChapterId
-        val scope = persistenceScope ?: viewModelScope
-        val pendingChapter = pendingAppendedProgress
-        if (pendingChapter != null) {
-            if (activeChapterId == pendingChapter.mediaId) {
-                // The appended chapter still owns the viewport: flush it under NonCancellable so a
-                // fast exit cannot lose its position while the delayed job is cancelled.
-                scope.launch(dispatchers.io + NonCancellable) {
-                    flushPendingAppendedProgress()
-                    if (pendingAppendedProgress?.mediaId == pendingChapter.mediaId) {
-                        pendingAppendedProgress = null
-                    }
-                }
-            } else {
-                // Reverse scrolling left a stale appended anchor; never write it over the primary row.
-                pendingAppendedProgress = null
-            }
-        }
-        // While an appended chapter is active it owns the latest history row; writing the primary
-        // row here would promote a chapter the reader has already scrolled past.
-        if (activeChapterId != null) return
-        if (!hasDirtyProgress && lastSavedPage == state.currentPage && lastSavedOffsetPx == state.stripScrollOffsetPx) {
-            return
-        }
-        val page = state.currentPage
-        val offset = state.stripScrollOffsetPx
-        val total = state.totalPages.coerceAtLeast(1)
-        val item = detail.item
-        val series = activeSeriesMetadata ?: resolveSeriesMetadata(detail)
-        scope.launch(dispatchers.io + NonCancellable) {
-            persistProgressEntity(
-                siteId = siteId,
-                mediaId = mediaId,
-                url = item.url.ifBlank { url },
-                title = item.title,
-                coverUrl = item.coverUrl,
-                kind = item.kind,
-                currentPage = page,
-                totalPages = total,
-                scrollOffsetPx = offset,
-                series = series,
-            )
-        }
-    }
+    /** Cancels any pending debounce timer and flushes the latest reading progress immediately. */
+    fun flushProgress() = progressStore.flush()
 
     /** Suspend helper for immediate deterministic flushing (e.g., tests or pre-navigation). */
-    suspend fun flushProgressNow() {
-        progressSaveJob?.cancel()
-        progressSaveJob = null
-        appendedProgressSaveJob?.cancel()
-        appendedProgressSaveJob = null
-        val state = _uiState.value
-        if (state.detail == null) return
-        val activeChapterId = state.activeStripChapterId
-        withContext(dispatchers.io + NonCancellable) {
-            val pendingChapter = pendingAppendedProgress
-            if (pendingChapter != null && activeChapterId == pendingChapter.mediaId) {
-                flushPendingAppendedProgress()
-            }
-            pendingAppendedProgress = null
-            if (activeChapterId == null) {
-                persistProgressInternal(
-                    page = state.currentPage,
-                    scrollOffsetPx = state.stripScrollOffsetPx,
-                )
-            }
-        }
-    }
+    suspend fun flushProgressNow() = progressStore.flushNow()
 
-    private suspend fun persistProgressInternal(page: Int, scrollOffsetPx: Int) {
-        val state = _uiState.value
-        val detail = state.detail ?: return
-        val item = detail.item
-        val total = state.totalPages.coerceAtLeast(1)
-        val series = activeSeriesMetadata ?: resolveSeriesMetadata(detail)
-        persistProgressEntity(
-            siteId = siteId,
-            mediaId = mediaId,
-            url = item.url.ifBlank { url },
-            title = item.title,
-            coverUrl = item.coverUrl,
-            kind = item.kind,
-            currentPage = page,
-            totalPages = total,
-            scrollOffsetPx = scrollOffsetPx,
-            series = series,
-        )
-    }
-
-    private suspend fun persistProgressEntity(
-        siteId: SiteId,
-        mediaId: String,
-        url: String,
-        title: String,
-        coverUrl: String,
-        kind: com.raven.app.core.model.MediaKind,
-        currentPage: Int,
-        totalPages: Int,
-        scrollOffsetPx: Int,
-        series: RavenRoute.ReaderParent?,
-    ) {
-        if (isInvalidSiteId || latestIncognitoMode) {
-            hasDirtyProgress = false
-            return
-        }
-        val clampedPage = currentPage.coerceIn(1, totalPages.coerceAtLeast(1))
-        val clampedOffset = scrollOffsetPx.coerceAtLeast(0)
-        runCatching {
-            historyRepository.saveReadingProgress(
-                ReadingProgress(
-                    siteId = siteId,
-                    mediaId = mediaId,
-                    url = url,
-                    title = title,
-                    coverUrl = coverUrl,
-                    kind = kind,
-                    currentPage = clampedPage,
-                    totalPages = totalPages,
-                    scrollOffsetPx = clampedOffset,
-                    updatedAt = clock(),
-                    seriesId = series?.seriesId,
-                    seriesTitle = series?.title?.takeIf(String::isNotBlank),
-                    seriesUrl = series?.url?.takeIf(String::isNotBlank),
-                ),
-            )
-            hasDirtyProgress = false
-            lastSavedPage = clampedPage
-            lastSavedOffsetPx = clampedOffset
-        }
-    }
 
     fun clearSnackbar() {
         _uiState.update { it.copy(snackbarMessage = null) }
@@ -2121,7 +1921,7 @@ class ReaderViewModel(
         chapterListJob?.cancel()
         chapterAdvanceJob?.cancel()
         appendNextChapterJob?.cancel()
-        appendedProgressSaveJob?.cancel()
+        progressStore.cancel()
         bufferCollectJob?.cancel()
         appendedChapterCollectJobs.values.forEach { it.cancel() }
         appendedChapterCollectJobs.clear()
@@ -2133,23 +1933,13 @@ class ReaderViewModel(
         super.onCleared()
     }
 
-    private fun clearPendingAppendedProgress() {
-        pendingAppendedProgress = null
-        appendedProgressSaveJob?.cancel()
-        appendedProgressSaveJob = null
-    }
+    private fun clearPendingAppendedProgress() = progressStore.clearPending()
+
 
     /** Persist the primary chapter anchor before an appended chapter becomes the viewport owner. */
-    private fun persistPrimaryAnchorBeforeAppended(state: ReaderUiState) {
-        if (!hasDirtyProgress) return
-        progressSaveJob?.cancel()
-        progressSaveJob = null
-        val page = state.currentPage
-        val offset = state.stripScrollOffsetPx
-        viewModelScope.launch(dispatchers.io + NonCancellable) {
-            persistProgressInternal(page = page, scrollOffsetPx = offset)
-        }
-    }
+    private fun persistPrimaryAnchorBeforeAppended(state: ReaderUiState) =
+        progressStore.persistPrimaryAnchorBeforeAppended(state)
+
 
     /**
      * Series identity shared by every chapter row of the same work. An explicit route parent wins,

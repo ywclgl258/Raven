@@ -168,6 +168,22 @@ class PlayerViewModel(
     private val _sideEffects = MutableSharedFlow<PlayerSideEffect>(extraBufferCapacity = 16)
     val sideEffects: SharedFlow<PlayerSideEffect> = _sideEffects.asSharedFlow()
 
+    /** Tag chip subscribe/block/translation actions (see [PlayerTagActions]). */
+    private val tagActions = PlayerTagActions(
+        scope = viewModelScope,
+        dispatchers = dispatchers,
+        clock = clockMs,
+        activeSiteId = { activeTarget.value?.siteId },
+        subscriptions = subscriptionRepository,
+        preferences = preferencesRepository,
+        blockedTerms = blockedTermsRepository,
+        tagDictionaryRepository = tagDictionaryRepository,
+        dictionary = tagDictionary,
+        matchesBlockedTerm = ::isMatchingTermForTag,
+        message = { text -> _sideEffects.tryEmit(PlayerSideEffect.ShowMessage(text)) },
+    )
+
+
     private val _seekPreviewFrame = MutableStateFlow<Bitmap?>(null)
     val seekPreviewFrame: StateFlow<Bitmap?> = _seekPreviewFrame.asStateFlow()
 
@@ -1055,84 +1071,16 @@ class PlayerViewModel(
         }
     }
 
-    fun toggleTagSubscription(tag: TagRef) {
-        val repo = subscriptionRepository ?: return
-        val siteId = activeTarget.value?.siteId ?: return
-        val slug = tag.slug.trim().ifBlank { tag.label.trim() }
-        if (slug.isEmpty()) return
-        val translated = tagDictionary.translate(tag.slug, tag.namespace)
-            ?: tagDictionary.translate(tag.label, tag.namespace)
-        val label = translated ?: tag.label.ifBlank { slug }
-        viewModelScope.launch {
-            val subscribed = repo.toggleSubscription(
-                TagSubscription(
-                    siteId = siteId,
-                    slug = slug,
-                    label = label,
-                    url = tag.url,
-                    scope = SearchScope.TAG,
-                    createdAt = clockMs(),
-                ),
-            )
-            _sideEffects.tryEmit(
-                PlayerSideEffect.ShowMessage(
-                    if (subscribed) "已订阅标签「$label」" else "已取消订阅标签「$label」",
-                ),
-            )
-        }
-    }
+    // ---- Tag chip actions（实现见 PlayerTagActions）----
 
-    fun toggleTagFavorite(tag: TagRef) {
-        toggleTagSubscription(tag)
-    }
+    fun toggleTagSubscription(tag: TagRef) = tagActions.toggleSubscription(tag)
 
-    fun toggleTagBlocked(tag: TagRef) {
-        val siteId = activeTarget.value?.siteId ?: return
-        val term = tag.slug.trim().ifBlank { tag.label.trim() }
-        if (term.isEmpty()) return
-        viewModelScope.launch {
-            val settings = preferencesRepository.currentSettings()
-            val primaryScope = if (settings.blockTagsGlobally) SiteId.GLOBAL else siteId
-            val normalized = ContentFilter.normalizeTerm(term)
-            val globalTerms = blockedTermsRepository.observeGlobalTerms().first()
-            val siteTerms = blockedTermsRepository.observeTermsBySite(siteId).first()
-            val matchingGlobal = globalTerms.filter { isMatchingTermForTag(tag, it) }
-            val matchingSite = siteTerms.filter { isMatchingTermForTag(tag, it) }
-            val nowBlocked = if (matchingGlobal.isNotEmpty() || matchingSite.isNotEmpty()) {
-                matchingGlobal.forEach { blockedTermsRepository.removeTerm(SiteId.GLOBAL, it) }
-                matchingSite.forEach { blockedTermsRepository.removeTerm(siteId, it) }
-                false
-            } else {
-                blockedTermsRepository.addTerm(primaryScope, normalized)
-                true
-            }
-            val scopePrefix = if (settings.blockTagsGlobally) "已全局屏蔽标签" else "已在当前站点屏蔽标签"
-            _sideEffects.tryEmit(
-                PlayerSideEffect.ShowMessage(if (nowBlocked) "$scopePrefix：$term" else "已取消屏蔽：$term"),
-            )
-        }
-    }
+    fun toggleTagFavorite(tag: TagRef) = tagActions.toggleFavorite(tag)
 
-    fun saveCustomTagTranslation(tag: TagRef, chineseName: String) {
-        val repo = tagDictionaryRepository ?: return
-        val slug = tag.slug.trim().ifBlank { tag.label.trim() }
-        val cleanZh = chineseName.trim()
-        if (slug.isEmpty() || cleanZh.isEmpty()) {
-            _sideEffects.tryEmit(PlayerSideEffect.ShowMessage("请输入有效的中文译名"))
-            return
-        }
-        viewModelScope.launch(dispatchers.io) {
-            val saved = repo.upsertCustomTranslation(
-                rawSlug = slug,
-                chineseName = cleanZh,
-                namespace = tag.namespace,
-            )
-            if (saved) {
-                repo.hydrateRuntimeDictionary()
-                _sideEffects.tryEmit(PlayerSideEffect.ShowMessage("已更新中文译名：$cleanZh"))
-            }
-        }
-    }
+    fun toggleTagBlocked(tag: TagRef) = tagActions.toggleBlocked(tag)
+
+    fun saveCustomTagTranslation(tag: TagRef, chineseName: String) =
+        tagActions.saveCustomTranslation(tag, chineseName)
 
     // ---- Per-Site Playback Preferences ----
 
