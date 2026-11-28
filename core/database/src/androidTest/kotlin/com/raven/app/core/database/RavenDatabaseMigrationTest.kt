@@ -49,10 +49,14 @@ class RavenDatabaseMigrationTest {
                 if (oldVersion >= 4) {
                     db.execSQL("INSERT INTO media_likes VALUES ('r34v', 'v1', 'VIDEO', 'Demo', '', '', '', '[]', 1234)")
                 }
-                if (oldVersion >= 6) {
+                if (oldVersion == 6) {
                     db.execSQL("INSERT INTO reading_progress (site_id, media_id, url, title, cover_url, kind, current_page, total_pages, scroll_offset_px, updated_at, completed) VALUES ('r34v', 'series-1:chapter-2', 'https://rule34video.com/g/1/', 'Serial', '', 'SERIAL_COMIC', 1, 2, 0, 1000, 0)")
                     db.execSQL("INSERT INTO reading_progress (site_id, media_id, url, title, cover_url, kind, current_page, total_pages, scroll_offset_px, updated_at, completed) VALUES ('r34v', 'plain-serial', 'https://rule34video.com/g/2/', 'Plain', '', 'SERIAL_COMIC', 0, 0, 0, 1001, 0)")
                     db.execSQL("INSERT INTO reading_progress (site_id, media_id, url, title, cover_url, kind, current_page, total_pages, scroll_offset_px, updated_at, completed) VALUES ('r34v', 'gallery:1', 'https://rule34video.com/g/3/', 'Gallery', '', 'COMIC', 1, 2, 0, 1002, 0)")
+                } else if (oldVersion >= 7) {
+                    db.execSQL("INSERT INTO reading_progress (site_id, media_id, url, title, cover_url, kind, current_page, total_pages, scroll_offset_px, updated_at, completed, series_id) VALUES ('r34v', 'series-1:chapter-2', 'https://rule34video.com/g/1/', 'Serial', '', 'SERIAL_COMIC', 1, 2, 0, 1000, 0, 'series-1')")
+                    db.execSQL("INSERT INTO reading_progress (site_id, media_id, url, title, cover_url, kind, current_page, total_pages, scroll_offset_px, updated_at, completed, series_id) VALUES ('r34v', 'plain-serial', 'https://rule34video.com/g/2/', 'Plain', '', 'SERIAL_COMIC', 0, 0, 0, 1001, 0, NULL)")
+                    db.execSQL("INSERT INTO reading_progress (site_id, media_id, url, title, cover_url, kind, current_page, total_pages, scroll_offset_px, updated_at, completed, series_id) VALUES ('r34v', 'gallery:1', 'https://rule34video.com/g/3/', 'Gallery', '', 'COMIC', 1, 2, 0, 1002, 0, NULL)")
                 }
             }
             helper.runMigrationsAndValidate(
