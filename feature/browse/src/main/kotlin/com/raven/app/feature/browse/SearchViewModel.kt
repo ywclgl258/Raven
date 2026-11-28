@@ -123,33 +123,6 @@ internal data class CrossSiteResultState(
     val bucketsBySite: Map<SiteId, CrossSiteBucketState> = emptyMap(),
 )
 
-private data class SearchTopDbSlice(
-    val history: List<SearchHistoryEntry>,
-    val savedSearches: List<SavedSearch>,
-    val blockedTermsBySite: Map<SiteId, List<String>>,
-    val activeSiteEffectiveBlocked: List<String>,
-)
-
-private data class SearchBottomDbSlice(
-    val watchProgressMap: Map<String, Float>,
-    val readingProgressMap: Map<String, Float>,
-    val watchLaterKeys: Set<String>,
-    val cachedTagsByKey: Map<String, List<TagRef>>,
-    val dictRevision: Long,
-)
-
-private data class SearchDbContext(
-    val history: List<SearchHistoryEntry>,
-    val savedSearches: List<SavedSearch>,
-    val blockedTermsBySite: Map<SiteId, List<String>>,
-    val activeSiteEffectiveBlocked: List<String>,
-    val cachedTagsByKey: Map<String, List<TagRef>>,
-    val watchProgressMap: Map<String, Float>,
-    val readingProgressMap: Map<String, Float>,
-    val watchLaterKeys: Set<String>,
-    val dictRevision: Long = 0L,
-)
-
 /**
  * 合并全站最近搜索：同一关键词 + 范围只保留最新一条，按 searchedAt 倒序后截断。
  * GLOBAL 记录在同秒并列时优先，确保跨站搜索仍可一键恢复。
@@ -169,12 +142,6 @@ internal fun mergeSearchHistoryEntries(
         }
     return merged.values.take(limit)
 }
-
-private data class SiteDiscoverySnapshot(
-    val works: List<MediaItem> = emptyList(),
-    val isLoading: Boolean = false,
-    val fetchedAtMs: Long = 0L,
-)
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class SearchViewModel(
@@ -289,7 +256,6 @@ class SearchViewModel(
      * fetch, history write) that finishes late cannot start a request or cancel a newer one.
      */
     private var searchGeneration: Long = 0L
-    private val discoveryCache = ConcurrentHashMap<SiteId, SiteDiscoverySnapshot>()
     private val shelfController = BrowseShelfController(
         shelfRepository = shelfRepository,
         scope = viewModelScope,
@@ -302,38 +268,16 @@ class SearchViewModel(
     private val activeSiteIdFlow = combine(preferencesRepository.settings, manualSiteOverride, ::resolveSearchSiteId)
         .distinctUntilChanged()
 
+    private val discoveryController = SearchDiscoveryController(
+        dispatchers = dispatchers,
+        siteRegistry = siteRegistry,
+        activeSiteIdFlow = activeSiteIdFlow,
+    )
+
     private val cachedTagsFlow = mediaTagCacheRepository?.observeAllTags() ?: flowOf(emptyMap())
     private val dictRevisionFlow = tagDictionaryRepository?.observeRevision() ?: flowOf(0L)
 
-    private val discoveryFlow = activeSiteIdFlow.flatMapLatest { siteId ->
-        flow {
-            val now = System.currentTimeMillis()
-            val cached = discoveryCache[siteId]
-            if (cached != null && (now - cached.fetchedAtMs) < DISCOVERY_CACHE_TTL_MS) {
-                emit(cached)
-                return@flow
-            }
-            val plugin = siteRegistry.get(siteId)
-            val canFetch = plugin?.feedSource != null
-            if (!canFetch) {
-                emit(SiteDiscoverySnapshot(works = emptyList(), isLoading = false, fetchedAtMs = now))
-                return@flow
-            }
-            emit(SiteDiscoverySnapshot(works = cached?.works.orEmpty(), isLoading = true, fetchedAtMs = 0L))
-            val fetched = withContext(dispatchers.io) {
-                fetchDiscoveryWorks(plugin)
-            }
-            val snapshot = SiteDiscoverySnapshot(
-                works = fetched,
-                isLoading = false,
-                fetchedAtMs = System.currentTimeMillis(),
-            )
-            if (fetched.isNotEmpty()) {
-                discoveryCache[siteId] = snapshot
-            }
-            emit(snapshot)
-        }
-    }
+    private val discoveryFlow = discoveryController.flow
 
     private val dbContextFlow = activeSiteIdFlow.flatMapLatest { siteId ->
         val mergedHistoryFlow = searchHistoryRepository
@@ -516,12 +460,13 @@ class SearchViewModel(
             .take(MAX_HOT_WORKS_RANKING)
             .withLocalizedTags(tagDictionary, translateTags)
 
-        val rankedTags = buildDiscoveryTagRankings(
+        val rankedTags = buildTrendingTags(
             siteId = activeSiteId,
             works = hotWorks,
             cachedTagsByKey = cachedTags,
             blockedTerms = activeSiteBlocked,
             translateTags = translateTags,
+            tagDictionary = tagDictionary,
         )
 
         val directoryBuckets = orderedCrossBuckets.filter { it.isDirectorySearch }
@@ -1115,120 +1060,6 @@ class SearchViewModel(
 
     private fun interleaveBuckets(buckets: List<CrossSiteBucketState>): List<MediaItem> =
         interleaveCrossSiteBuckets(buckets)
-
-    private suspend fun fetchDiscoveryWorks(plugin: SitePlugin): List<MediaItem> {
-        val siteId = plugin.id
-        try {
-            val home = plugin.feedSource?.loadHome()
-            if (home != null) {
-                val combined = buildList {
-                    home.sections.firstOrNull { it.isRanked }?.items?.let(::addAll)
-                    home.sections.forEach { addAll(it.items) }
-                    addAll(home.heroItems)
-                    home.primaryFeedPage?.items?.let(::addAll)
-                }
-                if (combined.isNotEmpty()) {
-                    return combined.distinctBy { it.compositeKey }.take(20)
-                }
-            }
-        } catch (ce: CancellationException) {
-            throw ce
-        } catch (_: Throwable) {
-            // Fall through to popular feed lookup
-        }
-        return try {
-            val page = plugin.feedSource?.loadFeed(
-                FeedRequest(
-                    siteId = siteId,
-                    sort = FeedSort.POPULAR,
-                    page = 1,
-                ),
-            )
-            page?.items.orEmpty().distinctBy { it.compositeKey }.take(20)
-        } catch (ce: CancellationException) {
-            throw ce
-        } catch (_: Throwable) {
-            emptyList()
-        }
-    }
-
-    private fun buildDiscoveryTagRankings(
-        siteId: SiteId,
-        works: List<MediaItem>,
-        cachedTagsByKey: Map<String, List<TagRef>>,
-        blockedTerms: List<String>,
-        translateTags: Boolean,
-    ): List<SearchTrendingTag> {
-        val counts = LinkedHashMap<String, Int>()
-        val labels = LinkedHashMap<String, String>()
-        val namespaces = LinkedHashMap<String, String>()
-
-        fun recordTag(slugRaw: String, labelRaw: String, nsRaw: String, weight: Int) {
-            val slug = slugRaw.trim()
-            if (slug.isEmpty()) return
-            val key = slug.lowercase()
-            if (blockedTerms.any { it.equals(key, ignoreCase = true) }) return
-            counts[key] = (counts[key] ?: 0) + weight
-            labels.putIfAbsent(key, labelRaw.ifBlank { slug })
-            if (nsRaw.isNotBlank()) namespaces.putIfAbsent(key, nsRaw)
-        }
-
-        works.forEachIndexed { idx, item ->
-            val rankWeight = (works.size - idx).coerceAtLeast(1)
-            item.tags.forEach { tag ->
-                recordTag(tag.slug, tag.label, tag.namespace, weight = rankWeight)
-            }
-            cachedTagsByKey[item.compositeKey]?.forEach { tag ->
-                recordTag(tag.slug, tag.label, tag.namespace, weight = rankWeight)
-            }
-        }
-
-        val sitePrefix = "${siteId.value}:"
-        cachedTagsByKey.forEach { (key, tags) ->
-            if (key.startsWith(sitePrefix)) {
-                tags.forEach { tag ->
-                    recordTag(tag.slug, tag.label, tag.namespace, weight = 2)
-                }
-            }
-        }
-
-        val observedKeys = counts.keys.toSet()
-        if (counts.size < MAX_TRENDING_TAGS) {
-            val fallback = tagDictionary.builtInTagEntries(limit = MAX_TRENDING_TAGS)
-            fallback.forEachIndexed { idx, sug ->
-                val weight = (MAX_TRENDING_TAGS - idx).coerceAtLeast(1)
-                if (sug.slug.lowercase() !in counts) {
-                    recordTag(sug.slug, sug.localizedName, sug.namespace, weight = weight)
-                }
-            }
-        }
-
-        return counts.entries
-            .sortedWith(
-                compareByDescending<Map.Entry<String, Int>> { it.key in observedKeys }
-                    .thenByDescending { it.value }
-                    .thenBy { it.key },
-            )
-            .take(MAX_TRENDING_TAGS)
-            .mapIndexed { idx, entry ->
-                val key = entry.key
-                val ns = namespaces[key].orEmpty()
-                val rawLabel = labels[key] ?: key
-                val localized = if (translateTags) {
-                    tagDictionary.translate(key, ns)
-                        ?: tagDictionary.translate(rawLabel, ns)
-                        ?: rawLabel
-                } else {
-                    key
-                }
-                SearchTrendingTag(
-                    slug = key,
-                    localizedName = localized,
-                    count = entry.value,
-                    rank = idx + 1,
-                )
-            }
-    }
 
     private fun resolveActiveSiteId(preferred: SiteId): SiteId =
         resolveActiveSite(preferred, siteRegistry, allDescriptors)

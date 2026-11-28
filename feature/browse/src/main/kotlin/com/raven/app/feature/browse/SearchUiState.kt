@@ -1,5 +1,6 @@
 package com.raven.app.feature.browse
 
+import com.raven.app.core.model.TagRef
 import com.raven.app.core.common.TagSuggestion
 import com.raven.app.core.model.AdvancedFilterField
 import com.raven.app.core.model.AdvancedSearchFilters
@@ -102,3 +103,31 @@ data class SearchUiState(
     val canSaveCurrentSearch: Boolean
         get() = query.isNotBlank() || !advancedFilters.isEmpty
 }
+
+/** Internal DB slices combined into `SearchUiState`; grouped here with the state contracts. */
+internal data class SearchTopDbSlice(
+    val history: List<SearchHistoryEntry>,
+    val savedSearches: List<SavedSearch>,
+    val blockedTermsBySite: Map<SiteId, List<String>>,
+    val activeSiteEffectiveBlocked: List<String>,
+)
+
+internal data class SearchBottomDbSlice(
+    val watchProgressMap: Map<String, Float>,
+    val readingProgressMap: Map<String, Float>,
+    val watchLaterKeys: Set<String>,
+    val cachedTagsByKey: Map<String, List<TagRef>>,
+    val dictRevision: Long,
+)
+
+internal data class SearchDbContext(
+    val history: List<SearchHistoryEntry>,
+    val savedSearches: List<SavedSearch>,
+    val blockedTermsBySite: Map<SiteId, List<String>>,
+    val activeSiteEffectiveBlocked: List<String>,
+    val cachedTagsByKey: Map<String, List<TagRef>>,
+    val watchProgressMap: Map<String, Float>,
+    val readingProgressMap: Map<String, Float>,
+    val watchLaterKeys: Set<String>,
+    val dictRevision: Long = 0L,
+)

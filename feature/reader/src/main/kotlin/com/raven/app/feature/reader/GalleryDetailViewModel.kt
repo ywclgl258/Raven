@@ -681,33 +681,19 @@ class GalleryDetailViewModel(
         candidates: List<MediaItem>,
         blockedTerms: Set<String>,
         cachedTagsByKey: Map<String, List<TagRef>>,
-    ): List<MediaItem> {
-        val allowed = filterRelatedItems(
-            raw = candidates,
-            blockedTerms = blockedTerms,
-            cachedTagsByKey = cachedTagsByKey,
-        )
-        val authors = buildList {
-            detail.authors.mapTo(this) { it.name }
-            detail.item.author?.name?.let(::add)
-        }
-        val sourceTags = detail.tags + detail.characters + detail.categories + detail.item.tags
-        return LikeRecommendationEngine.rankSimilarWorks(
-            sourceTitle = detail.item.title,
-            sourceAuthors = authors,
-            sourceTags = sourceTags,
-            sourceCompositeKey = detail.item.compositeKey,
-            sourceMediaId = detail.item.id,
-            candidates = allowed,
+    ): List<MediaItem> = rankSimilarRelated(
+        detail = detail,
+        candidates = candidates,
+        blockedTerms = blockedTerms,
+        cachedTagsByKey = cachedTagsByKey,
+        tagDictionary = tagDictionary,
+        inputs = SimilarRankingInputs(
             likedTagWeights = latestLikedTagWeights,
-            cachedTagsByKey = cachedTagsByKey,
             tagHintKeysByItem = latestTagHintKeysByItem,
             authorCandidateKeys = latestAuthorCandidateKeys,
             titleCandidateKeys = latestTitleCandidateKeys,
-            limit = 18,
-        )
-    }
-
+        ),
+    )
 
     /**
      * 连载漫画：自动载入章节列表，并在存在历史记录时切换到最近阅读的章节；
@@ -1185,17 +1171,7 @@ class GalleryDetailViewModel(
         raw: List<MediaItem>,
         blockedTerms: Set<String>,
         cachedTagsByKey: Map<String, List<TagRef>>,
-    ): List<MediaItem> {
-        if (raw.isEmpty() || blockedTerms.isEmpty()) return raw
-        return raw.filter { item ->
-            ContentFilter.isAllowed(
-                item = item,
-                blockedTerms = blockedTerms,
-                tagDictionary = tagDictionary,
-                extraTags = cachedTagsByKey[item.compositeKey].orEmpty(),
-            )
-        }
-    }
+    ): List<MediaItem> = filterRelatedCandidates(raw, blockedTerms, cachedTagsByKey, tagDictionary)
 
     private fun matchesBlockedTerms(tag: TagRef, blockedTerms: Set<String>): Boolean =
         tagMatchesBlockedTerms(tag, blockedTerms, tagDictionary)

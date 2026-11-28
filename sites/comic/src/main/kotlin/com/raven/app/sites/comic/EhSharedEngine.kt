@@ -893,44 +893,16 @@ class EhSharedEngine(
         )
     }
 
-    private fun extractNextCursor(doc: Document, baseUrl: String): String? {
-        doc.selectFirst("a#unext[href]")?.absUrl("href")?.let { candidate ->
-            val parsed = ComicUrl.parseStrictHttps(candidate)
-            if (parsed != null && descriptor.matchesHost(parsed.host)) {
-                return candidate
-            }
-        }
-        return doc.select(".ptt a[href]")
-            .lastOrNull()
-            ?.takeIf { it.text().contains('>') }
-            ?.absUrl("href")
-            ?.takeIf { candidate ->
-                candidate != baseUrl &&
-                    ComicUrl.parseStrictHttps(candidate)?.let { descriptor.matchesHost(it.host) } == true
-            }
-    }
+    private fun extractNextCursor(doc: Document, baseUrl: String): String? =
+        ehExtractNextCursor(doc, baseUrl, descriptor)
 
-    private fun canonicalGalleryUrl(raw: String): String? {
-        val parsed = ComicUrl.parseStrictHttps(raw)?.takeIf { descriptor.matchesHost(it.host) } ?: return null
-        val match = GALLERY_PATH_REGEX.matchEntire(parsed.encodedPath) ?: return null
-        return "https://${descriptor.defaultHost}/g/${match.groupValues[1]}/${match.groupValues[2]}/"
-    }
+    private fun canonicalGalleryUrl(raw: String): String? = ehCanonicalGalleryUrl(raw, descriptor)
 
-    private fun extractPageIndex(raw: String): Int? {
-        val parsed = ComicUrl.parseStrictHttps(raw)?.takeIf { descriptor.matchesHost(it.host) } ?: return null
-        return IMAGE_PATH_REGEX.matchEntire(parsed.encodedPath)
-            ?.groupValues?.get(3)?.toIntOrNull()?.takeIf { it > 0 }
-    }
+    private fun extractPageIndex(raw: String): Int? = ehExtractPageIndex(raw, descriptor)
 
-    private fun resolveHttps(raw: String, baseUrl: String): String {
-        val trimmed = raw.trim()
-        if (trimmed.isEmpty()) return ""
-        val resolved = ComicUrl.parse(baseUrl)?.resolve(trimmed) ?: ComicUrl.parse(trimmed) ?: return ""
-        return if (resolved.isHttps) resolved.toString() else ""
-    }
+    private fun resolveHttps(raw: String, baseUrl: String): String = ehResolveHttps(raw, baseUrl)
 
-    private fun extractCssImageUrl(style: String, baseUrl: String): String =
-        CSS_URL_REGEX.find(style)?.groupValues?.get(1)?.let { resolveHttps(it, baseUrl) }.orEmpty()
+    private fun extractCssImageUrl(style: String, baseUrl: String): String = ehExtractCssImageUrl(style, baseUrl)
 
     private fun extractImageDimension(element: org.jsoup.nodes.Element?, attr: String): Int {
         if (element == null) return 0
@@ -1116,17 +1088,17 @@ class EhSharedEngine(
             // Native discovery surfaces whose pagination links (e.g. `/toplist.php?...&p=2`) are valid.
             "/toplist.php", "/watched", "/watched/", "/mytags", "/mytags/",
         )
-        private val GALLERY_PATH_REGEX = Regex("^/g/(\\d+)/([a-fA-F0-9]+)/?$")
-        private val IMAGE_PATH_REGEX = Regex("^/s/([a-fA-F0-9]+)/(\\d+)-(\\d+)/?$")
+        internal val GALLERY_PATH_REGEX = Regex("^/g/(\\d+)/([a-fA-F0-9]+)/?$")
+        internal val IMAGE_PATH_REGEX = Regex("^/s/([a-fA-F0-9]+)/(\\d+)-(\\d+)/?$")
         private val PASS_HASH_REGEX = Regex("^[A-Za-z0-9_-]{16,128}$")
         private val SEARCH_TOKEN_REGEX = Regex("""-?(?:[^\s"]|"[^"]*")+""")
         private val UPLOADER_QUERY_REGEX = Regex("""^uploader:"(.+)"$""", RegexOption.IGNORE_CASE)
         private val PAGES_COUNT_REGEX = Regex("""([\d,]+)\s+pages?""", RegexOption.IGNORE_CASE)
         private val DIGITS_REGEX = Regex("""[\d,]+""")
         private val FLOAT_REGEX = Regex("""\d+(?:\.\d+)?""")
-        private val CSS_URL_REGEX = Regex("""url\(\s*['"]?([^)'"\s]+)""")
-        private val STYLE_WIDTH_REGEX = Regex("""width\s*:\s*(\d+)px""", RegexOption.IGNORE_CASE)
-        private val STYLE_HEIGHT_REGEX = Regex("""height\s*:\s*(\d+)px""", RegexOption.IGNORE_CASE)
+        internal val CSS_URL_REGEX = Regex("""url\(\s*['"]?([^)'"\s]+)""")
+        internal val STYLE_WIDTH_REGEX = Regex("""width\s*:\s*(\d+)px""", RegexOption.IGNORE_CASE)
+        internal val STYLE_HEIGHT_REGEX = Regex("""height\s*:\s*(\d+)px""", RegexOption.IGNORE_CASE)
         private val NL_TOKEN_REGEX = Regex("""nl\(['"]([A-Za-z0-9-]+)['"]\)""")
         private val ORIGINAL_SIZE_REGEX = Regex(
             """(?:Load|Download)\s+original[^,]*,\s*size:\s*([\d.]+\s*[KMGT]?B)""",
