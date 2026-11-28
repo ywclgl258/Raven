@@ -206,7 +206,12 @@ class GalleryPageRepository(
         null
     }
 
-    private val cacheTrimLock = Any()
+    private val readingCache = GalleryReadingCacheStore(
+        baseDir = readingCacheBaseDir,
+        legacyBaseDir = legacyReadingCacheBaseDir,
+        siteDir = ::readingCacheDir,
+    )
+
 
     private fun readingCacheDir(siteId: SiteId): File =
         File(readingCacheBaseDir, siteId.value).apply { mkdirs() }
@@ -742,7 +747,7 @@ class GalleryPageRepository(
                 json.encodeToString(SavedPageMeta.serializer(), SavedPageMeta(normalizedPage, finalBytes.size.toLong())).toByteArray(),
             )
             rememberCacheLink(siteId, galleryUrl, normalizedPage)
-            trimReadingCache()
+            readingCache.trim()
         }
         return OriginalGalleryPage(normalizedPage, finalBytes, fromCache = false)
     }
@@ -1011,44 +1016,13 @@ class GalleryPageRepository(
 
     // ---- Cache Inspection & Clearing ----
 
-    fun readingCacheStats(siteId: SiteId): Pair<Int, Long> {
-        val files = readingCacheImages(readingCacheDir(siteId))
-        val uniquePages = files.distinctBy { it.nameWithoutExtension }.size
-        return uniquePages to files.sumOf(File::length)
-    }
+    fun readingCacheStats(siteId: SiteId): Pair<Int, Long> = readingCache.stats(siteId)
 
-    fun readingCacheBytes(): Long {
-        val current = readingCacheBaseDir.listFiles().orEmpty()
-            .filter { it.isDirectory }
-            .sumOf { siteDir -> readingCacheImages(siteDir).sumOf(File::length) }
-        val legacy = legacyReadingCacheBaseDir
-            ?.takeIf { it.isDirectory && it.canonicalPath != readingCacheBaseDir.canonicalPath }
-            ?.let { legacyRoot ->
-                legacyRoot.listFiles().orEmpty()
-                    .filter { it.isDirectory }
-                    .sumOf { siteDir -> readingCacheImages(siteDir).sumOf(File::length) }
-            } ?: 0L
-        return current + legacy
-    }
+    fun readingCacheBytes(): Long = readingCache.totalBytes()
 
-    fun clearReadingCache(siteId: SiteId) {
-        readingCacheDir(siteId).listFiles().orEmpty()
-            .filter { it.isFile }
-            .forEach { file -> check(file.delete()) { "部分图页缓存无法删除，请重试" } }
-    }
+    fun clearReadingCache(siteId: SiteId) = readingCache.clearSite(siteId)
 
-    fun clearAllReadingCaches() {
-        synchronized(cacheTrimLock) {
-            readingCacheBaseDir.listFiles().orEmpty().forEach { siteDir ->
-                if (siteDir.isDirectory) {
-                    siteDir.listFiles().orEmpty().filter { it.isFile }.forEach { it.delete() }
-                }
-            }
-            legacyReadingCacheBaseDir
-                ?.takeIf { it.isDirectory && it.canonicalPath != readingCacheBaseDir.canonicalPath }
-                ?.deleteRecursively()
-        }
-    }
+    fun clearAllReadingCaches() = readingCache.clearAll()
 
     // ---- Network Fetch + EH ?nl= Error Recovery + JMComic Unscrambling ----
 
@@ -1307,29 +1281,6 @@ class GalleryPageRepository(
             bytes.takeIf { input.read() == -1 }
         }
     }.getOrNull()
-
-    private fun readingCacheImages(dir: File): List<File> =
-        dir.listFiles().orEmpty().filter { it.isFile && (it.extension == "image" || it.extension == "strips") }
-
-    private fun trimReadingCache() {
-        synchronized(cacheTrimLock) {
-            val files = readingCacheBaseDir.listFiles().orEmpty()
-                .filter { it.isDirectory }
-                .flatMap(::readingCacheImages)
-                .sortedBy { it.lastModified() }
-            var total = files.sumOf(File::length)
-            for (file in files) {
-                if (total <= READING_CACHE_MAX_BYTES) break
-                val len = file.length()
-                if (file.delete()) {
-                    total -= len
-                    file.parentFile?.let { parent ->
-                        File(parent, "${file.nameWithoutExtension}.page.json").delete()
-                    }
-                }
-            }
-        }
-    }
 
     companion object {
         const val READING_CACHE_MAX_BYTES: Long = 256L * 1024L * 1024L
