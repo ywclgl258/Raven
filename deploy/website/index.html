@@ -278,7 +278,7 @@
   <main id="main" class="wrap" tabindex="-1">
     <section class="hero" aria-labelledby="title" data-od-id="hero">
       <div class="hero-copy">
-        <div class="version">ANDROID&nbsp; / &nbsp;v0.9.5</div>
+        <div class="version">ANDROID&nbsp; / &nbsp;v0.9.6</div>
         <h1 id="title">Raven<span>渡鸦</span></h1>
         <p class="hero-line">一个 App，浏览视频、漫画与图集</p>
         <p class="lede">跨站搜索想看的作品，接着上次的进度播放或阅读。把喜欢的内容收进鸦巢，也能下载到设备，留到离线时慢慢看。</p>
@@ -327,8 +327,8 @@
         </article>
         <article class="feature">
           <svg class="feature-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3 4 6v5c0 5 3 8 8 10 5-2 8-5 8-10V6z"/><path d="m9 12 2 2 4-4"/></svg>
-          <h3>加密备份与隐私</h3>
-          <p>支持密码加密备份、恢复和 WebDAV 同步。站点会话由设备上的加密会话库管理。需要时可启用无痕模式、应用锁与防截屏。</p>
+          <h3>加密备份与多设备同步</h3>
+          <p>支持密码加密备份、WebDAV 云同步与同一 Wi-Fi 下局域网多设备自动发现端到端加密同步。站点会话由设备上的加密会话库管理，支持无痕模式、应用锁与防截屏。</p>
         </article>
       </div>
     </section>
@@ -368,6 +368,19 @@
       </div>
       <div>
         <details class="release" open>
+          <summary><span class="version release-version">v0.9.6</span><span class="label">局域网多设备同步与播放黑屏修复</span><time datetime="2026-11-29">2026-11-29</time></summary>
+          <div class="release-content">
+            <ul>
+              <li>新增局域网多设备自动发现同步：同一 Wi-Fi 通过 mDNS 与局域网广播自动发现附近设备（支持手动输入 IP:端口 兜底）。</li>
+              <li>采用 ECDH (P-256) + AES-256-GCM 端到端加密与 6 位配对码（支持记住设备免码一键同步、连续 5 次输错自动轮换），支持双向合并、推送及拉取预览；绝不传输站点登录态或媒体文件。</li>
+              <li>彻底修复 Hanime1 播放黑屏：移除会抑制渲染表面创建的透明遮挡与反复清空动作，避免切源/Seek 卡黑。</li>
+              <li>新增播放黑屏 Watchdog 与解码兼容自动回退：遇到高画质硬解受限、纯声音黑屏时自动切换同档备用封装或降档画质，避免误走过期刷新。</li>
+              <li>加固 Hanime1 流地址分辨率与容器识别，避免数字视频 ID 被误判为清晰度高度，全面提升站点、并发读写与播放阅读稳定性。</li>
+            </ul>
+            <a href="https://github.com/ywclgl258/Raven/releases/tag/v0.9.6">查看 v0.9.6 发布详情</a>
+          </div>
+        </details>
+        <details class="release">
           <summary><span class="version release-version">v0.9.5</span><span class="label">稳定性与数据安全修正</span><time datetime="2026-11-28">2026-11-28</time></summary>
           <div class="release-content">
             <ul>
@@ -461,13 +474,13 @@
     <section id="download" class="section" aria-labelledby="download-title" data-od-id="download">
       <div class="download-panel">
         <div>
-          <div class="version">v0.9.5 · 正式版</div>
+          <div class="version">v0.9.6 · 正式版</div>
           <h2 id="download-title">下载 Raven</h2>
-          <p>Android 7.0+ · APK 7.59 MiB · <code>com.raven.app</code></p>
+          <p>Android 7.0+ · APK 7.66 MiB · <code>com.raven.app</code></p>
         </div>
         <div class="actions">
-          <a class="btn btn-primary" href="https://github.com/ywclgl258/Raven/releases/download/v0.9.5/Raven-v0.9.5-release.apk">GitHub 下载</a>
-          <a class="btn" href="https://ywclgl258.us.ci/download/Raven-v0.9.5-release.apk" download>VPS 镜像下载</a>
+          <a class="btn btn-primary" href="https://github.com/ywclgl258/Raven/releases/download/v0.9.6/Raven-v0.9.6-release.apk">GitHub 下载</a>
+          <a class="btn" href="https://ywclgl258.us.ci/download/Raven-v0.9.6-release.apk" download>VPS 镜像下载</a>
         </div>
         <div class="install-guide">
           <details>
@@ -481,8 +494,8 @@
           <details>
             <summary>查看 APK 文件 SHA-256</summary>
             <p>两个下载渠道的安装包摘要相同，可用下方数值核对下载文件。</p>
-            <code class="hash">b2c9c9f29d720205f81f6ab30b1377901e886880f03b9e90a81f80c91291cd8d</code>
-            <p><a href="https://github.com/ywclgl258/Raven/releases/download/v0.9.5/SHA256SUMS.txt">下载 SHA256SUMS.txt</a></p>
+            <code class="hash">b5c8897b8db23de05345b4cd9fe1911d49f6225c5521efcc9482e27da3a64965</code>
+            <p><a href="https://github.com/ywclgl258/Raven/releases/download/v0.9.6/SHA256SUMS.txt">下载 SHA256SUMS.txt</a></p>
           </details>
         </div>
       </div>
