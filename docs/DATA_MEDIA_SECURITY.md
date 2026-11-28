@@ -74,9 +74,9 @@ flowchart LR
 | `TagDictionaryRepository` | `tag_translations` | 合并远程/用户标签翻译并维护本地词典运行时快照 |
 | `MediaTagCacheRepository` | `media_tag_cache` | 按作品读写标签 JSON 缓存，供本地筛选与屏蔽使用 |
 | `PreferencesRepository` | `SettingsDataStore`, `playback_preferences`, `reader_preferences` | 偏好统一门面：负责解析 2 级播放偏好（全局 → 站点）与 3 级阅读偏好（全局 → 站点 → 单本）合并生效值 |
-| `BackupDataRepository` | 除 `download_items`、`browse_positions`、`media_tag_cache` 外的 17 张表 + `SettingsDataStore` | 同一互斥锁串行化导出与恢复，避免 Room / DataStore 快照跨代；单一 Room 事务内导出/合并快照（调用 `BackupMerger`）；严格排除凭证、密钥、本地存储路径与下载队列；导出 `LOCAL` 单图收藏前剥离本地磁盘路径；Room 事务失败时全量回滚且**绝不修改 `SettingsDataStore`** |
+| `BackupDataRepository` | 除 `download_items`、`browse_positions`、`media_tag_cache`、`media_likes`、`inbox_dismissed`、`backup_restore_journal` 外的 18 张表 + `SettingsDataStore` | 同一互斥锁串行化导出与恢复，避免 Room / DataStore 快照跨代；单一 Room 事务内导出/合并快照（调用 `BackupMerger`）；严格排除凭证、密钥、本地存储路径与下载队列；导出 `LOCAL` 单图收藏前剥离本地磁盘路径；Room 事务失败时全量回滚且**绝不修改 `SettingsDataStore`** |
 
-### 1.3 `SettingsDataStore` 37 个固定 Key + 2 类动态站点 Key
+### 1.3 `SettingsDataStore` 43 个固定 Key + 2 类动态站点 Key
 
 - **实现路径**：`core/database/src/main/kotlin/com/raven/app/core/database/datastore/SettingsDataStore.kt`
 - **持久化文件**：`raven_settings.preferences_pb`（真正的文件损坏由 `ReplaceFileCorruptionHandler` 替换为空偏好；界面与策略读取采用有上限退避重试，避免崩溃或静默停止；存储根切换与备份快照使用严格读取，普通 `IOException` 直接向上传递，绝不把瞬时故障伪装成默认设置）。
@@ -121,12 +121,18 @@ flowchart LR
 | 35 | `incognito_mode` | `Boolean` | `false` | 否 | 无痕模式；跳过观看/阅读历史写入 |
 | 36 | `webdav_last_sync_at` | `Long` | `0L` | 否 | 最近一次 WebDAV 同步的 epoch milliseconds |
 | 37 | `startup_default_site_id` | `String` | 键缺失 = 记住上次使用 | 是 | 冷启动默认站点；仅进程启动应用一次，不覆盖返回首页或手动切换 |
+| 38 | `dynamic_site_sorting` | `Boolean` | `true` | 是 | 首页站点是否按打开频次动态排序 |
+| 39 | `site_open_counts` | `String` (JSON map) | `"{}"` | 否 | 站点打开次数；供动态排序使用，随使用增长 |
+| 40 | `section_open_counts` | `String` (JSON 嵌套 map) | `"{}"` | 否 | 站点内各分区打开次数 |
+| 41 | `seen_tutorials` | `String` (JSON 数组) | `"[]"` | 否 | 已读引导 ID 集合；严格单次消费 |
+| 42 | `auto_continue_queue` | `Boolean` | `false` | 否 | 播放结束后是否自动续播队列 |
+| 43 | `legacy_portable_settings` | `String` (JSON) | 键缺失 = 无 | 否 | 旧版便携设置快照，仅用于一次性迁移合并 |
 | D1 | `site_language_<siteId>` | `String`（动态前缀） | 键缺失 = `ALL` | 是（经 `siteLanguages` 字段） | 按站点语言偏好；设为 `ALL` 时移除该键 |
 | D2 | `site_explore_filter_<siteId>` | `String`（JSON，动态前缀） | 键缺失 = 空筛选 | 否 | 按站点保存 `ExploreFilterState`；为空时移除 |
 
-### 1.4 当前 Schema v5 与迁移链
+### 1.4 当前 Schema v8 与迁移链
 
-`RavenDatabase.build()` 为每个受支持的旧版本注册显式迁移。各版导出的表结构位于 `core/database/schemas/com.raven.app.core.database.RavenDatabase/`。
+`RavenDatabase.build()` 为每个受支持的旧版本注册显式迁移。各版导出的表结构位于 `core/database/schemas/com.raven.app.core.database.RavenDatabase/`（`1.json` … `8.json`）。
 
 | 迁移 | 数据变化 |
 |---|---|
@@ -136,6 +142,7 @@ flowchart LR
 | 4 → 5 | 为 `shelf_items` 增加可空的 `completion_changed_at`。旧条目继续根据原完成标志和观看、阅读历史判断。手动标记后，该条目按用户的选择显示。 |
 | 5 → 6 | 增加 `series_follows` 以保存追更记录。 |
 | 6 → 7 | 阅读进度增加作品 ID、标题和地址。旧连载的复合章节 ID 可直接恢复作品归属，仅含独立章节 ID 的记录在加载该作品目录时补全。 |
+| 7 → 8 | 创建 `inbox_dismissed` 收件箱墓碑表，避免同步时已忽略条目重新出现。 |
 
 后续表结构变更必须延续显式迁移，不得回退到破坏性重建：
 

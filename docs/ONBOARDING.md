@@ -55,7 +55,7 @@
    # 1. 验证 Kotlin Gradle Plugin 已解析为 2.3.21
    .\gradlew.bat buildEnvironment --no-daemon | Select-String "kotlin-gradle-plugin"
 
-   # 2. 运行全部 17 模块 JVM 单元测试（当前源码静态计数 384 处 @Test）
+   # 2. 运行全部 17 模块 JVM 单元测试（当前源码静态计数 694 处 @Test）
    .\gradlew.bat :core:model:test :core:common:test :core:site-spi:test :sites:video:test :sites:comic:test :sites:gallery:test testDebugUnitTest --no-daemon
 
    # 3. 构建 Debug APK
@@ -151,7 +151,7 @@ flowchart TB
 
 ### 2.2 全部 17 模块清册
 
-> 截至当前源码静态计数，全部 `src/test` 共有 **384 处 JVM `@Test`**，`src/androidTest` 共有 **6 处 `@Test`**（`:app` Compose 冒烟 4 处 + `:core:database` 迁移 2 处）。这些数字仅是注解静态计数，不表示测试已执行或通过；复算命令见 §3.1。13 个业务/引擎模块导出 Koin `Module`；`:core:model`、`:core:common`、`:core:site-spi` 与 `:core:designsystem` 不持有 Koin 模块。
+> 截至当前源码静态计数，全部 `src/test` 共有 **694 处 JVM `@Test`**，`src/androidTest` 共有 **27 处 `@Test`**（`:app` 20 处、`:core:database` 迁移 7 处）。这些数字仅是注解静态计数，不表示测试已执行或通过；一次性核对全部基线请运行 `pwsh -File .\scripts\audit-stats.ps1`，复算测试数量见 §3.1。13 个业务/引擎模块导出 Koin `Module`；`:core:model`、`:core:common`、`:core:site-spi` 与 `:core:designsystem` 不持有 Koin 模块。
 
 | # | 模块 | 类型 | 包名 / Namespace | Koin 模块 | 核心源码入口文件 | 单模块测试命令 |
 |---|---|---|---|---|---|---|
@@ -160,7 +160,7 @@ flowchart TB
 | 3 | `:core:site-spi` | Pure JVM | `com.raven.app.core.sitespi` | — | `SitePlugin.kt`, `SiteCapabilities.kt`, `SiteRegistry.kt`, `SiteHttp.kt`, `SiteSessionStore.kt`, 9 个协议工具 (`Base62Packer`, `RouPngProtocol`, `CossoraAesProtocol`, `JmcomicStripMath` 等) | `.\gradlew.bat :core:site-spi:test --no-daemon` |
 | 4 | `:core:security` | Android Lib | `com.raven.app.core.security` | `coreSecurityModule` | `CoreSecurityModule.kt`, `SessionVault.kt`, `VaultCipher.kt`, `BackupCodec.kt`, `BackupValidator.kt`, `LegacyR34vBackupAdapter.kt` | `.\gradlew.bat :core:security:testDebugUnitTest --no-daemon` |
 | 5 | `:core:network` | Android Lib | `com.raven.app.core.network` | `coreNetworkModule` | `CoreNetworkModule.kt`, `RavenOkHttpPool.kt`, `SiteHttpClient.kt`, `HostPacer.kt`, `SiteCookieJar.kt`, `Ipv4FirstDns.kt`, `SystemProxySelector.kt`, `NetworkMonitor.kt`, `RavenImageLoaderFactory.kt` | `.\gradlew.bat :core:network:testDebugUnitTest --no-daemon` |
-| 6 | `:core:database` | Android Lib (KSP) | `com.raven.app.core.database` | `coreDatabaseModule` | `CoreDatabaseModule.kt`, `RavenDatabase.kt` (21 表 / Schema v5), `SettingsDataStore.kt` (37 固定 Key + 2 类动态站点 Key), `entity/*`, `dao/*`, `repository/*` (13 仓储) | `.\gradlew.bat :core:database:testDebugUnitTest --no-daemon` |
+| 6 | `:core:database` | Android Lib (KSP) | `com.raven.app.core.database` | `coreDatabaseModule` | `CoreDatabaseModule.kt`, `RavenDatabase.kt` (24 表 / Schema v8), `SettingsDataStore.kt` (43 固定 Key + 2 类动态站点 Key), `entity/*`, `dao/*`, `repository/*` (14 仓储) | `.\gradlew.bat :core:database:testDebugUnitTest --no-daemon` |
 | 7 | `:core:designsystem` | Android Lib (Compose) | `com.raven.app.core.designsystem` | — | `theme/RavenTheme.kt`, `RavenColors.kt`, `RavenTypography.kt`, `RavenShapes.kt`, `RavenMotion.kt`, `component/*` | `.\gradlew.bat :core:designsystem:testDebugUnitTest --no-daemon` |
 | 8 | `:core:media` | Android Lib | `com.raven.app.core.media` | `coreMediaModule` | `CoreMediaModule.kt`, `playback/PlayerSessionController.kt`, `reader/GalleryPageRepository.kt`, `reader/ReaderBuffer.kt`, `download/DownloadCoordinator.kt`, `storage/StorageRootManager.kt`, `LocalLibraryImporter.kt`, `DuplicateScanner.kt` | `.\gradlew.bat :core:media:testDebugUnitTest --no-daemon` |
 | 9 | `:sites:video` | Pure JVM | `com.raven.app.sites.video` | `videoSitesModule` | `VideoSitesModule.kt`, `VideoSiteSupport.kt`, 7 个视频插件 (`R34v`, `Hanime`, `Iwara`, `Missav`, `Jable`, `Rouvideo`, `Pornhub`) | `.\gradlew.bat :sites:video:test --no-daemon` |
@@ -191,7 +191,7 @@ flowchart TB
 
 ```powershell
 # 1. 运行全部 17 模块 JVM 单元测试（6 个 Pure JVM 模块 + 11 个 Android 模块）
-# 截至当前源码静态计数为 384 处 @Test；计数不代表已执行或通过
+# 截至当前源码静态计数为 694 处 @Test；计数不代表已执行或通过
 # 注意：仅跑 testDebugUnitTest 会跳过 6 个 Pure JVM 模块！
 .\gradlew.bat :core:model:test :core:common:test :core:site-spi:test :sites:video:test :sites:comic:test :sites:gallery:test testDebugUnitTest --no-daemon
 

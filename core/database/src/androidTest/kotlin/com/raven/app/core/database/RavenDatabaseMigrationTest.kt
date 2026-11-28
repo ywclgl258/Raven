@@ -30,6 +30,7 @@ class RavenDatabaseMigrationTest {
     @Test fun migrateFrom4() = verifyUpgrade(4)
     @Test fun migrateFrom5() = verifyUpgrade(5)
     @Test fun migrateFrom6() = verifyUpgrade(6)
+    @Test fun migrateFrom7() = verifyUpgrade(7)
 
     private fun verifyUpgrade(oldVersion: Int) {
         val name = "raven-upgrade-from-$oldVersion.db"

@@ -16,7 +16,7 @@ Android 包管理器（`PackageManager`）在执行覆盖安装时，强制校�
 一旦 Release 签名证书发生变化：
 - 系统会直接拒绝覆盖安装并报错 `INSTALL_FAILED_UPDATE_INCOMPATIBLE`；
 - 应用内更新器 `RavenUpdater` 也会在调起系统安装器前直接拦截该安装包；
-- 用户被迫卸载旧版重装，导致应用私有沙盒数据全部清空（Room 20 表历史/收藏/片单、`SessionVault` 加密站点登录态、DataStore 偏好设置及私有下载索引）。
+- 用户被迫卸载旧版重装，导致应用私有沙盒数据全部清空（Room 24 表历史/收藏/片单、`SessionVault` 加密站点登录态、DataStore 偏好设置及私有下载索引）。
 
 因此，**从 v0.1.0 起，Raven 全生命周期所有正式版本必须永久使用同一份发布密钥签名**。
 

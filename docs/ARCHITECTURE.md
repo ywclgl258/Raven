@@ -103,7 +103,7 @@ The three `:sites:*` modules are **Pure JVM** modules. Their Gradle project depe
 | 3 | `:core:site-spi` | Pure JVM | `com.raven.app.core.sitespi` | Composable `SitePlugin` SPI, `HttpClientAdapter`, immutable `SiteRegistry`, 9 `SiteKit` pure-Kotlin utilities | **LOCKED by Foundation Lead** |
 | 4 | `:core:security` | Android Lib | `com.raven.app.core.security` | `SessionVault`, `PrivacyLockStore`, `WebDavCredentialStore` (AndroidKeyStore AES-256-GCM), `BackupCodec` (`RVNBK01` + `R34VBK01` import), TLS/cert helpers | Core Infra Builder |
 | 5 | `:core:network` | Android Lib | `com.raven.app.core.network` | Shared OkHttp pool (`page`/`api`/`image`/`media`/`probe`), coroutine `HostPacer`, `Ipv4FirstDns`, `SystemProxySelector`, `MediaRedirectCache`, encrypted `SiteCookieJar`, `SiteHttpClient`, single Coil3 `ImageLoader` | Core Infra Builder |
-| 6 | `:core:database` | Android Lib + KSP + Room | `com.raven.app.core.database` | `RavenDatabase`, 20 Room entities/DAOs (schema v3), 13 repositories, `SettingsDataStore` (37 fixed keys + 2 dynamic per-site key families) | Core Infra Builder |
+| 6 | `:core:database` | Android Lib + KSP + Room | `com.raven.app.core.database` | `RavenDatabase`, 24 Room entities/DAOs (schema v8), 14 repositories, `SettingsDataStore` (43 fixed keys + 2 dynamic per-site key families) | Core Infra Builder |
 | 7 | `:core:designsystem` | Android Lib + Compose | `com.raven.app.core.designsystem` | Raven Obsidian × Apple HIG × Netflix Cinema tokens, HarmonyOS-readable typography and geometry, adaptive navigation shell (`>= 1200dp` Drawer), cards, sheets (`RavenShelfPickerSheet`), `RavenAppLockOverlay`, HUD components | Design System Builder |
 | 8 | `:core:media` | Android Lib | `com.raven.app.core.media` | Media3 `PlayerSessionController`, `LanCastManager`, `StreamSelection`, `StallPolicy`, 4-tier caches, `RouPngDataSource`, `GalleryPageStore` + `ImageStructure` + JMComic strip bitmap renderer, `DownloadCoordinator` (Video + Gallery), `StorageRootManager`, `LocalLibraryImporter`, `DuplicateScanner` | Media & Download Builder |
 | 9 | `:sites:video` | Pure JVM | `com.raven.app.sites.video` | 7 video plugins: `r34v`, `hanime1`, `iwara` (dual-media), `missav`, `jable`, `rouvideo`, `pornhub` + JVM fixture tests | Video Sites Builder |
@@ -138,7 +138,7 @@ Each module exposes a single top-level `val <moduleName>Module: Module` inside i
 |---|---|---|
 | `:core:security` | `coreSecurityModule` | `SessionVault`, `PrivacyLockStore`, `WebDavCredentialStore`, `BackupCodec`, `BackupValidator` |
 | `:core:network` | `coreNetworkModule` | `AppDispatchers`, `ApplicationScope`, `Ipv4FirstDns`, `SystemProxySelector`, `HostPacer`, `SiteCookieJar`, `OkHttpClient` (named: `page`, `api`, `image`, `media`, `probe`), `HttpClientAdapter` (`SiteHttpClient`), `ImageLoader` (Coil3) |
-| `:core:database` | `coreDatabaseModule` | `RavenDatabase`, all 20 Room DAOs, `SettingsDataStore`, 13 domain repositories (`HistoryRepository`, `FavoriteRepository`, `ShelfRepository`, `BookmarkRepository`, `SubscriptionRepository`, `BlockedTermsRepository`, `SearchHistoryRepository`, `DownloadStateRepository`, `BrowsePositionRepository`, `PreferencesRepository`, `TagDictionaryRepository`, `MediaTagCacheRepository`, `BackupDataRepository`) |
+| `:core:database` | `coreDatabaseModule` | `RavenDatabase`, all 24 Room DAOs, `SettingsDataStore`, 14 domain repositories (`HistoryRepository`, `FavoriteRepository`, `ShelfRepository`, `BookmarkRepository`, `SubscriptionRepository`, `BlockedTermsRepository`, `SearchHistoryRepository`, `DownloadStateRepository`, `BrowsePositionRepository`, `PreferencesRepository`, `TagDictionaryRepository`, `MediaTagCacheRepository`, `LikeRepository`, `BackupDataRepository`) |
 | `:core:media` | `coreMediaModule` | `DownloadCaches`, `PlayerSessionController`, `LanCastManager`, `GalleryPageRepository`, `DownloadCoordinator`, `StorageRootManager`, `LocalLibraryImporter`, `DuplicateScanner`, WorkManager workers (`workerOf(...)`) |
 | `:sites:video` | `videoSitesModule` | 7 video `SitePlugin` singletons bound with `bind<SitePlugin>()` |
 | `:sites:comic` | `comicSitesModule` | 12 comic `SitePlugin` singletons (7 standard + 5 serial) bound with `bind<SitePlugin>()` |
@@ -318,7 +318,7 @@ sealed interface RavenRoute {
 
 Replaces R34V's monolithic single-key `SharedPreferences` JSON blob (`personal_library_v1`) and 13 blocking `.commit()` calls with normalized **Room SQLite (`2.8.5`)** + **Preferences DataStore (`1.3.0`)**.
 
-### 6.1 Room Database (`RavenDatabase`, schema v3)
+### 6.1 Room Database (`RavenDatabase`, schema v8)
 
 | Table Name | Primary Key | Key Indices | Purpose |
 |---|---|---|---|
@@ -331,25 +331,29 @@ Replaces R34V's monolithic single-key `SharedPreferences` JSON blob (`personal_l
 | `page_bookmarks` | `id` | `(site_id, media_id, page)`, `(created_at DESC)` | Gallery/comic page + strip pixel-offset bookmarks |
 | `time_bookmarks` | `id` | `(site_id, media_id, position_ms)`, `(created_at DESC)` | Video timestamp bookmarks & labeled clips |
 | `image_favorites` | `id` | `(site_id, media_id, page_index)`, `(added_at DESC)` | Single-page image favorites (capped at 20,000) |
+| `media_likes` | `(site_id, media_id)` | `(liked_at DESC)` | Liked works snapshotted with title/cover/author/tags for offline browsing |
+| `series_follows` | `(site_id, series_id)` | `(site_id)` | Serial-comic follow records with seen chapter ids |
 | `tag_subscriptions` | `(site_id, slug, scope)` | `(site_id, sort_order ASC)` | Per-site tag/author subscriptions with manual sort order |
 | `saved_searches` | `id` | `(created_at DESC)` | Multi-site saved search recipes & filter snapshots |
 | `update_inbox` | `id` | `(is_read, discovered_at DESC)`, `(source_kind, source_id)`, `(site_id, discovered_at DESC)` | Unified unread feed for tag subscriptions & saved searches |
+| `inbox_dismissed` | `entry_key` | `(source_kind, source_id)` | Tombstones for inbox entries the user dismissed, so re-syncs never resurrect them |
 | `blocked_terms` | `(site_id, term)` | `(site_id)` | Strict per-site content blocklist |
 | `search_history` | `(site_id, query, scope)` | `(site_id, searched_at DESC)` | Recent 30 searches per site |
 | `download_items` | `id` | `(status, priority DESC, updated_at DESC)`, `(site_id, media_id)` | Unified projection table for Video (Media3) & Gallery downloads |
 | `playback_preferences` | `site_id` (`"*"` for global) | — | Per-site speed, long-press speed, seek step, sensitivity, quality |
 | `reader_preferences` | `(site_id, media_id)` (`""` for site default) | `(site_id)` | Per-site & per-book mode, fit, crop, spread cover, original-image toggle |
 | `browse_positions` | `position_key` | `(updated_at DESC)` | Last 32 cross-process scroll restoration anchors (`workId`, `throughPage`, `shelfId`) |
+| `backup_restore_journal` | `id` (singleton row) | — | Single-row journal capturing settings + site-language snapshots before a restore, enabling rollback |
 | `tag_translations` | `(source, namespace, raw_slug)` | `(raw_slug)`, `(chinese_name)`, `(source)` | Synchronized community/user Chinese tag dictionary translations |
 | `media_tag_cache` | `(site_id, media_id)` | `(updated_at DESC)` | Cached per-item tag metadata used for local filtering & blocking |
 
 All DAOs expose `Flow<List<T>>` / `Flow<T?>` so Compose screens react atomically with zero `revision++` hacks.
 
-`RavenDatabase.build()` explicitly installs two migrations: `MIGRATION_1_2` creates `tag_translations` and `media_tag_cache` plus their initial indices; `MIGRATION_2_3` adds the `(site_id, media_id)` shelf-item lookup index and `(site_id, discovered_at DESC)` inbox index. Exported schemas `1.json`, `2.json`, and `3.json` are present, and device migration tests cover `1 -> 3` and `2 -> 3`.
+`RavenDatabase.build()` explicitly installs one migration per schema step (`1 -> 2` through `7 -> 8`): `MIGRATION_1_2` creates `tag_translations` and `media_tag_cache` plus their initial indices; `MIGRATION_2_3` adds the `(site_id, media_id)` shelf-item lookup index and `(site_id, discovered_at DESC)` inbox index; `MIGRATION_3_4` creates `media_likes`; `MIGRATION_4_5` adds `shelf_items.completion_changed_at` and creates `backup_restore_journal`; `MIGRATION_5_6` creates `series_follows`; `MIGRATION_6_7` adds the reading-progress series columns and backfills legacy `seriesId:chapterId` keys; `MIGRATION_7_8` creates `inbox_dismissed`. Exported schemas `1.json` … `8.json` are present, and device migration tests verify upgrades from schema 1–7 to the current version.
 
 ### 6.2 Preferences DataStore (`raven_settings.preferences_pb`)
 
-The current source declares **37 fixed keys** plus **2 dynamic per-site key families** (`site_language_<siteId>` and `site_explore_filter_<siteId>`).
+The current source declares **43 fixed keys** plus **2 dynamic per-site key families** (`site_language_<siteId>` and `site_explore_filter_<siteId>`).
 
 | Key | Type | Default | Description |
 |---|---|---|---|

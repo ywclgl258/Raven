@@ -352,7 +352,7 @@ flowchart LR
 
 ### 4.2 全部 28 条 Type-Safe `RavenRoute` 清单（`RavenRoute.kt`）
 
-所有路由定义于 `:core:model` 的 `@Serializable sealed interface RavenRoute`，由 `RavenNavHost.kt` 统一注册，并在 `AppDiGraphTest` 中验证全部 28 条路由的 `kotlinx.serialization` 双向编解码：
+所有路由定义于 `:core:model` 的 `@Serializable sealed interface RavenRoute`，由 `RavenNavHost.kt` 统一注册，并在 `AppDiGraphTest` 中验证全部 28 个已注册目的地的 `kotlinx.serialization` 双向编解码（另有 `ReaderParent` 作为导航参数类型，故 `RavenRoute` 共 29 个类型）：
 
 | 组别 | # | 路由类型 (`RavenRoute.*`) | 参数签名 | 目标 Screen（所属模块） | 显示主导航壳 |
 |---|---:|---|---|---|---|
@@ -429,3 +429,25 @@ Raven 严禁 Feature 模块互相依赖，也严禁向 Feature Screen 传递 `Na
   - **集中常量对象**：
     - `PlayerTestTags`（`feature/player/.../PlayerContracts.kt`）：36 个稳定常量（`player_screen`、`player_surface`、`player_gesture_layer`、`player_scrubber`、`player_*_sheet` 等）。
     - `ReaderTestTags`（`feature/reader/.../ReaderTestTags.kt`）：23 个稳定常量（`gallery_detail_screen`、`reader_screen`、`reader_top_bar`、`reader_chapter_picker`、`reader_open_detail`、`reader_*_sheet` 等）。
+
+---
+
+## 6. 大屏文件分层与拆分约定
+
+`Screen` 超过约 1200 行时按「职责层」拆成同包多文件，本仓库当前固定使用下列命名与可见性规则（改代码后运行 `pwsh -File .\scripts\audit-stats.ps1` 会列出仍超过 1200 行的文件）：
+
+| 分层 | 典型文件 | 内容边界 |
+|---|---|---|
+| 入口 | `XxxScreen.kt` | 仅 `XxxScreen`（取 ViewModel/导航器）与 `XxxScreenContent`（状态装配、滚动与首次进入副作用） |
+| 控件层 | `XxxChrome.kt` / `XxxControls.kt` | 顶栏下方的模式切换、排序、筛选条与分组控件 |
+| 面板层 | `XxxDiscovery.kt` / `XxxPanels.kt` | 空态、发现面板、导入面板等可独立预览的整块区域 |
+| 结果层 | `XxxResults.kt` / `XxxCards.kt` | 列表/瀑布流主体与条目卡片 |
+| Sheet 层 | `XxxSheets.kt` / `XxxDeviceSheets.kt` | 全部 `RavenBottomSheet` 弹层；按「播放参数 / 设备与队列」等主题再分文件 |
+| 状态契约 | `XxxState.kt` / `XxxUiState.kt` | `XxxUiState`、派生属性、`XxxEvent`、Sheet 状态数据类 |
+
+硬性规则：
+
+1. **同包、`internal`、零改名**：跨文件调用一律用 `internal`（不用 `public` 扩大 API），`testTag`、无障碍语义与 `Modifier` 参数保持原样，禁止借拆分顺手改行为。
+2. **不搬状态**：拆分只移动声明，不引入新的 `remember` / 新的 `LaunchedEffect`，`ViewModel` 仍是唯一状态源。
+3. **拆分后用模块级编译验证**：`.\gradlew.bat :feature:<module>:compileDebugKotlin --no-daemon`；涉及测试时再跑 `:feature:<module>:testDebugUnitTest`。
+4. **`ViewModel` 不做机械拆分**：Kotlin 无局部类，状态机应按「队列 / 进度持久化 / 下载协调」提炼协作者（构造注入），属于设计性重构，需单独立项并补测试。
