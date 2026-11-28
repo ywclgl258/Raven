@@ -115,7 +115,7 @@ class GalleryPageRepository(
     private val hostPacer: HostPacer? = null,
 ) {
     @Serializable
-    private data class KnownPageLinks(
+    internal data class KnownPageLinks(
         val links: Map<Int, String> = emptyMap(),
     )
 
@@ -1079,96 +1079,25 @@ class GalleryPageRepository(
 
     // ---- Disk Helpers ----
 
-    private fun readDiskBook(
-        folder: File,
-        expectedSiteId: SiteId? = null,
-        expectedMediaId: String? = null,
-    ): DiskBook? {
-        val detail = readJsonFile(File(folder, "book.json"), GalleryDetail.serializer(), MAX_BOOK_JSON_BYTES)
-            ?: return null
-        if (detail.pageCount !in 1..MAX_PAGE_NUMBER) return null
-        if (expectedSiteId != null && detail.item.siteId != expectedSiteId) return null
-        if (expectedMediaId != null && detail.item.id != expectedMediaId) return null
-        if (expectedSiteId != null && folder.name != StorageRootManager.sha256Hex(detail.item.id)) return null
+    private fun readDiskBook(folder: File, expectedSiteId: SiteId? = null, expectedMediaId: String? = null): DiskBook? =
+        readBookDisk(folder, expectedSiteId, expectedMediaId, json, requireAndroidImageDecoder)
 
-        val selection = readJsonFile(File(folder, "selection.json"), SelectionManifest.serializer(), MAX_BOOK_JSON_BYTES)
-            ?.selected.orEmpty().distinct().sorted()
-        val completeFile = File(folder, "complete")
-        val markerCount = runCatching {
-            if (!completeFile.isFile || completeFile.length() !in 1L..32L || !StorageRootManager.directChild(folder, completeFile)) {
-                null
-            } else {
-                completeFile.readText().trim().toIntOrNull()
-            }
-        }.getOrNull()
-
-        return DiskBook(
-            folder = folder,
-            detail = detail,
-            links = readLinksMap(folder),
-            selection = selection,
-            hasCompleteMarker = markerCount == detail.pageCount,
-            json = json,
-            requireAndroidDecoder = requireAndroidImageDecoder,
-        )
-    }
-
-    private fun readLinksMap(folder: File): Map<Int, String> =
-        readJsonFile(File(folder, "links.json"), KnownPageLinks.serializer(), MAX_BOOK_JSON_BYTES)
-            ?.links.orEmpty()
+    private fun readLinksMap(folder: File): Map<Int, String> = readKnownLinks(folder, json)
 
     @Synchronized
-    private fun rememberDownloadLink(folder: File, page: GalleryPage) {
-        val file = File(folder, "links.json")
-        val current = readLinksMap(folder)
-        if (current[page.index] != page.pageUrl) {
-            atomicWriteBytes(
-                file,
-                json.encodeToString(KnownPageLinks.serializer(), KnownPageLinks(current + (page.index to page.pageUrl))).toByteArray(),
-            )
-        }
-    }
+    private fun rememberDownloadLink(folder: File, page: GalleryPage) = appendDownloadLink(folder, page, json)
 
-    @Synchronized
     private fun rememberCacheLink(siteId: SiteId, galleryUrl: String, page: GalleryPage) {
         if (galleryUrl.isBlank()) return
-        val file = File(readingCacheDir(siteId), "${StorageRootManager.sha256Hex(galleryUrl)}.links.json")
-        val current = readJsonFile(file, KnownPageLinks.serializer(), MAX_BOOK_JSON_BYTES)?.links.orEmpty()
-        if (current[page.index] != page.pageUrl) {
-            atomicWriteBytes(
-                file,
-                json.encodeToString(KnownPageLinks.serializer(), KnownPageLinks(current + (page.index to page.pageUrl))).toByteArray(),
-            )
-        }
+        appendCacheLink(File(readingCacheDir(siteId), "${StorageRootManager.sha256Hex(galleryUrl)}.links.json"), page, json)
     }
 
-    private fun <T> readJsonFile(
-        file: File,
-        serializer: kotlinx.serialization.KSerializer<T>,
-        maxBytes: Long,
-    ): T? = Companion.readJsonFile(file, serializer, maxBytes, json)
+    private fun <T> readJsonFile(file: File, serializer: kotlinx.serialization.KSerializer<T>, maxBytes: Long): T? =
+        Companion.readJsonFile(file, serializer, maxBytes, json)
 
-    private fun atomicWriteBytes(target: File, bytes: ByteArray) {
-        val parent = target.parentFile ?: throw GalleryStorageException("无效的文件路径：${target.path}")
-        try {
-            check(parent.isDirectory || parent.mkdirs()) { "无法创建目录：${parent.path}" }
-            // Never delete the previous copy before the new bytes are published: a refused rename
-            // would otherwise leave neither the old nor the new page behind.
-            AtomicFiles.writeBytes(target, bytes)
-        } catch (e: Exception) {
-            throw GalleryStorageException(e.message ?: "无法保存图页文件", e)
-        }
-    }
+    private fun atomicWriteBytes(target: File, bytes: ByteArray) = writeBytesAtomic(target, bytes)
 
-    private fun readBytesBounded(file: File, maxBytes: Long): ByteArray? = runCatching {
-        val len = file.length()
-        if (!file.isFile || len !in 1L..maxBytes) return null
-        file.inputStream().use { input ->
-            val bytes = ByteArray(len.toInt())
-            DataInputStream(input).readFully(bytes)
-            bytes.takeIf { input.read() == -1 }
-        }
-    }.getOrNull()
+    private fun readBytesBounded(file: File, maxBytes: Long): ByteArray? = readBoundedBytes(file, maxBytes)
 
     companion object {
         const val READING_CACHE_MAX_BYTES: Long = 256L * 1024L * 1024L
@@ -1177,8 +1106,8 @@ class GalleryPageRepository(
         const val MAX_IMAGE_CONCURRENCY: Int = 3
         private const val STRICT_IMAGE_INTERVAL_THRESHOLD_MS: Long = 300L
         private const val STRICT_PAGE_INTERVAL_THRESHOLD_MS: Long = 1_000L
-        private const val MAX_PAGE_NUMBER: Int = 100_000
-        private const val MAX_BOOK_JSON_BYTES: Long = 16L * 1024L * 1024L
+        internal const val MAX_PAGE_NUMBER: Int = 100_000
+        internal const val MAX_BOOK_JSON_BYTES: Long = 16L * 1024L * 1024L
         private const val MAX_PAGE_JSON_BYTES: Long = 128L * 1024L
 
         const val RECOVERY_NOTE: String =
@@ -1210,7 +1139,7 @@ class GalleryPageRepository(
         private fun legacyPageFileKey(pageUrl: String): String =
             StorageRootManager.sha256Hex(pageUrl.substringBefore('?'))
 
-        private fun <T> readJsonFile(
+        internal fun <T> readJsonFile(
             file: File,
             serializer: kotlinx.serialization.KSerializer<T>,
             maxBytes: Long,
