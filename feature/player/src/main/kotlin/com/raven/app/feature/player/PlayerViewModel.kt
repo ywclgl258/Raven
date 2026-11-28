@@ -164,6 +164,20 @@ class PlayerViewModel(
     private val effectivePlaybackPrefs = MutableStateFlow(PlaybackPreferences())
     private val latestAppSettings = MutableStateFlow(AppSettings())
 
+    /** LAN cast + external player handoff (see [PlayerCastController]). */
+    private val castController = PlayerCastController(
+        castManager = lanCastManager,
+        scope = viewModelScope,
+        localState = localState,
+        state = { uiState.value },
+        currentStreamUrl = {
+            playback.state.value.currentStream?.url?.takeIf { it.startsWith("http", ignoreCase = true) }
+        },
+        fallbackUrl = { activeTarget.value?.url?.takeIf { it.startsWith("http", ignoreCase = true) } },
+        pausePlayback = { playback.pause() },
+        message = { text -> _sideEffects.tryEmit(PlayerSideEffect.ShowMessage(text)) },
+    )
+
     /** Sleep timer (see [PlayerSleepTimer]). */
     private val sleepTimer = PlayerSleepTimer(
         scope = viewModelScope,
@@ -791,66 +805,13 @@ class PlayerViewModel(
         }
     }
 
-    fun discoverCastDevices() {
-        val manager = lanCastManager ?: return
-        if (localState.value.isScanningCast) return
-        viewModelScope.launch {
-            localState.update { it.copy(isScanningCast = true) }
-            try {
-                val found = manager.discoverDevices()
-                localState.update { it.copy(castDevices = found, isScanningCast = false) }
-                if (found.isEmpty()) {
-                    _sideEffects.tryEmit(PlayerSideEffect.ShowMessage("局域网内未发现 DLNA 投屏设备"))
-                }
-            } catch (ce: CancellationException) {
-                throw ce
-            } catch (_: Throwable) {
-                localState.update { it.copy(isScanningCast = false) }
-                _sideEffects.tryEmit(PlayerSideEffect.ShowMessage("扫描投屏设备失败"))
-            }
-        }
-    }
+    fun discoverCastDevices() = castController.discover()
 
-    fun castCurrentVideo(device: LanCastDevice) {
-        val manager = lanCastManager ?: return
-        val streamUrl = playback.state.value.currentStream?.url?.takeIf { it.startsWith("http", ignoreCase = true) }
-            ?: activeTarget.value?.url?.takeIf { it.startsWith("http", ignoreCase = true) }
-        if (streamUrl == null) {
-            _sideEffects.tryEmit(PlayerSideEffect.ShowMessage("当前仅支持对在线直链或局域网视频发起 DLNA 投屏"))
-            return
-        }
-        val title = uiState.value.title.ifBlank { "Raven Video" }
-        viewModelScope.launch {
-            val result = runCatching {
-                manager.castVideo(device = device, streamUrl = streamUrl, title = title)
-            }
-            if (result.isSuccess) {
-                playback.pause()
-                localState.update { it.copy(activeCastDevice = device) }
-                _sideEffects.tryEmit(PlayerSideEffect.ShowMessage("已投屏至 ${device.friendlyName}"))
-            } else {
-                _sideEffects.tryEmit(PlayerSideEffect.ShowMessage("投屏至 ${device.friendlyName} 失败"))
-            }
-        }
-    }
+    fun castCurrentVideo(device: LanCastDevice) = castController.cast(device)
 
-    fun stopCast() {
-        val manager = lanCastManager ?: return
-        val device = localState.value.activeCastDevice ?: return
-        viewModelScope.launch {
-            manager.stopCast(device)
-            localState.update { it.copy(activeCastDevice = null) }
-            _sideEffects.tryEmit(PlayerSideEffect.ShowMessage("已断开投屏"))
-        }
-    }
+    fun stopCast() = castController.stop()
 
-    fun launchSystemExternalPlayer(): Boolean {
-        val manager = lanCastManager ?: return false
-        val streamUrl = playback.state.value.currentStream?.url?.takeIf { it.startsWith("http", ignoreCase = true) }
-            ?: activeTarget.value?.url?.takeIf { it.isNotBlank() }
-            ?: return false
-        return manager.launchExternalPlayer(streamUrl)
-    }
+    fun launchSystemExternalPlayer(): Boolean = castController.launchExternalPlayer()
 
     fun toggleFavorite() {
         val item = currentMediaItem() ?: return

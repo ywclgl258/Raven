@@ -179,6 +179,20 @@ class ReaderViewModel(
      * Series identity resolves through the same `activeSeriesMetadata` cache the chapter
      * navigator uses, so opaque chapter ids keep their work identity.
      */
+    /** Auto-page / slideshow loop (see [ReaderAutoPageLoop]). */
+    private val autoPageLoop = ReaderAutoPageLoop(
+        scope = viewModelScope,
+        dispatchers = dispatchers,
+        state = uiState,
+        update = { transform -> _uiState.update(transform) },
+        random = random,
+        isUserInteracting = { isUserZoomedOrDragging },
+        jumpToPage = ::jumpToPage,
+        preloadNextChapter = { chapterPrefetcher.preloadNextSerialChapterIfNeeded() },
+        requestNextChapterAtBoundary = ::requestNextChapterAtBoundary,
+        notice = ::emitSnackbar,
+    )
+
     /** Appended serial-chapter buffers for the continuous STRIP stream. */
     private val appendedChapters = ReaderAppendedChapterCache(
         scope = viewModelScope,
@@ -227,7 +241,6 @@ class ReaderViewModel(
     private var readerBuffer: ReaderBuffer<LoadedReaderPage>? = null
     private var bufferCollectJob: Job? = null
     private var loadJob: Job? = null
-    private var autoPageJob: Job? = null
     private var exportJob: Job? = null
     private var chapterAdvanceJob: Job? = null
     @Volatile
@@ -242,7 +255,6 @@ class ReaderViewModel(
     private var activeMemoryBudgetBytes: Long = ReaderBuffer.DEFAULT_OFFSCREEN_BUDGET_BYTES
     private var activeImageConcurrency: Int = ReaderBuffer.MAX_CONCURRENT_LOADS
     private var latestIncognitoMode: Boolean = false
-    private var autoPagePausedByLifecycle: Boolean = false
     private var isUserZoomedOrDragging: Boolean = false
     private var hasPromptedQueueForCurrentBook: Boolean = false
 
@@ -1173,112 +1185,14 @@ class ReaderViewModel(
         }
     }
 
-    // ---- Auto-Page & Slideshow (Waits for Current Page Render Ready) ----
+    // ---- Auto-Page & Slideshow（实现见 ReaderAutoPageLoop）----
 
-    fun setAutoPageInterval(seconds: Int) {
-        val sanitized = if (seconds in ALLOWED_AUTO_PAGE_INTERVALS) seconds else 0
-        _uiState.update { it.copy(autoPageIntervalSeconds = sanitized) }
-        restartAutoPageLoop()
-    }
+    fun setAutoPageInterval(seconds: Int) = autoPageLoop.setInterval(seconds)
 
-    fun setAutoPagePausedByLifecycle(paused: Boolean) {
-        if (autoPagePausedByLifecycle == paused) return
-        autoPagePausedByLifecycle = paused
-        if (paused) {
-            autoPageJob?.cancel()
-            autoPageJob = null
-        } else if (_uiState.value.autoPageIntervalSeconds > 0) {
-            restartAutoPageLoop()
-        }
-    }
+    fun setAutoPagePausedByLifecycle(paused: Boolean) = autoPageLoop.setPausedByLifecycle(paused)
 
     fun setSlideshowOrder(order: SlideshowOrder) {
         _uiState.update { it.copy(slideshowOrder = order) }
-    }
-
-    private fun restartAutoPageLoop() {
-        autoPageJob?.cancel()
-        val intervalSeconds = _uiState.value.autoPageIntervalSeconds
-        if (intervalSeconds <= 0 || autoPagePausedByLifecycle) return
-
-        autoPageJob = viewModelScope.launch(dispatchers.main) {
-            val visitedRandom = LinkedHashSet<Int>()
-            while (isActive) {
-                val currentInterval = _uiState.value.autoPageIntervalSeconds
-                if (currentInterval <= 0) break
-
-                // Strictly wait until the current page is render-ready and no sheet is blocking the view.
-                uiState.first { state ->
-                    state.autoPageIntervalSeconds > 0 &&
-                        !state.isLoading &&
-                        state.activeSheet == ReaderSheet.NONE &&
-                        state.isCurrentPageRenderReady
-                }
-
-                delay(currentInterval * 1_000L)
-
-                val latest = _uiState.value
-                if (latest.autoPageIntervalSeconds <= 0) break
-                if (latest.activeSheet != ReaderSheet.NONE || isUserZoomedOrDragging || !latest.isCurrentPageRenderReady) {
-                    continue
-                }
-
-                val pages = latest.pageNumbers
-                // 条漫连读时章末应无缝追加下一话，而不是开一个新的 Reader 打断节奏。
-                val appendsSeamlessly = latest.isSerialComic &&
-                    latest.preferences.mode == ReaderMode.STRIP &&
-                    latest.slideshowOrder == SlideshowOrder.SEQUENTIAL &&
-                    !latest.hasReachedFinalSerialChapter
-                if (pages.size <= 1) {
-                    if (appendsSeamlessly) {
-                        chapterPrefetcher.preloadNextSerialChapterIfNeeded()
-                        continue
-                    }
-                    val opensNextChapter = latest.slideshowOrder == SlideshowOrder.SEQUENTIAL &&
-                        latest.queueSession?.hasNext != true &&
-                        requestNextChapterAtBoundary()
-                    _uiState.update { it.copy(autoPageIntervalSeconds = 0) }
-                    if (!opensNextChapter) emitSnackbar("自动翻页已到达末尾")
-                    break
-                }
-
-                val nextPage: Int? = when (latest.slideshowOrder) {
-                    SlideshowOrder.SEQUENTIAL -> {
-                        latest.spreadNavigator?.adjacentPage(latest.currentPage, forward = true)
-                    }
-                    SlideshowOrder.RANDOM -> {
-                        visitedRandom.add(latest.currentPage)
-                        val remaining = pages.filter { it !in visitedRandom }
-                        val pool = remaining.ifEmpty {
-                            visitedRandom.clear()
-                            visitedRandom.add(latest.currentPage)
-                            pages.filter { it != latest.currentPage }
-                        }
-                        pool.takeIf { it.isNotEmpty() }?.let { list ->
-                            list[random.nextInt(list.size)]
-                        }
-                    }
-                }
-
-                if (nextPage != null) {
-                    jumpToPage(nextPage)
-                } else if (appendsSeamlessly) {
-                    chapterPrefetcher.preloadNextSerialChapterIfNeeded()
-                } else {
-                    val opensNextChapter = latest.slideshowOrder == SlideshowOrder.SEQUENTIAL &&
-                        latest.queueSession?.hasNext != true &&
-                        requestNextChapterAtBoundary()
-                    _uiState.update {
-                        it.copy(
-                            autoPageIntervalSeconds = 0,
-                            showQueueNextCard = it.queueSession?.hasNext == true,
-                        )
-                    }
-                    if (!opensNextChapter) emitSnackbar("自动翻页已到达末尾")
-                    break
-                }
-            }
-        }
     }
 
     // ---- Bookmarks & Single-Image Favorites ----
@@ -1669,7 +1583,7 @@ class ReaderViewModel(
     }
 
     override fun onCleared() {
-        autoPageJob?.cancel()
+        autoPageLoop.cancel()
         chapterPrefetcher.cancelAll()
         chapterAdvanceJob?.cancel()
         progressStore.cancel()
