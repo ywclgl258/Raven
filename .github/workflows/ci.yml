@@ -74,14 +74,4 @@ jobs:
           arch: x86_64
           profile: pixel_6
           disable-linux-hw-accel: false
-          script: |
-            set +e
-            ./gradlew :app:connectedDebugAndroidTest :core:database:connectedDebugAndroidTest --no-daemon --max-workers=2 -Dorg.gradle.jvmargs="-Xmx2g -XX:MaxMetaspaceSize=512m -Dfile.encoding=UTF-8"
-            status=$?
-            if [ "$status" -ne 0 ]; then
-              echo "=== Failure Diagnostics ==="
-              adb devices -l || true
-              dmesg | tail -n 30 || true
-              ls -la /tmp/android-runner* || true
-            fi
-            exit "$status"
+          script: ./gradlew :app:connectedDebugAndroidTest :core:database:connectedDebugAndroidTest --no-daemon --max-workers=2 -Dorg.gradle.jvmargs="-Xmx2g -XX:MaxMetaspaceSize=512m -Dfile.encoding=UTF-8"
