@@ -81,14 +81,14 @@ enum class CrossSiteStatus {
 }
 
 
-private fun requestLanguage(plugin: SitePlugin, input: SearchInputState, siteLanguage: ComicLanguage): ComicLanguage {
+internal fun requestLanguage(plugin: SitePlugin, input: SearchInputState, siteLanguage: ComicLanguage): ComicLanguage {
     val supported = plugin.descriptor.hasCapability(SiteCapability.LANGUAGE_FILTER) ||
         AdvancedFilterField.LANGUAGE in plugin.searchSource?.supportedFilters.orEmpty()
     if (!supported) return ComicLanguage.ALL
     return input.advancedFilters.siteLanguages[plugin.id] ?: input.languageOverride ?: siteLanguage
 }
 
-private data class SearchInputState(
+internal data class SearchInputState(
     val mode: SearchMode = SearchMode.SINGLE_SITE,
     val query: String = "",
     val submittedQuery: String = "",
@@ -100,7 +100,7 @@ private data class SearchInputState(
     val lastSavedNotice: String? = null,
 )
 
-private data class SingleSiteResultState(
+internal data class SingleSiteResultState(
     val siteId: SiteId? = null,
     val isLoading: Boolean = false,
     val isLoadingMore: Boolean = false,
@@ -117,7 +117,7 @@ private data class SingleSiteResultState(
     val hasMore: Boolean = false,
 )
 
-private data class CrossSiteResultState(
+internal data class CrossSiteResultState(
     val hasSearched: Boolean = false,
     val fetchedSort: FeedSort? = null,
     val bucketsBySite: Map<SiteId, CrossSiteBucketState> = emptyMap(),
@@ -235,7 +235,6 @@ class SearchViewModel(
     private val searchableDescriptors: List<SiteDescriptor> = searchablePlugins.map { it.descriptor }
     private val searchableIdSet: Set<SiteId> = searchableDescriptors.mapTo(HashSet()) { it.id }
 
-    private val crossSearchSemaphore = Semaphore(permits = MAX_CONCURRENT_CROSS_SITE_SEARCHES)
     private val crossSitesMutex = Mutex()
 
     /**
@@ -263,12 +262,20 @@ class SearchViewModel(
         ),
     )
     private val singleSiteState = MutableStateFlow(SingleSiteResultState())
-    private val crossSiteState = MutableStateFlow(CrossSiteResultState())
+
+    private val crossSiteRunner = CrossSiteSearchRunner(
+        scope = viewModelScope,
+        dispatchers = dispatchers,
+        siteRegistry = siteRegistry,
+        preferences = preferencesRepository,
+        blockedTerms = blockedTermsRepository,
+        tagDictionary = tagDictionary,
+        inputState = { inputState.value },
+        currentGeneration = { searchGeneration },
+    )
 
     private var singleSearchJob: Job? = null
     private var singlePaginateJob: Job? = null
-    private var crossSearchJob: Job? = null
-    private val crossPerSiteJobs = mutableMapOf<SiteId, Job>()
     /**
      * Monotonic intent generation. Bumped on every submit/clear so a stale prepare phase (settings
      * fetch, history write) that finishes late cannot start a request or cancel a newer one.
@@ -374,7 +381,7 @@ class SearchViewModel(
         preferencesRepository.settings,
         combine(inputState, discoveryFlow) { input, discovery -> input to discovery },
         singleSiteState,
-        crossSiteState,
+        crossSiteRunner.state,
         dbContextFlow,
     ) { settings, inputAndDiscovery, single, cross, db ->
         val (input, discovery) = inputAndDiscovery
@@ -672,11 +679,10 @@ class SearchViewModel(
         searchGeneration++
         singleSearchJob?.cancel()
         singlePaginateJob?.cancel()
-        crossSearchJob?.cancel()
-        cancelAllCrossSiteJobs()
+        crossSiteRunner.cancelAll()
         inputState.update { it.copy(query = "", submittedQuery = "", crossSiteFilterSiteId = null) }
         singleSiteState.value = SingleSiteResultState(siteId = uiState.value.activeSite?.id)
-        crossSiteState.value = CrossSiteResultState()
+        crossSiteRunner.reset()
     }
 
     fun applyTagSuggestion(suggestion: TagSuggestion, autoSubmit: Boolean = false) {
@@ -720,7 +726,7 @@ class SearchViewModel(
             }
             SearchMode.CROSS_SITE -> {
                 if (!hasQuery) return
-                if (crossSiteState.value.hasSearched) {
+                if (crossSiteRunner.state.value.hasSearched) {
                     submitSearch()
                 }
             }
@@ -851,8 +857,7 @@ class SearchViewModel(
         }
         singleSearchJob?.cancel()
         singlePaginateJob?.cancel()
-        crossSearchJob?.cancel()
-        cancelAllCrossSiteJobs()
+        crossSiteRunner.cancelAll()
         inputState.update {
             it.copy(
                 mode = targetMode,
@@ -1119,117 +1124,6 @@ class SearchViewModel(
         }
     }
 
-    fun retryCrossSite(siteId: SiteId) {
-        val query = inputState.value.submittedQuery.trim().ifBlank { inputState.value.query.trim() }
-        if (query.isEmpty()) return
-        val plugin = siteRegistry.get(siteId) ?: return
-        val searchSource = plugin.searchSource ?: return
-
-        crossPerSiteJobs[siteId]?.cancel()
-        crossPerSiteJobs[siteId] = viewModelScope.launch {
-            updateCrossBucket(siteId) { existing ->
-                (existing ?: CrossSiteBucketState(
-                    site = plugin.descriptor,
-                    isDirectorySearch = searchSource.isDirectorySearch,
-                )).copy(
-                    status = CrossSiteStatus.LOADING,
-                    errorMessage = null,
-                    isLoadingMore = false,
-                )
-            }
-            val requestedSort = inputState.value.sort.takeUnless { it == FeedSort.DEFAULT } ?: FeedSort.RELEVANCE
-            val resultBucket = executeCrossSiteQuery(
-                plugin = plugin,
-                query = query,
-                requestedSort = requestedSort,
-                page = 1,
-                cursor = null,
-            )
-            updateCrossBucket(siteId) { resultBucket }
-        }
-    }
-
-    fun loadMoreCrossSite(siteId: SiteId) {
-        val query = inputState.value.submittedQuery.trim()
-        if (query.isEmpty()) return
-        val existing = crossSiteState.value.bucketsBySite[siteId] ?: return
-        if (!existing.hasMore || existing.isLoadingMore) return
-        val plugin = siteRegistry.get(siteId) ?: return
-        val searchSource = plugin.searchSource ?: return
-        val requestedSort = crossSiteState.value.fetchedSort
-            ?: inputState.value.sort.takeUnless { it == FeedSort.DEFAULT }
-            ?: FeedSort.RELEVANCE
-        val siteSort = resolveCompatibleServerSort(
-            nativeSorts = resolveNativeSearchSorts(plugin, SearchScope.ALL),
-            requested = requestedSort,
-        )
-
-        crossPerSiteJobs[siteId]?.cancel()
-        crossPerSiteJobs[siteId] = viewModelScope.launch {
-            updateCrossBucket(siteId) { bucket ->
-                bucket?.copy(isLoadingMore = true, errorMessage = null) ?: existing
-            }
-            val nextPageNumber = existing.nextPage ?: (existing.currentPage + 1)
-            val result = crossSearchSemaphore.withPermit {
-                try {
-                    val settings = preferencesRepository.currentSettings()
-                    val lang = requestLanguage(plugin, inputState.value, settings.languageFor(siteId))
-                    val effectiveBlocked = blockedTermsRepository.observeEffectiveTermsBySite(siteId).first()
-                    val crossFilters = buildServerExcludeFilters(
-                        plugin = plugin,
-                        baseFilters = AdvancedSearchFilters(),
-                        effectiveBlockedTerms = effectiveBlocked,
-                    )
-                    val req = FeedRequest(
-                        siteId = siteId,
-                        query = query,
-                        scope = SearchScope.ALL,
-                        sort = siteSort,
-                        language = lang,
-                        page = nextPageNumber,
-                        cursor = existing.nextCursor,
-                        advancedFilters = crossFilters,
-                    )
-                    val feedPage = withContext(dispatchers.io) { searchSource.search(req) }
-                    Result.success(feedPage)
-                } catch (ce: CancellationException) {
-                    throw ce
-                } catch (error: Throwable) {
-                    Result.failure(error)
-                }
-            }
-            result.fold(
-                onSuccess = { feedPage ->
-                    updateCrossBucket(siteId) { current ->
-                        val base = current ?: existing
-                        val merged = mergeUniqueMediaItems(base.items, feedPage.items)
-                        val progressed = merged.size > base.items.size ||
-                            (feedPage.nextCursor != null && feedPage.nextCursor != base.nextCursor)
-                        base.copy(
-                            status = CrossSiteStatus.SUCCESS,
-                            items = merged,
-                            currentPage = nextPageNumber,
-                            nextPage = feedPage.nextPage,
-                            nextCursor = feedPage.nextCursor,
-                            hasMore = feedPage.hasMore && progressed,
-                            isLoadingMore = false,
-                            errorMessage = null,
-                        )
-                    }
-                },
-                onFailure = { error ->
-                    updateCrossBucket(siteId) { current ->
-                        val base = current ?: existing
-                        base.copy(
-                            isLoadingMore = false,
-                            errorMessage = error.toBrowseErrorMessage(),
-                        )
-                    }
-                },
-            )
-        }
-    }
-
     private fun runSingleSiteSearch(
         targetSiteId: SiteId,
         query: String,
@@ -1320,135 +1214,16 @@ class SearchViewModel(
         query: String,
         requestedSort: FeedSort,
         generation: Long = searchGeneration,
-    ) {
-        // A stale caller must not cancel current jobs nor seed buckets for a superseded intent.
-        if (generation != searchGeneration) return
-        crossSearchJob?.cancel()
-        cancelAllCrossSiteJobs()
+    ) = crossSiteRunner.start(
+        targetSiteIds = targetSiteIds,
+        query = query,
+        requestedSort = requestedSort,
+        generation = generation,
+    )
 
-        val plugins = targetSiteIds.mapNotNull { siteRegistry.get(it) }.filter { it.searchSource != null }
-        if (plugins.isEmpty()) {
-            crossSiteState.value = CrossSiteResultState(
-                hasSearched = true,
-                fetchedSort = requestedSort,
-                bucketsBySite = emptyMap(),
-            )
-            return
-        }
+    fun retryCrossSite(siteId: SiteId) = crossSiteRunner.retry(siteId)
 
-        val initialBuckets = plugins.associate { plugin ->
-            plugin.id to CrossSiteBucketState(
-                site = plugin.descriptor,
-                status = CrossSiteStatus.LOADING,
-                isDirectorySearch = plugin.searchSource?.isDirectorySearch == true,
-            )
-        }
-        crossSiteState.value = CrossSiteResultState(
-            hasSearched = true,
-            fetchedSort = requestedSort,
-            bucketsBySite = initialBuckets,
-        )
-
-        crossSearchJob = viewModelScope.launch {
-            if (generation != searchGeneration) return@launch
-            coroutineScope {
-                plugins.map { plugin ->
-                    async {
-                        val bucket = executeCrossSiteQuery(
-                            plugin = plugin,
-                            query = query,
-                            requestedSort = requestedSort,
-                            page = 1,
-                            cursor = null,
-                        )
-                        // Skip publishing results from a superseded generation.
-                        if (generation == searchGeneration) {
-                            updateCrossBucket(plugin.id) { bucket }
-                        }
-                    }
-                }.awaitAll()
-            }
-        }
-    }
-
-    private suspend fun executeCrossSiteQuery(
-        plugin: SitePlugin,
-        query: String,
-        requestedSort: FeedSort,
-        page: Int,
-        cursor: String?,
-    ): CrossSiteBucketState {
-        val searchSource = plugin.searchSource ?: return CrossSiteBucketState(
-            site = plugin.descriptor,
-            status = CrossSiteStatus.ERROR,
-            errorMessage = "不支持搜索",
-        )
-        val isDir = searchSource.isDirectorySearch
-        val siteSort = resolveCompatibleServerSort(
-            nativeSorts = resolveNativeSearchSorts(plugin, SearchScope.ALL),
-            requested = requestedSort,
-        )
-
-        return crossSearchSemaphore.withPermit {
-            try {
-                if (plugin.authProvider.requiresAuthGate) {
-                    val auth = withContext(dispatchers.io) { plugin.authProvider.currentAuthState() }
-                    if (!auth.isAuthenticated) {
-                        return@withPermit CrossSiteBucketState(
-                            site = plugin.descriptor,
-                            status = CrossSiteStatus.AUTH_REQUIRED,
-                            isDirectorySearch = isDir,
-                            errorMessage = "需要登录",
-                        )
-                    }
-                }
-
-                val settings = preferencesRepository.currentSettings()
-                val language = requestLanguage(plugin, inputState.value, settings.languageFor(plugin.id))
-                val effectiveBlocked = blockedTermsRepository.observeEffectiveTermsBySite(plugin.id).first()
-                val crossFilters = buildServerExcludeFilters(
-                    plugin = plugin,
-                    baseFilters = AdvancedSearchFilters(),
-                    effectiveBlockedTerms = effectiveBlocked,
-                )
-                val request = FeedRequest(
-                    siteId = plugin.id,
-                    query = query,
-                    scope = SearchScope.ALL,
-                    sort = siteSort,
-                    language = language,
-                    page = page,
-                    cursor = cursor,
-                    advancedFilters = crossFilters,
-                )
-                val result = withContext(dispatchers.io) { searchSource.search(request) }
-                val unique = result.items.distinctBy { it.compositeKey }
-                CrossSiteBucketState(
-                    site = plugin.descriptor,
-                    status = if (unique.isEmpty()) CrossSiteStatus.EMPTY else CrossSiteStatus.SUCCESS,
-                    isDirectorySearch = isDir || unique.any { it.isDirectoryEntryItem() },
-                    items = unique,
-                    currentPage = page,
-                    nextPage = result.nextPage,
-                    nextCursor = result.nextCursor,
-                    hasMore = result.hasMore,
-                )
-            } catch (ce: CancellationException) {
-                throw ce
-            } catch (error: Throwable) {
-                CrossSiteBucketState(
-                    site = plugin.descriptor,
-                    status = if (error is SiteException.AuthRequired) {
-                        CrossSiteStatus.AUTH_REQUIRED
-                    } else {
-                        CrossSiteStatus.ERROR
-                    },
-                    isDirectorySearch = isDir,
-                    errorMessage = error.toBrowseErrorMessage(),
-                )
-            }
-        }
-    }
+    fun loadMoreCrossSite(siteId: SiteId) = crossSiteRunner.loadMore(siteId)
 
     private fun buildSingleSiteRequest(
         plugin: SitePlugin,
@@ -1494,22 +1269,6 @@ class SearchViewModel(
         effectiveBlockedTerms: Collection<String>,
     ): AdvancedSearchFilters =
         serverExcludeFiltersFor(plugin, baseFilters, effectiveBlockedTerms, tagDictionary)
-
-    private fun updateCrossBucket(
-        siteId: SiteId,
-        transform: (CrossSiteBucketState?) -> CrossSiteBucketState,
-    ) {
-        crossSiteState.update { current ->
-            val nextMap = LinkedHashMap(current.bucketsBySite)
-            nextMap[siteId] = transform(nextMap[siteId])
-            current.copy(bucketsBySite = nextMap)
-        }
-    }
-
-    private fun cancelAllCrossSiteJobs() {
-        crossPerSiteJobs.values.forEach { it.cancel() }
-        crossPerSiteJobs.clear()
-    }
 
     private fun interleaveBuckets(buckets: List<CrossSiteBucketState>): List<MediaItem> =
         interleaveCrossSiteBuckets(buckets)
